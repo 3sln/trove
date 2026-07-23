@@ -9,9 +9,32 @@ export default function explorer(state, ui) {
   const ex = state.ex;
   return div({ className: 'sidebar' },
     header(ex, ui),
+    (ex.collections && ex.collections.length > 1) || ex.canCreateCollection ? collectionBar(ex, ui) : null,
     breadcrumb(ex, ui),
     div({ className: 'scroll' }, body(ex, ui)),
   );
+}
+
+function collectionBar(ex, ui) {
+  const active = ex.collections.find((c) => c.id === ex.collectionId) || { name: 'My Drive', id: 'default' };
+  return button({ className: 'collection-switch' },
+    icon('files', { size: 14 }),
+    span({ className: 'cs-name' }, active.name),
+    icon('chevron-down', { size: 13 }),
+  ).on({
+    click: (e) => {
+      const items = ex.collections.map((c) => ({
+        label: c.name, icon: c.id === ex.collectionId ? 'check' : 'files',
+        run: () => ui.exec('collections.switch', c.id),
+      }));
+      if (ex.canCreateCollection) {
+        items.push({ sep: true });
+        items.push({ label: 'New collection…', icon: 'plus', run: () => ui.exec('collections.create') });
+      }
+      const r = e.currentTarget.getBoundingClientRect();
+      ui.platform.workbench.showContextMenu(r.left, r.bottom + 4, items);
+    },
+  });
 }
 
 function header(ex, ui) {

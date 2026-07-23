@@ -8,7 +8,7 @@ import { Engine, Provider } from '@3sln/ngin';
 import { ExplorerService, SearchClientService, TransfersService } from './services.js';
 import { SocialService } from './social.js';
 import { registerCommands } from './commands.js';
-import { NavigateAction } from './actions.js';
+import { NavigateAction, LoadCollectionsAction } from './actions.js';
 import { registerBuiltinOpeners } from '../ui/components/openers/index.js';
 
 export function createApp(platform) {
@@ -41,6 +41,7 @@ export function createApp(platform) {
   });
 
   social.init();
+  engine.dispatch(new LoadCollectionsAction());
 
   return { engine, app };
 }

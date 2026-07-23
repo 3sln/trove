@@ -10,6 +10,9 @@ import { TroveError, wrapError } from '../errors.js';
 import { newId, joinPath, normalizePath } from '../util.js';
 
 const ROOT_ID = 'root';
+function rootId(collectionId = 'default') {
+  return collectionId === 'default' ? ROOT_ID : `root_${collectionId}`;
+}
 
 export class SqliteStore extends MetadataStore {
   /** @param {{path?: string, database?: object}} opts path to db file, or ':memory:' */
@@ -37,9 +40,10 @@ export class SqliteStore extends MetadataStore {
       PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS nodes (
         id TEXT PRIMARY KEY,
+        collectionId TEXT NOT NULL DEFAULT 'default',
         parentId TEXT,
         name TEXT NOT NULL,
-        path TEXT NOT NULL UNIQUE,
+        path TEXT NOT NULL,
         kind TEXT NOT NULL,
         size INTEGER NOT NULL DEFAULT 0,
         contentType TEXT,
@@ -52,15 +56,23 @@ export class SqliteStore extends MetadataStore {
       );
       CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parentId);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_parent_name ON nodes(parentId, name);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_coll_path ON nodes(collectionId, path);
       CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
+      CREATE INDEX IF NOT EXISTS idx_nodes_coll ON nodes(collectionId);
     `);
+    await this.ensureRoot('default');
+  }
+
+  async ensureRoot(collectionId) {
+    const id = rootId(collectionId);
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO nodes (id,parentId,name,path,kind,size,createdAt,updatedAt,meta,facets)
-         VALUES (?,?,?,?,?,?,?,?,'{}','{}')`,
+        `INSERT OR IGNORE INTO nodes (id,collectionId,parentId,name,path,kind,size,createdAt,updatedAt,meta,facets)
+         VALUES (?,?,?,?,?,?,?,?,?,'{}','{}')`,
       )
-      .run(ROOT_ID, null, '', '/', 'folder', 0, now, now);
+      .run(id, collectionId, null, '', '/', 'folder', 0, now, now);
+    return this.getById(id);
   }
 
   #get(sql) {
@@ -70,8 +82,12 @@ export class SqliteStore extends MetadataStore {
   async getById(id) {
     return row(this.#get('SELECT * FROM nodes WHERE id = ?').get(id));
   }
-  async getByPath(path) {
-    return row(this.#get('SELECT * FROM nodes WHERE path = ?').get(normalizePath(path)));
+  async getByPath(collectionId, path) {
+    if (path === undefined) {
+      path = collectionId;
+      collectionId = 'default';
+    }
+    return row(this.#get('SELECT * FROM nodes WHERE collectionId = ? AND path = ?').get(collectionId, normalizePath(path)));
   }
 
   async listChildren(parentId, opts = {}) {
@@ -97,20 +113,21 @@ export class SqliteStore extends MetadataStore {
       const parent = node.parentId ? this.#get('SELECT * FROM nodes WHERE id = ?').get(node.parentId) : null;
       if (node.parentId && !parent) throw TroveError.notFound('Parent folder');
       if (parent && parent.kind !== 'folder') throw TroveError.invalid('Parent is not a folder');
+      const collectionId = parent ? parent.collectionId : node.collectionId || 'default';
       const path = parent ? joinPath(parent.path, node.name) : normalizePath('/' + node.name);
       const now = Date.now();
       const full = {
         id: node.id || newId(node.kind === 'folder' ? 'fld' : 'fil'),
-        parentId: node.parentId, name: node.name, path, kind: node.kind,
+        collectionId, parentId: node.parentId, name: node.name, path, kind: node.kind,
         size: node.size ?? 0, contentType: node.contentType ?? null,
         storageKey: node.storageKey ?? null, etag: node.etag ?? null,
         createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: node.facets ?? {},
       };
       this.#get(
-        `INSERT INTO nodes (id,parentId,name,path,kind,size,contentType,storageKey,etag,createdAt,updatedAt,meta,facets)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO nodes (id,collectionId,parentId,name,path,kind,size,contentType,storageKey,etag,createdAt,updatedAt,meta,facets)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
-        full.id, full.parentId, full.name, full.path, full.kind, full.size,
+        full.id, full.collectionId, full.parentId, full.name, full.path, full.kind, full.size,
         full.contentType, full.storageKey, full.etag, full.createdAt, full.updatedAt,
         JSON.stringify(full.meta), JSON.stringify(full.facets),
       );
@@ -144,7 +161,8 @@ export class SqliteStore extends MetadataStore {
     if (!self) return [];
     // Path-prefix query gets the whole subtree in one shot.
     const prefix = self.path === '/' ? '/' : self.path + '/';
-    const rows = this.#get(`SELECT * FROM nodes WHERE path LIKE ? ESCAPE '\\' AND id != ?`).all(
+    const rows = this.#get(`SELECT * FROM nodes WHERE collectionId = ? AND path LIKE ? ESCAPE '\\' AND id != ?`).all(
+      self.collectionId,
       escapeLike(prefix) + '%',
       id,
     );
@@ -157,6 +175,7 @@ export class SqliteStore extends MetadataStore {
     const parent = await this.getById(newParentId);
     if (!parent) throw TroveError.notFound('Destination folder');
     if (parent.kind !== 'folder') throw TroveError.invalid('Destination is not a folder');
+    if (parent.collectionId !== node.collectionId) throw TroveError.invalid('Cannot move across collections');
     const name = newName || node.name;
     const newPath = joinPath(parent.path, name);
     if (newPath === node.path && newParentId === node.parentId) return node;
@@ -171,8 +190,8 @@ export class SqliteStore extends MetadataStore {
       );
       // Rewrite descendant paths: replace the old prefix with the new one.
       tx.prepare(
-        `UPDATE nodes SET path = ? || substr(path, ?) WHERE path LIKE ? ESCAPE '\\'`,
-      ).run(newPath + '/', oldPrefix.length + 1, escapeLike(oldPrefix) + '%');
+        `UPDATE nodes SET path = ? || substr(path, ?) WHERE collectionId = ? AND path LIKE ? ESCAPE '\\'`,
+      ).run(newPath + '/', oldPrefix.length + 1, node.collectionId, escapeLike(oldPrefix) + '%');
       tx.exec('COMMIT');
     } catch (err) {
       tx.exec('ROLLBACK');
@@ -198,9 +217,13 @@ export class SqliteStore extends MetadataStore {
   }
 
   async searchByName(query, opts = {}) {
+    const clause = opts.collectionId ? 'AND collectionId = ?' : '';
+    const params = ['%' + escapeLike(query) + '%'];
+    if (opts.collectionId) params.push(opts.collectionId);
+    params.push(opts.limit ?? 50);
     const rows = this.#get(
-      `SELECT * FROM nodes WHERE id != 'root' AND name LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?`,
-    ).all('%' + escapeLike(query) + '%', opts.limit ?? 50);
+      `SELECT * FROM nodes WHERE parentId IS NOT NULL AND name LIKE ? ESCAPE '\\' COLLATE NOCASE ${clause} LIMIT ?`,
+    ).all(...params);
     return rows.map(row);
   }
 

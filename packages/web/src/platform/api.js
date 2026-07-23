@@ -88,6 +88,20 @@ export class TroveApiClient {
     return this.request('GET', '/api/me');
   }
 
+  // --- collections -----------------------------------------------------------
+  collections() {
+    return this.request('GET', '/api/collections');
+  }
+  createCollection(body) {
+    return this.request('POST', '/api/collections', { body });
+  }
+  updateCollection(id, body) {
+    return this.request('POST', `/api/collections/${encodeURIComponent(id)}`, { body });
+  }
+  setCollectionGrant(id, grant) {
+    return this.request('POST', `/api/collections/${encodeURIComponent(id)}/grants`, { body: grant });
+  }
+
   // --- conversations, tags, sidecar ------------------------------------------
   sidecar(id) {
     return this.request('GET', `/api/files/${encodeURIComponent(id)}/sidecar`);

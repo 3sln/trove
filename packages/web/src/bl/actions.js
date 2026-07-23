@@ -12,26 +12,51 @@ class AppAction extends Action {
 }
 
 export class NavigateAction extends AppAction {
-  constructor(target) {
+  constructor(target, collectionId) {
     super();
     this.target = target; // folder id or '/path'
+    this.collectionId = collectionId; // set to switch collections (navigates to its root)
   }
   async execute({ app }) {
     const { explorer, platform } = app;
-    explorer.set({ loading: true, error: null });
+    const collectionId = this.collectionId || explorer.state.collectionId || 'default';
+    const target = this.collectionId ? '/' : this.target ?? '/';
+    explorer.set({ loading: true, error: null, collectionId });
     try {
       const sort = platform.settings.get('explorer.sort');
       const order = platform.settings.get('explorer.sortOrder');
-      const res = await platform.api.list(this.target ?? '/', { sort, order });
+      const res = await platform.api.list(target, { sort, order, collection: collectionId });
       explorer.set({
         folder: res.node, breadcrumb: res.breadcrumb, items: res.items,
-        loading: false, selection: [], sort, order,
+        loading: false, selection: [], sort, order, collectionId: res.collectionId || collectionId,
       });
-      platform.context.setMany({ 'explorer.folderId': res.node.id, 'explorer.hasSelection': false });
+      platform.context.setMany({ 'explorer.folderId': res.node.id, 'explorer.collectionId': collectionId, 'explorer.hasSelection': false });
     } catch (err) {
       explorer.set({ loading: false, error: err.message });
       platform.notifications.error(`Couldn't open folder: ${err.message}`);
     }
+  }
+}
+
+export class LoadCollectionsAction extends AppAction {
+  async execute({ app }) {
+    try {
+      const res = await app.platform.api.collections();
+      app.explorer.set({ collections: res.collections || [], canCreateCollection: !!res.canCreate });
+    } catch { /* collections disabled */ }
+  }
+}
+
+export class CreateCollectionAction extends AppAction {
+  constructor(record) {
+    super();
+    this.record = record;
+  }
+  async execute({ app }) {
+    const res = await app.platform.api.createCollection(this.record);
+    app.platform.notifications.success(`Created collection “${res.collection.name}”`);
+    await app.engine.dispatch(new LoadCollectionsAction());
+    app.engine.dispatch(new NavigateAction('/', res.collection.id));
   }
 }
 

@@ -1,48 +1,63 @@
 // In-memory MetadataStore. Reference implementation + test double. Keeps nodes
-// in a Map keyed by id, with secondary indexes for path and (parentId,name).
+// in a Map keyed by id, with secondary indexes for (collectionId,path) and
+// (parentId,name). Every node belongs to a collection; each collection has its
+// own root, so paths are unique per collection, not globally.
 
 import { MetadataStore } from './interface.js';
 import { TroveError } from '../errors.js';
 import { newId, joinPath, normalizePath } from '../util.js';
 
 const ROOT_ID = 'root';
+export function rootId(collectionId = 'default') {
+  return collectionId === 'default' ? ROOT_ID : `root_${collectionId}`;
+}
 
 export class MemoryStore extends MetadataStore {
   constructor() {
     super();
     this.nodes = new Map(); // id -> node
-    this.byPath = new Map(); // path -> id
+    this.byPath = new Map(); // `${collectionId}\0${path}` -> id
     this.childKey = new Map(); // `${parentId}\0${name}` -> id
   }
 
   async init() {
-    if (!this.nodes.has(ROOT_ID)) {
+    await this.ensureRoot('default');
+  }
+
+  async ensureRoot(collectionId) {
+    const id = rootId(collectionId);
+    if (!this.nodes.has(id)) {
       const now = Date.now();
-      const root = {
-        id: ROOT_ID, parentId: null, name: '', path: '/', kind: 'folder',
+      this.#index({
+        id, collectionId, parentId: null, name: '', path: '/', kind: 'folder',
         size: 0, contentType: null, storageKey: null, etag: null,
         createdAt: now, updatedAt: now, meta: {}, facets: {},
-      };
-      this.#index(root);
+      });
     }
+    return clone(this.nodes.get(id));
   }
 
   #index(node) {
     this.nodes.set(node.id, node);
-    this.byPath.set(node.path, node.id);
+    this.byPath.set(`${node.collectionId}\0${node.path}`, node.id);
     if (node.parentId) this.childKey.set(`${node.parentId}\0${node.name}`, node.id);
   }
   #deindex(node) {
     this.nodes.delete(node.id);
-    this.byPath.delete(node.path);
+    this.byPath.delete(`${node.collectionId}\0${node.path}`);
     if (node.parentId) this.childKey.delete(`${node.parentId}\0${node.name}`);
   }
 
   async getById(id) {
     return clone(this.nodes.get(id));
   }
-  async getByPath(path) {
-    const id = this.byPath.get(normalizePath(path));
+  async getByPath(collectionId, path) {
+    // Back-compat: getByPath(path) → default collection.
+    if (path === undefined) {
+      path = collectionId;
+      collectionId = 'default';
+    }
+    const id = this.byPath.get(`${collectionId}\0${normalizePath(path)}`);
     return id ? clone(this.nodes.get(id)) : null;
   }
 
@@ -53,7 +68,6 @@ export class MemoryStore extends MetadataStore {
     const sort = opts.sort ?? 'name';
     const dir = opts.order === 'desc' ? -1 : 1;
     items.sort((a, b) => {
-      // Folders first, then by chosen key.
       if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
       const av = a[sort], bv = b[sort];
       if (av < bv) return -1 * dir;
@@ -71,6 +85,7 @@ export class MemoryStore extends MetadataStore {
     const parent = node.parentId ? this.nodes.get(node.parentId) : null;
     if (node.parentId && !parent) throw TroveError.notFound('Parent folder');
     if (parent && parent.kind !== 'folder') throw TroveError.invalid('Parent is not a folder');
+    const collectionId = parent ? parent.collectionId : node.collectionId || 'default';
     const path = parent ? joinPath(parent.path, node.name) : normalizePath('/' + node.name);
     if (this.childKey.has(`${node.parentId}\0${node.name}`)) {
       throw TroveError.alreadyExists(node.name);
@@ -78,7 +93,7 @@ export class MemoryStore extends MetadataStore {
     const now = Date.now();
     const full = {
       id: node.id || newId(node.kind === 'folder' ? 'fld' : 'fil'),
-      parentId: node.parentId, name: node.name, path, kind: node.kind,
+      collectionId, parentId: node.parentId, name: node.name, path, kind: node.kind,
       size: node.size ?? 0, contentType: node.contentType ?? null,
       storageKey: node.storageKey ?? null, etag: node.etag ?? null,
       createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: node.facets ?? {},
@@ -122,10 +137,10 @@ export class MemoryStore extends MetadataStore {
     const parent = this.nodes.get(newParentId);
     if (!parent) throw TroveError.notFound('Destination folder');
     if (parent.kind !== 'folder') throw TroveError.invalid('Destination is not a folder');
+    if (parent.collectionId !== node.collectionId) throw TroveError.invalid('Cannot move across collections');
     const name = newName || node.name;
     if (this.childKey.has(`${newParentId}\0${name}`)) throw TroveError.alreadyExists(name);
 
-    // Collect subtree before mutating.
     const subtree = await this.descendants(id);
     this.#deindex(node);
     node.parentId = newParentId;
@@ -134,12 +149,11 @@ export class MemoryStore extends MetadataStore {
     node.path = joinPath(parent.path, name);
     node.updatedAt = Date.now();
     this.#index(node);
-    // Rewrite descendant paths.
     for (const raw of subtree) {
       const d = this.nodes.get(raw.id);
-      this.byPath.delete(d.path);
+      this.byPath.delete(`${d.collectionId}\0${d.path}`);
       d.path = node.path + d.path.slice(oldPath.length);
-      this.byPath.set(d.path, d.id);
+      this.byPath.set(`${d.collectionId}\0${d.path}`, d.id);
     }
     return clone(node);
   }
@@ -161,7 +175,8 @@ export class MemoryStore extends MetadataStore {
   async searchByName(query, opts = {}) {
     const q = query.toLowerCase();
     const items = [...this.nodes.values()]
-      .filter((n) => n.id !== ROOT_ID && n.name.toLowerCase().includes(q))
+      .filter((n) => n.parentId !== null && n.name.toLowerCase().includes(q))
+      .filter((n) => !opts.collectionId || n.collectionId === opts.collectionId)
       .slice(0, opts.limit ?? 50);
     return items.map(clone);
   }

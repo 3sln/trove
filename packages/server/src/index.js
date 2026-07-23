@@ -15,6 +15,7 @@ import {
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
   KeyValueStore, MemoryKV, SqliteKV,
   SidecarService, NotificationCenter, WebPushService,
+  CollectionService,
   TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
@@ -121,7 +122,25 @@ export async function createServer(config = {}) {
     onMentions: (mentions) => notifications.enqueue(mentions).catch((e) => console.error('enqueue mentions failed', e)),
   });
 
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar });
+  // Collections — the ownership + permission boundary; each is a store config.
+  // Disable with config.collections === false (single open storage, no ACLs).
+  let collections = null;
+  if (config.collections !== false) {
+    collections = config.collections instanceof CollectionService
+      ? config.collections
+      : new CollectionService({
+          kv,
+          storageFactory: (storeConfig) => buildStorage(storeConfig),
+          admins: config.admins || [],
+          creatorRoles: config.creatorRoles || [],
+          defaultOpen: config.defaultOpen !== false,
+          // Record the primary driver on 'default', but reuse its live instance.
+          defaultStore: (config.storage && !(config.storage instanceof StorageBackend)) ? config.storage : { driver: config.storageDriver || 'memory' },
+          storageOverrides: { default: storage },
+        });
+  }
+
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections });
   await vfs.init();
 
   if (config.startFlusher !== false) notifications.start();
@@ -140,7 +159,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -154,7 +173,7 @@ export async function createServer(config = {}) {
     await sidecar.dispose?.();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, close };
 }
 
 /** Map process.env → createServer config. */
@@ -239,6 +258,13 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
 
   // KV store for subscriptions/inboxes: follows the metadata driver by default.
   config.kv = { driver: env.TROVE_KV || (config.metadata.driver === 'sqlite' ? 'sqlite' : 'memory'), path: config.metadata.path };
+
+  // Collections: on by default. Admins (global) + roles that can create collections.
+  if (env.TROVE_COLLECTIONS === 'false') config.collections = false;
+  config.admins = (env.TROVE_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  config.creatorRoles = (env.TROVE_COLLECTION_CREATOR_ROLES || '').split(',').map((s) => s.trim()).filter(Boolean);
+  // 'default' collection grants everyone all caps unless locked down.
+  config.defaultOpen = env.TROVE_DEFAULT_OPEN !== 'false';
 
   return config;
 }

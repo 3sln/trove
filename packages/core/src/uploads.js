@@ -45,10 +45,15 @@ export class UploadManager {
    * @param {object} [deps.sessions] session store (defaults in-memory)
    * @param {number} [deps.partSize]
    */
-  constructor({ storage, sessions, partSize = DEFAULT_PART_SIZE }) {
-    this.storage = storage;
+  constructor({ storage, storageFor, sessions, partSize = DEFAULT_PART_SIZE }) {
+    // Either a single backend, or a resolver keyed by collectionId (collections).
+    this.storageFor = storageFor ?? (async () => storage);
     this.sessions = sessions ?? new MemorySessionStore();
     this.partSize = partSize;
+  }
+
+  #storage(collectionId) {
+    return this.storageFor(collectionId);
   }
 
   /**
@@ -58,13 +63,16 @@ export class UploadManager {
   async create(req) {
     if (!isValidName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
     if (!(req.size >= 0)) throw TroveError.invalid('size must be a non-negative number');
-    const caps = this.storage.capabilities;
+    const collectionId = req.collectionId || 'default';
+    const storage = await this.#storage(collectionId);
+    const caps = storage.capabilities;
     const storageKey = newId('obj');
     const contentType = req.contentType || 'application/octet-stream';
 
     const session = {
       id: newId('up'),
       storageKey,
+      collectionId,
       parentId: req.parentId,
       name: req.name,
       size: req.size,
@@ -80,21 +88,21 @@ export class UploadManager {
     if (req.size <= SINGLE_PUT_LIMIT && caps.presignUpload) {
       session.strategy = 'single';
       await this.sessions.put(session);
-      const url = await this.storage.presignPut(storageKey, { contentType });
+      const url = await storage.presignPut(storageKey, { contentType });
       return { ...planSummary(session), strategy: 'single', url };
     }
 
     // Multipart (presigned or direct).
     if (caps.multipart) {
       session.strategy = caps.presignUpload ? 'presign' : 'direct';
-      session.uploadId = await this.storage.createMultipart(storageKey, { contentType });
+      session.uploadId = await storage.createMultipart(storageKey, { contentType });
       const partCount = Math.max(1, Math.ceil(req.size / this.partSize));
       session.partCount = partCount;
       await this.sessions.put(session);
       const parts = [];
       if (session.strategy === 'presign') {
         for (let n = 1; n <= partCount; n++) {
-          parts.push({ partNumber: n, url: await this.storage.presignPart(storageKey, session.uploadId, n) });
+          parts.push({ partNumber: n, url: await storage.presignPart(storageKey, session.uploadId, n) });
         }
       }
       return { ...planSummary(session), strategy: session.strategy, partCount, parts };
@@ -110,7 +118,8 @@ export class UploadManager {
   async signPart(uploadId, partNumber) {
     const s = await this.#session(uploadId);
     if (s.strategy !== 'presign') throw TroveError.invalid('signPart only applies to presigned uploads');
-    return this.storage.presignPart(s.storageKey, s.uploadId, partNumber);
+    const storage = await this.#storage(s.collectionId);
+    return storage.presignPart(s.storageKey, s.uploadId, partNumber);
   }
 
   /** Client reports a completed presigned part (with its ETag from S3). */
@@ -125,14 +134,15 @@ export class UploadManager {
   /** Direct backends: stream one part through us to storage. */
   async uploadPart(uploadId, partNumber, body, opts = {}) {
     const s = await this.#session(uploadId);
+    const storage = await this.#storage(s.collectionId);
     if (s.strategy === 'direct-single') {
-      const info = await this.storage.put(s.storageKey, body, { contentType: s.contentType, ...opts });
+      const info = await storage.put(s.storageKey, body, { contentType: s.contentType, ...opts });
       s.parts[1] = { etag: info.etag || 'single' };
       await this.sessions.put(s);
       return { partNumber: 1, etag: s.parts[1].etag };
     }
     if (s.strategy !== 'direct') throw TroveError.invalid('uploadPart only applies to direct uploads');
-    const res = await this.storage.putPart(s.storageKey, s.uploadId, partNumber, body, opts);
+    const res = await storage.putPart(s.storageKey, s.uploadId, partNumber, body, opts);
     s.parts[partNumber] = { etag: res.etag };
     await this.sessions.put(s);
     return res;
@@ -174,7 +184,8 @@ export class UploadManager {
         }
         parts.push({ partNumber: n, etag: etagN });
       }
-      const res = await this.storage.completeMultipart(s.storageKey, s.uploadId, parts);
+      const storage = await this.#storage(s.collectionId);
+      const res = await storage.completeMultipart(s.storageKey, s.uploadId, parts);
       etag = res.etag;
     }
     await this.sessions.delete(uploadId);
@@ -183,6 +194,7 @@ export class UploadManager {
       size: s.size,
       contentType: s.contentType,
       etag,
+      collectionId: s.collectionId,
       parentId: s.parentId,
       name: s.name,
     };
@@ -191,8 +203,9 @@ export class UploadManager {
   async abort(uploadId) {
     const s = await this.sessions.get(uploadId);
     if (!s) return;
-    if (s.uploadId) await this.storage.abortMultipart(s.storageKey, s.uploadId).catch(() => {});
-    else await this.storage.delete(s.storageKey).catch(() => {});
+    const storage = await this.#storage(s.collectionId);
+    if (s.uploadId) await storage.abortMultipart(s.storageKey, s.uploadId).catch(() => {});
+    else await storage.delete(s.storageKey).catch(() => {});
     await this.sessions.delete(uploadId);
   }
 

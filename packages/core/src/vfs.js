@@ -1,17 +1,16 @@
-// Vfs — the façade the server talks to. It binds the three pluggable pieces
-// (storage blobs, metadata tree, search) into coherent, user-level operations:
-// list/stat/mkdir/read/write/move/delete/search and the upload lifecycle. It's
-// where indexing is triggered (on write/complete) and where download URLs are
-// resolved to a presigned link when the backend supports it (so big downloads
-// bypass our server) or a proxied stream when it doesn't.
-//
-// Nothing here is HTTP-aware; the server package adapts these methods to routes.
+// Vfs — the façade the server talks to. It binds storage blobs, the metadata
+// tree, search, and sidecars into user-level operations, and is collection-aware:
+// every node belongs to a collection, and its bytes live in that collection's
+// backing store. When a CollectionService is provided, storage is resolved per
+// collection (so different collections can sit on different buckets/prefixes/
+// filesystems); without one, a single storage backend serves the lone 'default'
+// collection (the library/zero-config path). Nothing here is HTTP-aware.
 
 import { TroveError } from './errors.js';
 import { UploadManager } from './uploads.js';
 import { IndexerRegistry, textIndexer } from './indexers/registry.js';
 import { basename, parentPath, extname } from './util.js';
-import { ROOT_ID } from './metadata/memory.js';
+import { ROOT_ID, rootId } from './metadata/memory.js';
 
 const CONTENT_TYPES = {
   '.txt': 'text/plain', '.md': 'text/markdown', '.html': 'text/html', '.css': 'text/css',
@@ -23,65 +22,71 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  /**
-   * @param {object} deps
-   * @param {import('./storage/interface.js').StorageBackend} deps.storage
-   * @param {import('./metadata/interface.js').MetadataStore} deps.metadata
-   * @param {import('./search/index.js').SearchService} [deps.search]
-   * @param {IndexerRegistry} [deps.indexers]
-   * @param {number} [deps.maxIndexBytes] cap on bytes read for content indexing
-   */
-  constructor({ storage, metadata, search, indexers, sidecar, maxIndexBytes = 2 * 1024 * 1024 }) {
-    if (!storage) throw TroveError.invalid('Vfs requires a storage backend');
+  constructor({ storage, metadata, search, indexers, sidecar, collections, maxIndexBytes = 2 * 1024 * 1024 }) {
+    if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
-    this.storage = storage;
+    this.storage = storage; // primary backend (default collection + capability reporting)
     this.metadata = metadata;
     this.search = search ?? null;
-    // Sidecar owns indexer facets (scoped per indexer), tags, and conversations.
-    // When present, facets land in the sidecar (cold in object storage) instead
-    // of the metadata store.
     this.sidecar = sidecar ?? null;
+    this.collections = collections ?? null;
     this.indexers = indexers ?? new IndexerRegistry();
     if (!this.indexers.indexers.size) this.indexers.register(textIndexer);
-    this.uploads = new UploadManager({ storage });
+    // One UploadManager; it resolves the right backend per session's collection.
+    this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid) });
     this.maxIndexBytes = maxIndexBytes;
-  }
-
-  /** Write an indexer facet to the sidecar if configured, else the metadata store. */
-  async #writeFacet(nodeId, indexerId, facet) {
-    if (this.sidecar) return this.sidecar.setFacet(nodeId, indexerId, facet);
-    return this.metadata.setFacet(nodeId, indexerId, facet);
   }
 
   async init() {
     await this.metadata.init();
+    if (this.collections) await this.collections.init();
+  }
+
+  /** Resolve the storage backend for a collection. */
+  async storageFor(collectionId = 'default') {
+    if (this.collections) return this.collections.storageFor(collectionId);
+    return this.storage;
   }
 
   guessContentType(name) {
     return CONTENT_TYPES[extname(name)] || 'application/octet-stream';
   }
 
+  async #writeFacet(nodeId, indexerId, facet) {
+    if (this.sidecar) return this.sidecar.setFacet(nodeId, indexerId, facet);
+    return this.metadata.setFacet(nodeId, indexerId, facet);
+  }
+
   // --- reads -----------------------------------------------------------------
 
-  async resolve(pathOrId) {
+  /** Resolve a path (needs collectionId) or a globally-unique id to a node. */
+  async resolve(pathOrId, collectionId = 'default') {
+    // The collection root is created on first access (a new collection has no
+    // tree yet), so `/` always resolves.
+    if (pathOrId === '/' || pathOrId === '') return this.rootNode(collectionId);
     const node = pathOrId.startsWith('/')
-      ? await this.metadata.getByPath(pathOrId)
+      ? await this.metadata.getByPath(collectionId, pathOrId)
       : await this.metadata.getById(pathOrId);
     if (!node) throw TroveError.notFound('File or folder');
     return node;
   }
 
-  async list(pathOrId, opts) {
-    const node = await this.resolve(pathOrId);
+  /** The root node of a collection (created on first use). */
+  async rootNode(collectionId = 'default') {
+    if (this.metadata.ensureRoot) return this.metadata.ensureRoot(collectionId);
+    return this.metadata.getById(rootId(collectionId));
+  }
+
+  async list(pathOrId, opts = {}) {
+    const node = await this.resolve(pathOrId, opts.collectionId);
     if (node.kind !== 'folder') throw TroveError.invalid('Not a folder');
     return this.metadata.listChildren(node.id, opts);
   }
 
-  async stat(pathOrId) {
-    return this.resolve(pathOrId);
+  async stat(pathOrId, collectionId) {
+    return this.resolve(pathOrId, collectionId);
   }
 
-  /** Path from root to node (for breadcrumbs). */
   async breadcrumb(id) {
     const trail = [];
     let cur = await this.metadata.getById(id);
@@ -94,40 +99,41 @@ export class Vfs {
 
   // --- mutations -------------------------------------------------------------
 
-  async mkdir(parentId, name) {
-    const parent = await this.resolve(parentId);
+  async mkdir(parentId, name, collectionId) {
+    const parent = await this.resolve(parentId, collectionId);
     return this.metadata.create({ parentId: parent.id, name, kind: 'folder' });
   }
 
-  /** Convenience whole-file write (used for small files / server-side writes). */
-  async writeFile(parentId, name, body, { contentType, signal } = {}) {
-    const parent = await this.resolve(parentId);
+  async writeFile(parentId, name, body, { contentType, signal, collectionId } = {}) {
+    const parent = await this.resolve(parentId, collectionId);
+    const cid = parent.collectionId;
     const storageKey = `obj_${cryptoId()}`;
     const ct = contentType || this.guessContentType(name);
-    const info = await this.storage.put(storageKey, body, { contentType: ct, signal });
-    const node = await this.#upsertFileNode({
-      parentId: parent.id, name, storageKey, size: info.size, contentType: ct, etag: info.etag,
-    });
-    this.#indexNode(node).catch((e) => console.error('index error', e));
+    const storage = await this.storageFor(cid);
+    const info = await storage.put(storageKey, body, { contentType: ct, signal });
+    const node = await this.#upsertFileNode({ parent, name, storageKey, size: info.size, contentType: ct, etag: info.etag });
+    // Small server-side writes index synchronously (search is ready on return);
+    // large client uploads (completeUpload) index in the background instead.
+    await this.#indexNode(node).catch((e) => console.error('index error', e));
     return node;
   }
 
-  /** Create-or-overwrite a file node at (parentId, name). */
-  async #upsertFileNode({ parentId, name, storageKey, size, contentType, etag }) {
-    const existing = await this.metadata.getByPath(pathOf(await this.metadata.getById(parentId), name));
+  async #upsertFileNode({ parent, name, storageKey, size, contentType, etag }) {
+    const cid = parent.collectionId;
+    const existing = await this.metadata.getByPath(cid, pathOf(parent, name));
     if (existing && existing.kind === 'file') {
       const oldKey = existing.storageKey;
       const updated = await this.metadata.update(existing.id, { storageKey, size, contentType, etag });
-      if (oldKey && oldKey !== storageKey) await this.storage.delete(oldKey).catch(() => {});
+      if (oldKey && oldKey !== storageKey) (await this.storageFor(cid)).delete(oldKey).catch(() => {});
       return updated;
     }
     if (existing) throw TroveError.alreadyExists(name);
-    return this.metadata.create({ parentId, name, kind: 'file', storageKey, size, contentType, etag });
+    return this.metadata.create({ parentId: parent.id, name, kind: 'file', storageKey, size, contentType, etag });
   }
 
   async move(id, destParentId, newName) {
     const node = await this.resolve(id);
-    if (node.id === ROOT_ID) throw TroveError.invalid('Cannot move the root');
+    if (node.parentId === null) throw TroveError.invalid('Cannot move a collection root');
     return this.metadata.move(node.id, destParentId, newName);
   }
 
@@ -138,21 +144,20 @@ export class Vfs {
 
   async remove(id, { recursive = true } = {}) {
     const node = await this.resolve(id);
-    if (node.id === ROOT_ID) throw TroveError.invalid('Cannot delete the root');
+    if (node.parentId === null) throw TroveError.invalid('Cannot delete a collection root');
     if (node.kind === 'folder') {
       const kids = await this.metadata.descendants(node.id);
       if (kids.length && !recursive) throw TroveError.invalid('Folder is not empty');
-      // Delete children (files first: reclaim blobs), then the folder.
       for (const child of kids) {
         if (child.kind === 'file' && child.storageKey) {
-          await this.storage.delete(child.storageKey).catch(() => {});
+          (await this.storageFor(child.collectionId)).delete(child.storageKey).catch(() => {});
         }
         await this.search?.removeNode(child.id);
         await this.sidecar?.remove(child.id).catch(() => {});
         await this.metadata.remove(child.id);
       }
     } else if (node.storageKey) {
-      await this.storage.delete(node.storageKey).catch(() => {});
+      (await this.storageFor(node.collectionId)).delete(node.storageKey).catch(() => {});
     }
     await this.search?.removeNode(node.id);
     await this.sidecar?.remove(node.id).catch(() => {});
@@ -162,18 +167,13 @@ export class Vfs {
 
   // --- download --------------------------------------------------------------
 
-  /**
-   * Resolve how the client should fetch a file:
-   *   { mode: 'redirect', url }  — presigned; client GETs S3 directly.
-   *   { mode: 'proxy', node }    — caller streams bytes via readStream().
-   */
   async getDownload(id, { expiresIn, download } = {}) {
     const node = await this.resolve(id);
     if (node.kind !== 'file') throw TroveError.invalid('Not a file');
-    if (this.storage.capabilities.presignDownload) {
-      const url = await this.storage.presignGet(node.storageKey, {
-        expiresIn,
-        responseContentType: node.contentType,
+    const storage = await this.storageFor(node.collectionId);
+    if (storage.capabilities.presignDownload) {
+      const url = await storage.presignGet(node.storageKey, {
+        expiresIn, responseContentType: node.contentType,
         downloadName: download ? node.name : undefined,
       });
       return { mode: 'redirect', url, node };
@@ -181,19 +181,21 @@ export class Vfs {
     return { mode: 'proxy', node };
   }
 
-  /** Byte stream for proxying (fs/memory backends, or range requests). */
   async readStream(id, { range, signal } = {}) {
     const node = await this.resolve(id);
     if (node.kind !== 'file') throw TroveError.invalid('Not a file');
     if (!node.storageKey) throw TroveError.notFound('File content');
-    return this.storage.get(node.storageKey, { range, signal });
+    return (await this.storageFor(node.collectionId)).get(node.storageKey, { range, signal });
   }
 
   // --- uploads ---------------------------------------------------------------
 
   async createUpload(req) {
-    const parent = await this.resolve(req.parentId);
-    return this.uploads.create({ ...req, parentId: parent.id, contentType: req.contentType || this.guessContentType(req.name) });
+    const parent = await this.resolve(req.parentId, req.collectionId);
+    return this.uploads.create({
+      ...req, parentId: parent.id, collectionId: parent.collectionId,
+      contentType: req.contentType || this.guessContentType(req.name),
+    });
   }
   signUploadPart(uploadId, partNumber) {
     return this.uploads.signPart(uploadId, partNumber);
@@ -213,30 +215,32 @@ export class Vfs {
 
   async completeUpload(uploadId, parts) {
     const obj = await this.uploads.complete(uploadId, parts);
-    const node = await this.#upsertFileNode(obj);
+    const parent = await this.metadata.getById(obj.parentId);
+    if (!parent) throw TroveError.notFound('Parent folder');
+    const node = await this.#upsertFileNode({ parent, name: obj.name, storageKey: obj.storageKey, size: obj.size, contentType: obj.contentType, etag: obj.etag });
     this.#indexNode(node).catch((e) => console.error('index error', e));
     return node;
   }
 
   // --- search & indexing -----------------------------------------------------
 
-  async searchQuery(query, opts) {
+  async searchQuery(query, opts = {}) {
     if (!this.search) {
-      // Fall back to name search via metadata when no SearchService is wired.
       const items = await this.metadata.searchByName(query, opts);
       return items.map((n) => ({ nodeId: n.id, score: 1, node: n, snippet: null }));
     }
     const results = await this.search.search(query, opts);
-    // Hydrate nodes for the UI.
     const out = [];
     for (const r of results) {
       const node = await this.metadata.getById(r.nodeId);
-      if (node) out.push({ ...r, node });
+      if (!node) continue;
+      // Scope to the requested collections (permission-filtered by the server).
+      if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
+      out.push({ ...r, node });
     }
     return out;
   }
 
-  /** Push documents from a (plugin) indexer under its namespace onto a node. */
   async indexDocuments(nodeId, indexerId, documents, facet) {
     const node = await this.metadata.getById(nodeId);
     if (!node) throw TroveError.notFound('Node');
@@ -249,16 +253,17 @@ export class Vfs {
     if (node.kind !== 'file') return;
     if (this.search) await this.search.indexName(node);
     const matching = this.indexers.matching(node);
+    const storage = await this.storageFor(node.collectionId);
     for (const indexer of matching) {
       try {
         const ctx = {
           maxBytes: this.maxIndexBytes,
           readBytes: async () => {
-            const { stream } = await this.storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
+            const { stream } = await storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
             return readAll(stream);
           },
           readText: async () => {
-            const { stream } = await this.storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
+            const { stream } = await storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
             return new TextDecoder().decode(await readAll(stream));
           },
         };

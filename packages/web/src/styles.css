@@ -195,6 +195,16 @@ kbd {
 .iconbtn:active { transform: translateY(1px); }
 .iconbtn.danger:hover { color: var(--danger); }
 
+/* ---- Collection switcher ------------------------------------------------- */
+.collection-switch {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 4px 8px 0;
+  padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-elevated); color: var(--text); transition: border-color .12s var(--ease);
+}
+.collection-switch:hover { border-color: var(--accent); }
+.collection-switch .cs-name { flex: 1; text-align: left; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-switch svg:last-child { color: var(--text-faint); }
+
 /* ---- Breadcrumb ---------------------------------------------------------- */
 .breadcrumb {
   display: flex; align-items: center; gap: 2px; flex-wrap: wrap;

@@ -50,56 +50,105 @@ export function createRouter() {
     ...(config?.clientConfig || {}),
   }));
 
+  // --- collections -----------------------------------------------------------
+
+  r.get('/api/collections', async ({ collections, principal }) => {
+    if (!collections) return { collections: [{ id: 'default', name: 'My Drive', capabilities: ['read', 'write', 'delete', 'admin'] }] };
+    return { collections: await collections.list(principal), canCreate: collections.canCreate(principal) };
+  });
+
+  r.get('/api/collections/:id', async ({ collections, principal, params }) => {
+    if (!collections) return { collection: { id: 'default', name: 'My Drive' } };
+    const c = await collections.assert(principal, params.id, 'read');
+    return { collection: collections.describe(c, principal) };
+  });
+
+  r.post('/api/collections', async ({ collections, principal, req }) => {
+    if (!collections) throw TroveError.unsupported('Collections are not enabled');
+    const b = await body(req);
+    return { collection: await collections.create(b, principal) };
+  });
+
+  r.post('/api/collections/:id', async ({ collections, principal, params, req }) => {
+    if (!collections) throw TroveError.unsupported('Collections are not enabled');
+    const b = await body(req);
+    return { collection: await collections.update(params.id, b, principal) };
+  });
+
+  r.delete('/api/collections/:id', async ({ collections, principal, params }) => {
+    if (!collections) throw TroveError.unsupported('Collections are not enabled');
+    return collections.remove(params.id, principal);
+  });
+
+  r.post('/api/collections/:id/grants', async ({ collections, principal, params, req }) => {
+    if (!collections) throw TroveError.unsupported('Collections are not enabled');
+    const b = await body(req);
+    return { collection: await collections.setGrant(params.id, b, principal) };
+  });
+
   // --- browse ----------------------------------------------------------------
 
-  r.get('/api/fs/list', async ({ vfs, query }) => {
+  r.get('/api/fs/list', async (ctx) => {
+    const { vfs, query } = ctx;
     const pathOrId = query.id || query.path || '/';
-    const node = await vfs.stat(pathOrId);
+    const node = await vfs.stat(pathOrId, query.collection);
+    await assertCap(ctx, node.collectionId, 'read');
     const { items, nextCursor } = await vfs.list(node.id, {
       sort: query.sort, order: query.order,
       limit: query.limit ? Number(query.limit) : undefined,
       cursor: query.cursor,
     });
     const breadcrumb = await vfs.breadcrumb(node.id);
-    return { node, items, nextCursor, breadcrumb };
+    return { node, items, nextCursor, breadcrumb, collectionId: node.collectionId };
   });
 
-  r.get('/api/fs/stat', async ({ vfs, query }) => {
-    const node = await vfs.stat(query.id || query.path);
-    return { node, breadcrumb: await vfs.breadcrumb(node.id) };
+  r.get('/api/fs/stat', async (ctx) => {
+    const node = await ctx.vfs.stat(ctx.query.id || ctx.query.path, ctx.query.collection);
+    await assertCap(ctx, node.collectionId, 'read');
+    return { node, breadcrumb: await ctx.vfs.breadcrumb(node.id) };
   });
 
-  r.post('/api/fs/folder', async ({ vfs, req }) => {
-    const b = await body(req);
+  r.post('/api/fs/folder', async (ctx) => {
+    const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    return { node: await vfs.mkdir(await resolveParent(vfs, b), b.name) };
+    const parent = await ctx.vfs.stat(await resolveParent(ctx.vfs, b), b.collection);
+    await assertCap(ctx, parent.collectionId, 'write');
+    return { node: await ctx.vfs.mkdir(parent.id, b.name) };
   });
 
-  r.post('/api/fs/move', async ({ vfs, req }) => {
-    const b = await body(req);
+  r.post('/api/fs/move', async (ctx) => {
+    const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
-    const destParentId = b.destParentId || (b.destParentPath ? (await vfs.stat(b.destParentPath)).id : undefined);
+    const node = await ctx.vfs.stat(b.id);
+    await assertCap(ctx, node.collectionId, 'write');
+    const destParentId = b.destParentId || (b.destParentPath ? (await ctx.vfs.stat(b.destParentPath, b.collection)).id : undefined);
     if (!destParentId) throw TroveError.invalid('destParentId is required');
-    return { node: await vfs.move(b.id, destParentId, b.newName) };
+    return { node: await ctx.vfs.move(b.id, destParentId, b.newName) };
   });
 
-  r.post('/api/fs/rename', async ({ vfs, req }) => {
-    const b = await body(req);
+  r.post('/api/fs/rename', async (ctx) => {
+    const b = await body(ctx.req);
     if (!b.id || !b.newName) throw TroveError.invalid('id and newName are required');
-    return { node: await vfs.rename(b.id, b.newName) };
+    const node = await ctx.vfs.stat(b.id);
+    await assertCap(ctx, node.collectionId, 'write');
+    return { node: await ctx.vfs.rename(b.id, b.newName) };
   });
 
-  r.post('/api/fs/delete', async ({ vfs, req }) => {
-    const b = await body(req);
+  r.post('/api/fs/delete', async (ctx) => {
+    const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
-    return vfs.remove(b.id, { recursive: b.recursive !== false });
+    const node = await ctx.vfs.stat(b.id);
+    await assertCap(ctx, node.collectionId, 'delete');
+    return ctx.vfs.remove(b.id, { recursive: b.recursive !== false });
   });
 
   // --- download (presign redirect or range-aware proxy) ----------------------
 
-  r.get('/api/fs/download', async ({ vfs, query, req }) => {
+  r.get('/api/fs/download', async (ctx) => {
+    const { vfs, query, req } = ctx;
     const id = query.id;
     if (!id) throw TroveError.invalid('id is required');
+    await assertCap(ctx, (await vfs.stat(id)).collectionId, 'read');
     const wantAttachment = query.disposition === 'attachment';
     const range = parseRange(req.headers.get('range'));
 
@@ -129,14 +178,14 @@ export function createRouter() {
 
   // --- uploads ---------------------------------------------------------------
 
-  r.post('/api/uploads', async ({ vfs, req }) => {
-    const b = await body(req);
+  r.post('/api/uploads', async (ctx) => {
+    const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    const plan = await vfs.createUpload({
-      parentId: await resolveParent(vfs, b),
-      name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
+    const parent = await ctx.vfs.stat(await resolveParent(ctx.vfs, b), b.collection);
+    await assertCap(ctx, parent.collectionId, 'write');
+    return ctx.vfs.createUpload({
+      parentId: parent.id, name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
     });
-    return plan;
   });
 
   r.get('/api/uploads/:id/status', ({ vfs, params }) => vfs.uploadStatus(params.id));
@@ -168,11 +217,18 @@ export function createRouter() {
 
   // --- search & indexing -----------------------------------------------------
 
-  r.get('/api/search', async ({ vfs, query }) => {
+  r.get('/api/search', async ({ vfs, query, collections, principal }) => {
     if (!query.q) throw TroveError.invalid('q is required');
+    // Only search collections the caller can read.
+    let collectionIds;
+    if (collections) {
+      const readable = (await collections.list(principal)).map((c) => c.id);
+      collectionIds = query.collection ? readable.filter((id) => id === query.collection) : readable;
+    }
     const results = await vfs.searchQuery(query.q, {
       mode: query.mode, limit: query.limit ? Number(query.limit) : undefined,
       indexers: query.indexers ? query.indexers.split(',') : undefined,
+      collectionIds,
     });
     return { query: query.q, results };
   });
@@ -181,10 +237,11 @@ export function createRouter() {
 
   // Plugin indexers push namespaced documents/facets here. The namespace is the
   // path param, so a plugin can only ever write under its own id.
-  r.post('/api/index/:indexerId', async ({ vfs, params, req }) => {
-    const b = await body(req);
+  r.post('/api/index/:indexerId', async (ctx) => {
+    const b = await body(ctx.req);
     if (!b.nodeId) throw TroveError.invalid('nodeId is required');
-    return vfs.indexDocuments(b.nodeId, params.indexerId, b.documents || [], b.facet);
+    await assertCap(ctx, (await ctx.vfs.stat(b.nodeId)).collectionId, 'write');
+    return ctx.vfs.indexDocuments(b.nodeId, ctx.params.indexerId, b.documents || [], b.facet);
   });
 
   // --- identity --------------------------------------------------------------
@@ -194,18 +251,20 @@ export function createRouter() {
   // --- conversations, tags, sidecar (per file) -------------------------------
   // The :id is a file node id; the sidecar is that file's CRDT document.
 
-  r.get('/api/files/:id/sidecar', async ({ vfs, sidecar, params }) => {
-    requireSidecar(sidecar);
-    await vfs.stat(params.id); // 404 if the file is gone
-    return sidecar.view(params.id);
+  r.get('/api/files/:id/sidecar', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    const node = await ctx.vfs.stat(ctx.params.id); // 404 if the file is gone
+    await assertCap(ctx, node.collectionId, 'read');
+    return ctx.sidecar.view(ctx.params.id);
   });
 
-  r.post('/api/files/:id/comments', async ({ vfs, sidecar, params, req, principal }) => {
-    requireSidecar(sidecar);
-    requirePrincipal(principal);
-    await vfs.stat(params.id);
-    const b = await body(req);
-    return { comment: await sidecar.addComment(params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, principal) };
+  r.post('/api/files/:id/comments', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    requirePrincipal(ctx.principal);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'write');
+    const b = await body(ctx.req);
+    return { comment: await ctx.sidecar.addComment(ctx.params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
   });
 
   r.post('/api/files/:id/comments/:cid/edit', async ({ sidecar, params, req, principal }) => {
@@ -229,12 +288,13 @@ export function createRouter() {
     return { comment: await sidecar.react(params.id, params.cid, b.emoji, b.on !== false, principal) };
   });
 
-  r.post('/api/files/:id/tags', async ({ vfs, sidecar, params, req, principal }) => {
-    requireSidecar(sidecar);
-    await vfs.stat(params.id);
-    const b = await body(req);
+  r.post('/api/files/:id/tags', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'write');
+    const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    return sidecar.setTag(params.id, b.name, b.value, principal);
+    return ctx.sidecar.setTag(ctx.params.id, b.name, b.value, ctx.principal);
   });
 
   r.delete('/api/files/:id/tags/:name', async ({ sidecar, params, principal }) => {
@@ -286,6 +346,10 @@ export function createRouter() {
   return r;
 }
 
+async function assertCap(ctx, collectionId, capability) {
+  if (!ctx.collections) return; // collections disabled → no per-collection ACL
+  await ctx.collections.assert(ctx.principal, collectionId, capability);
+}
 function requirePrincipal(principal) {
   if (!principal) throw TroveError.unauthorized('Authentication required');
 }

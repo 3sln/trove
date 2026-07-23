@@ -5,7 +5,7 @@
 
 import {
   NavigateAction, RefreshAction, CreateFolderAction, DeleteAction, RenameAction,
-  UploadFilesAction, OpenFileAction, SearchAction,
+  UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction,
 } from './actions.js';
 
 export function registerCommands(app) {
@@ -85,6 +85,18 @@ export function registerCommands(app) {
 
   // --- search ----------------------------------------------------------------
   cmd('search.run', 'Search Files', (q) => go(new SearchAction(q, undefined)), { palette: false });
+
+  // --- collections -----------------------------------------------------------
+  cmd('collections.switch', 'Switch Collection…', (cid) => { if (cid) go(new NavigateAction('/', cid)); }, { palette: false });
+  cmd('collections.create', 'New Collection…', () => {
+    workbench.showDialog({
+      kind: 'collection', title: 'New collection',
+      onSubmit: (record) => {
+        workbench.closeDialog();
+        if (record) go(new CreateCollectionAction(record));
+      },
+    });
+  }, { category: 'Collections', icon: 'files' });
 
   // --- conversations & notifications -----------------------------------------
   cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => workbench.toggleInfoPanel(), { category: 'View', icon: 'info' });

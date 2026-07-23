@@ -6,12 +6,13 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
 
-const { div, span, button, input, h3, p } = dd;
+const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
 // ---- Dialog ----------------------------------------------------------------
 export function dialog(state, ui) {
   const d = state.wb.dialog;
   if (!d) return null;
+  if (d.kind === 'collection') return collectionDialog(d, ui);
   const wb = ui.platform.workbench;
   let value = d.value ?? '';
   const submit = () => (d.kind === 'confirm' ? d.onConfirm?.() : d.onSubmit?.(value));
@@ -37,6 +38,68 @@ export function dialog(state, ui) {
       ),
     ),
   );
+}
+
+// A collection is a backing-store config. This form collects the driver + its
+// fields (filesystem path, or S3 bucket/prefix/keys) so a user with the create
+// capability can provision a new collection dynamically. The form persists
+// across re-renders (keyed to the dialog instance) so switching driver keeps it.
+let colState = { ref: null, form: null };
+function collectionDialog(d, ui) {
+  const wb = ui.platform.workbench;
+  if (colState.ref !== d) {
+    colState = { ref: d, form: { name: '', description: '', driver: 'filesystem', root: '', bucket: '', prefix: '', region: 'auto', endpoint: '', accessKeyId: '', secretAccessKey: '' } };
+  }
+  const form = colState.form;
+  const set = (k) => (e) => { form[k] = e.target.value; if (k === 'driver') ui.rerender?.(); };
+  const submit = () => {
+    const store = { driver: form.driver };
+    if (form.driver === 'filesystem') store.root = form.root;
+    if (form.driver === 's3') {
+      store.s3 = { bucket: form.bucket, region: form.region, endpoint: form.endpoint || undefined, accessKeyId: form.accessKeyId, secretAccessKey: form.secretAccessKey, forcePathStyle: !!form.endpoint };
+      if (form.prefix) store.prefix = form.prefix;
+    }
+    if (form.driver === 'filesystem' && form.prefix) store.prefix = form.prefix;
+    d.onSubmit?.({ name: form.name, description: form.description, store });
+  };
+  const field = (lbl, k, ph = '') => div({ className: 'field', $styling: { marginBottom: '10px' } },
+    label(lbl), input({ className: 'input', placeholder: ph }).on({ input: set(k) }));
+  return div({},
+    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'dialog', $styling: { width: 'min(480px, 94vw)' } },
+      h3('New collection'),
+      div({ className: 'body' }, 'A collection is a backing store you own. Configure where its files live.'),
+      field('Name', 'name', 'Team Vault'),
+      div({ className: 'field', $styling: { marginBottom: '10px' } },
+        label('Backing store'),
+        select({ className: 'input' },
+          option({ value: 'filesystem', selected: form.driver === 'filesystem' }, 'Filesystem / NAS'),
+          option({ value: 's3', selected: form.driver === 's3' }, 'S3-compatible (S3 · R2 · MinIO)'),
+          option({ value: 'memory', selected: form.driver === 'memory' }, 'Memory (ephemeral)'),
+        ).on({ change: set('driver') })),
+      storeFields(form, set),
+      div({ className: 'row-actions' },
+        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn primary' }, 'Create collection').on({ click: submit }),
+      ),
+    ),
+  );
+}
+function storeFields(form, set) {
+  const f = (lbl, k, ph = '') => div({ className: 'field', $styling: { marginBottom: '10px' } },
+    label(lbl), input({ className: 'input', placeholder: ph }).on({ input: set(k) }));
+  if (form.driver === 'filesystem') return div({}, f('Root directory', 'root', './data/team'), f('Prefix (optional)', 'prefix'));
+  if (form.driver === 's3') {
+    return div({},
+      f('Bucket', 'bucket', 'my-bucket'),
+      f('Prefix (optional)', 'prefix', 'team-a/'),
+      f('Region', 'region', 'auto'),
+      f('Endpoint (R2/MinIO; blank for AWS)', 'endpoint', 'https://<acct>.r2.cloudflarestorage.com'),
+      f('Access key id', 'accessKeyId'),
+      f('Secret access key', 'secretAccessKey'),
+    );
+  }
+  return div({ className: 'body', $styling: { fontSize: '12px' } }, 'Ephemeral — data is lost on restart. Good for testing.');
 }
 
 // ---- Context menu ----------------------------------------------------------

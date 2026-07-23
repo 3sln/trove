@@ -9,10 +9,13 @@ export { StorageBackend } from './storage/interface.js';
 export { MemoryStorage } from './storage/memory.js';
 export { FilesystemStorage } from './storage/filesystem.js';
 export { S3Storage } from './storage/s3.js';
+export { PrefixedStorage } from './storage/prefixed.js';
 
 export { MetadataStore } from './metadata/interface.js';
-export { MemoryStore, ROOT_ID } from './metadata/memory.js';
+export { MemoryStore, ROOT_ID, rootId } from './metadata/memory.js';
 export { SqliteStore } from './metadata/sqlite.js';
+
+export { CollectionService, CAPABILITIES } from './collections/index.js';
 
 export { SearchService } from './search/index.js';
 export { VectorStore, MemoryVectorStore, QdrantVectorStore } from './search/vectorStore.js';
@@ -73,7 +76,7 @@ export async function createVfs(opts = {}) {
     new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
   if (!indexers.indexers.size) indexers.register(textIndexer);
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, maxIndexBytes: opts.maxIndexBytes });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, maxIndexBytes: opts.maxIndexBytes });
   await vfs.init();
   return vfs;
 }

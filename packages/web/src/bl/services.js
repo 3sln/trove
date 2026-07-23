@@ -12,6 +12,7 @@ export class ExplorerService {
     this.state = {
       folder: null, breadcrumb: [], items: [], loading: false, error: null,
       selection: [], sort: settings.get('explorer.sort'), order: settings.get('explorer.sortOrder'),
+      collectionId: 'default', collections: [], canCreateCollection: false,
     };
     this.subject = new ObservableSubject(this.state);
   }
