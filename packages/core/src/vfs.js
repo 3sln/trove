@@ -137,13 +137,13 @@ export class Vfs {
         if (child.kind === 'file' && child.storageKey) {
           await this.storage.delete(child.storageKey).catch(() => {});
         }
-        this.search?.removeNode(child.id);
+        await this.search?.removeNode(child.id);
         await this.metadata.remove(child.id);
       }
     } else if (node.storageKey) {
       await this.storage.delete(node.storageKey).catch(() => {});
     }
-    this.search?.removeNode(node.id);
+    await this.search?.removeNode(node.id);
     await this.metadata.remove(node.id);
     return { ok: true };
   }

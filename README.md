@@ -31,8 +31,12 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   per-part retry, live progress, and resume-after-drop. Range-aware downloads
   (media seeking, partial fetch).
 - **Semantic + keyword search** — a hybrid `SearchService` blends dense vector
-  similarity with lexical matching. Embeddings are pluggable (offline hash model
-  out of the box, or any OpenAI-compatible endpoint).
+  similarity with lexical matching. **Every piece is a pluggable, async provider
+  you inject into the server constructor**: the embeddings (offline hash model or
+  any OpenAI-compatible endpoint), the **vector store** (in-memory brute-force by
+  default, or an external DB — a Qdrant adapter ships in core, and the
+  `VectorStore` interface fits pgvector/Pinecone/Milvus/LanceDB), and the keyword
+  store. Core hardcodes none of them and stays platform-agnostic.
 - **Pluggable indexers** — attach searchable content to files, namespaced under
   the indexer that owns it. A built-in text/code extractor runs server-side;
   plugins push their own documents through the API under their namespace.
@@ -108,22 +112,39 @@ presigned URLs work unchanged on the Workers runtime.
 
 ## Using the core as a library
 
+Every backend is a provider you inject into the server (or `createVfs`) — pass a
+class instance, or a `{ driver, ... }` config the server builds for you:
+
 ```js
-import { createVfs, S3Storage, SqliteStore, HttpEmbedding } from '@trove/core';
+import { createServer } from '@trove/server';
+import { S3Storage, SqliteStore, HttpEmbedding, QdrantVectorStore } from '@trove/core';
 
-const vfs = await createVfs({
-  storage: new S3Storage({ bucket, region, accessKeyId, secretAccessKey }),
-  metadata: new SqliteStore({ path: 'trove.db' }),
-  embeddings: new HttpEmbedding({ url, apiKey, model, dimensions: 1536 }),
+const { handle } = await createServer({
+  storage:     new S3Storage({ bucket, region, accessKeyId, secretAccessKey }),
+  metadata:    new SqliteStore({ path: 'trove.db' }),
+  embeddings:  new HttpEmbedding({ url, apiKey, model, dimensions: 1536 }),
+  vectorStore: new QdrantVectorStore({ url, collection: 'trove', dimensions: 1536 }),
 });
-
-const folder = await vfs.mkdir('root', 'photos');
-await vfs.writeFile(folder.id, 'note.txt', 'hello');
-const hits = await vfs.searchQuery('greeting');
 ```
 
-Every storage/metadata/embedding piece is an interface — implement your own and
-pass it in.
+Bring your own vector DB by implementing the async `VectorStore` interface
+(`add` / `remove{,ByNode,ByIndexer,ByNodeIndexer}` / `query`) and passing the
+instance in — same for `MetadataStore`, `StorageBackend`, `EmbeddingProvider`,
+and `KeywordStore`. Or drive it all from env:
+
+```sh
+TROVE_VECTOR=qdrant TROVE_QDRANT_URL=http://localhost:6333 \
+TROVE_QDRANT_COLLECTION=trove node packages/server/src/adapters/node.js
+```
+
+The lower-level `createVfs` helper does the same wiring for library use:
+
+```js
+import { createVfs } from '@trove/core';
+const vfs = await createVfs({ storage, metadata, embeddings, vectorStore });
+await vfs.writeFile('root', 'note.txt', 'hello');
+const hits = await vfs.searchQuery('greeting');
+```
 
 ## Writing a plugin
 

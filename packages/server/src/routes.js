@@ -32,6 +32,14 @@ export function createRouter() {
     indexers: vfs.indexers.list(),
     partSize: vfs.uploads.partSize,
     features: { semanticSearch: !!vfs.search },
+    search: vfs.search
+      ? {
+          vectorStore: vfs.search.vectors?.constructor?.name || null,
+          keywordStore: vfs.search.keywords?.constructor?.name || null,
+          embeddings: vfs.search.embeddings?.constructor?.name || null,
+          dimensions: vfs.search.vectors?.dimensions || null,
+        }
+      : null,
     ...(config?.clientConfig || {}),
   }));
 

@@ -15,7 +15,8 @@ export { MemoryStore, ROOT_ID } from './metadata/memory.js';
 export { SqliteStore } from './metadata/sqlite.js';
 
 export { SearchService } from './search/index.js';
-export { VectorIndex } from './search/vector.js';
+export { VectorStore, MemoryVectorStore, QdrantVectorStore } from './search/vectorStore.js';
+export { KeywordStore, MemoryKeywordStore } from './search/keywordStore.js';
 export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/embeddings.js';
 
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
@@ -46,7 +47,9 @@ export async function createVfs(opts = {}) {
   const storage = opts.storage ?? new MemoryStorage();
   const metadata = opts.metadata ?? new MemoryStore();
   const embeddings = opts.embeddings ?? new LocalHashEmbedding();
-  const search = opts.search ?? new SearchService({ embeddings });
+  const search =
+    opts.search ??
+    new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
   if (!indexers.indexers.size) indexers.register(textIndexer);
   const vfs = new Vfs({ storage, metadata, search, indexers, ...opts });
