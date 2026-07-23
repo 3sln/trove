@@ -1,0 +1,23 @@
+{
+  "name": "@trove/web",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Trove web client — a VS Code-style workbench with a contribution system, sandboxed plugins, semantic search, and media openers.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:browser": "web-test-runner --config web-test-runner.config.mjs"
+  },
+  "dependencies": {
+    "@3sln/bones": "^0.0.5",
+    "@3sln/dodo": "^0.0.9",
+    "@3sln/ngin": "^0.0.3",
+    "@trove/plugin-sdk": "0.0.1"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  },
+  "license": "MIT",
+  "author": "Ray Stubbs"
+}

@@ -6,6 +6,9 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./errors.js": "./src/errors.js",
+    "./retry.js": "./src/retry.js",
+    "./util.js": "./src/util.js",
     "./storage/*": "./src/storage/*",
     "./metadata/*": "./src/metadata/*",
     "./search/*": "./src/search/*"
