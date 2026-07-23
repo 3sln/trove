@@ -35,8 +35,8 @@ export default function workbench({ engine, app, platform, plugins }) {
 
   const { watch, zip } = platform.reactive;
   const combined$ = zip(
-    (wb, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, _bump) =>
-      ({ wb, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so }),
+    (wb, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, _bump) =>
+      ({ wb, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off }),
     platform.workbench.observe(),
     app.explorer.observe(),
     app.search.observe(),
@@ -47,6 +47,7 @@ export default function workbench({ engine, app, platform, plugins }) {
     platform.plugins.observe() || new ObservableSubject([]),
     platform.contributions.statusItems.observe(),
     app.social.observe(),
+    app.offline.observe(),
     bump$,
   );
 

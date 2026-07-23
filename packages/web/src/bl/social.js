@@ -91,6 +91,13 @@ export class SocialService {
     const nodeId = this.state.sidecar?.nodeId;
     if (!nodeId || !body.trim()) return;
     const parentId = this.state.replyTo?.id || null;
+    // Offline → queue the op; it replays (CRDT-merges) on reconnect.
+    if (this.offline && !this.offline.state.online) {
+      await this.offline.queueOp({ method: 'POST', path: `/api/files/${encodeURIComponent(nodeId)}/comments`, body: { body, parentId } });
+      this.#set({ replyTo: null });
+      this.platform.notifications.info('Offline — your comment will post when you reconnect.');
+      return;
+    }
     this.#set({ posting: true });
     try {
       await this.api.addComment(nodeId, { body, parentId });
@@ -117,6 +124,11 @@ export class SocialService {
   async addTag(name, value) {
     const nodeId = this.state.sidecar?.nodeId;
     if (!name.trim()) return;
+    if (this.offline && !this.offline.state.online) {
+      await this.offline.queueOp({ method: 'POST', path: `/api/files/${encodeURIComponent(nodeId)}/tags`, body: { name: name.trim(), value } });
+      this.platform.notifications.info('Offline — tag will sync when you reconnect.');
+      return;
+    }
     await this.api.setTag(nodeId, name.trim(), value).catch((e) => this.platform.notifications.error(e.message));
     await this.#reload();
   }

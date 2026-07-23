@@ -53,6 +53,11 @@ platform.settings.observe().subscribe(() => applyTheme());
 // --- keybindings ------------------------------------------------------------
 platform.keybindings.install(window);
 
+// --- service worker (offline shell + pinned files + push) -------------------
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
+
 // --- global drag & drop upload ---------------------------------------------
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => {

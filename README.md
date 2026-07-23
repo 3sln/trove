@@ -67,6 +67,16 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   third-party push service.
 - **Cloudflare-native** — the vector store speaks **Vectorize** (binding or REST),
   storage speaks **R2**, and identity speaks **Access** — first-class, env-driven.
+- **Collections** — every item belongs to a collection, which is both a permission
+  boundary (read / write / delete / admin grants by user, role, or anyone) and a
+  **store config**: each collection points at its own backend (an S3 bucket+prefix,
+  a filesystem path, …). Users with the create capability provision new
+  collections dynamically by configuring the backing store.
+- **Offline mode (PWA)** — a service worker caches the app shell and every
+  built-in media player/previewer; "make available offline" pins a file's bytes
+  (served from cache) and indexes its text for **offline hybrid search**
+  (lexical + local vectors). Comments and tags written offline are **queued and
+  merged** (the sidecar is a CRDT) when you reconnect.
 
 ## Quick start
 

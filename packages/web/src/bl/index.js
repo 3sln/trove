@@ -7,6 +7,7 @@
 import { Engine, Provider } from '@3sln/ngin';
 import { ExplorerService, SearchClientService, TransfersService } from './services.js';
 import { SocialService } from './social.js';
+import { OfflineService } from './offline.js';
 import { registerCommands } from './commands.js';
 import { NavigateAction, LoadCollectionsAction } from './actions.js';
 import { registerBuiltinOpeners } from '../ui/components/openers/index.js';
@@ -16,8 +17,10 @@ export function createApp(platform) {
   const search = new SearchClientService();
   const transfers = new TransfersService();
   const social = new SocialService(platform);
+  const offline = new OfflineService(platform);
+  social.offline = offline; // social queues sidecar ops through offline when disconnected
 
-  const app = { platform, explorer, search, transfers, social, engine: null };
+  const app = { platform, explorer, search, transfers, social, offline, engine: null };
 
   const engine = new Engine({
     providers: { app: Provider.fromSingleton(app) },
@@ -41,6 +44,7 @@ export function createApp(platform) {
   });
 
   social.init();
+  offline.init();
   engine.dispatch(new LoadCollectionsAction());
 
   return { engine, app };

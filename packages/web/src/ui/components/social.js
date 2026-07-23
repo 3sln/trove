@@ -87,15 +87,25 @@ export function infoPanel(state, ui) {
     !active
       ? div({ className: 'ip-empty' }, span('Open a file to see its tags and conversation.'))
       : div({ className: 'ip-body' },
-          fileHeader(active.node),
+          fileHeader(active.node, state, ui),
           tagSection(sc, ui),
           conversationSection(state, sc, ui),
         ),
   );
 }
 
-function fileHeader(node) {
-  return div({ className: 'ip-file' }, div({ className: 'ip-name' }, node.name), div({ className: 'ip-path' }, node.path));
+function fileHeader(node, state, ui) {
+  const pinned = node.kind === 'file' && ui.app.offline.isPinned(node.id);
+  return div({ className: 'ip-file' },
+    div({ className: 'ip-name' }, node.name),
+    div({ className: 'ip-path' }, node.path),
+    node.kind === 'file'
+      ? button({ className: `btn ${pinned ? '' : 'primary'}`, $styling: { marginTop: '10px', padding: '6px 11px' } },
+          icon(pinned ? 'check' : 'download', { size: 14 }),
+          pinned ? 'Available offline' : 'Make available offline',
+        ).on({ click: () => (pinned ? ui.exec('offline.unpin', node) : ui.exec('offline.pin', node)) })
+      : null,
+  );
 }
 
 function tagSection(sc, ui) {

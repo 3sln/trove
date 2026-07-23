@@ -86,6 +86,16 @@ export function registerCommands(app) {
   // --- search ----------------------------------------------------------------
   cmd('search.run', 'Search Files', (q) => go(new SearchAction(q, undefined)), { palette: false });
 
+  // --- offline ---------------------------------------------------------------
+  cmd('offline.pin', 'Make Available Offline', (node) => {
+    const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    if (target?.kind === 'file') app.offline.pin(target);
+  }, { category: 'Offline', icon: 'download' });
+  cmd('offline.unpin', 'Remove from Offline', (node) => {
+    const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    if (target) app.offline.unpin(target.id);
+  }, { palette: false });
+
   // --- collections -----------------------------------------------------------
   cmd('collections.switch', 'Switch Collection…', (cid) => { if (cid) go(new NavigateAction('/', cid)); }, { palette: false });
   cmd('collections.create', 'New Collection…', () => {

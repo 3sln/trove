@@ -230,6 +230,9 @@ kbd {
 .row .ico.folder { color: var(--accent); }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .meta { color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.row .pin-dot { color: var(--success); display: grid; place-items: center; flex: none; }
+.statusbar .offline-badge { color: var(--warn); }
+.statusbar .offline-badge span { color: var(--warn); }
 .row .rename-input {
   flex: 1; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 4px;
   padding: 2px 6px; outline: none; color: var(--text);

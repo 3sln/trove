@@ -81,12 +81,14 @@ function body(ex, ui) {
 function row(node, ex, ui) {
   const selected = ex.selection.includes(node.id);
   const ic = iconForNode(node);
+  const pinned = node.kind === 'file' && ui.app.offline.isPinned(node.id);
   return div({
     className: `row ${selected ? 'selected' : ''}`,
     $attrs: { draggable: 'true', 'data-id': node.id },
   },
     span({ className: `ico ${node.kind === 'folder' ? 'folder' : ''}` }, icon(ic, { size: 17 })),
     span({ className: 'name' }, node.name),
+    pinned ? span({ className: 'pin-dot', title: 'Available offline' }, icon('download', { size: 11 })) : null,
     span({ className: 'meta' }, node.kind === 'file' ? bytes(node.size) : relativeDate(node.updatedAt)),
   ).on({
     click: (e) => {
@@ -125,9 +127,13 @@ function row(node, ex, ui) {
 }
 
 function openRowMenu(e, node, ui) {
+  const pinned = node.kind === 'file' && ui.app.offline.isPinned(node.id);
   const items = [
     { label: 'Open', icon: 'file', run: () => ui.go(new OpenFileAction(node)) },
     node.kind === 'file' && { label: 'Download', icon: 'download', run: () => ui.exec('explorer.download', node) },
+    node.kind === 'file' && (pinned
+      ? { label: 'Remove from offline', icon: 'check', run: () => ui.exec('offline.unpin', node) }
+      : { label: 'Make available offline', icon: 'download', run: () => ui.exec('offline.pin', node) }),
     { sep: true },
     { label: 'Rename…', icon: 'file-text', run: () => ui.exec('explorer.rename') },
     { label: 'Delete', icon: 'trash', danger: true, run: () => ui.exec('explorer.delete') },

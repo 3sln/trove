@@ -16,7 +16,15 @@ export default function statusBar(state, ui) {
   // Plugin-contributed status items (right side).
   const pluginItems = state.statusItems || [];
 
+  const off = state.off || { online: true, pins: [], queued: 0, syncing: false };
   return div({ className: 'statusbar' },
+    !off.online
+      ? span({ className: 'seg offline-badge', title: 'You are offline — pinned files and cached data are available' }, icon('info', { size: 12 }), span('Offline'))
+      : off.syncing
+        ? span({ className: 'seg', title: 'Syncing offline changes' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span('Syncing…'))
+        : null,
+    off.queued ? span({ className: 'seg', title: 'Changes waiting to sync' }, `${off.queued} queued`) : null,
+    off.pins.length ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` }, icon('download', { size: 12 }), span(`${off.pins.length} offline`)).on({ click: () => ui.exec('workbench.view.search') }) : null,
     button({ className: 'seg', title: 'Explorer' }, icon('files', { size: 13 }), span(ex.folder ? ex.folder.path : '/'))
       .on({ click: () => ui.exec('workbench.view.explorer') }),
     active.length
