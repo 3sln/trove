@@ -1,0 +1,18 @@
+{
+  "name": "@trove/core",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Runtime-agnostic core for Trove: pluggable storage, metadata, resumable transfers, semantic search, and indexers.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./storage/*": "./src/storage/*",
+    "./metadata/*": "./src/metadata/*",
+    "./search/*": "./src/search/*"
+  },
+  "files": [
+    "src/"
+  ],
+  "license": "MIT",
+  "author": "Ray Stubbs"
+}

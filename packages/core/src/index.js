@@ -1,0 +1,55 @@
+// @trove/core — runtime-agnostic building blocks for a self-hostable drive.
+// Import the pieces directly, or use `createVfs` to wire a sensible default.
+
+export { TroveError, ErrorCode, wrapError, isRetryable } from './errors.js';
+export { withRetry, withTimeout } from './retry.js';
+export * from './util.js';
+
+export { StorageBackend } from './storage/interface.js';
+export { MemoryStorage } from './storage/memory.js';
+export { FilesystemStorage } from './storage/filesystem.js';
+export { S3Storage } from './storage/s3.js';
+
+export { MetadataStore } from './metadata/interface.js';
+export { MemoryStore, ROOT_ID } from './metadata/memory.js';
+export { SqliteStore } from './metadata/sqlite.js';
+
+export { SearchService } from './search/index.js';
+export { VectorIndex } from './search/vector.js';
+export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/embeddings.js';
+
+export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
+export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
+export { Vfs, CONTENT_TYPES } from './vfs.js';
+
+import { Vfs } from './vfs.js';
+import { MemoryStorage } from './storage/memory.js';
+import { MemoryStore } from './metadata/memory.js';
+import { SearchService } from './search/index.js';
+import { LocalHashEmbedding } from './search/embeddings.js';
+import { IndexerRegistry, textIndexer } from './indexers/registry.js';
+
+/**
+ * Wire a Vfs from parts, defaulting to in-memory everything (great for tests and
+ * a zero-config first run). Pass real backends for production:
+ *
+ *   createVfs({
+ *     storage: new S3Storage({ ... }),
+ *     metadata: new SqliteStore({ path: 'trove.db' }),
+ *     embeddings: new HttpEmbedding({ url, apiKey, model, dimensions: 1536 }),
+ *   })
+ *
+ * @param {object} [opts]
+ * @returns {Promise<Vfs>} initialised (metadata.init already run)
+ */
+export async function createVfs(opts = {}) {
+  const storage = opts.storage ?? new MemoryStorage();
+  const metadata = opts.metadata ?? new MemoryStore();
+  const embeddings = opts.embeddings ?? new LocalHashEmbedding();
+  const search = opts.search ?? new SearchService({ embeddings });
+  const indexers = opts.indexers ?? new IndexerRegistry();
+  if (!indexers.indexers.size) indexers.register(textIndexer);
+  const vfs = new Vfs({ storage, metadata, search, indexers, ...opts });
+  await vfs.init();
+  return vfs;
+}

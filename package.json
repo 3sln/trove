@@ -1,0 +1,22 @@
+{
+  "name": "trove",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Trove — a self-hostable, plugin-extensible Google Drive. Semantic search, pluggable storage (S3 / filesystem / NAS), and a VS Code-style contribution system with sandboxed plugins.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "cd packages/web && npx vite",
+    "build:web": "cd packages/web && npx vite build",
+    "serve": "node packages/server/src/adapters/node.js",
+    "test": "bun test"
+  },
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.1.0"
+  },
+  "license": "MIT",
+  "author": "Ray Stubbs"
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+trove.db
+trove.db-*
+*.sqlite
+*.sqlite-*
+data/
+.trove/
+coverage/
+.vite/
