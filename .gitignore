@@ -16,4 +16,4 @@ coverage/
 .vite/
 
 # test artifacts
-packages/web/test/screenshot.png
+packages/web/test/*.png
