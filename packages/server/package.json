@@ -1,0 +1,17 @@
+{
+  "name": "@trove/server",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Runtime-agnostic HTTP server for Trove: give it a Request, get a Response. Node + Cloudflare Worker adapters.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./adapters/node.js": "./src/adapters/node.js",
+    "./adapters/worker.js": "./src/adapters/worker.js"
+  },
+  "dependencies": {
+    "@trove/core": "0.0.1"
+  },
+  "license": "MIT",
+  "author": "Ray Stubbs"
+}
