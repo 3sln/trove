@@ -21,6 +21,10 @@ async function getServer(env, buildVfs) {
   if (cached) return cached;
   const config = configFromEnv(env);
   if (buildVfs) config.vfs = buildVfs(env);
+  // Cloudflare Vectorize binding → first-class vector store (no REST creds needed).
+  if (env.VECTORIZE) {
+    config.vectorStore = { driver: 'vectorize', binding: env.VECTORIZE };
+  }
   // Serve static assets from the ASSETS binding (Workers Sites / assets).
   if (env.ASSETS) {
     config.assets = async (req) => {

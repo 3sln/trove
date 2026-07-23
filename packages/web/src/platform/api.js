@@ -83,6 +83,54 @@ export class TroveApiClient {
     return this.request('POST', `/api/index/${encodeURIComponent(indexerId)}`, { body: { nodeId, documents, facet } });
   }
 
+  // --- identity --------------------------------------------------------------
+  me() {
+    return this.request('GET', '/api/me');
+  }
+
+  // --- conversations, tags, sidecar ------------------------------------------
+  sidecar(id) {
+    return this.request('GET', `/api/files/${encodeURIComponent(id)}/sidecar`);
+  }
+  addComment(id, { body, parentId, mentions } = {}) {
+    return this.request('POST', `/api/files/${encodeURIComponent(id)}/comments`, { body: { body, parentId, mentions } });
+  }
+  editComment(id, cid, body) {
+    return this.request('POST', `/api/files/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}/edit`, { body: { body } });
+  }
+  deleteComment(id, cid) {
+    return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}`);
+  }
+  reactComment(id, cid, emoji, on) {
+    return this.request('POST', `/api/files/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}/react`, { body: { emoji, on } });
+  }
+  setTag(id, name, value) {
+    return this.request('POST', `/api/files/${encodeURIComponent(id)}/tags`, { body: { name, value } });
+  }
+  removeTag(id, name) {
+    return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/tags/${encodeURIComponent(name)}`);
+  }
+  subscribeThread(id, muted) {
+    return this.request('POST', `/api/files/${encodeURIComponent(id)}/subscribe`, { body: { muted } });
+  }
+  unsubscribeThread(id) {
+    return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/subscribe`, { body: {} });
+  }
+
+  // --- notifications & push --------------------------------------------------
+  notifications() {
+    return this.request('GET', '/api/notifications');
+  }
+  markNotificationsRead(ids) {
+    return this.request('POST', '/api/notifications/read', { body: { ids } });
+  }
+  vapidKey() {
+    return this.request('GET', '/api/push/vapid');
+  }
+  subscribePush(subscription) {
+    return this.request('POST', '/api/push/subscribe', { body: { subscription } });
+  }
+
   /** URL for GET-ing bytes (used by <img>/<audio>/<video> and downloads). */
   downloadUrl(id, { attachment } = {}) {
     return `${this.baseUrl}/api/fs/download?id=${encodeURIComponent(id)}${attachment ? '&disposition=attachment' : ''}`;

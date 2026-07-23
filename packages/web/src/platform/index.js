@@ -64,6 +64,7 @@ function registerDefaults(p) {
     { key: 'delete', command: 'explorer.delete', when: "view.active == 'explorer' && explorer.hasSelection" },
     { key: 'escape', command: 'workbench.closeOverlays' },
     { key: 'f5', command: 'explorer.refresh' },
+    { key: 'mod+shift+i', command: 'workbench.toggleInfoPanel' },
   ];
   for (const b of kb) p.contributions.keybindings.register(b);
 }

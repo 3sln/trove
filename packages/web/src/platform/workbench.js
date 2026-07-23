@@ -18,6 +18,7 @@ export class WorkbenchService {
       pluginPanel: null, // pluginId when a plugin popup is open
       dialog: null, // { kind, ... } modal dialog
       contextMenu: null, // { x, y, items }
+      infoPanel: false, // conversation/tags side panel for the active file
     };
     this.subject = new ObservableSubject(this.state);
   }
@@ -87,6 +88,10 @@ export class WorkbenchService {
     this.#set({ tabs });
   }
 
+  toggleInfoPanel(force) {
+    this.#set({ infoPanel: force ?? !this.state.infoPanel });
+    this.context.set('infoPanel.open', this.state.infoPanel);
+  }
   openPluginPanel(pluginId) {
     this.#set({ pluginPanel: pluginId });
   }

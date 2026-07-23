@@ -85,6 +85,11 @@ export function registerCommands(app) {
 
   // --- search ----------------------------------------------------------------
   cmd('search.run', 'Search Files', (q) => go(new SearchAction(q, undefined)), { palette: false });
+
+  // --- conversations & notifications -----------------------------------------
+  cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => workbench.toggleInfoPanel(), { category: 'View', icon: 'info' });
+  cmd('notifications.show', 'Show Notifications', () => app.social.toggleInbox(true), { category: 'View' });
+  cmd('notifications.enablePush', 'Enable Push Notifications', () => app.social.enablePush(), { category: 'Notifications' });
 }
 
 // --- helpers ----------------------------------------------------------------

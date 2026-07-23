@@ -6,6 +6,7 @@
 
 import { Engine, Provider } from '@3sln/ngin';
 import { ExplorerService, SearchClientService, TransfersService } from './services.js';
+import { SocialService } from './social.js';
 import { registerCommands } from './commands.js';
 import { NavigateAction } from './actions.js';
 import { registerBuiltinOpeners } from '../ui/components/openers/index.js';
@@ -14,8 +15,9 @@ export function createApp(platform) {
   const explorer = new ExplorerService(platform.settings);
   const search = new SearchClientService();
   const transfers = new TransfersService();
+  const social = new SocialService(platform);
 
-  const app = { platform, explorer, search, transfers, engine: null };
+  const app = { platform, explorer, search, transfers, social, engine: null };
 
   const engine = new Engine({
     providers: { app: Provider.fromSingleton(app) },
@@ -27,6 +29,18 @@ export function createApp(platform) {
 
   // Wire the plugin panel opener hook to the workbench.
   platform.openPluginPanel = (pluginId) => platform.workbench.openPluginPanel(pluginId);
+
+  // Load a file's conversation/tags whenever the active editor tab changes.
+  let lastTab = null;
+  platform.workbench.observe().subscribe((wb) => {
+    if (wb.activeTabId !== lastTab) {
+      lastTab = wb.activeTabId;
+      const tab = wb.tabs.find((t) => t.id === wb.activeTabId);
+      if (tab) social.loadSidecar(tab.node.id);
+    }
+  });
+
+  social.init();
 
   return { engine, app };
 }

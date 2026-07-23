@@ -27,11 +27,18 @@ export function createRouter() {
 
   r.get('/api/health', () => ({ ok: true, service: 'trove', time: Date.now() }));
 
-  r.get('/api/capabilities', ({ vfs, config }) => ({
+  r.get('/api/capabilities', ({ vfs, config, sidecar, notifications, principal }) => ({
     storage: vfs.storage.capabilities,
     indexers: vfs.indexers.list(),
     partSize: vfs.uploads.partSize,
-    features: { semanticSearch: !!vfs.search },
+    features: {
+      semanticSearch: !!vfs.search,
+      conversations: !!sidecar,
+      notifications: !!notifications,
+      webPush: !!notifications?.vapidPublicKey(),
+      auth: !!principal,
+    },
+    principal: principal || null,
     search: vfs.search
       ? {
           vectorStore: vfs.search.vectors?.constructor?.name || null,
@@ -180,5 +187,111 @@ export function createRouter() {
     return vfs.indexDocuments(b.nodeId, params.indexerId, b.documents || [], b.facet);
   });
 
+  // --- identity --------------------------------------------------------------
+
+  r.get('/api/me', ({ principal }) => ({ principal: principal || null, authenticated: !!principal }));
+
+  // --- conversations, tags, sidecar (per file) -------------------------------
+  // The :id is a file node id; the sidecar is that file's CRDT document.
+
+  r.get('/api/files/:id/sidecar', async ({ vfs, sidecar, params }) => {
+    requireSidecar(sidecar);
+    await vfs.stat(params.id); // 404 if the file is gone
+    return sidecar.view(params.id);
+  });
+
+  r.post('/api/files/:id/comments', async ({ vfs, sidecar, params, req, principal }) => {
+    requireSidecar(sidecar);
+    requirePrincipal(principal);
+    await vfs.stat(params.id);
+    const b = await body(req);
+    return { comment: await sidecar.addComment(params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, principal) };
+  });
+
+  r.post('/api/files/:id/comments/:cid/edit', async ({ sidecar, params, req, principal }) => {
+    requireSidecar(sidecar);
+    requirePrincipal(principal);
+    const b = await body(req);
+    return { comment: await sidecar.editComment(params.id, params.cid, b.body, principal) };
+  });
+
+  r.delete('/api/files/:id/comments/:cid', async ({ sidecar, params, principal }) => {
+    requireSidecar(sidecar);
+    requirePrincipal(principal);
+    return sidecar.deleteComment(params.id, params.cid, principal);
+  });
+
+  r.post('/api/files/:id/comments/:cid/react', async ({ sidecar, params, req, principal }) => {
+    requireSidecar(sidecar);
+    requirePrincipal(principal);
+    const b = await body(req);
+    if (!b.emoji) throw TroveError.invalid('emoji is required');
+    return { comment: await sidecar.react(params.id, params.cid, b.emoji, b.on !== false, principal) };
+  });
+
+  r.post('/api/files/:id/tags', async ({ vfs, sidecar, params, req, principal }) => {
+    requireSidecar(sidecar);
+    await vfs.stat(params.id);
+    const b = await body(req);
+    if (!b.name) throw TroveError.invalid('name is required');
+    return sidecar.setTag(params.id, b.name, b.value, principal);
+  });
+
+  r.delete('/api/files/:id/tags/:name', async ({ sidecar, params, principal }) => {
+    requireSidecar(sidecar);
+    return sidecar.removeTag(params.id, params.name, principal);
+  });
+
+  r.post('/api/files/:id/subscribe', async ({ sidecar, params, req, principal }) => {
+    requireSidecar(sidecar);
+    requirePrincipal(principal);
+    const b = await body(req);
+    return sidecar.subscribe(params.id, principal, !!b.muted);
+  });
+  r.delete('/api/files/:id/subscribe', async ({ sidecar, params, principal }) => {
+    requireSidecar(sidecar);
+    requirePrincipal(principal);
+    return sidecar.unsubscribe(params.id, principal);
+  });
+
+  // --- notifications & web push ----------------------------------------------
+
+  r.get('/api/notifications', async ({ notifications, principal }) => {
+    requireNotifications(notifications);
+    requirePrincipal(principal);
+    return notifications.inbox(principal.id);
+  });
+  r.post('/api/notifications/read', async ({ notifications, principal, req }) => {
+    requireNotifications(notifications);
+    requirePrincipal(principal);
+    const b = await body(req);
+    return notifications.markRead(principal.id, b.ids);
+  });
+
+  r.get('/api/push/vapid', ({ notifications }) => ({ publicKey: notifications?.vapidPublicKey() || null }));
+
+  r.post('/api/push/subscribe', async ({ notifications, principal, req }) => {
+    requireNotifications(notifications);
+    requirePrincipal(principal);
+    const b = await body(req);
+    return notifications.subscribePush(principal.id, b.subscription);
+  });
+  r.delete('/api/push/subscribe', async ({ notifications, principal, req }) => {
+    requireNotifications(notifications);
+    requirePrincipal(principal);
+    const b = await body(req);
+    return notifications.unsubscribePush(principal.id, b.endpoint);
+  });
+
   return r;
+}
+
+function requirePrincipal(principal) {
+  if (!principal) throw TroveError.unauthorized('Authentication required');
+}
+function requireSidecar(sidecar) {
+  if (!sidecar) throw TroveError.unsupported('Conversations are not enabled on this server');
+}
+function requireNotifications(n) {
+  if (!n) throw TroveError.unsupported('Notifications are not enabled on this server');
 }

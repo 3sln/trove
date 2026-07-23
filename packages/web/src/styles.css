@@ -468,8 +468,77 @@ kbd {
 }
 .editor, .sidebar { position: relative; }
 
+/* ---- Title-bar right cluster: info toggle, bell, avatar ------------------ */
+.titlebar-right { display: flex; align-items: center; gap: 4px; -webkit-app-region: no-drag; }
+.titlebar .iconbtn.active { color: var(--accent); background: var(--bg-active); }
+.principal { width: 28px; height: 28px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; margin-left: 4px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; font-size: 12px; }
+.principal .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.bell-wrap { position: relative; }
+.bell-badge { position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 3px; background: var(--danger); color: #fff; border-radius: 8px; font-size: 9.5px; font-weight: 700; display: grid; place-items: center; }
+.inbox { position: absolute; top: 36px; right: 0; width: 340px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); z-index: 55; overflow: hidden; animation: pop .12s var(--ease); }
+.inbox-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
+.inbox-head .link, .link { background: none; border: 0; color: var(--accent); font-size: 12px; }
+.inbox-head .muted, .muted { color: var(--text-faint); }
+.inbox-items { max-height: 380px; overflow-y: auto; }
+.inbox-item { padding: 10px 13px; border-bottom: 1px solid var(--border); cursor: default; }
+.inbox-item:hover { background: var(--bg-hover); }
+.inbox-item.unread { border-left: 2px solid var(--accent); }
+.inbox-item .ii-title { font-size: 12.5px; font-weight: 550; }
+.inbox-item .ii-excerpt { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+.inbox-item .ii-time { color: var(--text-faint); font-size: 10.5px; margin-top: 3px; }
+.inbox-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 30px; color: var(--text-faint); }
+
+/* ---- Info panel: tags + conversation ------------------------------------ */
+.editor-split { display: grid; grid-template-columns: 1fr 340px; min-width: 0; overflow: hidden; }
+.infopanel { border-left: 1px solid var(--border); background: var(--bg-sidebar); display: flex; flex-direction: column; min-height: 0; }
+.ip-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
+.ip-head .iconbtn { margin-left: auto; }
+.ip-body { flex: 1; overflow-y: auto; }
+.ip-empty { padding: 30px; color: var(--text-faint); text-align: center; }
+.ip-file { padding: 12px; border-bottom: 1px solid var(--border); }
+.ip-file .ip-name { font-weight: 600; }
+.ip-file .ip-path { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+.ip-section { padding: 12px; border-bottom: 1px solid var(--border); }
+.ip-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); margin-bottom: 9px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 4px 3px 9px; border-radius: 14px; background: var(--bg-selected); border: 1px solid var(--border); font-size: 12px; }
+.tag-x { width: 16px; height: 16px; border: 0; background: transparent; color: var(--text-faint); border-radius: 50%; display: grid; place-items: center; }
+.tag-x:hover { background: var(--bg-active); color: var(--danger); }
+.tag-input { background: var(--bg-input); border: 1px solid var(--border); border-radius: 14px; padding: 4px 10px; outline: none; color: var(--text); width: 84px; font-size: 12px; }
+.tag-input:focus { border-color: var(--accent); width: 120px; }
+
+.conv .thread { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.conv-empty { color: var(--text-faint); font-size: 12px; line-height: 1.5; margin-bottom: 12px; }
+.conv-signin { color: var(--text-faint); font-size: 12px; padding: 8px 0; }
+.comment { font-size: 13px; }
+.c-head { display: flex; align-items: center; gap: 7px; }
+.c-avatar { width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-2), var(--accent)); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.c-author { font-weight: 600; font-size: 12.5px; }
+.c-time { color: var(--text-faint); font-size: 11px; }
+.c-body { margin: 4px 0 4px 29px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.c-body.deleted { color: var(--text-faint); font-style: italic; }
+.c-body .mention { color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 4px; padding: 0 3px; }
+.c-actions { display: flex; align-items: center; gap: 4px; margin-left: 29px; flex-wrap: wrap; }
+.react { border: 0; background: transparent; border-radius: 12px; padding: 2px 6px; font-size: 12px; display: inline-flex; align-items: center; gap: 3px; }
+.react:hover { background: var(--bg-hover); }
+.react.on { background: var(--bg-selected); }
+.react .rc { font-size: 10px; color: var(--text-dim); }
+.c-link { border: 0; background: transparent; color: var(--text-faint); font-size: 11.5px; padding: 2px 5px; border-radius: 5px; }
+.c-link:hover { color: var(--text); background: var(--bg-hover); }
+.c-link.danger:hover { color: var(--danger); }
+.replies { margin-top: 10px; border-left: 2px solid var(--border); }
+.composer { display: flex; flex-direction: column; gap: 6px; }
+.composer .replying { font-size: 11px; color: var(--text-dim); display: flex; gap: 8px; align-items: center; }
+.composer-input { background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: 9px; padding: 8px 10px; resize: vertical; outline: none; color: var(--text); font-family: inherit; }
+.composer-input:focus { border-color: var(--accent); }
+.composer-actions { display: flex; align-items: center; justify-content: space-between; }
+.composer-actions .btn { padding: 5px 12px; }
+
 @media (max-width: 720px) {
   :root { --sidebar-w: 220px; }
   .audiobook { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .audiobook .cover-pane { border-right: 0; border-bottom: 1px solid var(--border); }
+  .editor-split { grid-template-columns: 1fr; }
+  .infopanel { display: none; }
 }

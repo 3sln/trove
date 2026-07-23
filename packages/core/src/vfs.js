@@ -31,16 +31,26 @@ export class Vfs {
    * @param {IndexerRegistry} [deps.indexers]
    * @param {number} [deps.maxIndexBytes] cap on bytes read for content indexing
    */
-  constructor({ storage, metadata, search, indexers, maxIndexBytes = 2 * 1024 * 1024 }) {
+  constructor({ storage, metadata, search, indexers, sidecar, maxIndexBytes = 2 * 1024 * 1024 }) {
     if (!storage) throw TroveError.invalid('Vfs requires a storage backend');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage;
     this.metadata = metadata;
     this.search = search ?? null;
+    // Sidecar owns indexer facets (scoped per indexer), tags, and conversations.
+    // When present, facets land in the sidecar (cold in object storage) instead
+    // of the metadata store.
+    this.sidecar = sidecar ?? null;
     this.indexers = indexers ?? new IndexerRegistry();
     if (!this.indexers.indexers.size) this.indexers.register(textIndexer);
     this.uploads = new UploadManager({ storage });
     this.maxIndexBytes = maxIndexBytes;
+  }
+
+  /** Write an indexer facet to the sidecar if configured, else the metadata store. */
+  async #writeFacet(nodeId, indexerId, facet) {
+    if (this.sidecar) return this.sidecar.setFacet(nodeId, indexerId, facet);
+    return this.metadata.setFacet(nodeId, indexerId, facet);
   }
 
   async init() {
@@ -138,12 +148,14 @@ export class Vfs {
           await this.storage.delete(child.storageKey).catch(() => {});
         }
         await this.search?.removeNode(child.id);
+        await this.sidecar?.remove(child.id).catch(() => {});
         await this.metadata.remove(child.id);
       }
     } else if (node.storageKey) {
       await this.storage.delete(node.storageKey).catch(() => {});
     }
     await this.search?.removeNode(node.id);
+    await this.sidecar?.remove(node.id).catch(() => {});
     await this.metadata.remove(node.id);
     return { ok: true };
   }
@@ -229,7 +241,7 @@ export class Vfs {
     const node = await this.metadata.getById(nodeId);
     if (!node) throw TroveError.notFound('Node');
     if (this.search) await this.search.indexDocuments(nodeId, indexerId, documents);
-    if (facet) await this.metadata.setFacet(nodeId, indexerId, facet);
+    if (facet) await this.#writeFacet(nodeId, indexerId, facet);
     return { ok: true };
   }
 
@@ -252,7 +264,7 @@ export class Vfs {
         };
         const { documents, facet } = await indexer.index(node, ctx);
         if (this.search && documents) await this.search.indexDocuments(node.id, indexer.id, documents);
-        if (facet) await this.metadata.setFacet(node.id, indexer.id, facet);
+        if (facet) await this.#writeFacet(node.id, indexer.id, facet);
       } catch (err) {
         console.error(`indexer ${indexer.id} failed on ${node.path}:`, err.message);
       }

@@ -23,6 +23,27 @@ export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js'
 export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 
+// Cloudflare Vectorize — first-class pluggable vector DB.
+export { VectorizeVectorStore } from './search/vectorize.js';
+
+// Server-side key/value store (subscriptions, inboxes, profiles).
+export { KeyValueStore, MemoryKV, SqliteKV } from './kv.js';
+
+// Identity (BYO IdP — Cloudflare Access / Zero Trust / a proxy).
+export {
+  IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider,
+  AnonymousIdentityProvider, principalFromClaims,
+} from './identity/index.js';
+export { verifyJwt, decodeJwt, JwksClient } from './identity/jwt.js';
+
+// Sidecar documents: conversations, tags, indexer facets (CRDT, cold-in-S3).
+export { SidecarService, SidecarStore, SidecarManager } from './sidecar/index.js';
+export * as sidecarOps from './sidecar/document.js';
+
+// Notifications: mention batching + web push.
+export { NotificationCenter } from './notifications/index.js';
+export { WebPushService, generateVapidKeys } from './notifications/webpush.js';
+
 import { Vfs } from './vfs.js';
 import { MemoryStorage } from './storage/memory.js';
 import { MemoryStore } from './metadata/memory.js';
@@ -52,7 +73,7 @@ export async function createVfs(opts = {}) {
     new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
   if (!indexers.indexers.size) indexers.register(textIndexer);
-  const vfs = new Vfs({ storage, metadata, search, indexers, ...opts });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, maxIndexBytes: opts.maxIndexBytes });
   await vfs.init();
   return vfs;
 }

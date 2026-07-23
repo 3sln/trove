@@ -10,8 +10,12 @@ import {
   Vfs, StorageBackend, MemoryStorage, FilesystemStorage, S3Storage,
   MetadataStore, MemoryStore, SqliteStore,
   SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,
-  VectorStore, MemoryVectorStore, QdrantVectorStore,
+  VectorStore, MemoryVectorStore, QdrantVectorStore, VectorizeVectorStore,
   IndexerRegistry, textIndexer,
+  IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
+  KeyValueStore, MemoryKV, SqliteKV,
+  SidecarService, NotificationCenter, WebPushService,
+  TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
 
@@ -46,8 +50,20 @@ function buildEmbeddings(cfg) {
 function buildVectorStore(cfg, dimensions) {
   switch (cfg.driver) {
     case 'qdrant': return new QdrantVectorStore({ dimensions, ...cfg.qdrant });
+    case 'vectorize': return new VectorizeVectorStore({ dimensions, binding: cfg.binding, ...cfg.vectorize });
     case 'memory': default: return new MemoryVectorStore({ dimensions });
   }
+}
+function buildIdentity(cfg) {
+  switch (cfg.driver) {
+    case 'jwt': return new JwtIdentityProvider(cfg.jwt || {});
+    case 'header': return new HeaderIdentityProvider(cfg.header || {});
+    case 'anonymous': default: return new AnonymousIdentityProvider();
+  }
+}
+function buildKV(cfg, sqliteDb) {
+  if (cfg.driver === 'sqlite') return new SqliteKV({ db: sqliteDb, path: cfg.path });
+  return new MemoryKV();
 }
 
 /**
@@ -79,16 +95,52 @@ export async function createServer(config = {}) {
   const indexers = config.indexers instanceof IndexerRegistry ? config.indexers : new IndexerRegistry();
   if (!indexers.indexers.size) indexers.register(textIndexer);
 
-  const vfs = new Vfs({ storage, metadata, search, indexers });
+  // Identity: BYO IdP. Default anonymous (single shared user) so a zero-config
+  // run still works; production injects a JwtIdentityProvider (Cloudflare Access).
+  const identity = resolve(config.identity, IdentityProvider, buildIdentity);
+
+  // Shared KV (subscriptions, inboxes). Reuse the SQLite db if metadata is sqlite.
+  const sqliteDb = metadata instanceof SqliteStore ? metadata.db : null;
+  const kv = config.kv instanceof KeyValueStore ? config.kv : buildKV(config.kv || {}, sqliteDb);
+  await kv.init?.();
+
+  // Web push (optional — only when VAPID keys are configured).
+  const push =
+    config.push instanceof WebPushService
+      ? config.push
+      : config.vapid?.publicKey && config.vapid?.privateKey
+        ? new WebPushService({ publicKey: config.vapid.publicKey, privateKey: config.vapid.privateKey, subject: config.vapid.subject || 'mailto:admin@example.com' })
+        : null;
+
+  // Mention batcher + inbox. Flushes on an interval (bodyless web push).
+  const notifications = new NotificationCenter({ kv, push, flushIntervalMs: config.mentionFlushMs ?? 30_000 });
+
+  // Sidecar conversations/tags/facets; mentions are piped to the batcher.
+  const sidecar = config.sidecar ?? new SidecarService({
+    storage,
+    onMentions: (mentions) => notifications.enqueue(mentions).catch((e) => console.error('enqueue mentions failed', e)),
+  });
+
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar });
   await vfs.init();
+
+  if (config.startFlusher !== false) notifications.start();
 
   const router = createRouter();
 
   async function handle(req) {
     const url = new URL(req.url);
-    // API first, then static assets, then SPA fallback.
     if (url.pathname.startsWith('/api/')) {
-      return router.handle(req, { vfs, config });
+      // Authenticate every API request; a bad token is a clean 401, missing is
+      // anonymous-or-401 per the provider's policy.
+      let principal = null;
+      try {
+        principal = await identity.authenticate(req);
+      } catch (err) {
+        const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
+        return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json' } });
+      }
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -97,7 +149,12 @@ export async function createServer(config = {}) {
     return new Response('Not found', { status: 404 });
   }
 
-  return { vfs, handle, router };
+  async function close() {
+    notifications.stop();
+    await sidecar.dispose?.();
+  }
+
+  return { vfs, handle, router, sidecar, notifications, identity, kv, close };
 }
 
 /** Map process.env → createServer config. */
@@ -133,7 +190,7 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
     config.embeddings.driver = 'local';
   }
 
-  // Pluggable vector DB: default in-memory; point at Qdrant with a few vars.
+  // Pluggable vector DB: default in-memory; Qdrant or Cloudflare Vectorize.
   config.vectorStore.driver = env.TROVE_VECTOR || 'memory';
   if (config.vectorStore.driver === 'qdrant') {
     config.vectorStore.qdrant = {
@@ -143,6 +200,45 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
       distance: env.TROVE_QDRANT_DISTANCE || 'Cosine',
     };
   }
+  if (config.vectorStore.driver === 'vectorize') {
+    // On Workers the binding is injected by the adapter; over REST use API creds.
+    config.vectorStore.vectorize = {
+      accountId: env.TROVE_VECTORIZE_ACCOUNT_ID || env.CF_ACCOUNT_ID,
+      apiKey: env.TROVE_VECTORIZE_API_TOKEN,
+      indexName: env.TROVE_VECTORIZE_INDEX || 'trove',
+    };
+  }
+
+  // Identity: default anonymous; 'jwt' for Cloudflare Access / Zero Trust.
+  config.identity = { driver: env.TROVE_AUTH || 'anonymous' };
+  if (config.identity.driver === 'jwt') {
+    config.identity.jwt = {
+      jwksUrl: env.TROVE_JWKS_URL, // e.g. https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
+      issuer: env.TROVE_JWT_ISSUER,
+      audience: env.TROVE_JWT_AUDIENCE, // the Access application AUD
+      secret: env.TROVE_JWT_SECRET, // HS256 dev only
+      required: env.TROVE_AUTH_REQUIRED === 'true',
+    };
+  } else if (config.identity.driver === 'header') {
+    config.identity.header = {
+      idHeader: env.TROVE_AUTH_ID_HEADER || 'cf-access-authenticated-user-email',
+      emailHeader: env.TROVE_AUTH_EMAIL_HEADER || 'cf-access-authenticated-user-email',
+      required: env.TROVE_AUTH_REQUIRED === 'true',
+    };
+  }
+
+  // Web push (VAPID) for mention notifications — optional.
+  if (env.TROVE_VAPID_PUBLIC_KEY && env.TROVE_VAPID_PRIVATE_KEY) {
+    config.vapid = {
+      publicKey: env.TROVE_VAPID_PUBLIC_KEY,
+      privateKey: env.TROVE_VAPID_PRIVATE_KEY,
+      subject: env.TROVE_VAPID_SUBJECT || 'mailto:admin@example.com',
+    };
+  }
+  if (env.TROVE_MENTION_FLUSH_MS) config.mentionFlushMs = Number(env.TROVE_MENTION_FLUSH_MS);
+
+  // KV store for subscriptions/inboxes: follows the metadata driver by default.
+  config.kv = { driver: env.TROVE_KV || (config.metadata.driver === 'sqlite' ? 'sqlite' : 'memory'), path: config.metadata.path };
 
   return config;
 }

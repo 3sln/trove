@@ -16,6 +16,7 @@ import pluginsView from '../components/pluginsView.js';
 import editorArea from '../components/editorArea.js';
 import commandPalette from '../components/commandPalette.js';
 import { dialog, contextMenu, toasts, transferTray, pluginPanel } from '../components/overlays.js';
+import { infoPanel } from '../components/social.js';
 
 const { alias, div } = dd;
 
@@ -34,8 +35,8 @@ export default function workbench({ engine, app, platform, plugins }) {
 
   const { watch, zip } = platform.reactive;
   const combined$ = zip(
-    (wb, ex, se, tr, notif, ctx, settings, pluginList, statusItems, _bump) =>
-      ({ wb, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems }),
+    (wb, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, _bump) =>
+      ({ wb, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so }),
     platform.workbench.observe(),
     app.explorer.observe(),
     app.search.observe(),
@@ -45,6 +46,7 @@ export default function workbench({ engine, app, platform, plugins }) {
     platform.settings.observe(),
     platform.plugins.observe() || new ObservableSubject([]),
     platform.contributions.statusItems.observe(),
+    app.social.observe(),
     bump$,
   );
 
@@ -86,7 +88,11 @@ function mainArea(state, ui) {
   switch (state.wb.activity) {
     case 'settings': return settingsView(state, ui);
     case 'plugins': return pluginsView(state, ui);
-    default: return editorArea(state, ui);
+    default: {
+      const showInfo = state.wb.infoPanel;
+      if (!showInfo) return editorArea(state, ui);
+      return div({ className: 'editor-split' }, editorArea(state, ui), infoPanel(state, ui));
+    }
   }
 }
 

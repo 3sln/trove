@@ -93,6 +93,12 @@ export class TroveError extends Error {
   static aborted(message = 'Operation aborted', opts) {
     return new TroveError(ErrorCode.ABORTED, message, { retryable: false, ...opts });
   }
+  static unauthorized(message = 'Unauthorized', opts) {
+    return new TroveError(ErrorCode.UNAUTHORIZED, message, opts);
+  }
+  static forbidden(message = 'Forbidden', opts) {
+    return new TroveError(ErrorCode.FORBIDDEN, message, opts);
+  }
   static internal(message = 'Internal error', opts) {
     return new TroveError(ErrorCode.INTERNAL, message, opts);
   }

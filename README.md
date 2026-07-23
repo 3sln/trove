@@ -53,6 +53,20 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   commands, openers, indexers, status items, and keybindings; they can surface a
   popup UI panel (Chrome-extension style); and — when they declare the capability
   — they get a **persistent per-domain database**.
+- **Conversations on every file** — threaded comments with @mentions, reactions,
+  and tags, stored in a **CRDT sidecar document** kept cold in object storage
+  (one `sidecars/<id>.json` next to your data — no extra database) and loaded
+  into a hot, debounced, merge-on-write manager when active. Indexer facets live
+  there too, scoped to the indexer that wrote them.
+- **Bring-your-own identity** — Trove ships no login. It verifies an identity JWT
+  (Cloudflare Access / Zero Trust, oauth2-proxy, any IdP) via JWKS/RS256/ES256 —
+  or a proxy-set header — on Web Crypto, and builds a profile from the claims.
+- **Mention notifications over Web Push** — as conversations change, @mentions
+  batch per user and flush on an interval as **bodyless VAPID web pushes**; the
+  service worker wakes and pulls the inbox. No mention text ever touches a
+  third-party push service.
+- **Cloudflare-native** — the vector store speaks **Vectorize** (binding or REST),
+  storage speaks **R2**, and identity speaks **Access** — first-class, env-driven.
 
 ## Quick start
 
