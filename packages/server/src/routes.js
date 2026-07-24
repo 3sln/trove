@@ -326,7 +326,7 @@ export function createRouter() {
       const readable = (await collections.list(principal)).map((c) => c.id);
       collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
     }
-    const items = await vfs.metadata.findByFacets(filters, {
+    const items = await vfs.metadata.findByTags(filters, {
       q: b.q, collectionIds, limit: clampLimit(b.limit, 100),
     });
     return { items };
@@ -334,13 +334,17 @@ export function createRouter() {
 
   r.get('/api/indexers', ({ vfs }) => ({ indexers: vfs.indexers.list() }));
 
-  // Plugin indexers push namespaced documents/facets here. The namespace is the
-  // path param, so a plugin can only ever write under its own id.
+  // Plugin indexers push a namespaced contribution here (semanticTexts / tags /
+  // metadata; legacy documents/facet accepted). The namespace is the path param,
+  // so a plugin can only ever write under its own id.
   r.post('/api/index/:indexerId', async (ctx) => {
     const b = await body(ctx.req);
     if (!b.nodeId) throw TroveError.invalid('nodeId is required');
     await assertCap(ctx, (await ctx.vfs.stat(b.nodeId)).collectionId, 'write');
-    return ctx.vfs.indexDocuments(b.nodeId, ctx.params.indexerId, b.documents || [], b.facet);
+    return ctx.vfs.indexContributions(b.nodeId, ctx.params.indexerId, {
+      semanticTexts: b.semanticTexts, tags: b.tags, metadata: b.metadata,
+      documents: b.documents, facet: b.facet, // legacy
+    });
   });
 
   // --- identity --------------------------------------------------------------
@@ -404,16 +408,17 @@ export function createRouter() {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
     const res = await ctx.sidecar.setTag(ctx.params.id, b.name, b.value, ctx.principal);
-    // Mirror the tag onto the node's facets so it's filterable (#tag / #tag:=value).
-    await ctx.vfs.metadata.setFacet(ctx.params.id, 'tags', { [b.name]: b.value ?? true }).catch(() => {});
+    // Mirror the tag into the queryable 'user' contribution scope so it's filterable
+    // (#tag / #tag:=value) alongside indexer-contributed tags.
+    await ctx.vfs.metadata.setContribution(ctx.params.id, 'user', { tags: { [b.name]: b.value ?? true } }).catch(() => {});
     return res;
   });
 
   r.delete('/api/files/:id/tags/:name', async ({ sidecar, vfs, params, principal }) => {
     requireSidecar(sidecar);
     const res = await sidecar.removeTag(params.id, params.name, principal);
-    // No clearFacet on the vfs; null reads as "absent" to the filter matcher.
-    await vfs.metadata.setFacet(params.id, 'tags', { [params.name]: null }).catch(() => {});
+    // Null clears the merged tag (the matcher reads null as "absent").
+    await vfs.metadata.setContribution(params.id, 'user', { tags: { [params.name]: null } }).catch(() => {});
     return res;
   });
 

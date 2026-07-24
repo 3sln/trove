@@ -199,7 +199,14 @@
         list: (pathOrId, opts) => (requireCap('files'), call('files:list', Object.assign({ pathOrId }, opts))),
         stat: (id) => (requireCap('files'), call('files:stat', { id })),
         downloadUrl: (id) => (requireCap('files'), call('files:downloadUrl', { id })),
-        index: (indexerId, nodeId, documents, facet) => (requireCap('indexer'), call('files:index', { indexerId, nodeId, documents, facet })),
+        // index(indexerId, nodeId, contribution) where contribution is
+        // { semanticTexts?, tags?, metadata? }. Legacy (indexerId, nodeId, documents[], facet)
+        // is still accepted when the 3rd arg is an array of documents.
+        index: (indexerId, nodeId, contribution, facet) => {
+          requireCap('indexer');
+          var payload = Array.isArray(contribution) ? { documents: contribution, facet: facet } : (contribution || {});
+          return call('files:index', Object.assign({ indexerId: indexerId, nodeId: nodeId }, payload));
+        },
       },
       // Persistent storage: an isolated SQLite database per granted scope. `plugin`
       // is private to this plugin; `domain` (verified packages only) is shared with

@@ -23,10 +23,10 @@ export function parseTagQuery(query) {
   return { text: text.replace(/\s+/g, ' ').trim(), filters };
 }
 
-/** The flat property map a node exposes to filters: indexed tags + metadata. */
+/** The flat property map a node exposes to filters: user meta + merged tags
+ * (all contributors' tags, e.g. user tags + indexer-contributed tags). */
 function nodeProps(node) {
-  const tags = (node.facets && node.facets.tags) || {};
-  return { ...(node.meta || {}), ...tags };
+  return { ...(node.meta || {}), ...(node.tags || {}) };
 }
 
 function compare(a, op, b) {

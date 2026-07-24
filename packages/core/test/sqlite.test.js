@@ -99,15 +99,15 @@ async function seedTagged(store) {
   const sub = await store.create({ parentId: 'root', name: 'sub', kind: 'folder' });
   const b = await store.create({ parentId: sub.id, name: 'b.txt', kind: 'file' });
   await store.create({ parentId: 'root', name: 'plain.txt', kind: 'file' });
-  await store.setFacet(a.id, 'tags', { fav: 'yes', rating: '5' });
-  await store.setFacet(b.id, 'tags', { fav: 'yes', rating: '2' }); // in a subfolder → drive-wide
+  await store.setContribution(a.id, 'user', { tags: { fav: 'yes', rating: '5' } });
+  await store.setContribution(b.id, 'user', { tags: { fav: 'yes', rating: '2' } }); // subfolder → drive-wide
   return { a, b };
 }
 
-test('findByFacets (SqliteStore): drive-wide presence + numeric + string', async () => {
+test('findByTags (SqliteStore): drive-wide presence + numeric + string', async () => {
   const store = new SqliteStore({ provider: provider(), key: 'metadata' });
   await seedTagged(store);
-  const names = async (filters, opts) => (await store.findByFacets(filters, opts)).map((n) => n.name).sort();
+  const names = async (filters, opts) => (await store.findByTags(filters, opts)).map((n) => n.name).sort();
   expect(await names([{ key: 'fav', present: true }])).toEqual(['a.txt', 'b.txt']); // across folders
   expect(await names([{ key: 'rating', op: '>=', value: 4 }])).toEqual(['a.txt']);   // numeric via CAST
   expect(await names([{ key: 'rating', op: '<', value: 4 }])).toEqual(['b.txt']);
@@ -115,14 +115,46 @@ test('findByFacets (SqliteStore): drive-wide presence + numeric + string', async
   expect(await names([{ key: 'fav', present: true }], { q: 'b' })).toEqual(['b.txt']); // + name
 });
 
-test('findByFacets (MemoryStore) matches the SqliteStore behaviour', async () => {
+test('findByTags (MemoryStore) matches the SqliteStore behaviour', async () => {
   const store = new MemoryStore();
   await seedTagged(store);
-  const names = async (f) => (await store.findByFacets(f)).map((n) => n.name).sort();
+  const names = async (f) => (await store.findByTags(f)).map((n) => n.name).sort();
   expect(await names([{ key: 'fav', present: true }])).toEqual(['a.txt', 'b.txt']);
   expect(await names([{ key: 'rating', op: '>=', value: 4 }])).toEqual(['a.txt']);
   expect(await names([{ key: 'missing', present: true }])).toEqual([]);
 });
+
+for (const [label, make] of [['SqliteStore', () => new SqliteStore({ provider: provider(), key: 'metadata' })], ['MemoryStore', () => new MemoryStore()]]) {
+  test(`contributions: three scopes, merged tags, per-contributor removal (${label})`, async () => {
+    const store = make();
+    await store.init?.();
+    const f = await store.create({ parentId: 'root', name: 'book.m4b', kind: 'file' });
+
+    // Two contributors each add tags + metadata under their own namespace.
+    await store.setContribution(f.id, 'user', { tags: { fav: 'yes' } });
+    await store.setContribution(f.id, 'core.audiobook', {
+      tags: { language: 'en' },
+      metadata: { chapters: [{ title: 'Intro', start: 0 }, { title: 'One', start: 120 }] },
+    });
+
+    let node = await store.getById(f.id);
+    // Kept separate per contributor…
+    expect(node.contributions.user.tags.fav).toBe('yes');
+    expect(node.contributions['core.audiobook'].metadata.chapters.length).toBe(2);
+    // …and merged into one queryable tag view.
+    expect(node.tags).toEqual({ fav: 'yes', language: 'en' });
+    // Filterable by any contributor's tag.
+    expect((await store.findByTags([{ key: 'language', op: '=', value: 'en' }])).map((n) => n.id)).toContain(f.id);
+
+    // Removing one contributor drops only its tags + metadata; the other survives.
+    await store.clearContribution(f.id, 'core.audiobook');
+    node = await store.getById(f.id);
+    expect(node.contributions['core.audiobook']).toBeUndefined();
+    expect(node.contributions.user.tags.fav).toBe('yes');
+    expect(node.tags).toEqual({ fav: 'yes' });
+    expect((await store.findByTags([{ key: 'language', present: true }])).length).toBe(0);
+  });
+}
 
 test('assertSafePluginSql blocks ATTACH/DETACH but allows normal SQL', () => {
   expect(() => assertSafePluginSql("SELECT * FROM t WHERE name = 'attach'")).not.toThrow(); // in a literal

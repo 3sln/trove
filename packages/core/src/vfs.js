@@ -52,11 +52,6 @@ export class Vfs {
     return CONTENT_TYPES[extname(name)] || 'application/octet-stream';
   }
 
-  async #writeFacet(nodeId, indexerId, facet) {
-    if (this.sidecar) return this.sidecar.setFacet(nodeId, indexerId, facet);
-    return this.metadata.setFacet(nodeId, indexerId, facet);
-  }
-
   // --- reads -----------------------------------------------------------------
 
   /** Resolve a path (needs collectionId) or a globally-unique id to a node. */
@@ -241,12 +236,39 @@ export class Vfs {
     return out;
   }
 
-  async indexDocuments(nodeId, indexerId, documents, facet) {
+  /**
+   * Apply one contributor's indexed contribution to a node. A contribution has up
+   * to three scopes: `semanticTexts` (→ search index), `tags` (filterable), and
+   * `metadata` (arbitrary, e.g. a chapter index). Each contributor is namespaced,
+   * so its contribution replaces only its own and can be removed independently.
+   * The legacy `{ documents, facet }` shape is accepted (documents→semanticTexts,
+   * facet→metadata).
+   */
+  async indexContributions(nodeId, contributorId, contribution) {
     const node = await this.metadata.getById(nodeId);
     if (!node) throw TroveError.notFound('Node');
-    if (this.search) await this.search.indexDocuments(nodeId, indexerId, documents);
-    if (facet) await this.#writeFacet(nodeId, indexerId, facet);
+    await this.#applyContribution(nodeId, contributorId, contribution);
     return { ok: true };
+  }
+
+  /** @deprecated positional form kept for existing callers; use indexContributions. */
+  async indexDocuments(nodeId, indexerId, documents, facet) {
+    return this.indexContributions(nodeId, indexerId, { documents, facet });
+  }
+
+  async #applyContribution(nodeId, contributorId, contribution) {
+    const { semanticTexts, tags, metadata } = normalizeContribution(contribution);
+    if (this.search && semanticTexts.length) await this.search.indexDocuments(nodeId, contributorId, semanticTexts);
+    // Indexer contributions live in the queryable metadata store (not the sidecar),
+    // so they show up in list/stat and drive tag filtering.
+    if (tags || metadata) await this.metadata.setContribution(nodeId, contributorId, { tags, metadata });
+  }
+
+  /** Remove everything a contributor added to a node (search + tags + metadata). */
+  async removeContributions(nodeId, contributorId) {
+    // Re-indexing with no docs clears this (node, contributor)'s vectors + keywords.
+    if (this.search) await this.search.indexDocuments(nodeId, contributorId, []).catch(() => {});
+    await this.metadata.clearContribution(nodeId, contributorId);
   }
 
   async #indexNode(node) {
@@ -267,9 +289,7 @@ export class Vfs {
             return new TextDecoder().decode(await readAll(stream));
           },
         };
-        const { documents, facet } = await indexer.index(node, ctx);
-        if (this.search && documents) await this.search.indexDocuments(node.id, indexer.id, documents);
-        if (facet) await this.#writeFacet(node.id, indexer.id, facet);
+        await this.#applyContribution(node.id, indexer.id, await indexer.index(node, ctx));
       } catch (err) {
         console.error(`indexer ${indexer.id} failed on ${node.path}:`, err.message);
       }
@@ -279,6 +299,16 @@ export class Vfs {
 
 function pathOf(parent, name) {
   return parent.path === '/' ? `/${name}` : `${parent.path}/${name}`;
+}
+
+// Normalize an indexer/plugin contribution to the three canonical scopes, accepting
+// the legacy `{ documents, facet }` shape (documents→semanticTexts, facet→metadata).
+function normalizeContribution(c = {}) {
+  return {
+    semanticTexts: c.semanticTexts || c.documents || [],
+    tags: c.tags || null,
+    metadata: c.metadata || c.facet || null,
+  };
 }
 function cryptoId() {
   return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)).replace(/-/g, '');

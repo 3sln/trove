@@ -3,7 +3,7 @@
 // (parentId,name). Every node belongs to a collection; each collection has its
 // own root, so paths are unique per collection, not globally.
 
-import { MetadataStore } from './interface.js';
+import { MetadataStore, MERGED_TAGS, mergeContributionTags, splitContributions, applyContribution, rawFacetsFromNode } from './interface.js';
 import { TroveError } from '../errors.js';
 import { newId, joinPath, normalizePath } from '../util.js';
 
@@ -96,7 +96,7 @@ export class MemoryStore extends MetadataStore {
       collectionId, parentId: node.parentId, name: node.name, path, kind: node.kind,
       size: node.size ?? 0, contentType: node.contentType ?? null,
       storageKey: node.storageKey ?? null, etag: node.etag ?? null,
-      createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: node.facets ?? {},
+      createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: rawFacetsFromNode(node),
     };
     this.#index(full);
     return clone(full);
@@ -158,18 +158,18 @@ export class MemoryStore extends MetadataStore {
     return clone(node);
   }
 
-  async setFacet(id, indexerId, data) {
+  async setContribution(id, contributorId, contribution) {
     const node = this.nodes.get(id);
     if (!node) throw TroveError.notFound('Node');
-    node.facets = { ...node.facets, [indexerId]: { ...(node.facets[indexerId] || {}), ...data } };
+    node.facets = applyContribution(node.facets, contributorId, contribution);
     node.updatedAt = Date.now();
     return clone(node);
   }
-  async clearFacet(id, indexerId) {
+  async clearContribution(id, contributorId) {
     const node = this.nodes.get(id);
     if (!node) return;
-    const { [indexerId]: _drop, ...rest } = node.facets;
-    node.facets = rest;
+    const { [contributorId]: _drop, ...rest } = node.facets;
+    node.facets = { ...rest, [MERGED_TAGS]: mergeContributionTags(rest) };
   }
 
   async searchByName(query, opts = {}) {
@@ -181,27 +181,35 @@ export class MemoryStore extends MetadataStore {
     return items.map(clone);
   }
 
-  async findByFacets(filters = [], opts = {}) {
+  async findByTags(filters = [], opts = {}) {
     const q = opts.q ? opts.q.toLowerCase() : null;
     const out = [];
     for (const node of this.nodes.values()) {
       if (node.parentId === null) continue;
       if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
       if (q && !node.name.toLowerCase().includes(q)) continue;
-      if (matchFacets(node, filters)) out.push(node);
+      if (matchTags(node, filters)) out.push(node);
     }
     out.sort((a, b) => b.updatedAt - a.updatedAt);
     return out.slice(0, opts.limit ?? 100).map(clone);
   }
 }
 
+// Split the internal raw facets into the exposed contributions + tags on read.
 function clone(n) {
-  return n ? JSON.parse(JSON.stringify(n)) : n;
+  if (!n) return n;
+  const copy = JSON.parse(JSON.stringify(n));
+  const { contributions, tags } = splitContributions(copy.facets || {});
+  copy.contributions = contributions;
+  copy.tags = tags;
+  delete copy.facets;
+  return copy;
 }
 
 // Server-side mirror of the client tag matcher (web/src/bl/tagQuery.js).
-function matchFacets(node, filters) {
-  const props = { ...(node.meta || {}), ...((node.facets && node.facets.tags) || {}) };
+function matchTags(node, filters) {
+  const merged = mergeContributionTags(node.facets || {});
+  const props = { ...(node.meta || {}), ...merged };
   return (filters || []).every((f) => {
     const v = props[f.key];
     if (f.present) return v != null && v !== false && v !== '';

@@ -1,12 +1,14 @@
-// IndexerRegistry — server-side indexers that extract searchable content from
-// files. An indexer declares which nodes it handles and, for each, produces
-// documents (text chunks + fields) and an optional facet (namespaced metadata
-// written back onto the node). Everything an indexer writes is namespaced under
-// its `id`, so indexers never clobber one another.
+// IndexerRegistry — server-side indexers that extract structured content from
+// files. An indexer declares which nodes it handles and, for each, produces a
+// *contribution* with up to three scopes:
+//   - semanticTexts: text chunks that become embeddings + keyword entries (search)
+//   - tags:          filterable key/values (merged into the node's queryable tags)
+//   - metadata:      arbitrary structured data (e.g. an audiobook's chapter index)
+// Everything is namespaced under the indexer's `id`, so indexers never clobber one
+// another and an indexer's whole contribution can be removed independently.
 //
 // This complements *plugin* indexers, which run in the browser sandbox and push
-// their documents through the API under their own namespace — same document
-// shape, same namespacing guarantee, different execution location.
+// the same contribution shape through the API under their own namespace.
 //
 // A built-in text/markdown extractor is included as the reference indexer.
 
@@ -17,7 +19,12 @@ import { extname } from '../util.js';
  * @property {string} id                 unique namespace
  * @property {string} [displayName]
  * @property {(node: object) => boolean} match
- * @property {(node: object, ctx: IndexContext) => Promise<{documents?: Doc[], facet?: object}>} index
+ * @property {(node: object, ctx: IndexContext) => Promise<Contribution>} index
+ *
+ * @typedef {object} Contribution
+ * @property {Doc[]} [semanticTexts]  text chunks → embeddings + keyword search
+ * @property {object} [tags]          filterable key/values, e.g. { language: 'en' }
+ * @property {object} [metadata]      arbitrary structured data, e.g. { chapters: [...] }
  *
  * @typedef {object} Doc
  * @property {string} [id]   stable per (node, chunk); defaults to `${node.id}:${i}`
@@ -77,16 +84,16 @@ export const textIndexer = {
   },
   async index(node, ctx) {
     const text = await ctx.readText();
-    if (!text.trim()) return { documents: [] };
+    if (!text.trim()) return { semanticTexts: [] };
     const chunks = chunkText(text, 1200, 200);
-    const documents = chunks.map((chunk, i) => ({
+    const semanticTexts = chunks.map((chunk, i) => ({
       id: `${node.id}:${i}`,
       text: chunk,
       fields: { name: node.name, path: node.path, chunk: i },
     }));
     return {
-      documents,
-      facet: { chars: text.length, chunks: chunks.length, excerpt: text.slice(0, 280) },
+      semanticTexts,
+      metadata: { chars: text.length, chunks: chunks.length, excerpt: text.slice(0, 280) },
     };
   },
 };

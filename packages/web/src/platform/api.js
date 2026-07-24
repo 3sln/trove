@@ -83,8 +83,9 @@ export class TroveApiClient {
   indexers() {
     return this.request('GET', '/api/indexers');
   }
-  pushIndex(indexerId, nodeId, documents, facet) {
-    return this.request('POST', `/api/index/${encodeURIComponent(indexerId)}`, { body: { nodeId, documents, facet } });
+  // contribution: { semanticTexts?, tags?, metadata? } (legacy { documents, facet } ok).
+  pushIndex(indexerId, nodeId, contribution) {
+    return this.request('POST', `/api/index/${encodeURIComponent(indexerId)}`, { body: { nodeId, ...contribution } });
   }
 
   // --- identity --------------------------------------------------------------

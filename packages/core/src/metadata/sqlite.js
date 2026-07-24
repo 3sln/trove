@@ -5,7 +5,7 @@
 // `facets` are JSON columns. FTS over names is provided via a LIKE index; the
 // SearchService layers semantic search on top.
 
-import { MetadataStore } from './interface.js';
+import { MetadataStore, MERGED_TAGS, mergeContributionTags, splitContributions, applyContribution, rawFacetsFromNode } from './interface.js';
 import { TroveError, wrapError } from '../errors.js';
 import { newId, joinPath, normalizePath } from '../util.js';
 
@@ -114,7 +114,7 @@ export class SqliteStore extends MetadataStore {
         collectionId, parentId: node.parentId, name: node.name, path, kind: node.kind,
         size: node.size ?? 0, contentType: node.contentType ?? null,
         storageKey: node.storageKey ?? null, etag: node.etag ?? null,
-        createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: node.facets ?? {},
+        createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: rawFacetsFromNode(node),
       };
       await this.db.run(
         `INSERT INTO nodes (id,collectionId,parentId,name,path,kind,size,contentType,storageKey,etag,createdAt,updatedAt,meta,facets)
@@ -193,18 +193,24 @@ export class SqliteStore extends MetadataStore {
     return this.getById(id);
   }
 
-  async setFacet(id, indexerId, data) {
-    const node = await this.getById(id);
-    if (!node) throw TroveError.notFound('Node');
-    node.facets = { ...node.facets, [indexerId]: { ...(node.facets[indexerId] || {}), ...data } };
-    await this.db.run('UPDATE nodes SET facets=?, updatedAt=? WHERE id=?', JSON.stringify(node.facets), Date.now(), id);
-    return node;
+  // Read the raw contributions JSON (with the reserved merged-tags key intact).
+  async #rawFacets(id) {
+    const r = await this.db.get('SELECT facets FROM nodes WHERE id=?', id);
+    if (!r) throw TroveError.notFound('Node');
+    return r.facets ? JSON.parse(r.facets) : {};
   }
 
-  async clearFacet(id, indexerId) {
-    const node = await this.getById(id);
-    if (!node) return;
-    const { [indexerId]: _drop, ...rest } = node.facets;
+  async setContribution(id, contributorId, contribution) {
+    const raw = applyContribution(await this.#rawFacets(id), contributorId, contribution);
+    await this.db.run('UPDATE nodes SET facets=?, updatedAt=? WHERE id=?', JSON.stringify(raw), Date.now(), id);
+    return this.getById(id);
+  }
+
+  async clearContribution(id, contributorId) {
+    let raw;
+    try { raw = await this.#rawFacets(id); } catch { return; }
+    const { [contributorId]: _drop, ...rest } = raw;
+    rest[MERGED_TAGS] = mergeContributionTags(rest);
     await this.db.run('UPDATE nodes SET facets=? WHERE id=?', JSON.stringify(rest), id);
   }
 
@@ -220,11 +226,12 @@ export class SqliteStore extends MetadataStore {
     return rows.map(row);
   }
 
-  async findByFacets(filters = [], opts = {}) {
+  async findByTags(filters = [], opts = {}) {
     const where = ['parentId IS NOT NULL'];
     const params = [];
     for (const f of filters) {
-      const path = '$.tags.' + '"' + String(f.key).replace(/["\\]/g, '') + '"';
+      // Query the denormalized merged-tags view: facets['#tags'][key].
+      const path = '$."' + MERGED_TAGS + '"."' + String(f.key).replace(/["\\]/g, '') + '"';
       if (f.present) {
         where.push('json_extract(facets, ?) IS NOT NULL');
         params.push(path);
@@ -255,11 +262,10 @@ export class SqliteStore extends MetadataStore {
 
 function row(r) {
   if (!r) return null;
-  return {
-    ...r,
-    meta: r.meta ? JSON.parse(r.meta) : {},
-    facets: r.facets ? JSON.parse(r.facets) : {},
-  };
+  const { contributions, tags } = splitContributions(r.facets ? JSON.parse(r.facets) : {});
+  const out = { ...r, meta: r.meta ? JSON.parse(r.meta) : {}, contributions, tags };
+  delete out.facets; // internal column name; exposed as contributions + tags
+  return out;
 }
 
 function escapeLike(s) {

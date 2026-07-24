@@ -58,8 +58,8 @@ async function main() {
   const sailing = await vfs.writeFile(docs.id, 'sailing.txt', 'Trimming the mainsail and tacking upwind across the bay at dawn.', { contentType: 'text/plain' });
   // Tag files (welcome.md at root, sailing.txt in a subfolder) so the launcher's
   // #tag/#property filters have something to match — and to prove drive-wide search.
-  await vfs.metadata.setFacet(welcome.id, 'tags', { fav: 'yes', rating: '5' });
-  await vfs.metadata.setFacet(sailing.id, 'tags', { fav: 'yes', deep: 'yes' });
+  await vfs.metadata.setContribution(welcome.id, 'user', { tags: { fav: 'yes', rating: '5' } });
+  await vfs.metadata.setContribution(sailing.id, 'user', { tags: { fav: 'yes', deep: 'yes' } });
 
   const server = http.createServer(async (req, res) => {
     const webRes = await handle(await toWeb(req));

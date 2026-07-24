@@ -303,7 +303,10 @@ export class PluginHost {
       case 'files:index': {
         cap('indexer');
         const ns = params.indexerId?.startsWith(pid) ? params.indexerId : `${pid}.${params.indexerId || 'default'}`;
-        return this.platform.api.pushIndex(ns, params.nodeId, params.documents, params.facet);
+        return this.platform.api.pushIndex(ns, params.nodeId, {
+          semanticTexts: params.semanticTexts, tags: params.tags, metadata: params.metadata,
+          documents: params.documents, facet: params.facet, // legacy
+        });
       }
 
       // Network — brokered by the host and confined to declared endpoints. The

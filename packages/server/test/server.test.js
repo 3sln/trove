@@ -100,15 +100,17 @@ test('plugin storage SQL: scoped round-trip + ATTACH rejected', async () => {
   expect((await sql('drop_table', { sql: 'x' })).status).toBeGreaterThanOrEqual(400);
 });
 
-test('adding a tag indexes it onto the node facet (filterable)', async () => {
+test('adding a tag exposes it in the node\'s merged tags (filterable)', async () => {
   const { handle, vfs } = await createServer();
   const folder = await vfs.mkdir('root', 'tagged');
   const file = await vfs.writeFile(folder.id, 'x.txt', 'hi', { contentType: 'text/plain' });
   await jsonReq(handle, 'POST', `/api/files/${file.id}/tags`, { name: 'fav', value: 'yes' });
   const list = await jsonReq(handle, 'GET', `/api/fs/list?id=${folder.id}`);
-  expect(list.json.items.find((n) => n.id === file.id).facets.tags.fav).toBe('yes');
+  const row = list.json.items.find((n) => n.id === file.id);
+  expect(row.tags.fav).toBe('yes'); // merged view
+  expect(row.contributions.user.tags.fav).toBe('yes'); // namespaced under the 'user' scope
 
   await jsonReq(handle, 'DELETE', `/api/files/${file.id}/tags/fav`);
   const after = await jsonReq(handle, 'GET', `/api/fs/list?id=${folder.id}`);
-  expect(after.json.items.find((n) => n.id === file.id).facets.tags.fav).toBe(null); // removed reads as absent
+  expect(after.json.items.find((n) => n.id === file.id).tags.fav).toBeFalsy(); // removed reads as absent
 });

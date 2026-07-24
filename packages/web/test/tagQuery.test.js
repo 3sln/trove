@@ -18,7 +18,7 @@ test('parseTagQuery handles operators, shorthand equality, and quoted values', (
 });
 
 test('matchesTagFilters: presence + numeric + string comparisons over tags/meta', () => {
-  const node = { facets: { tags: { fav: 'yes', rating: '5' } }, meta: { status: 'done' } };
+  const node = { tags: { fav: 'yes', rating: '5' }, meta: { status: 'done' } };
   expect(matchesTagFilters(node, parseTagQuery('#fav').filters)).toBe(true);
   expect(matchesTagFilters(node, parseTagQuery('#missing').filters)).toBe(false);
   expect(matchesTagFilters(node, parseTagQuery('#rating:>=4').filters)).toBe(true);   // numeric
@@ -31,7 +31,7 @@ test('matchesTagFilters: presence + numeric + string comparisons over tags/meta'
 });
 
 test('a removed tag (null value) reads as absent', () => {
-  const node = { facets: { tags: { fav: null } } };
+  const node = { tags: { fav: null } };
   expect(matchesTagFilters(node, parseTagQuery('#fav').filters)).toBe(false);
 });
 
