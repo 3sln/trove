@@ -108,14 +108,19 @@ function fallbackOpener(node, ui) {
 }
 
 function pluginOpenerView(opener, node, ui) {
-  // A plugin-provided opener renders inside its own iframe; we surface its panel.
-  Promise.resolve(opener.open?.(node, {})).catch(() => {});
-  return div({ className: 'viewer' },
-    div({ className: 'fallback' },
-      icon('plug', { size: 40 }),
-      span(`Opened with ${opener.title} (plugin)`),
-      button({ className: 'btn' }, 'Show plugin panel').on({ click: () => ui.platform.workbench.openPluginPanel(opener.pluginId) }),
-    ),
+  // A plugin opener renders inside its own sandboxed iframe. We hand the plugin's
+  // persistent frame to mountViewer, which fills this container (transparent) and
+  // tells the plugin to open `node`. On $detach (navigating away) the returned fn
+  // either hides the frame or — if the viewer registered `dock` — floats it as a
+  // dock. The frame is host-owned and survives this vnode being torn down.
+  // `.opaque()`: dodo never reconciles this element's children, so the host-owned
+  // iframe we imperatively mount here survives workbench re-renders (it would
+  // otherwise be removed as an "undeclared" child). $attach/$detach still fire.
+  return div({ className: 'viewer plugin-viewer' },
+    div({ className: 'pv-host' }).on({
+      $attach: (el) => { el._detach = ui.platform.plugins.mountViewer(opener.pluginId, el, node, opener.id); },
+      $detach: (el) => { el._detach?.(); el._detach = null; },
+    }).opaque(),
   );
 }
 

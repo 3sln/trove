@@ -14,6 +14,8 @@ const CAP_DESCRIPTIONS = {
   opener: 'Preview/open file types.',
   indexer: 'Add searchable content to your files.',
   network: 'Connect to the internet — only the endpoints it declares (shown below).',
+  media: 'Show playback controls on your lock screen and notifications while it plays media.',
+  dock: 'Keep its viewer in a small floating window when you navigate away.',
 };
 
 // Capabilities that need an admin to grant (they touch shared data). None at the

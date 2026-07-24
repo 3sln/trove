@@ -33,6 +33,36 @@ window.trove.activate(async (ctx) => {
       return row && row.v;
     }, { title: 'Demo: Client store round-trip', offline: true });
   }
+  // A sandboxed viewer: renders a tiny "player" for .demo files into its own
+  // iframe DOM, then drives the OS media session + registers for dock mode while
+  // "playing". Exercises ctx.media and ctx.dock end-to-end.
+  if (ctx.capabilities.includes('opener')) {
+    let current = null;
+    ctx.contributes.opener({ id: 'demo.player', title: 'Demo Player', selector: { ext: ['.demo'] }, offline: true }, (file) => {
+      current = file;
+      document.body.innerHTML = '';
+      const el = document.createElement('div');
+      el.id = 'demo-player';
+      el.textContent = 'Playing ' + (file && file.name || '');
+      el.style.cssText = 'color:#fff;font:13px sans-serif;padding:10px;background:rgba(0,0,0,.6);border-radius:8px;';
+      document.body.appendChild(el);
+      window.__openedDemo = file && file.name;
+    });
+    if (ctx.capabilities.includes('media')) {
+      ctx.commands.register('demo.play', async () => {
+        await ctx.media.setMetadata({ title: (current && current.name) || 'Demo', artist: 'Trove' });
+        await ctx.media.setPlaybackState('playing');
+        await ctx.media.setActionHandler('pause', () => { window.__mediaPause = true; });
+        if (ctx.capabilities.includes('dock')) await ctx.dock.enable({ minSize: { width: 320, height: 80 } });
+        return 'playing';
+      }, { title: 'Demo: Play', offline: true });
+      ctx.commands.register('demo.stop', async () => {
+        await ctx.media.setPlaybackState('paused');
+        if (ctx.capabilities.includes('dock')) await ctx.dock.disable();
+        return 'stopped';
+      }, { title: 'Demo: Stop', offline: true });
+    }
+  }
   // Brokered network: fetch a declared endpoint (allowed) and an undeclared one
   // (blocked). Returns the outcome so the host/e2e can assert enforcement.
   if (ctx.capabilities.includes('network')) {

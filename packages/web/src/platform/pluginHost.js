@@ -21,7 +21,7 @@ import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes
 import { isAllowedUrl, endpointSummary } from './pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from './pluginModules.js';
 
-const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network'];
+const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network', 'media', 'dock'];
 
 // Response bodies larger than this are refused, so a plugin can't exhaust host
 // memory through the brokered fetch.
@@ -288,9 +288,47 @@ export class PluginHost {
         this.platform.openPluginPanel?.(pid);
         this.#emit();
         return { ok: true };
+
+      // Media session — the host owns navigator.mediaSession; a viewer surfaces its
+      // playback so the OS shows transport controls. Actions fire back over RPC.
+      case 'media:metadata': cap('media'); return this.#media(record, 'metadata', params);
+      case 'media:playbackState': cap('media'); return this.#media(record, 'playbackState', params);
+      case 'media:position': cap('media'); return this.#media(record, 'position', params);
+      case 'media:action': cap('media'); return this.#media(record, 'action', params);
+      case 'media:clear': return this.#media(record, 'clear', params);
+
+      // Dock — register/unregister this viewer for the floating "dock" mode.
+      case 'dock:enable': cap('dock'); record.dock = { enabled: true, minSize: params.minSize, maxSize: params.maxSize, dismissed: false }; return { ok: true };
+      case 'dock:disable': cap('dock'); if (record.dock) record.dock.enabled = false; if (this._dockedId === pid) this.#closeDock(record); return { ok: true };
+      case 'dock:close': this.#closeDock(record); return { ok: true };
+
       default:
         throw new Error(`Unknown host method ${method}`);
     }
+  }
+
+  // Bridge a viewer's playback to navigator.mediaSession (only the currently-shown
+  // or docked viewer owns the session).
+  #media(record, kind, params) {
+    const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : null;
+    if (!ms) return { ok: false };
+    try {
+      if (kind === 'metadata') {
+        ms.metadata = typeof MediaMetadata !== 'undefined'
+          ? new MediaMetadata({ title: params.title || '', artist: params.artist || '', album: params.album || '', artwork: params.artwork || [] })
+          : ms.metadata;
+      } else if (kind === 'playbackState') {
+        ms.playbackState = params.state || 'none';
+      } else if (kind === 'position' && ms.setPositionState) {
+        ms.setPositionState({ duration: params.duration || 0, position: params.position || 0, playbackRate: params.playbackRate || 1 });
+      } else if (kind === 'action') {
+        ms.setActionHandler?.(params.action, params.on ? () => record.channel?.emit('media:action', { action: params.action }) : null);
+      } else if (kind === 'clear') {
+        ms.metadata = null;
+        ms.playbackState = 'none';
+      }
+    } catch { /* unsupported action/state */ }
+    return { ok: true };
   }
 
   // Plugin storage: run a SQL op against one scoped, isolated database. `scope` is
@@ -430,19 +468,125 @@ export class PluginHost {
     if (record) { await this.#probe(record); this.#emit(); }
   }
 
-  // --- panel / uninstall -----------------------------------------------------
+  // --- panel / viewer / dock -------------------------------------------------
+  //
+  // A plugin's iframe is created once (in #run) and stays a child of <body> for
+  // its whole life — we NEVER re-parent it, because moving an <iframe> in the DOM
+  // reloads its document (per the HTML spec) and would kill the running plugin and
+  // its MessagePort. To show it "inside" a panel, viewer, or dock, we instead float
+  // it as a position:fixed overlay tracking the target element's box every frame.
 
   mountPanel(pluginId, container, { width = 380, height = 480 } = {}) {
     const record = this.plugins.get(pluginId);
     if (!record) return null;
-    const f = record.iframe;
-    f.style.cssText = `width:${width}px;height:${height}px;border:0;visibility:visible;display:block;`;
-    container.appendChild(f);
+    container.style.width = `${width}px`;
+    container.style.height = `${height}px`;
+    this.#place(record, container, 50);
     record.hasUi = true;
+    return () => this.#hideIframe(record);
+  }
+
+  /**
+   * Mount a plugin opener's iframe as the full viewer for `node`. Returns a detach
+   * fn the viewer calls when it goes away: if the opener registered `dock`, the
+   * iframe is kept alive as a floating dock instead of being hidden.
+   */
+  mountViewer(pluginId, container, node, openerId) {
+    const record = this.plugins.get(pluginId);
+    if (!record) return null;
+    if (this._dockedId === pluginId) this.#undock(record); // re-opening a docked viewer
+    record.viewer = { node, openerId };
+    this.#place(record, container, 3);
+    record.hasUi = true;
+    record.channel?.call('opener:open', { openerId, file: node, context: {} }).catch(() => {});
     return () => {
-      f.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
-      document.body.appendChild(f);
+      if (record.dock?.enabled && !record.dock.dismissed) this.#dock(record);
+      else this.#hideIframe(record);
     };
+  }
+
+  // Float the (never-moved) iframe over `targetEl`, keeping it aligned each frame so
+  // it tracks layout/scroll/resize. Replaces any previous placement for this record.
+  #place(record, targetEl, z) {
+    this.#stopPlace(record);
+    const f = record.iframe;
+    f.style.cssText = `position:fixed;border:0;visibility:visible;display:block;background:transparent;z-index:${z};margin:0;padding:0;`;
+    const sync = () => {
+      const r = targetEl.getBoundingClientRect();
+      f.style.left = `${r.left}px`;
+      f.style.top = `${r.top}px`;
+      f.style.width = `${r.width}px`;
+      f.style.height = `${r.height}px`;
+    };
+    sync();
+    let raf = 0;
+    const loop = () => { sync(); raf = requestAnimationFrame(loop); };
+    if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(loop);
+    record._place = { stop: () => { if (raf) cancelAnimationFrame(raf); } };
+  }
+  #stopPlace(record) {
+    if (record._place) { record._place.stop(); record._place = null; }
+  }
+
+  #hideIframe(record) {
+    this.#stopPlace(record);
+    record.iframe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;border:0;visibility:hidden;';
+  }
+
+  // Float the viewer's iframe as a single small dock (transparent), sized by the
+  // viewer's declared min constraints. Click the header to reopen; × to dismiss.
+  #dock(record) {
+    if (this._dockedId && this._dockedId !== record.manifest.id) {
+      const prev = this.plugins.get(this._dockedId);
+      if (prev) this.#closeDock(prev);
+    }
+    const min = record.dock?.minSize || { width: 300, height: 90 };
+    const el = this.#dockEl();
+    el.style.width = `${clampDim(min.width, 200, 480)}px`;
+    el.style.height = `${clampDim(min.height, 56, 360) + 26}px`; // + header
+    el.querySelector('.vd-title').textContent = record.viewer?.node?.name || record.manifest.name;
+    el.style.display = 'flex';
+    this.#place(record, el.querySelector('.vd-body'), 61);
+    this._dockedId = record.manifest.id;
+    record.docked = true;
+    record.channel?.emit('dock:state', { docked: true });
+    this.#emit();
+  }
+
+  #undock(record) {
+    if (this._dockEl_) this._dockEl_.style.display = 'none';
+    if (this._dockedId === record.manifest.id) this._dockedId = null;
+    record.docked = false;
+    record.channel?.emit('dock:state', { docked: false });
+  }
+
+  #closeDock(record) {
+    if (this._dockedId === record.manifest.id || record.docked) {
+      if (this._dockEl_) this._dockEl_.style.display = 'none';
+      this._dockedId = null;
+      record.docked = false;
+      this.#hideIframe(record);
+      record.channel?.emit('dock:state', { docked: false, closed: true });
+      this.#emit();
+    }
+  }
+
+  #dockEl() {
+    if (this._dockEl_) return this._dockEl_;
+    const el = document.createElement('div');
+    el.className = 'viewer-dock';
+    el.innerHTML = '<div class="vd-bar"><span class="vd-title"></span><button class="vd-expand" title="Reopen">↗</button><button class="vd-close" title="Close">✕</button></div><div class="vd-body"></div>';
+    el.querySelector('.vd-expand').addEventListener('click', () => {
+      const record = this.plugins.get(this._dockedId);
+      if (record?.viewer) this.platform.workbench.openFile(record.viewer.node, record.viewer.openerId);
+    });
+    el.querySelector('.vd-close').addEventListener('click', () => {
+      const record = this.plugins.get(this._dockedId);
+      if (record) this.#closeDock(record);
+    });
+    document.body.appendChild(el);
+    this._dockEl_ = el;
+    return el;
   }
 
   /** Uninstall: stop the plugin, forget it, and wipe everything it owns. */
@@ -572,6 +716,12 @@ function runSqlOp(db, op, sql, params = [], statements) {
     case 'batch': return db.batch(statements);
     default: throw new Error(`Unknown storage op "${op}"`);
   }
+}
+
+// Clamp a viewer-declared dock dimension into a sane host range (defaulting to the
+// low bound when the viewer gives nothing).
+function clampDim(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v || lo));
 }
 
 function signature(live) {

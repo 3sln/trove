@@ -16,7 +16,8 @@
   const openerHandlers = new Map();
   const indexerHandlers = new Map();
   const contributions = { commands: new Map(), openers: new Map(), indexers: new Map(), statusItems: new Map() };
-  let onConnectivity = null, onDeactivate = null, onSettingsChange = null;
+  let onConnectivity = null, onDeactivate = null, onSettingsChange = null, onDock = null;
+  const mediaHandlers = {}; // action -> handler, for OS media-session controls
 
   const now = () => { try { return Date.now(); } catch { return 0; } };
 
@@ -70,6 +71,10 @@
     if (method === 'deactivate') return onDeactivate && onDeactivate();
     if (method === 'connectivity') { online = !!params.online; try { onConnectivity && (await onConnectivity({ online })); } catch (e) { console.error(e); } announce(); }
     if (method === 'settings:changed') { try { onSettingsChange && onSettingsChange(params.key, params.value); } catch (e) { console.error(e); } }
+    // The OS/host fired a media transport control (play/pause/next/seek…).
+    if (method === 'media:action') { try { mediaHandlers[params.action] && mediaHandlers[params.action](params); } catch (e) { console.error(e); } }
+    // The host docked or undocked this viewer (see ctx.dock).
+    if (method === 'dock:state') { try { onDock && onDock(params); } catch (e) { console.error(e); } }
   }
 
   function requireCap(cap) { if (!capabilities.includes(cap)) throw new Error('Plugin lacks capability "' + cap + '"'); }
@@ -146,6 +151,26 @@
         showPanel: () => call('ui:showPanel', {}),
         setBadge: (text) => emit('ui:badge', { text }),
         setContext: (key, value) => emit('context:set', { key, value }),
+      },
+      // Media session — surfaces this viewer's playback to the OS (lock-screen /
+      // notification transport controls, so phones can play/pause/seek). The host
+      // owns navigator.mediaSession; action handlers are called back over RPC.
+      media: {
+        setMetadata: (m) => (requireCap('media'), call('media:metadata', m || {})),
+        setPlaybackState: (state) => (requireCap('media'), call('media:playbackState', { state })),
+        setPositionState: (p) => (requireCap('media'), call('media:position', p || {})),
+        setActionHandler: (action, handler) => { requireCap('media'); if (handler) mediaHandlers[action] = handler; else delete mediaHandlers[action]; return call('media:action', { action, on: !!handler }); },
+        clear: () => call('media:clear', {}),
+      },
+      // Dock — register this viewer to persist as a small floating frame when the
+      // user navigates away (a docked video = picture-in-picture; docked audio = a
+      // mini transport). Enable while playing/active, disable otherwise. `minSize`/
+      // `maxSize` are {width,height} constraints. onDock is notified on (un)dock.
+      dock: {
+        enable: (opts) => (requireCap('dock'), call('dock:enable', opts || {})),
+        disable: () => (requireCap('dock'), call('dock:disable', {})),
+        close: () => call('dock:close', {}),
+        onChange: (fn) => { onDock = fn; },
       },
       // Network — there is no direct fetch in the sandbox; the host performs the
       // request, but ONLY to endpoints declared in the manifest's `network` list
