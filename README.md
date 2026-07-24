@@ -1,7 +1,7 @@
 # 🗄️ Trove
 
 A **self-hostable Google Drive** you actually own — with **semantic search**,
-**pluggable storage** (S3 / filesystem / NAS), a **VS Code-style workbench**, and
+**pluggable storage** (S3 / filesystem / NAS), a **search-first workbench**, and
 a **sandboxed plugin system**. Ships as a runtime-agnostic library plus a server
 that speaks plain `Request → Response`, so it runs on **Node**, **Bun**, or
 **Cloudflare Workers** with a light wrapper.
@@ -11,7 +11,7 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  @trove/web            VS Code-style workbench (dodo/ngin/bones)│
+│  @trove/web         search-first workbench (dodo/ngin/bones)   │
 │   contributions · commands · keymaps · settings · plugin host  │
 ├──────────────────────────────────────────────────────────────┤
 │  @trove/server         Request → Response  (Node · Worker)     │
@@ -40,10 +40,13 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
 - **Pluggable indexers** — attach searchable content to files, namespaced under
   the indexer that owns it. A built-in text/code extractor runs server-side;
   plugins push their own documents through the API under their namespace.
-- **VS Code-style workbench** — a real contribution system: commands, a command
-  palette + quick-open, keybindings (chords, user overrides), when-clauses,
-  schema-driven settings, an activity bar, an explorer with drag-and-drop, and
-  media openers.
+- **Search-first workbench** — the main panel is a launcher (Spotlight/Raycast
+  style): type to search files, `!` to run a command, `#tag` / `#key:>=value` to
+  filter by tag or property; recents and the current folder sit underneath. Opening
+  a file shows the opener **beside** the launcher (split) or **over** it (modal) —
+  your last choice is the default, and you can swap. Underneath is a real
+  contribution system: commands, a command palette + quick-open, keybindings
+  (chords, user overrides), when-clauses, schema-driven settings, and media openers.
 - **Media openers** — text, image, audio, video, and a full **audiobook player**
   for `.m4b`: chapter list, cover art, rich metadata, variable speed, ±30s skip,
   and **resumable progress** — chapters/metadata parsed straight from the MP4
