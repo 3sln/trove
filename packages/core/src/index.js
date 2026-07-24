@@ -31,6 +31,7 @@ export { VectorizeVectorStore } from './search/vectorize.js';
 
 // Server-side key/value store (subscriptions, inboxes, profiles).
 export { KeyValueStore, MemoryKV, SqliteKV } from './kv.js';
+export { SqliteDatabase, SqliteProvider, LocalSqliteProvider } from './sqlite.js';
 
 // Identity (BYO IdP — Cloudflare Access / Zero Trust / a proxy).
 export {
@@ -60,7 +61,7 @@ import { IndexerRegistry, textIndexer } from './indexers/registry.js';
  *
  *   createVfs({
  *     storage: new S3Storage({ ... }),
- *     metadata: new SqliteStore({ path: 'trove.db' }),
+ *     metadata: new SqliteStore({ provider: new LocalSqliteProvider({ path: 'trove.db' }) }),
  *     embeddings: new HttpEmbedding({ url, apiKey, model, dimensions: 1536 }),
  *   })
  *

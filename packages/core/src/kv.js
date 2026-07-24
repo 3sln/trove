@@ -4,7 +4,6 @@
 // the interface over D1/Redis/etc). Values are JSON-serialisable.
 
 import { TroveError } from './errors.js';
-import { openDatabase } from './sqlite-driver.js';
 
 export class KeyValueStore {
   async get(ns, key) {
@@ -48,35 +47,45 @@ export class MemoryKV extends KeyValueStore {
 }
 
 export class SqliteKV extends KeyValueStore {
-  /** @param {{db?: object, path?: string}} opts pass the SqliteStore's db to share it */
+  /**
+   * @param {{ provider?: object, key?: string, database?: object }} opts
+   *   Pass a SqliteProvider + `key` (default 'kv', which shares the main db file),
+   *   or a ready `database` (SqliteDatabase) directly.
+   */
   constructor(opts = {}) {
     super();
     this._opts = opts;
-    this.db = opts.db || null;
+    this.key = opts.key ?? 'kv';
+    this.db = opts.database ?? null;
   }
   async init() {
     if (!this.db) {
-      this.db = await openDatabase(this._opts.path ?? ':memory:');
+      if (!this._opts.provider) throw TroveError.invalid('SqliteKV needs a provider or database');
+      this.db = await this._opts.provider.obtain({ key: this.key });
     }
-    this.db.exec(`CREATE TABLE IF NOT EXISTS kv (
+    await this.db.exec(`CREATE TABLE IF NOT EXISTS kv (
       ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updatedAt INTEGER NOT NULL,
       PRIMARY KEY (ns, key)
     )`);
   }
   async get(ns, key) {
-    const row = this.db.prepare('SELECT value FROM kv WHERE ns=? AND key=?').get(ns, key);
+    const row = await this.db.get('SELECT value FROM kv WHERE ns=? AND key=?', ns, key);
     return row ? JSON.parse(row.value) : null;
   }
   async set(ns, key, value) {
-    this.db.prepare('INSERT INTO kv (ns,key,value,updatedAt) VALUES (?,?,?,?) ON CONFLICT(ns,key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt')
-      .run(ns, key, JSON.stringify(value), Date.now());
+    await this.db.run(
+      'INSERT INTO kv (ns,key,value,updatedAt) VALUES (?,?,?,?) ON CONFLICT(ns,key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt',
+      ns, key, JSON.stringify(value), Date.now(),
+    );
   }
   async delete(ns, key) {
-    this.db.prepare('DELETE FROM kv WHERE ns=? AND key=?').run(ns, key);
+    await this.db.run('DELETE FROM kv WHERE ns=? AND key=?', ns, key);
   }
   async list(ns, prefix = '') {
-    const rows = this.db.prepare("SELECT key, value FROM kv WHERE ns=? AND key LIKE ? ESCAPE '\\'")
-      .all(ns, prefix.replace(/[\\%_]/g, (c) => '\\' + c) + '%');
+    const rows = await this.db.all(
+      "SELECT key, value FROM kv WHERE ns=? AND key LIKE ? ESCAPE '\\'",
+      ns, prefix.replace(/[\\%_]/g, (c) => '\\' + c) + '%',
+    );
     return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value) }));
   }
 }

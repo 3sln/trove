@@ -14,6 +14,7 @@ import {
   IndexerRegistry, textIndexer,
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
   KeyValueStore, MemoryKV, SqliteKV,
+  SqliteProvider, LocalSqliteProvider,
   SidecarService, NotificationCenter, WebPushService,
   CollectionService,
   TroveError,
@@ -38,9 +39,9 @@ function buildStorage(cfg) {
     case 'memory': default: return new MemoryStorage();
   }
 }
-function buildMetadata(cfg) {
+function buildMetadata(cfg, sqliteProvider) {
   switch (cfg.driver) {
-    case 'sqlite': return new SqliteStore({ path: cfg.path });
+    case 'sqlite': return new SqliteStore({ provider: sqliteProvider, key: 'metadata' });
     case 'memory': default: return new MemoryStore();
   }
 }
@@ -62,9 +63,11 @@ function buildIdentity(cfg) {
     case 'anonymous': default: return new AnonymousIdentityProvider();
   }
 }
-function buildKV(cfg, sqliteDb) {
-  if (cfg.driver === 'sqlite') return new SqliteKV({ db: sqliteDb, path: cfg.path });
-  return new MemoryKV();
+// The SQLite provider: a keyed pool the whole server shares (metadata + kv co-locate
+// in the main db file; plugin scopes get isolated sibling files). Injectable, so a
+// Worker can supply a D1/Durable-Object-backed provider instead.
+function buildSqliteProvider(cfg) {
+  return new LocalSqliteProvider({ path: cfg?.path || './data/trove.db' });
 }
 
 /**
@@ -84,7 +87,18 @@ function buildKV(cfg, sqliteDb) {
  */
 export async function createServer(config = {}) {
   const storage = resolve(config.storage ?? config.vfs?.storage, StorageBackend, buildStorage);
-  const metadata = resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, buildMetadata);
+
+  // One shared SQLite provider (keyed pool) for metadata, kv, and per-plugin scopes.
+  // Built only when something needs sqlite; injectable for other runtimes (D1/DO).
+  const wantsSqlite = config.sqlite || config.metadata?.driver === 'sqlite' || config.kv?.driver === 'sqlite';
+  const sqliteProvider = config.sqlite instanceof SqliteProvider
+    ? config.sqlite
+    : wantsSqlite
+      ? buildSqliteProvider(config.sqlite || { path: config.metadata?.path })
+      : null;
+  if (sqliteProvider) await sqliteProvider.init();
+
+  const metadata = resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, (cfg) => buildMetadata(cfg, sqliteProvider));
   const embeddings = resolve(config.embeddings, EmbeddingProvider, buildEmbeddings);
   const vectorStore = resolve(config.vectorStore, VectorStore, (cfg) => buildVectorStore(cfg, embeddings.dimensions));
 
@@ -100,9 +114,14 @@ export async function createServer(config = {}) {
   // run still works; production injects a JwtIdentityProvider (Cloudflare Access).
   const identity = resolve(config.identity, IdentityProvider, buildIdentity);
 
-  // Shared KV (subscriptions, inboxes). Reuse the SQLite db if metadata is sqlite.
-  const sqliteDb = metadata instanceof SqliteStore ? metadata.db : null;
-  const kv = config.kv instanceof KeyValueStore ? config.kv : buildKV(config.kv || {}, sqliteDb);
+  // Shared KV (subscriptions, inboxes). When metadata is sqlite, KV shares the same
+  // provider (co-located in the main db file) so it actually persists — memory
+  // otherwise.
+  const kv = config.kv instanceof KeyValueStore
+    ? config.kv
+    : (sqliteProvider && (config.kv?.driver === 'sqlite' || metadata instanceof SqliteStore))
+      ? new SqliteKV({ provider: sqliteProvider, key: 'kv' })
+      : new MemoryKV();
   await kv.init?.();
 
   // Web push (optional — only when VAPID keys are configured).
@@ -159,7 +178,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -171,9 +190,10 @@ export async function createServer(config = {}) {
   async function close() {
     notifications.stop();
     await sidecar.dispose?.();
+    await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, sqlite: sqliteProvider, close };
 }
 
 /** Map process.env → createServer config. */
