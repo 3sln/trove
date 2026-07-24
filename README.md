@@ -57,7 +57,9 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   each contribution flagged offline-capable or not — so the workbench knows which
   plugin features actually work right now, disables the ones that don't (e.g. a
   network-only previewer while offline), and treats a plugin that sends no
-  manifest as not running.
+  manifest as not running. The host also **re-requests the manifest on a
+  heartbeat**, so a plugin that hangs or crashes between events is noticed and its
+  features are marked unavailable.
 - **Conversations on every file** — threaded comments with @mentions, reactions,
   and tags, stored in a **CRDT sidecar document** kept cold in object storage
   (one `sidecars/<id>.json` next to your data — no extra database) and loaded

@@ -27,13 +27,50 @@ export class PluginHost {
   /**
    * @param {object} platform the assembled platform (contributions, commands, api, …)
    */
-  constructor(platform) {
+  constructor(platform, { heartbeatMs = 20000 } = {}) {
     this.platform = platform;
     this.plugins = new Map(); // id -> record
     this.online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    this.heartbeatMs = heartbeatMs;
+    this._heartbeat = null;
+    this._probing = false;
     this.subject = platform.reactive.ObservableSubject
       ? new platform.reactive.ObservableSubject([])
       : null;
+  }
+
+  /** Poll every active plugin's manifest on a timer, independent of connectivity
+   *  changes. This catches plugins that hang/crash (they stop answering → their
+   *  contributions go unavailable) and silent capability updates a plugin didn't
+   *  push. Runs only while at least one plugin is loaded. */
+  #startHeartbeat() {
+    if (this._heartbeat || !this.heartbeatMs) return;
+    this._heartbeat = setInterval(() => this.#heartbeat(), this.heartbeatMs);
+    if (this._heartbeat?.unref) this._heartbeat.unref();
+  }
+  #stopHeartbeat() {
+    if (this._heartbeat) clearInterval(this._heartbeat);
+    this._heartbeat = null;
+  }
+  async #heartbeat() {
+    if (this._probing) return; // don't overlap slow probes
+    this._probing = true;
+    try {
+      let changed = false;
+      for (const r of this.plugins.values()) {
+        if (r.status === 'active') changed = (await this.#probe(r)) || changed;
+      }
+      if (changed) this.#emit();
+    } finally {
+      this._probing = false;
+    }
+  }
+
+  /** Change the heartbeat interval (0 disables); restarts the timer. */
+  setHeartbeat(ms) {
+    this.heartbeatMs = ms;
+    this.#stopHeartbeat();
+    if (ms && [...this.plugins.values()].some((r) => r.status === 'active')) this.#startHeartbeat();
   }
 
   list() {
@@ -130,6 +167,7 @@ export class PluginHost {
       record.responsive = true;
       // Pull the initial manifest in case the push hasn't arrived yet.
       this.#probe(record).then(() => this.#emit());
+      this.#startHeartbeat(); // begin periodic liveness/capability polling
     } catch (err) {
       record.status = 'error';
       record.error = err?.message || String(err);
@@ -286,21 +324,23 @@ export class PluginHost {
     }
   }
 
-  /** Ask a plugin for its manifest as a liveness probe; false if it doesn't answer. */
+  /** Ask a plugin for its manifest as a liveness probe. Returns whether the
+   *  plugin's availability picture changed (responsiveness flipped or the
+   *  announced contributions changed), so callers know whether to re-render. */
   async #probe(record) {
     if (record.status !== 'active' || !record.channel) return false;
+    const before = { responsive: record.responsive, sig: signature(record.live) };
     try {
       const live = await record.channel.call('manifest', {}, { timeout: 4000 });
       record.live = live;
       record.responsive = true;
       record.lastManifestAt = Date.now();
-      return true;
     } catch {
-      // No manifest → the plugin isn't really working (e.g. its frame failed to
-      // load offline). Its contributions become unavailable.
+      // No manifest → the plugin isn't really working (hung, crashed, or its
+      // frame failed to load offline). Its contributions become unavailable.
       record.responsive = false;
-      return false;
     }
+    return before.responsive !== record.responsive || before.sig !== signature(record.live);
   }
 
   /**
@@ -361,8 +401,19 @@ export class PluginHost {
     record.channel?.dispose();
     record.iframe.remove();
     this.plugins.delete(pluginId);
+    if (![...this.plugins.values()].some((r) => r.status === 'active')) this.#stopHeartbeat();
     this.#emit();
   }
+}
+
+// A cheap change signature over a plugin's announced contributions + online flag,
+// so the heartbeat only re-renders when the availability picture actually moves.
+function signature(live) {
+  if (!live) return '';
+  const c = live.contributions || {};
+  const flat = ['commands', 'openers', 'indexers', 'statusItems']
+    .flatMap((k) => (c[k] || []).map((x) => `${k}:${x.id}:${x.offline ? 1 : 0}`));
+  return `${live.online ? 1 : 0}|${flat.sort().join(',')}`;
 }
 
 export { ALL_CAPABILITIES };

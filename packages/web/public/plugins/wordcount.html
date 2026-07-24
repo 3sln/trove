@@ -34,7 +34,7 @@
     // A compact inline implementation of the @trove/plugin-sdk handshake, so the
     // plugin is a single self-hostable file on its own domain. (Real plugins can
     // `import { activate } from '@trove/plugin-sdk'` instead.)
-    let port, caps = [], manifest, seq = 0, online = true;
+    let port, caps = [], manifest, seq = 0, online = true, silent = false;
     const pending = new Map();
     const commands = {};
     // Live contribution catalog with per-feature offline flags.
@@ -83,7 +83,12 @@
     // Answering `manifest` proves we're alive; the payload says what works offline.
     const dispatch = (method, params) => {
       if (method === 'command:execute') return commands[params.id]?.(...(params.args || []));
-      if (method === 'manifest') return buildManifest();
+      // When "hung" we stop answering manifest probes — the host's heartbeat then
+      // marks us unresponsive and our features become unavailable.
+      if (method === 'manifest') {
+        if (silent) throw new Error('plugin is not responding');
+        return buildManifest();
+      }
       return undefined;
     };
 
@@ -99,6 +104,10 @@
       commands['wordcount.sync'] = () => emit('ui:toast', { text: online ? 'Synced ☁️' : 'Cannot sync while offline' });
       contribs.commands.push({ id: 'wordcount.sync', title: 'Word Count: Sync to cloud', offline: false });
       await call('contribute:command', { id: 'wordcount.sync', title: 'Word Count: Sync to cloud', offline: false });
+      // Test hook: simulate the plugin hanging (stops answering manifest probes).
+      commands['wordcount.hang'] = () => { silent = true; };
+      contribs.commands.push({ id: 'wordcount.hang', title: 'Word Count: (simulate hang)', offline: true });
+      await call('contribute:command', { id: 'wordcount.hang', title: 'Word Count: (simulate hang)', offline: true });
 
       if (caps.includes('storage')) count = (await call('db:get', { key: 'count' })) || 0;
       render();

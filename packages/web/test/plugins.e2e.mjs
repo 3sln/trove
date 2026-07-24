@@ -95,6 +95,18 @@ async function main() {
   }, { timeout: 5000 });
   check('reconnect: network-only command available again', true);
 
+  // Heartbeat: with a short interval, a plugin that stops answering manifest
+  // probes is detected as unresponsive (no connectivity change involved) and its
+  // features become unavailable.
+  await page.evaluate(() => window.__trove.platform.plugins.setHeartbeat(400));
+  await page.evaluate(() => window.__trove.platform.commands.execute('wordcount.hang'));
+  await page.waitForFunction(() => {
+    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.wordcount');
+    return p && p.responsive === false;
+  }, { timeout: 6000 });
+  check('heartbeat marks a hung plugin unresponsive', true);
+  check('hung plugin: even offline-capable command unavailable', (await availOf(page, 'wordcount.tap')) === false);
+
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();
   server.close();
