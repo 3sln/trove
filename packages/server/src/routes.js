@@ -5,14 +5,82 @@
 import { Router, json, parseRange } from './router.js';
 import { TroveError, assertSafePluginSql } from '@trove/core';
 
+const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
+// Cap JSON request bodies so a giant payload can't exhaust server memory. Uploads
+// don't use body() (their bytes stream straight to storage), so this is safe to keep small.
+const MAX_JSON_BYTES = Number(ENV.TROVE_MAX_JSON_BYTES || 4 * 1024 * 1024);
+// Clamp any client-supplied result limit to a sane ceiling (DoS via huge scans).
+const MAX_PAGE = Number(ENV.TROVE_MAX_PAGE || 1000);
+
 async function body(req) {
-  const text = await req.text();
+  const text = await readCapped(req, MAX_JSON_BYTES);
   if (!text) return {};
   try {
     return JSON.parse(text);
   } catch {
     throw TroveError.invalid('Body must be valid JSON');
   }
+}
+
+// Read the body as text, aborting if it exceeds `max` bytes (checks Content-Length
+// first, then enforces while streaming in case the header lies or is absent).
+async function readCapped(req, max) {
+  const declared = Number(req.headers.get('content-length') || 0);
+  if (declared && declared > max) throw TroveError.invalid('Request body too large');
+  const reader = req.body?.getReader?.();
+  if (!reader) {
+    const text = await req.text();
+    if (text.length > max) throw TroveError.invalid('Request body too large');
+    return text;
+  }
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel().catch(() => {}); throw TroveError.invalid('Request body too large'); }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(concatBytes(chunks, total));
+}
+function concatBytes(chunks, total) {
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out;
+}
+function clampLimit(value, dflt) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return dflt;
+  return Math.min(Math.floor(n), MAX_PAGE);
+}
+
+// Content types safe to render inline in the app's own origin. Anything else
+// (HTML, SVG, XML, scripts…) is forced to download so it can't execute as
+// same-origin script when opened directly.
+function inlineSafe(ct) {
+  const t = String(ct || '').toLowerCase().split(';')[0].trim();
+  if (t === 'image/svg+xml') return false;
+  return /^image\//.test(t) || /^audio\//.test(t) || /^video\//.test(t) || t === 'application/pdf' || t === 'text/plain';
+}
+
+// Reject SSRF-prone hosts for the server-side assetlinks fetch: IP literals,
+// loopback, link-local (cloud metadata), and internal TLDs. DNS names that resolve
+// to private IPs are a residual (rebinding) risk, documented in the README.
+function assertPublicHost(hostname) {
+  const h = hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) {
+    throw TroveError.invalid('Refusing to fetch from an internal host');
+  }
+  // IPv4 literal → block private/loopback/link-local ranges; block IPv6 literals wholesale.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) {
+    const [a, b] = h.split('.').map(Number);
+    if (a === 10 || a === 127 || a === 0 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254) || a >= 224) {
+      throw TroveError.invalid('Refusing to fetch from a private address');
+    }
+  }
+  if (h.includes(':')) throw TroveError.invalid('Refusing to fetch from an IP literal');
 }
 
 // Accept either ?path=/x or ?id=... ; body may carry parentId or parentPath.
@@ -25,7 +93,18 @@ async function resolveParent(vfs, src) {
 export function createRouter() {
   const r = new Router();
 
+  // Liveness: the process is up and serving.
   r.get('/api/health', () => ({ ok: true, service: 'trove', time: Date.now() }));
+
+  // Readiness: the backing store actually answers — for load-balancer / k8s gating.
+  r.get('/api/ready', async ({ sqlite }) => {
+    try {
+      if (sqlite) { const db = await sqlite.obtain({ key: 'metadata' }); await db.get('SELECT 1'); }
+      return { ok: true };
+    } catch (err) {
+      throw new TroveError('transient', 'Storage not ready', { cause: err });
+    }
+  });
 
   r.get('/api/capabilities', ({ vfs, config, sidecar, notifications, principal }) => ({
     storage: vfs.storage.capabilities,
@@ -95,7 +174,7 @@ export function createRouter() {
     await assertCap(ctx, node.collectionId, 'read');
     const { items, nextCursor } = await vfs.list(node.id, {
       sort: query.sort, order: query.order,
-      limit: query.limit ? Number(query.limit) : undefined,
+      limit: clampLimit(query.limit, 500),
       cursor: query.cursor,
     });
     const breadcrumb = await vfs.breadcrumb(node.id);
@@ -149,24 +228,28 @@ export function createRouter() {
     const id = query.id;
     if (!id) throw TroveError.invalid('id is required');
     await assertCap(ctx, (await vfs.stat(id)).collectionId, 'read');
-    const wantAttachment = query.disposition === 'attachment';
+    const node = await vfs.stat(id);
+    const ct = node.contentType || 'application/octet-stream';
+    // Force a download for anything not safe to render inline in our own origin
+    // (HTML/SVG/etc. would otherwise be same-origin XSS when opened directly).
+    const attach = query.disposition === 'attachment' || !inlineSafe(ct);
     const range = parseRange(req.headers.get('range'));
 
     // Ranged requests must proxy (we can't add Range to a bare redirect safely
     // for all clients), so only redirect for full-file GETs.
     if (!range) {
-      const d = await vfs.getDownload(id, { download: wantAttachment });
+      const d = await vfs.getDownload(id, { download: attach });
       if (d.mode === 'redirect') return Response.redirect(d.url, 302);
     }
 
-    const node = await vfs.stat(id);
     const { stream, size, contentType, etag, range: served } = await vfs.readStream(id, { range });
     const headers = {
-      'content-type': contentType || node.contentType || 'application/octet-stream',
+      'content-type': contentType || ct,
       'accept-ranges': 'bytes',
       'content-length': String(size),
+      'x-content-type-options': 'nosniff',
       ...(etag ? { etag } : {}),
-      'content-disposition': `${wantAttachment ? 'attachment' : 'inline'}; filename="${encodeURIComponent(node.name)}"`,
+      'content-disposition': `${attach ? 'attachment' : 'inline'}; filename="${encodeURIComponent(node.name)}"`,
       'cache-control': 'private, max-age=0',
     };
     if (served) {
@@ -226,7 +309,7 @@ export function createRouter() {
       collectionIds = query.collection ? readable.filter((id) => id === query.collection) : readable;
     }
     const results = await vfs.searchQuery(query.q, {
-      mode: query.mode, limit: query.limit ? Number(query.limit) : undefined,
+      mode: query.mode, limit: clampLimit(query.limit, 40),
       indexers: query.indexers ? query.indexers.split(',') : undefined,
       collectionIds,
     });
@@ -243,7 +326,7 @@ export function createRouter() {
       collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
     }
     const items = await vfs.metadata.findByFacets(filters, {
-      q: b.q, collectionIds, limit: b.limit ? Number(b.limit) : 100,
+      q: b.q, collectionIds, limit: clampLimit(b.limit, 100),
     });
     return { items };
   });
@@ -286,25 +369,31 @@ export function createRouter() {
     return { comment: await ctx.sidecar.addComment(ctx.params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
   });
 
-  r.post('/api/files/:id/comments/:cid/edit', async ({ sidecar, params, req, principal }) => {
-    requireSidecar(sidecar);
-    requirePrincipal(principal);
-    const b = await body(req);
-    return { comment: await sidecar.editComment(params.id, params.cid, b.body, principal) };
+  r.post('/api/files/:id/comments/:cid/edit', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    requirePrincipal(ctx.principal);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'write'); // + authorship checked in the service
+    const b = await body(ctx.req);
+    return { comment: await ctx.sidecar.editComment(ctx.params.id, ctx.params.cid, b.body, ctx.principal) };
   });
 
-  r.delete('/api/files/:id/comments/:cid', async ({ sidecar, params, principal }) => {
-    requireSidecar(sidecar);
-    requirePrincipal(principal);
-    return sidecar.deleteComment(params.id, params.cid, principal);
+  r.delete('/api/files/:id/comments/:cid', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    requirePrincipal(ctx.principal);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'write'); // + authorship checked in the service
+    return ctx.sidecar.deleteComment(ctx.params.id, ctx.params.cid, ctx.principal);
   });
 
-  r.post('/api/files/:id/comments/:cid/react', async ({ sidecar, params, req, principal }) => {
-    requireSidecar(sidecar);
-    requirePrincipal(principal);
-    const b = await body(req);
+  r.post('/api/files/:id/comments/:cid/react', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    requirePrincipal(ctx.principal);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'write');
+    const b = await body(ctx.req);
     if (!b.emoji) throw TroveError.invalid('emoji is required');
-    return { comment: await sidecar.react(params.id, params.cid, b.emoji, b.on !== false, principal) };
+    return { comment: await ctx.sidecar.react(ctx.params.id, ctx.params.cid, b.emoji, b.on !== false, ctx.principal) };
   });
 
   r.post('/api/files/:id/tags', async (ctx) => {
@@ -327,16 +416,20 @@ export function createRouter() {
     return res;
   });
 
-  r.post('/api/files/:id/subscribe', async ({ sidecar, params, req, principal }) => {
-    requireSidecar(sidecar);
-    requirePrincipal(principal);
-    const b = await body(req);
-    return sidecar.subscribe(params.id, principal, !!b.muted);
+  r.post('/api/files/:id/subscribe', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    requirePrincipal(ctx.principal);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'read');
+    const b = await body(ctx.req);
+    return ctx.sidecar.subscribe(ctx.params.id, ctx.principal, !!b.muted);
   });
-  r.delete('/api/files/:id/subscribe', async ({ sidecar, params, principal }) => {
-    requireSidecar(sidecar);
-    requirePrincipal(principal);
-    return sidecar.unsubscribe(params.id, principal);
+  r.delete('/api/files/:id/subscribe', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    requirePrincipal(ctx.principal);
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'read');
+    return ctx.sidecar.unsubscribe(ctx.params.id, ctx.principal);
   });
 
   // --- notifications & web push ----------------------------------------------
@@ -371,14 +464,18 @@ export function createRouter() {
   // --- plugins: domain verification proxy + per-plugin server storage --------
 
   // Fetch a plugin domain's assetlinks doc server-side (avoids browser CORS).
-  r.get('/api/plugins/assetlinks', async ({ query }) => {
+  r.get('/api/plugins/assetlinks', async ({ query, principal }) => {
+    requirePrincipal(principal); // don't expose an open fetch proxy to the world
     const domain = String(query.domain || '');
-    if (!/^[a-z0-9.-]+$/i.test(domain)) throw TroveError.invalid('Invalid domain');
+    if (!/^[a-z0-9.-]+$/i.test(domain) || !domain.includes('.')) throw TroveError.invalid('Invalid domain');
+    assertPublicHost(domain); // block loopback / private / metadata targets
     const url = `https://${domain}/.well-known/trove-assetlinks.json`;
     try {
-      const res = await fetch(url, { redirect: 'follow' });
+      // No redirects: a public host must not bounce us onto an internal target.
+      const res = await fetch(url, { redirect: 'error' });
       if (!res.ok) return { assetlinks: null };
-      return { assetlinks: await res.json() };
+      const body = await readCapped(res, 256 * 1024); // small, well-known doc
+      return { assetlinks: JSON.parse(body) };
     } catch {
       return { assetlinks: null };
     }

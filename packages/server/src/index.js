@@ -175,13 +175,13 @@ export async function createServer(config = {}) {
         principal = await identity.authenticate(req);
       } catch (err) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
-        return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } });
       }
       return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider });
     }
     if (config.assets) {
       const asset = await config.assets(req);
-      if (asset) return asset;
+      if (asset) return hardenAsset(asset, config);
     }
     return new Response('Not found', { status: 404 });
   }
@@ -193,6 +193,49 @@ export async function createServer(config = {}) {
   }
 
   return { vfs, handle, router, sidecar, notifications, identity, kv, collections, sqlite: sqliteProvider, close };
+}
+
+// A CSP starting point for deployments that DON'T rely on sandboxed plugins (opt in
+// via TROVE_CSP). It is deliberately not shipped by default: Trove runs plugins in
+// sandboxed, opaque-origin `srcdoc` iframes, which no `frame-src` source expression
+// can match, so a strict shell CSP would break every plugin. The concrete
+// same-origin XSS risk (opening an uploaded .html/.svg) is instead closed by forcing
+// non-inline-safe downloads to `Content-Disposition: attachment` (see routes.js).
+export const SAMPLE_CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "connect-src 'self'",
+].join('; ');
+
+/**
+ * Warn (once, to the console) when a configuration is world-open — anonymous auth
+ * plus the default collection granting everyone every capability. Safe on
+ * localhost, dangerous when exposed. Called by the runnable adapters at startup.
+ */
+export function warnOnOpenAccess(config = {}) {
+  const anon = !config.identity || config.identity.driver === 'anonymous' || config.identity === 'anonymous';
+  const open = config.collections !== false && config.defaultOpen !== false;
+  if (anon && open) {
+    console.warn(
+      '[trove] SECURITY: anonymous auth + open default collection — anyone who can reach '
+      + 'this server has full read/write/delete access. Set TROVE_AUTH (+ TROVE_AUTH_REQUIRED=true) '
+      + 'and/or TROVE_DEFAULT_OPEN=false, and run behind an authenticating reverse proxy.',
+    );
+  }
+}
+
+/** Add security headers to a static/app-shell response (CSP only if configured). */
+function hardenAsset(res, config = {}) {
+  res.headers.set('x-content-type-options', 'nosniff');
+  res.headers.set('x-frame-options', 'SAMEORIGIN');
+  res.headers.set('referrer-policy', 'no-referrer');
+  if (typeof config.csp === 'string') res.headers.set('content-security-policy', config.csp);
+  return res;
 }
 
 /** Map process.env → createServer config. */
@@ -284,6 +327,12 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   config.creatorRoles = (env.TROVE_COLLECTION_CREATOR_ROLES || '').split(',').map((s) => s.trim()).filter(Boolean);
   // 'default' collection grants everyone all caps unless locked down.
   config.defaultOpen = env.TROVE_DEFAULT_OPEN !== 'false';
+
+  // Cross-origin API access is off unless an origin (or '*') is configured.
+  config.corsOrigin = env.TROVE_CORS_ORIGIN || null;
+  // App-shell CSP is opt-in (see SAMPLE_CSP) — provide a full policy string to
+  // enable it. Off by default because sandboxed plugin iframes can't satisfy one.
+  if (env.TROVE_CSP && env.TROVE_CSP !== 'off') config.csp = env.TROVE_CSP;
 
   return config;
 }

@@ -45,23 +45,35 @@ export class Router {
    */
   async handle(req, ctx = {}) {
     const url = new URL(req.url);
-    // CORS preflight — permissive by default; tighten via a wrapping middleware.
-    if (req.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
+    // Cross-origin sharing is OFF by default (the app is same-origin); an operator
+    // opts in with TROVE_CORS_ORIGIN ('*' or a specific origin) → config.corsOrigin.
+    const origin = corsOriginFor(ctx.config?.corsOrigin, req.headers.get('origin'));
+    if (req.method === 'OPTIONS') return cors(new Response(null, { status: 204 }), origin);
 
     const found = this.#match(req.method, url.pathname);
-    if (!found) return cors(json({ error: { code: 'not_found', message: 'No such route' } }, 404));
+    if (!found) return cors(json({ error: { code: 'not_found', message: 'No such route' } }, 404), origin);
 
     const query = Object.fromEntries(url.searchParams);
     try {
       const result = await found.route.handler({ req, params: found.params, query, url, ...ctx });
       const res = result instanceof Response ? result : json(result ?? { ok: true });
-      return cors(res);
+      return cors(res, origin);
     } catch (raw) {
       const err = raw instanceof TroveError ? raw : wrapError(raw);
       if (err.code === 'internal') console.error('Unhandled:', err.cause || err);
-      return cors(json(err.toJSON(), err.status));
+      return cors(json(err.toJSON(), err.status), origin);
     }
   }
+}
+
+// Resolve the Access-Control-Allow-Origin value: null (no CORS) unless configured.
+// '*' echoes '*'; a configured origin is echoed only when the request matches it
+// (so credentials-mode requests get a specific origin, not a wildcard).
+function corsOriginFor(configured, reqOrigin) {
+  if (!configured) return null;
+  if (configured === '*') return '*';
+  const allowed = String(configured).split(',').map((s) => s.trim()).filter(Boolean);
+  return reqOrigin && allowed.includes(reqOrigin) ? reqOrigin : null;
 }
 
 export function json(body, status = 200, headers = {}) {
@@ -71,11 +83,16 @@ export function json(body, status = 200, headers = {}) {
   });
 }
 
-export function cors(res, origin = '*') {
-  res.headers.set('access-control-allow-origin', origin);
-  res.headers.set('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.headers.set('access-control-allow-headers', 'content-type, authorization, x-trove-indexer');
-  res.headers.set('access-control-expose-headers', 'content-range, accept-ranges, etag, content-length, content-disposition');
+export function cors(res, origin = null) {
+  // Never let a browser sniff an API response into a different content type.
+  res.headers.set('x-content-type-options', 'nosniff');
+  if (origin) {
+    res.headers.set('access-control-allow-origin', origin);
+    if (origin !== '*') res.headers.set('vary', 'Origin');
+    res.headers.set('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.headers.set('access-control-allow-headers', 'content-type, authorization, x-trove-indexer');
+    res.headers.set('access-control-expose-headers', 'content-range, accept-ranges, etag, content-length, content-disposition');
+  }
   return res;
 }
 

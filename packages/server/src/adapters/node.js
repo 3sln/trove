@@ -13,7 +13,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
-import { createServer, configFromEnv } from '../index.js';
+import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -79,8 +79,10 @@ async function writeWebResponse(res, webRes) {
 }
 
 const hasWeb = fs.existsSync(WEB_DIST);
-const { handle } = await createServer({
-  ...configFromEnv(),
+const envConfig = configFromEnv();
+warnOnOpenAccess(envConfig);
+const { handle, close } = await createServer({
+  ...envConfig,
   assets: hasWeb ? staticAssets : undefined,
 });
 
@@ -99,3 +101,16 @@ const server = http.createServer(async (nodeReq, nodeRes) => {
 server.listen(PORT, HOST, () => {
   console.log(`Trove server on http://${HOST}:${PORT}  (web assets: ${hasWeb ? WEB_DIST : 'none — run npm run build:web'})`);
 });
+
+// Graceful shutdown: stop accepting connections, then flush notifications, dispose
+// the sidecar, and close SQLite cleanly so a redeploy doesn't lose in-flight work.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Trove shutting down (${signal})…`);
+  server.close();
+  try { await close(); } catch (err) { console.error('shutdown error', err); }
+  process.exit(0);
+}
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => shutdown(sig));

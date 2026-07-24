@@ -11,7 +11,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { createServer, configFromEnv } from '../index.js';
+import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -45,12 +45,14 @@ async function staticAssets(req) {
 }
 
 const hasWeb = existsSync(WEB_DIST);
-const { handle } = await createServer({
-  ...configFromEnv(),
+const envConfig = configFromEnv();
+warnOnOpenAccess(envConfig);
+const { handle, close } = await createServer({
+  ...envConfig,
   assets: hasWeb ? staticAssets : undefined,
 });
 
-Bun.serve({
+const server = Bun.serve({
   port: PORT,
   hostname: HOST,
   async fetch(req) {
@@ -63,3 +65,16 @@ Bun.serve({
 });
 
 console.log(`Trove server (Bun) on http://${HOST}:${PORT}  (web assets: ${hasWeb ? WEB_DIST : 'none — run npm run build:web'})`);
+
+// Graceful shutdown: stop serving, then flush notifications, dispose the sidecar,
+// and close SQLite cleanly so a redeploy doesn't lose in-flight work.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Trove shutting down (${signal})…`);
+  try { server.stop(); } catch { /* ignore */ }
+  try { await close(); } catch (err) { console.error('shutdown error', err); }
+  process.exit(0);
+}
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => shutdown(sig));
