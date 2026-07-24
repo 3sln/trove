@@ -32,6 +32,7 @@ export function pluginReview(d, ui) {
           ? div({ className: 'cap-list' }, ...s.capabilities.map((c) => capRow(c, d.isAdmin, sel.grants.has(c.id), () => toggle(c.id))))
           : muted('None — this plugin only runs in its sandbox.')),
         (s.network || []).length ? section('Network access', div({ className: 'contrib-list' }, ...s.network.map(endpointRow))) : null,
+        s.storage ? section('Storage', storageRows(s.storage)) : null,
         s.contributions.length ? section('What it adds', div({ className: 'contrib-list' }, ...s.contributions.map(contribRow))) : null,
         s.settings.length ? section('Settings', div({ className: 'contrib-list' }, ...s.settings.map(settingRow))) : null,
         div({ className: 'review-meta' }, `${s.fileCount} files · ${fmtBytes(s.sizeBytes)} · id ${s.id}`),
@@ -94,6 +95,21 @@ function endpointRow(ep) {
     span({ className: 'cr-title' }, ep.host),
     ep.path ? span({ className: 'cr-detail' }, ep.path) : null,
     span({ className: 'pf-kind' }, ep.scheme),
+  );
+}
+
+function storageRows(st) {
+  const rows = [];
+  if (st.plugin) rows.push(storageRow('Private database', 'A SQLite store just for this plugin (server + this device).', false));
+  if (st.domain) rows.push(storageRow('Shared database', `Shared with other plugins from ${'its domain'} (SQLite).`, st.domainBlocked));
+  return div({ className: 'contrib-list' }, ...rows);
+}
+function storageRow(title, detail, blocked) {
+  return div({ className: `contrib-row ${blocked ? 'blocked' : ''}` },
+    icon('plug', { size: 13 }),
+    span({ className: 'cr-title' }, title),
+    span({ className: 'cr-detail' }, blocked ? detail + ' — needs a verified domain' : detail),
+    blocked ? span({ className: 'pf-badge', $styling: { color: 'var(--warn)' } }, 'unavailable') : null,
   );
 }
 

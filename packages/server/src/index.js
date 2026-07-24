@@ -89,14 +89,13 @@ export async function createServer(config = {}) {
   const storage = resolve(config.storage ?? config.vfs?.storage, StorageBackend, buildStorage);
 
   // One shared SQLite provider (keyed pool) for metadata, kv, and per-plugin scopes.
-  // Built only when something needs sqlite; injectable for other runtimes (D1/DO).
-  const wantsSqlite = config.sqlite || config.metadata?.driver === 'sqlite' || config.kv?.driver === 'sqlite';
+  // Always present so plugin storage works regardless of the metadata backend
+  // (file-backed when metadata is sqlite, else ephemeral in-memory). Injectable, so
+  // a Worker can supply a D1 / Durable-Object-backed provider instead.
   const sqliteProvider = config.sqlite instanceof SqliteProvider
     ? config.sqlite
-    : wantsSqlite
-      ? buildSqliteProvider(config.sqlite || { path: config.metadata?.path })
-      : null;
-  if (sqliteProvider) await sqliteProvider.init();
+    : buildSqliteProvider(config.sqlite || { path: config.metadata?.driver === 'sqlite' ? config.metadata.path : ':memory:' });
+  await sqliteProvider.init();
 
   const metadata = resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, (cfg) => buildMetadata(cfg, sqliteProvider));
   const embeddings = resolve(config.embeddings, EmbeddingProvider, buildEmbeddings);

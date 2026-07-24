@@ -8,8 +8,7 @@ import { parseEndpoint, endpointSummary } from './pluginNet.js';
 
 const CAP_DESCRIPTIONS = {
   files: 'Read your files, folders, and search index (via the host).',
-  storage: 'Keep its own private data (local database).',
-  serverStorage: 'Store its data on the server, synced across your devices.',
+  storage: 'Keep its own SQLite database(s) — on the server and/or on this device.',
   ui: 'Show a popup panel and toasts.',
   commands: 'Add commands to the palette.',
   opener: 'Preview/open file types.',
@@ -17,9 +16,24 @@ const CAP_DESCRIPTIONS = {
   network: 'Connect to the internet — only the endpoints it declares (shown below).',
 };
 
-// Capabilities that a normal user may grant themselves vs. those that need an
-// admin (they touch shared data or the server).
-export const ADMIN_ONLY_CAPS = new Set(['serverStorage']);
+// Capabilities that need an admin to grant (they touch shared data). None at the
+// moment — the `storage.domain` scope is instead gated on domain verification.
+export const ADMIN_ONLY_CAPS = new Set();
+
+/**
+ * The storage scopes a manifest declares: `{ plugin, domain }`. Each is a separate
+ * lazily-created SQLite database (server + client). The `domain` scope — shared
+ * across a vendor's plugins — is only usable by a domain-verified package.
+ */
+export function storageScopes(manifest) {
+  const opt = capabilityOptions(manifest, 'storage');
+  if (!opt) return { plugin: false, domain: false };
+  // `storage: true` (or `{}`) → the private plugin scope, nothing shared.
+  if (opt === true || (typeof opt === 'object' && !('plugin' in opt) && !('domain' in opt))) {
+    return { plugin: true, domain: false };
+  }
+  return { plugin: !!opt.plugin, domain: !!opt.domain };
+}
 
 export function describeCapability(cap) {
   return CAP_DESCRIPTIONS[cap] || cap;
@@ -141,6 +155,8 @@ export function reviewSummary(pkg, trust) {
     ...(c.openers || []).map((x) => ({ kind: 'opener', title: x.title || x.id, detail: selectorText(x.selector), offline: !!x.offline })),
     ...(c.indexers || []).map((x) => ({ kind: 'indexer', title: x.title || x.id })),
   ];
+  const verified = trust?.status === 'verified';
+  const scopes = storageScopes(m);
   return {
     id: m.id, name: m.name, version: m.version || '0.0.0', description: m.description || '',
     author: m.author || 'Unknown', domain: m.domain || null,
@@ -148,10 +164,22 @@ export function reviewSummary(pkg, trust) {
     contributions,
     settings: (m.settings || []).map((s) => ({ key: s.key, title: s.title || s.key, type: s.type, secret: !!s.secret })),
     network: endpointSummary(networkEndpoints(m)),
+    // Which SQLite stores it wants. `domain` (shared across a vendor's plugins) is
+    // only grantable for a verified package; flag it so the review can say why.
+    storage: (scopes.plugin || scopes.domain)
+      ? { plugin: scopes.plugin, domain: scopes.domain, domainBlocked: scopes.domain && !verified }
+      : null,
     fileCount: pkg.files.size,
     sizeBytes: [...pkg.files.values()].reduce((n, b) => n + b.length, 0),
     trust,
   };
+}
+
+/** The storage scopes actually granted at install: plugin if declared, domain if
+ * declared AND the package is domain-verified. */
+export function grantedStorageScopes(manifest, trust) {
+  const s = storageScopes(manifest);
+  return { plugin: s.plugin, domain: s.domain && trust?.status === 'verified' };
 }
 
 function selectorText(sel) {

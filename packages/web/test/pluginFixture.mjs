@@ -15,7 +15,15 @@ window.trove.activate(async (ctx) => {
   ctx.contributes.statusItem({ id: 'demo.status', align: 'right', text: 'demo', offline: true });
   // read a packaged resource via an opaque handle
   ctx.resources.text('data.txt').then((t) => { window.__resourceText = t; });
-  if (ctx.capabilities.includes('storage')) await ctx.db.set('installs', 1).catch(() => {});
+  if (ctx.storage && ctx.storage.plugin) {
+    const db = ctx.storage.plugin.server;
+    await db.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
+    await db.run('INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)', 'installs', '1');
+    ctx.commands.register('demo.store', async () => {
+      const row = await db.get('SELECT v FROM kv WHERE k = ?', 'installs');
+      return row && row.v;
+    }, { title: 'Demo: Store round-trip', offline: false });
+  }
   // Brokered network: fetch a declared endpoint (allowed) and an undeclared one
   // (blocked). Returns the outcome so the host/e2e can assert enforcement.
   if (ctx.capabilities.includes('network')) {

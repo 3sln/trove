@@ -363,41 +363,52 @@ export function createRouter() {
     }
   });
 
-  // Server-backed plugin storage, namespaced per (user, plugin) so ownership is
-  // tracked and everything can be wiped on uninstall.
-  const pdNs = (principal, pluginId) => `plugin:${principal.id}:${pluginId}`;
-  r.get('/api/plugins/:pluginId/data', async ({ kv, principal, params, query }) => {
-    requirePluginData(kv, principal);
-    const items = await kv.list(pdNs(principal, params.pluginId), query.prefix || '');
-    return { items };
+  // Server-backed plugin storage: an isolated SQLite database per scope, keyed by
+  // (user, plugin) for the private scope or (user, verified domain) for the shared
+  // scope, so ownership is tracked and it can be wiped on uninstall. The sandboxed
+  // plugin reaches this only through the host (which sets `scope`/`domain` from the
+  // install record); we scope by the authenticated principal for cross-user
+  // isolation, and only expose a fixed set of SQL ops against that one scoped db.
+  const PLUGIN_SQL_OPS = new Set(['exec', 'run', 'get', 'all', 'batch']);
+  const storeKey = (principal, pluginId, scope, domain) =>
+    scope === 'domain'
+      ? `pstore:${principal.id}:dom:${domain}`
+      : `pstore:${principal.id}:plg:${pluginId}`;
+
+  r.post('/api/plugins/:pluginId/sql', async ({ sqlite, principal, params, req }) => {
+    requirePluginStore(sqlite, principal);
+    const { scope = 'plugin', op, sql, params: args = [], statements, domain } = await body(req);
+    if (!PLUGIN_SQL_OPS.has(op)) throw TroveError.invalid(`Unknown storage op "${op}"`);
+    if (scope !== 'plugin' && scope !== 'domain') throw TroveError.invalid(`Unknown storage scope "${scope}"`);
+    if (scope === 'domain' && !domain) throw TroveError.invalid('domain scope requires a domain');
+    const db = await sqlite.obtain({ key: storeKey(principal, params.pluginId, scope, domain) });
+    return { result: await runPluginSql(db, op, { sql, args, statements }) };
   });
-  r.get('/api/plugins/:pluginId/data/:key', async ({ kv, principal, params }) => {
-    requirePluginData(kv, principal);
-    return { value: await kv.get(pdNs(principal, params.pluginId), params.key) };
-  });
-  r.put('/api/plugins/:pluginId/data/:key', async ({ kv, principal, params, req }) => {
-    requirePluginData(kv, principal);
-    const b = await body(req);
-    await kv.set(pdNs(principal, params.pluginId), params.key, b.value);
-    return { ok: true };
-  });
-  r.delete('/api/plugins/:pluginId/data/:key', async ({ kv, principal, params }) => {
-    requirePluginData(kv, principal);
-    await kv.delete(pdNs(principal, params.pluginId), params.key);
-    return { ok: true };
-  });
-  r.delete('/api/plugins/:pluginId/data', async ({ kv, principal, params }) => {
-    requirePluginData(kv, principal);
-    const ns = pdNs(principal, params.pluginId);
-    for (const { key } of await kv.list(ns, '')) await kv.delete(ns, key);
+
+  // Uninstall cleanup: wipe the plugin-private scope. The domain scope is shared
+  // across a vendor's plugins and deliberately outlives any single uninstall.
+  r.delete('/api/plugins/:pluginId/data', async ({ sqlite, principal, params }) => {
+    requirePluginStore(sqlite, principal);
+    await sqlite.drop({ key: storeKey(principal, params.pluginId, 'plugin') });
     return { ok: true };
   });
 
   return r;
 }
 
-function requirePluginData(kv, principal) {
-  if (!kv) throw TroveError.unsupported('Server plugin storage is not enabled');
+async function runPluginSql(db, op, { sql, args = [], statements = [] }) {
+  switch (op) {
+    case 'exec': await db.exec(sql); return { ok: true };
+    case 'run': return db.run(sql, ...args);
+    case 'get': return db.get(sql, ...args);
+    case 'all': return db.all(sql, ...args);
+    case 'batch': await db.batch(statements); return { ok: true };
+    default: throw TroveError.invalid(`Unknown storage op "${op}"`);
+  }
+}
+
+function requirePluginStore(sqlite, principal) {
+  if (!sqlite) throw TroveError.unsupported('Server plugin storage is not enabled');
   if (!principal) throw TroveError.unauthorized('Authentication required');
 }
 

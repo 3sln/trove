@@ -10,7 +10,7 @@
 // Plugins use it as:  trove.activate(async (ctx) => { ... })
 (function () {
   'use strict';
-  let port = null, manifest = null, capabilities = [], online = true, seq = 0;
+  let port = null, manifest = null, capabilities = [], storageScopes = {}, online = true, seq = 0;
   const pending = new Map();
   const commandHandlers = new Map();
   const openerHandlers = new Map();
@@ -73,6 +73,26 @@
   }
 
   function requireCap(cap) { if (!capabilities.includes(cap)) throw new Error('Plugin lacks capability "' + cap + '"'); }
+
+  // Storage: one async SQL handle (mirrors the host SqliteDatabase interface) per
+  // scope+side, over RPC. Only granted scopes are exposed on ctx.storage.
+  function sqlHandle(scope, side) {
+    var send = function (op, extra) { return call('storage:sql', Object.assign({ scope: scope, side: side, op: op }, extra)); };
+    return {
+      exec: function (sql) { return send('exec', { sql: sql }); },
+      run: function (sql) { return send('run', { sql: sql, params: [].slice.call(arguments, 1) }); },
+      get: function (sql) { return send('get', { sql: sql, params: [].slice.call(arguments, 1) }); },
+      all: function (sql) { return send('all', { sql: sql, params: [].slice.call(arguments, 1) }); },
+      batch: function (statements) { return send('batch', { statements: statements }); },
+    };
+  }
+  function makeStorage() {
+    var s = {};
+    // Stage 3 adds an on-device `.client` handle alongside `.server`.
+    if (storageScopes.plugin) s.plugin = { server: sqlHandle('plugin', 'server') };
+    if (storageScopes.domain) s.domain = { server: sqlHandle('domain', 'server') };
+    return s;
+  }
 
   function hasHeader(h, name) { name = name.toLowerCase(); for (var k in h) if (k.toLowerCase() === name) return true; return false; }
   // Wrap the host's brokered-fetch result in a minimal Response-like object.
@@ -150,14 +170,11 @@
         downloadUrl: (id) => (requireCap('files'), call('files:downloadUrl', { id })),
         index: (indexerId, nodeId, documents, facet) => (requireCap('indexer'), call('files:index', { indexerId, nodeId, documents, facet })),
       },
-      // Persistent per-plugin storage. Local by default; scope:'server' syncs
-      // (needs the serverStorage capability). The host tracks ownership for GC.
-      db: {
-        get: (key, scope) => (requireCap('storage'), call('db:get', { key, scope })),
-        set: (key, value, scope) => (requireCap('storage'), call('db:set', { key, value, scope })),
-        delete: (key, scope) => (requireCap('storage'), call('db:delete', { key, scope })),
-        query: (prefix, scope) => (requireCap('storage'), call('db:query', { prefix, scope })),
-      },
+      // Persistent storage: an isolated SQLite database per granted scope. `plugin`
+      // is private to this plugin; `domain` (verified packages only) is shared with
+      // the vendor's other plugins. Each scope exposes a `.server` handle (and, from
+      // Stage 3, an on-device `.client` handle) with the same async SQL surface.
+      storage: makeStorage(),
       // The plugin's own settings (declared in the manifest). getSecret reads a
       // secret-typed value the host stores separately.
       settings: {
@@ -178,7 +195,7 @@
       function onInit(e) {
         if (!e.data || e.data.__trove !== 'init') return;
         window.removeEventListener('message', onInit);
-        manifest = e.data.manifest; capabilities = e.data.capabilities || []; online = e.data.online != null ? e.data.online : true;
+        manifest = e.data.manifest; capabilities = e.data.capabilities || []; storageScopes = e.data.storage || {}; online = e.data.online != null ? e.data.online : true;
         port = e.ports[0];
         port.onmessage = onPort;
         resolve();

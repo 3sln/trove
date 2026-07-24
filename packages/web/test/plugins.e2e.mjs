@@ -85,6 +85,11 @@ async function main() {
   check('brokered fetch to a declared endpoint succeeds', net?.ok === true && net?.status === 200, JSON.stringify(net));
   check('fetch to an undeclared endpoint is blocked', net?.blocked === 'BLOCKED', JSON.stringify(net));
 
+  // Plugin storage: the demo wrote to its private server-side SQLite db on activate;
+  // read it back through a command to prove the round-trip.
+  const stored = await page.evaluate(() => window.__trove.platform.commands.execute('demo.store'));
+  check('plugin server storage round-trips via SQLite', stored === '1', String(stored));
+
   // Multi-file ESM package: entry under src/ imports a sibling module + the SDK as a
   // bare `trove` specifier. Proves the blob/import-map loader resolves them with no
   // bundler and no direct file fetch inside the sandbox.

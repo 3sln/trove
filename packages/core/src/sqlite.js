@@ -30,6 +30,8 @@ export class SqliteProvider {
   async init() {}
   /** @returns {Promise<SqliteDatabase>} the lazily-created, memoized db for `key`. */
   async obtain({ key }) { throw TroveError.unsupported('SqliteProvider.obtain'); }
+  /** Destroy the db for `key` (close + delete its backing store). */
+  async drop({ key }) {}
   async close() {}
 }
 
@@ -73,8 +75,11 @@ export class LocalSqliteProvider extends SqliteProvider {
     this._pool = new Map(); // resolvedPath -> LocalSqliteDatabase
   }
 
+  // Resolve a key to a pool token. In-memory: core keys share one db, every other
+  // key gets its own isolated in-memory db (so plugin scopes never collide). On
+  // disk: core keys share the main file, others get isolated sibling files.
   #resolve(key) {
-    if (this.path === ':memory:') return ':memory:';
+    if (this.path === ':memory:') return CORE_KEYS.has(key) ? ':memory:#core' : ':memory:#' + key;
     if (CORE_KEYS.has(key)) return this.path;
     return join(dirname(this.path), 'stores', sanitize(key) + '.db');
   }
@@ -83,15 +88,26 @@ export class LocalSqliteProvider extends SqliteProvider {
     const resolved = this.#resolve(key);
     let db = this._pool.get(resolved);
     if (!db) {
-      if (resolved !== ':memory:') {
+      const file = resolved.startsWith(':memory:') ? ':memory:' : resolved;
+      if (file !== ':memory:') {
         const { mkdir } = await import('node:fs/promises');
-        await mkdir(dirname(resolved), { recursive: true });
+        await mkdir(dirname(file), { recursive: true });
       }
       const { openDatabase } = await import('./sqlite-driver.js');
-      db = new LocalSqliteDatabase(await openDatabase(resolved));
+      db = new LocalSqliteDatabase(await openDatabase(file));
       this._pool.set(resolved, db);
     }
     return db;
+  }
+
+  async drop({ key }) {
+    const resolved = this.#resolve(key);
+    const db = this._pool.get(resolved);
+    if (db) { await db.close(); this._pool.delete(resolved); }
+    if (!resolved.startsWith(':memory:')) {
+      const { rm } = await import('node:fs/promises');
+      for (const suffix of ['', '-wal', '-shm']) await rm(resolved + suffix, { force: true }).catch(() => {});
+    }
   }
 
   async close() {

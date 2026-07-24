@@ -1,7 +1,7 @@
 // Unit tests for the plugin package format, signing, and domain-verified trust.
 
 import { test, expect } from './testkit.js';
-import { parsePackage, reviewSummary } from '../src/platform/pluginPackage.js';
+import { parsePackage, reviewSummary, storageScopes, grantedStorageScopes } from '../src/platform/pluginPackage.js';
 import { verifyPackage, assessTrust, checkAssetlinks, displayFingerprint } from '../src/platform/pluginSigning.js';
 import { isAllowedUrl, endpointSummary, parseEndpoint } from '../src/platform/pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from '../src/platform/pluginModules.js';
@@ -138,11 +138,26 @@ test('classic single-file packages stay in classic mode', () => {
 });
 
 test('reviewSummary surfaces caps, contributions, settings + admin-only flag', async () => {
-  const { zip } = await buildPackage({ manifest: { capabilities: { ui: true, commands: true, serverStorage: true } } });
+  const { zip } = await buildPackage({ manifest: { capabilities: { ui: true, commands: true, storage: true } } });
   const pkg = parsePackage(zip);
   const s = reviewSummary(pkg, { status: 'unverified' });
   expect(s.name).toBe('Demo Plugin');
-  expect(s.capabilities.find((c) => c.id === 'serverStorage').adminOnly).toBe(true);
   expect(s.contributions.length).toBeGreaterThan(0);
   expect(s.settings.find((x) => x.key === 'apiKey').secret).toBe(true);
+});
+
+test('storage scopes: plugin vs domain, and domain needs verification', async () => {
+  // `storage: true` → the private plugin scope only.
+  expect(storageScopes({ capabilities: { storage: true } })).toEqual({ plugin: true, domain: false });
+  // Explicit scopes.
+  const m = { domain: 'x.example.com', capabilities: { storage: { plugin: true, domain: true } } };
+  expect(storageScopes(m)).toEqual({ plugin: true, domain: true });
+
+  // Domain scope is only granted when the package is domain-verified.
+  expect(grantedStorageScopes(m, { status: 'signed' })).toEqual({ plugin: true, domain: false });
+  expect(grantedStorageScopes(m, { status: 'verified' })).toEqual({ plugin: true, domain: true });
+
+  // Review flags the blocked domain scope for an unverified package.
+  const s = reviewSummary(parsePackage((await buildPackage({ manifest: m })).zip), { status: 'unverified' });
+  expect(s.storage).toEqual({ plugin: true, domain: true, domainBlocked: true });
 });

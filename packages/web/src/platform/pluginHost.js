@@ -14,13 +14,13 @@
 
 import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
 import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
-import { PluginRegistry, PluginDataStore } from './pluginStore.js';
+import { PluginRegistry } from './pluginStore.js';
 import { assessTrust } from './pluginSigning.js';
-import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints } from './pluginPackage.js';
+import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes } from './pluginPackage.js';
 import { isAllowedUrl, endpointSummary } from './pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from './pluginModules.js';
 
-const ALL_CAPABILITIES = ['files', 'storage', 'serverStorage', 'ui', 'commands', 'indexer', 'opener', 'network'];
+const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network'];
 
 // Response bodies larger than this are refused, so a plugin can't exhaust host
 // memory through the brokered fetch.
@@ -92,10 +92,15 @@ export class PluginHost {
     const id = pkg.manifest.id;
     const requested = capabilityList(pkg.manifest);
     const granted = (grants || requested).filter((c) => ALL_CAPABILITIES.includes(c) && requested.includes(c));
+    // Storage scopes actually available: plugin if declared+granted; domain only if
+    // declared, granted, AND the package is domain-verified.
+    const storage = granted.includes('storage')
+      ? grantedStorageScopes(pkg.manifest, trust)
+      : { plugin: false, domain: false };
     const record = {
       id, manifest: pkg.manifest,
       files: Object.fromEntries([...pkg.files.entries()]),
-      grants: granted, trust: trust || null,
+      grants: granted, storage, trust: trust || null,
       settings: {}, secrets: {}, installedAt: Date.now(),
     };
     await this.registry.save(record);
@@ -138,7 +143,9 @@ export class PluginHost {
 
     const runtime = {
       ...record, iframe, status: 'loading', error: null, disposers: [], channel: null,
-      hasUi: false, responsive: false, data: new PluginDataStore(record.id),
+      hasUi: false, responsive: false,
+      // Storage scopes (defaulted for records saved before this field existed).
+      storage: record.storage || (record.grants?.includes('storage') ? grantedStorageScopes(record.manifest, record.trust) : { plugin: false, domain: false }),
       files: mapFromFiles(record.files),
     };
     this.plugins.set(record.id, runtime);
@@ -183,7 +190,7 @@ export class PluginHost {
         record._timer = timer;
         // Opaque origin → target '*'; the transferred port is the real capability.
         iframe.contentWindow.postMessage(
-          { __trove: 'init', manifest, capabilities: record.grants, online: this.online },
+          { __trove: 'init', manifest, capabilities: record.grants, storage: record.storage, online: this.online },
           '*',
           [channel.port2],
         );
@@ -262,11 +269,10 @@ export class PluginHost {
       // sandboxed frame has no direct network at all (connect-src 'none').
       case 'net:fetch': cap('network'); return this.#brokerFetch(record, params);
 
-      // Persistent storage — local (default) or server (needs serverStorage).
-      case 'db:get': cap('storage'); return this.#data(record, params.scope).get(params.key);
-      case 'db:set': cap('storage'); return this.#data(record, params.scope).set(params.key, params.value);
-      case 'db:delete': cap('storage'); return this.#data(record, params.scope).delete(params.key);
-      case 'db:query': cap('storage'); return this.#data(record, params.scope).query(params.prefix);
+      // Persistent storage — an isolated SQLite database per scope (plugin/domain),
+      // on the server or (client, Stage 3) on-device. SQL runs only against the
+      // plugin's own scoped db.
+      case 'storage:sql': cap('storage'); return this.#pluginSql(record, params);
 
       // Plugin settings + secrets.
       case 'settings:get': return this.platform.settings.get(`${pid}.${params.key}`);
@@ -285,12 +291,19 @@ export class PluginHost {
     }
   }
 
-  #data(record, scope) {
-    if (scope === 'server') {
-      if (!record.grants.includes('serverStorage')) throw new Error('serverStorage not granted');
-      return serverData(this.platform.api, record.manifest.id);
+  // Plugin storage: run a SQL op against one scoped, isolated database. `scope` is
+  // 'plugin' or 'domain' (each granted separately); `side` is 'server' or 'client'.
+  async #pluginSql(record, { scope = 'plugin', side = 'server', op, sql, params = [], statements }) {
+    if (!record.storage?.[scope]) {
+      throw new Error(`Storage scope "${scope}" not granted${scope === 'domain' ? ' (needs a verified domain)' : ''}`);
     }
-    return record.data;
+    if (side === 'client') throw new Error('Client-side storage is not available in this build');
+    // Server: the host proxies to the scoped db over the authenticated API; the
+    // domain (for the shared scope) comes from the verified install record, never
+    // the plugin.
+    const body = { scope, op, sql, params, statements, domain: scope === 'domain' ? record.manifest.domain : undefined };
+    const res = await this.platform.api.request('POST', `/api/plugins/${encodeURIComponent(record.manifest.id)}/sql`, { body });
+    return res.result;
   }
 
   /**
@@ -433,13 +446,13 @@ export class PluginHost {
       record._settingsDispose?.();
       record.channel?.dispose();
       record.iframe.remove();
-      if (wipeData) await record.data?.destroy().catch(() => {});
       this.plugins.delete(pluginId);
     }
     if (wipeData) {
-      // Server-side plugin data (ownership tracked by plugin id).
+      // Wipe the plugin's server-side private store (its domain scope, if any, is
+      // shared with the vendor's other plugins and left intact). Client-side stores
+      // are wiped in Stage 3.
       await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => {});
-      await new PluginDataStore(pluginId).destroy().catch(() => {});
     }
     await this.registry.remove(pluginId);
     if (![...this.plugins.values()].some((r) => r.status === 'active')) this.#stopHeartbeat();
@@ -538,17 +551,6 @@ function sanitizeHeaders(headers) {
     if (!FORBIDDEN_HEADERS.has(String(k).toLowerCase())) out[k] = v;
   }
   return out;
-}
-
-// Server-backed per-plugin storage (mirrors the local PluginDataStore shape).
-function serverData(api, pluginId) {
-  const base = `/api/plugins/${encodeURIComponent(pluginId)}/data`;
-  return {
-    get: (key) => api.request('GET', base + '/' + encodeURIComponent(key)).then((r) => r?.value ?? null),
-    set: (key, value) => api.request('PUT', base + '/' + encodeURIComponent(key), { body: { value } }),
-    delete: (key) => api.request('DELETE', base + '/' + encodeURIComponent(key)),
-    query: (prefix) => api.request('GET', base, { query: { prefix: prefix || '' } }).then((r) => r?.items || []),
-  };
 }
 
 function signature(live) {

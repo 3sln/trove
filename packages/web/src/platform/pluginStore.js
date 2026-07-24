@@ -1,13 +1,9 @@
-// Where installed plugins live. Two layers:
-//   • PluginRegistry — install records (manifest, package files, granted caps,
-//     trust status, settings, secrets) persisted in IndexedDB so plugins survive
-//     reloads on this device.
-//   • PluginDataStore — a plugin's OWN persistent data, namespaced by plugin id
-//     (local IndexedDB; the host also mediates a server-backed scope). Keyed by
-//     the plugin id so the host can wipe everything a plugin owns on uninstall.
-//
-// Package bytes stay on-device (they can be large); non-secret settings can also
-// be mirrored to the server (see the settings service) so they follow the user.
+// PluginRegistry — install records (manifest, package files, granted caps, trust
+// status, settings, secrets) persisted in IndexedDB so plugins survive reloads on
+// this device. Package bytes stay on-device (they can be large); non-secret
+// settings can also be mirrored to the server (see the settings service) so they
+// follow the user. A plugin's OWN data lives in per-scope SQLite databases (server
+// via the host API; on-device via the wasm store) — not here.
 
 const DB = 'trove-plugins';
 const STORE = 'installs';
@@ -69,73 +65,3 @@ export class PluginRegistry {
   }
 }
 
-// --- per-plugin local data (moderated via the host over postMessage) --------
-
-const DATA_DB = 'trove-plugin-data';
-
-function openDataDb(pluginId) {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(`${DATA_DB}.${pluginId}`, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-function dtx(db, mode, fn) {
-  return new Promise((resolve, reject) => {
-    const t = db.transaction('kv', mode);
-    const s = t.objectStore('kv');
-    let out;
-    Promise.resolve(fn(s)).then((r) => (out = r));
-    t.oncomplete = () => resolve(out);
-    t.onerror = () => reject(t.error);
-  });
-}
-
-export class PluginDataStore {
-  constructor(pluginId) {
-    this.pluginId = pluginId;
-    this._db = null;
-  }
-  async #db() {
-    return (this._db ??= await openDataDb(this.pluginId));
-  }
-  async get(key) {
-    return dtx(await this.#db(), 'readonly', (s) => reqP(s.get(key)));
-  }
-  async set(key, value) {
-    await dtx(await this.#db(), 'readwrite', (s) => s.put(value, key));
-    return { ok: true };
-  }
-  async delete(key) {
-    await dtx(await this.#db(), 'readwrite', (s) => s.delete(key));
-    return { ok: true };
-  }
-  async query(prefix = '') {
-    return dtx(await this.#db(), 'readonly', (store) =>
-      new Promise((resolve, reject) => {
-        const out = [];
-        const req = store.openCursor();
-        req.onsuccess = () => {
-          const cur = req.result;
-          if (!cur) return resolve(out);
-          if (String(cur.key).startsWith(prefix)) out.push({ key: cur.key, value: cur.value });
-          cur.continue();
-        };
-        req.onerror = () => reject(req.error);
-      }),
-    );
-  }
-  /** Wipe everything this plugin stored locally (uninstall cleanup). */
-  async destroy() {
-    this._db?.close();
-    this._db = null;
-    await new Promise((res) => {
-      const req = indexedDB.deleteDatabase(`${DATA_DB}.${this.pluginId}`);
-      req.onsuccess = req.onerror = req.onblocked = () => res();
-    });
-  }
-}
