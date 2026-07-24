@@ -52,9 +52,12 @@ async function toWeb(nodeReq) {
 async function main() {
   const { handle, vfs } = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), assets: staticAssets });
   // Seed some content so search/open have something to work with.
-  await vfs.writeFile('root', 'welcome.md', '# Welcome to Trove\nThis drive supports semantic search over your documents about sailing, cooking, and astronomy.', { contentType: 'text/markdown' });
+  const welcome = await vfs.writeFile('root', 'welcome.md', '# Welcome to Trove\nThis drive supports semantic search over your documents about sailing, cooking, and astronomy.', { contentType: 'text/markdown' });
+  await vfs.writeFile('root', 'notes.txt', 'plain notes with no tags', { contentType: 'text/plain' });
   const docs = await vfs.mkdir('root', 'documents');
   await vfs.writeFile(docs.id, 'sailing.txt', 'Trimming the mainsail and tacking upwind across the bay at dawn.', { contentType: 'text/plain' });
+  // Tag welcome.md so the launcher's #tag/#property filters have something to match.
+  await vfs.metadata.setFacet(welcome.id, 'tags', { fav: 'yes', rating: '5' });
 
   const server = http.createServer(async (req, res) => {
     const webRes = await handle(await toWeb(req));
@@ -123,6 +126,21 @@ async function main() {
   await page.waitForTimeout(700);
   const resultNames = await page.locator('.launch-item .name').allTextContents();
   check('semantic search returns results', resultNames.length > 0, resultNames.join(', '));
+  await page.locator('.launch-clear').click();
+
+  // Tag/property filters: `#fav` and `#rating:>=4` keep welcome.md but drop notes.txt.
+  await page.locator('.launch-input').fill('#fav');
+  await page.waitForTimeout(150);
+  let filtered = await page.locator('.launch-item .name').allTextContents();
+  check('#tag filter keeps tagged, drops untagged', filtered.includes('welcome.md') && !filtered.includes('notes.txt'), filtered.join(', '));
+  await page.locator('.launch-input').fill('#rating:>=4');
+  await page.waitForTimeout(150);
+  filtered = await page.locator('.launch-item .name').allTextContents();
+  check('#property comparison filter matches', filtered.includes('welcome.md'), filtered.join(', '));
+  await page.locator('.launch-input').fill('#rating:>5');
+  await page.waitForTimeout(150);
+  filtered = await page.locator('.launch-item .name').allTextContents();
+  check('#property comparison excludes non-matches', !filtered.includes('welcome.md'), filtered.join(', '));
   await page.locator('.launch-clear').click();
 
   // Plugins: install the sandboxed demo plugin from a package (zip bytes), the

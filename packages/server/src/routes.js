@@ -298,12 +298,18 @@ export function createRouter() {
     await assertCap(ctx, node.collectionId, 'write');
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    return ctx.sidecar.setTag(ctx.params.id, b.name, b.value, ctx.principal);
+    const res = await ctx.sidecar.setTag(ctx.params.id, b.name, b.value, ctx.principal);
+    // Mirror the tag onto the node's facets so it's filterable (#tag / #tag:=value).
+    await ctx.vfs.metadata.setFacet(ctx.params.id, 'tags', { [b.name]: b.value ?? true }).catch(() => {});
+    return res;
   });
 
-  r.delete('/api/files/:id/tags/:name', async ({ sidecar, params, principal }) => {
+  r.delete('/api/files/:id/tags/:name', async ({ sidecar, vfs, params, principal }) => {
     requireSidecar(sidecar);
-    return sidecar.removeTag(params.id, params.name, principal);
+    const res = await sidecar.removeTag(params.id, params.name, principal);
+    // No clearFacet on the vfs; null reads as "absent" to the filter matcher.
+    await vfs.metadata.setFacet(params.id, 'tags', { [params.name]: null }).catch(() => {});
+    return res;
   });
 
   r.post('/api/files/:id/subscribe', async ({ sidecar, params, req, principal }) => {

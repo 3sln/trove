@@ -7,6 +7,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { NavigateAction, OpenFileAction, SearchAction } from '../../bl/actions.js';
+import { parseTagQuery, matchesTagFilters, filterLabel } from '../../bl/tagQuery.js';
 
 const { div, span, input, button } = dd;
 
@@ -20,7 +21,7 @@ function runSearch(ui, query) {
 export default function launcher(state, ui) {
   const wb = ui.platform.workbench;
   const q = state.wb.launch.query;
-  const mode = q.startsWith('!') ? 'command' : q.startsWith('#') ? 'filter' : 'search';
+  const mode = q.startsWith('!') ? 'command' : q.includes('#') ? 'filter' : 'search';
 
   const groups = buildContent(state, ui, q, mode);
   const flat = groups.flatMap((g) => g.items);
@@ -29,7 +30,8 @@ export default function launcher(state, ui) {
   const onInput = (e) => {
     const v = e.target.value;
     wb.setLaunchQuery(v);
-    if (!v.startsWith('!')) runSearch(ui, v); // '#…' is parsed by SearchAction (tags)
+    // Search only the free-text part; `#…` filter tokens are applied to results.
+    if (!v.startsWith('!')) runSearch(ui, parseTagQuery(v).text);
   };
   const onKey = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); wb.moveLaunch(1, flat.length); }
@@ -83,9 +85,28 @@ function buildContent(state, ui, q, mode) {
     return [{ title: 'Commands', items, empty: 'No matching commands.' }];
   }
 
-  if (mode !== 'command' && q.trim() && (mode === 'search' || mode === 'filter')) {
-    const results = (state.se.results || []).map((r) => fileItem(r.node, ui));
-    return [{ title: state.se.loading ? 'Searching…' : results.length ? 'Results' : (state.se.ran ? 'No results' : 'Results'), items: results, empty: state.se.loading ? 'Searching…' : 'No files match.' }];
+  const { text, filters } = parseTagQuery(q);
+  const filterLabelStr = filters.map(filterLabel).join(' ');
+
+  // Free-text search (optionally narrowed by #tag filters).
+  if (text.trim()) {
+    let results = (state.se.results || []).map((r) => r.node);
+    if (filters.length) results = results.filter((n) => matchesTagFilters(n, filters));
+    return [{
+      title: state.se.loading ? 'Searching…' : (filters.length ? `Results · ${filterLabelStr}` : 'Results'),
+      items: results.map((n) => fileItem(n, ui)),
+      empty: state.se.loading ? 'Searching…' : 'No files match.',
+    }];
+  }
+
+  // Tag/property filter with no free text → filter the current folder.
+  if (filters.length) {
+    const items = (state.ex.items || []).filter((n) => n.kind === 'folder' || matchesTagFilters(n, filters));
+    return [{
+      title: `Filtered · ${filterLabelStr}`,
+      items: items.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui))),
+      empty: 'No files here match those filters.',
+    }];
   }
 
   // Home: recents + browse the current folder.
