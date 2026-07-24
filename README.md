@@ -114,7 +114,7 @@ npm run serve            # → http://localhost:8787
 
 # — or, for development with hot reload —
 npm run serve &          # API on :8787
-npm run dev              # Vite web app on :5173 (proxies /api to :8787)
+npm run dev              # @web/dev-server on :5173 (unbundled ESM + HMR, proxies /api to :8787)
 ```
 
 Then open the app, drag files in, and try the command palette (`⌘/Ctrl‑Shift‑P`)

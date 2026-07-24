@@ -1,7 +1,9 @@
-# Trove — single-image self-host. Builds the web app, then serves it plus the API
-# from the Node adapter. Configure storage/metadata/embeddings via env (see README).
+# Trove — single-image self-host. Builds the web app (with Bun), then serves it
+# plus the API from the Node adapter. Configure storage/metadata/embeddings via env.
 FROM node:22-slim AS build
 WORKDIR /app
+# The web build runs under Bun (bun build.mjs); the server runtime stays Node.
+RUN npm install -g bun
 COPY package.json ./
 COPY packages ./packages
 RUN npm install

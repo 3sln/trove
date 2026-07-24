@@ -13,7 +13,7 @@
 // validation and the domain-verified trust signal.
 
 import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
-import SDK_SOURCE from '@trove/plugin-sdk/browser.js?raw';
+import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
 import { PluginRegistry, PluginDataStore } from './pluginStore.js';
 import { assessTrust } from './pluginSigning.js';
 import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints } from './pluginPackage.js';

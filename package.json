@@ -8,8 +8,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "cd packages/web && npx vite",
-    "build:web": "cd packages/web && npx vite build",
+    "dev": "cd packages/web && npm run dev",
+    "build:web": "cd packages/web && npm run build",
     "serve": "node packages/server/src/adapters/node.js",
     "test": "bun test"
   },
