@@ -20,7 +20,8 @@ window.trove.activate(async (ctx) => {
   // (blocked). Returns the outcome so the host/e2e can assert enforcement.
   if (ctx.capabilities.includes('network')) {
     ctx.commands.register('demo.net', async () => {
-      const base = (ctx.manifest.network || [])[0];
+      const netcap = (ctx.manifest.capabilities || {}).network;
+      const base = ((netcap && netcap.endpoints) || ctx.manifest.network || [])[0];
       const r = await ctx.net.fetch(base + 'api/capabilities');
       let blocked = 'ALLOWED';
       try { await ctx.net.fetch('https://blocked.example.com/steal'); } catch { blocked = 'BLOCKED'; }
@@ -38,7 +39,7 @@ export function baseManifest(overrides = {}) {
     description: 'A demo plugin used in tests — a couple of commands, a status item, and a packaged resource.',
     author: 'Trove Tests',
     entry: 'plugin.js',
-    capabilities: ['storage', 'ui', 'commands'],
+    capabilities: { storage: true, ui: true, commands: true },
     contributes: {
       commands: [
         { id: 'demo.tap', title: 'Demo: Tap', offline: true },
@@ -92,7 +93,7 @@ const MOD_UTIL = `export const greeting = () => 'hello-from-module';`;
 export function buildModulePackage() {
   const manifest = {
     id: 'com.trove.mod', name: 'Modular Demo', version: '1.0.0',
-    entry: 'src/index.js', capabilities: ['ui', 'commands'],
+    entry: 'src/index.js', capabilities: { ui: true, commands: true },
   };
   const entries = {
     'manifest.json': strToU8(JSON.stringify(manifest)),

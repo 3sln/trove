@@ -201,6 +201,11 @@ A plugin is a **ZIP** containing a `manifest.json`, an entry script, and any
 assets. The manifest declares the plugin's id, the capabilities it wants, its
 contributions, and its settings:
 
+Capabilities are declared as an object — each key is a capability, each value is
+that capability's **options**. A capability that takes no options uses `true` (an
+empty object works too); the `network` capability carries its allowed endpoint
+prefixes:
+
 ```json
 {
   "id": "com.example.hello",
@@ -208,8 +213,13 @@ contributions, and its settings:
   "version": "1.0.0",
   "entry": "plugin.js",
   "domain": "plugins.example.com",
-  "capabilities": ["ui", "commands", "storage", "indexer", "network"],
-  "network": ["https://api.example.com/v1/"],
+  "capabilities": {
+    "ui": true,
+    "commands": true,
+    "storage": true,
+    "indexer": true,
+    "network": { "endpoints": ["https://api.example.com/v1/"] }
+  },
   "settings": [{ "key": "apiKey", "type": "string", "title": "API key", "secret": true }]
 }
 ```

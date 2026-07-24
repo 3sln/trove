@@ -16,8 +16,8 @@ import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
 import SDK_SOURCE from '@trove/plugin-sdk/browser.js?raw';
 import { PluginRegistry, PluginDataStore } from './pluginStore.js';
 import { assessTrust } from './pluginSigning.js';
-import { ADMIN_ONLY_CAPS } from './pluginPackage.js';
-import { isAllowedUrl } from './pluginNet.js';
+import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints } from './pluginPackage.js';
+import { isAllowedUrl, endpointSummary } from './pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from './pluginModules.js';
 
 const ALL_CAPABILITIES = ['files', 'storage', 'serverStorage', 'ui', 'commands', 'indexer', 'opener', 'network'];
@@ -50,7 +50,7 @@ export class PluginHost {
       id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, status: p.status,
       capabilities: p.grants, error: p.error || null, hasUi: p.hasUi, badge: p.badge || null,
       trust: p.trust || null, settingsSchema: p.manifest.settings || [],
-      endpoints: p.manifest.network || [],
+      endpoints: endpointSummary(networkEndpoints(p.manifest)),
       responsive: !!p.responsive, manifest: p.live || null, features: this.#featureList(p),
     }));
   }
@@ -90,7 +90,7 @@ export class PluginHost {
    */
   async install(pkg, { grants, trust } = {}) {
     const id = pkg.manifest.id;
-    const requested = pkg.manifest.capabilities || [];
+    const requested = capabilityList(pkg.manifest);
     const granted = (grants || requested).filter((c) => ALL_CAPABILITIES.includes(c) && requested.includes(c));
     const record = {
       id, manifest: pkg.manifest,
@@ -301,7 +301,7 @@ export class PluginHost {
    * bytes } — the SDK wraps it in a Response-like object.
    */
   async #brokerFetch(record, { url, method = 'GET', headers, body }) {
-    const allow = record.manifest.network || [];
+    const allow = networkEndpoints(record.manifest);
     if (!isAllowedUrl(allow, url)) {
       throw new Error(`Blocked: "${url}" is not one of this plugin's declared network endpoints`);
     }

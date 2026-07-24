@@ -114,7 +114,7 @@ async function main() {
   await page.evaluate(async (data) => {
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
     const pkg = window.__trove.test.parsePackage(bytes);
-    await window.__trove.test.install(pkg, { grants: pkg.manifest.capabilities });
+    await window.__trove.test.install(pkg, {}); // grants default to all declared capabilities
   }, b64);
   await page.waitForFunction(
     () => window.__trove.platform.plugins.list().some((p) => p.status === 'active'),

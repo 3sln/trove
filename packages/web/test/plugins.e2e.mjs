@@ -58,13 +58,13 @@ async function main() {
   // Declare this origin as the plugin's one allowed network endpoint so the
   // brokered-fetch enforcement can be exercised below.
   const { zip } = await buildPackage({
-    manifest: { capabilities: ['storage', 'ui', 'commands', 'network'], network: [base + '/'] },
+    manifest: { capabilities: { storage: true, ui: true, commands: true, network: { endpoints: [base + '/'] } } },
   });
   const b64 = Buffer.from(zip).toString('base64');
   await page.evaluate(async (data) => {
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
     const pkg = window.__trove.test.parsePackage(bytes);
-    await window.__trove.test.install(pkg, { grants: pkg.manifest.capabilities });
+    await window.__trove.test.install(pkg, {}); // grants default to all declared capabilities
   }, b64);
   await page.waitForFunction(() => {
     const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo');
@@ -92,7 +92,7 @@ async function main() {
   await page.evaluate(async (data) => {
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
     const pkg = window.__trove.test.parsePackage(bytes);
-    await window.__trove.test.install(pkg, { grants: pkg.manifest.capabilities });
+    await window.__trove.test.install(pkg, {});
   }, mod);
   await page.waitForFunction(
     () => window.__trove.platform.plugins.list().some((p) => p.id === 'com.trove.mod' && p.status === 'active'),

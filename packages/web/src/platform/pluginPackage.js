@@ -25,6 +25,48 @@ export function describeCapability(cap) {
   return CAP_DESCRIPTIONS[cap] || cap;
 }
 
+// Capabilities are declared as an object: each key is a capability, each value is
+// that capability's options. A capability that takes no options uses `true` (or an
+// empty object). e.g. { ui: true, network: { endpoints: ["https://api.example.com/"] } }.
+// A plain array of ids is also accepted (each treated as options-less) so simple
+// or hand-written manifests stay easy.
+export function capabilityEntries(manifest) {
+  const caps = manifest && manifest.capabilities;
+  const out = {};
+  if (Array.isArray(caps)) {
+    for (const id of caps) if (id) out[id] = {};
+  } else if (caps && typeof caps === 'object') {
+    for (const [id, val] of Object.entries(caps)) {
+      if (val === false || val == null) continue; // explicitly not requested
+      out[id] = val === true ? {} : val;
+    }
+  }
+  return out;
+}
+
+/** The declared capability ids. */
+export function capabilityList(manifest) {
+  return Object.keys(capabilityEntries(manifest));
+}
+
+/** Options declared for one capability, or null if it isn't declared. */
+export function capabilityOptions(manifest, id) {
+  const e = capabilityEntries(manifest);
+  return Object.prototype.hasOwnProperty.call(e, id) ? e[id] : null;
+}
+
+/** The network capability's declared endpoint prefixes (accepts a few shapes). */
+export function networkEndpoints(manifest) {
+  const opt = capabilityOptions(manifest, 'network');
+  if (opt) {
+    if (Array.isArray(opt)) return opt;                 // network: ["https://…"]
+    if (Array.isArray(opt.endpoints)) return opt.endpoints;
+    if (Array.isArray(opt.prefixes)) return opt.prefixes;
+  }
+  if (Array.isArray(manifest.network)) return manifest.network; // legacy top-level
+  return [];
+}
+
 /** Parse zip bytes into { manifest, files:Map<path,Uint8Array>, raw }. */
 export function parsePackage(zipBytes) {
   let entries;
@@ -55,12 +97,12 @@ function validateManifest(m, files) {
   need(m.name, 'manifest.name is required');
   need(m.entry, 'manifest.entry (path to the plugin script) is required');
   need(files.has(m.entry), `entry "${m.entry}" is not in the package`);
-  need(Array.isArray(m.capabilities || []), 'capabilities must be an array');
-  if (m.icon) need(files.has(m.icon), `icon "${m.icon}" is not in the package`);
-  if (m.network != null) {
-    need(Array.isArray(m.network), 'manifest.network must be an array of endpoint URLs');
-    for (const ep of m.network) parseEndpoint(ep); // throws on anything but an http(s) URL
+  if (m.capabilities != null) {
+    need(Array.isArray(m.capabilities) || typeof m.capabilities === 'object',
+      'capabilities must be an object of { capability: options } (or an array of ids)');
   }
+  if (m.icon) need(files.has(m.icon), `icon "${m.icon}" is not in the package`);
+  for (const ep of networkEndpoints(m)) parseEndpoint(ep); // throws on anything but an http(s) URL
 }
 
 /** Fetch a package from a URL (must be a zip). */
@@ -102,10 +144,10 @@ export function reviewSummary(pkg, trust) {
   return {
     id: m.id, name: m.name, version: m.version || '0.0.0', description: m.description || '',
     author: m.author || 'Unknown', domain: m.domain || null,
-    capabilities: (m.capabilities || []).map((cap) => ({ id: cap, description: describeCapability(cap), adminOnly: ADMIN_ONLY_CAPS.has(cap) })),
+    capabilities: capabilityList(m).map((cap) => ({ id: cap, description: describeCapability(cap), adminOnly: ADMIN_ONLY_CAPS.has(cap) })),
     contributions,
     settings: (m.settings || []).map((s) => ({ key: s.key, title: s.title || s.key, type: s.type, secret: !!s.secret })),
-    network: endpointSummary(m.network),
+    network: endpointSummary(networkEndpoints(m)),
     fileCount: pkg.files.size,
     sizeBytes: [...pkg.files.values()].reduce((n, b) => n + b.length, 0),
     trust,

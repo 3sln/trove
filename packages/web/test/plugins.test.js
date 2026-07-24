@@ -91,12 +91,26 @@ test('parseEndpoint rejects non-http(s) + endpointSummary is review-friendly', (
 });
 
 test('package with a bad network endpoint is rejected; good ones surface in review', async () => {
-  const bad = await buildPackage({ manifest: { network: ['ws://nope.example.com'] } });
+  const bad = await buildPackage({ manifest: { capabilities: { network: { endpoints: ['ws://nope.example.com'] } } } });
   expect(() => parsePackage(bad.zip)).toThrow(/http/i);
-  const { zip } = await buildPackage({ manifest: { capabilities: ['network', 'ui'], network: ['https://api.example.com/'] } });
+  const { zip } = await buildPackage({ manifest: { capabilities: { network: { endpoints: ['https://api.example.com/'] }, ui: true } } });
   const s = reviewSummary(parsePackage(zip), { status: 'unverified' });
   expect(s.capabilities.find((c) => c.id === 'network')).toBeTruthy();
   expect(s.network.map((e) => e.host)).toEqual(['api.example.com']);
+});
+
+test('capabilities: object form with options, plus lenient array form', async () => {
+  // Object form — each key is a capability, each value its options.
+  const obj = parsePackage((await buildPackage({
+    manifest: { capabilities: { ui: true, commands: {}, network: { endpoints: ['https://a.example.com/'] } } },
+  })).zip);
+  const so = reviewSummary(obj, { status: 'unverified' });
+  expect(so.capabilities.map((c) => c.id).sort()).toEqual(['commands', 'network', 'ui']);
+  expect(so.network.map((e) => e.host)).toEqual(['a.example.com']);
+
+  // Array form is still accepted (options-less).
+  const arr = parsePackage((await buildPackage({ manifest: { capabilities: ['ui', 'storage'] } })).zip);
+  expect(reviewSummary(arr, {}).capabilities.map((c) => c.id).sort()).toEqual(['storage', 'ui']);
 });
 
 test('module graph: only src/ code is wired; relative imports are canonicalized', async () => {
@@ -124,7 +138,7 @@ test('classic single-file packages stay in classic mode', () => {
 });
 
 test('reviewSummary surfaces caps, contributions, settings + admin-only flag', async () => {
-  const { zip } = await buildPackage({ manifest: { capabilities: ['ui', 'commands', 'serverStorage'] } });
+  const { zip } = await buildPackage({ manifest: { capabilities: { ui: true, commands: true, serverStorage: true } } });
   const pkg = parsePackage(zip);
   const s = reviewSummary(pkg, { status: 'unverified' });
   expect(s.name).toBe('Demo Plugin');
