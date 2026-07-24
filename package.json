@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "cd packages/web && npm run dev",
     "build:web": "cd packages/web && npm run build",
-    "serve": "node packages/server/src/adapters/node.js",
+    "serve": "bun packages/server/src/adapters/bun.js",
+    "serve:node": "node packages/server/src/adapters/node.js",
     "test": "bun test"
   },
   "engines": {

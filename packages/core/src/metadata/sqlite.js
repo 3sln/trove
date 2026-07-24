@@ -8,6 +8,7 @@
 import { MetadataStore } from './interface.js';
 import { TroveError, wrapError } from '../errors.js';
 import { newId, joinPath, normalizePath } from '../util.js';
+import { openDatabase } from '../sqlite-driver.js';
 
 const ROOT_ID = 'root';
 function rootId(collectionId = 'default') {
@@ -24,16 +25,7 @@ export class SqliteStore extends MetadataStore {
 
   async init() {
     if (!this.db) {
-      let DatabaseSync;
-      try {
-        ({ DatabaseSync } = await import('node:sqlite'));
-      } catch (err) {
-        throw TroveError.unsupported(
-          'node:sqlite unavailable — use Node ≥ 22.5 with --experimental-sqlite, or supply another MetadataStore',
-          { cause: err },
-        );
-      }
-      this.db = this._opts.database ?? new DatabaseSync(this._opts.path ?? ':memory:');
+      this.db = this._opts.database ?? await openDatabase(this._opts.path ?? ':memory:');
     }
     this.db.exec(`
       PRAGMA journal_mode = WAL;

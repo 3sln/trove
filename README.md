@@ -108,9 +108,10 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
 ```sh
 npm install
 
-# 1. Run the API + web app together (Node), in-memory (zero config):
-npm run build:web
-npm run serve            # → http://localhost:8787
+# 1. Run the API + web app together, in-memory (zero config):
+npm run build:web        # builds with Bun
+npm run serve            # Bun runtime → http://localhost:8787
+#   (npm run serve:node  # same server under Node ≥22.5, if you prefer)
 
 # — or, for development with hot reload —
 npm run serve &          # API on :8787
@@ -286,7 +287,7 @@ and what actually runs.
 ```
 packages/
   core/         @trove/core — Vfs, storage/metadata/search backends, uploads (runtime-agnostic)
-  server/       @trove/server — Request→Response API + Node & Worker adapters
+  server/       @trove/server — Request→Response API + Bun / Node / Worker adapters
   web/          @trove/web — the workbench (dodo + ngin + bones)
   plugin-sdk/   @trove/plugin-sdk — the iframe-side plugin API + RPC
 ```

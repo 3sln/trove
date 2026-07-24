@@ -4,6 +4,7 @@
 // the interface over D1/Redis/etc). Values are JSON-serialisable.
 
 import { TroveError } from './errors.js';
+import { openDatabase } from './sqlite-driver.js';
 
 export class KeyValueStore {
   async get(ns, key) {
@@ -55,8 +56,7 @@ export class SqliteKV extends KeyValueStore {
   }
   async init() {
     if (!this.db) {
-      const { DatabaseSync } = await import('node:sqlite');
-      this.db = new DatabaseSync(this._opts.path ?? ':memory:');
+      this.db = await openDatabase(this._opts.path ?? ':memory:');
     }
     this.db.exec(`CREATE TABLE IF NOT EXISTS kv (
       ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updatedAt INTEGER NOT NULL,
