@@ -628,3 +628,22 @@ kbd {
 .launch-up { display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; padding: 2px 4px; border-radius: 5px; }
 .launch-up:hover { background: var(--bg-hover); color: var(--text); }
 .launch-empty { padding: 8px 12px; color: var(--text-faint); font-size: 13px; }
+
+/* --- Workspace: launcher + opener as split or modal ------------------------- */
+.workspace { min-width: 0; overflow: hidden; }
+.workspace.split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.4fr); }
+.workspace.split .ws-pane { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
+.workspace.split .ws-launcher { border-right: 1px solid var(--border); }
+.workspace.split .ws-launcher .launcher { padding: 0 14px; max-width: none; }
+.workspace.split .ws-launcher .launch-box { margin-top: 18px; }
+
+.workspace.modal { position: relative; }
+.workspace.modal > .launcher { filter: saturate(.9); }
+.preview-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.42); z-index: 40; }
+.preview-modal { position: absolute; z-index: 41; inset: 4% 6%; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; }
+
+.preview { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.preview > .editor, .preview > .editor-split { flex: 1; min-height: 0; }
+.preview-controls { position: absolute; top: 6px; right: 8px; z-index: 5; display: flex; gap: 4px; }
+.pc-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-elevated); color: var(--text-dim); cursor: pointer; opacity: .85; }
+.pc-btn:hover { color: var(--text); background: var(--bg-hover); opacity: 1; }

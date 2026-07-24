@@ -19,6 +19,7 @@ export class WorkbenchService {
       launch: { query: '', index: 0 }, // the main-panel launcher's query
       tabs: [], // [{ id, node, openerId }]
       activeTabId: null,
+      previewMode: loadPreviewMode(), // 'split' | 'modal' — how an opener is shown
       recents: loadRecents(), // recently-opened files (for the launcher)
       pluginPanel: null, // pluginId when a plugin popup is open
       dialog: null, // { kind, ... } modal dialog
@@ -44,6 +45,16 @@ export class WorkbenchService {
   showHome() {
     this.#set({ activity: 'home', activeTabId: null });
     this.context.set('view.active', 'home');
+  }
+  /** How an opened file is presented: 'split' (beside the launcher) or 'modal'. */
+  setPreviewMode(mode) {
+    if (mode !== 'split' && mode !== 'modal') return;
+    this.#set({ previewMode: mode });
+    savePreviewMode(mode);
+    this.context.set('preview.mode', mode);
+  }
+  togglePreviewMode() {
+    this.setPreviewMode(this.state.previewMode === 'split' ? 'modal' : 'split');
   }
   toggleSidebar(force) {
     const v = force ?? !this.state.sidebarVisible;
@@ -150,6 +161,7 @@ export class WorkbenchService {
     if (this.state.dialog) return this.closeDialog(), true;
     if (this.state.palette) return this.closePalette(), true;
     if (this.state.pluginPanel) return this.closePluginPanel(), true;
+    if (this.state.activeTabId) return this.showHome(), true; // close the open preview
     return false;
   }
 }
@@ -159,4 +171,10 @@ function loadRecents() {
 }
 function saveRecents(recents) {
   try { localStorage.setItem(RECENTS_KEY, JSON.stringify(recents)); } catch { /* private mode / no storage */ }
+}
+function loadPreviewMode() {
+  try { return localStorage.getItem('trove.previewMode') === 'modal' ? 'modal' : 'split'; } catch { return 'split'; }
+}
+function savePreviewMode(mode) {
+  try { localStorage.setItem('trove.previewMode', mode); } catch { /* no storage */ }
 }

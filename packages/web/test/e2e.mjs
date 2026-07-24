@@ -98,11 +98,23 @@ async function main() {
   check('command palette filters commands', hasSettingsCmd);
   await page.keyboard.press('Escape');
 
-  // Open a file from the launcher → opener renders.
+  // Open a file from the launcher → opener renders as a split beside the launcher.
   await page.locator('.launch-item', { hasText: 'welcome.md' }).first().click();
   await page.waitForSelector('.viewer.text pre', { timeout: 3000 });
   const text = await page.locator('.viewer.text pre').textContent();
   check('text opener shows content', /Welcome to Trove/.test(text));
+  check('opener opens split beside the launcher',
+    (await page.locator('.workspace.split .ws-launcher .launcher').count()) === 1 &&
+    (await page.locator('.workspace.split .ws-preview .viewer').count()) === 1);
+
+  // Swap split → modal, then back (last choice persists as the default).
+  await page.locator('.preview-controls .pc-btn').first().click();
+  await page.waitForSelector('.workspace.modal .preview-modal .viewer', { timeout: 2000 });
+  check('swap to modal shows the opener over the launcher', (await page.locator('.preview-modal').count()) === 1);
+  await page.locator('.preview-controls .pc-btn').first().click();
+  await page.waitForSelector('.workspace.split', { timeout: 2000 });
+  check('swap back to split', (await page.locator('.workspace.split').count()) === 1);
+
   await page.evaluate(() => window.__trove.platform.workbench.showHome());
 
   // Semantic search in the launcher.
