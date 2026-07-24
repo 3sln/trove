@@ -31,6 +31,7 @@ export function pluginReview(d, ui) {
         section('Capabilities it requests', s.capabilities.length
           ? div({ className: 'cap-list' }, ...s.capabilities.map((c) => capRow(c, d.isAdmin, sel.grants.has(c.id), () => toggle(c.id))))
           : muted('None — this plugin only runs in its sandbox.')),
+        (s.network || []).length ? section('Network access', div({ className: 'contrib-list' }, ...s.network.map(endpointRow))) : null,
         s.contributions.length ? section('What it adds', div({ className: 'contrib-list' }, ...s.contributions.map(contribRow))) : null,
         s.settings.length ? section('Settings', div({ className: 'contrib-list' }, ...s.settings.map(settingRow))) : null,
         div({ className: 'review-meta' }, `${s.fileCount} files · ${fmtBytes(s.sizeBytes)} · id ${s.id}`),
@@ -84,6 +85,15 @@ function contribRow(c) {
     c.detail ? span({ className: 'cr-detail' }, c.detail) : null,
     c.offline ? span({ className: 'pf-badge offline-ok' }, 'offline') : null,
     span({ className: 'pf-kind' }, c.kind),
+  );
+}
+
+function endpointRow(ep) {
+  return div({ className: 'contrib-row' },
+    icon('plug', { size: 13 }),
+    span({ className: 'cr-title' }, ep.host),
+    ep.path ? span({ className: 'cr-detail' }, ep.path) : null,
+    span({ className: 'pf-kind' }, ep.scheme),
   );
 }
 

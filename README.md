@@ -57,7 +57,11 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   single `MessagePort`; **package resources arrive as opaque byte handles** over
   that port. Everything a plugin can do — file access, storage, UI — is gated by
   the **capabilities the user grants at install time**, and some (e.g. writing to
-  **server-side** storage) are **admin-only**. Before anything runs, a
+  **server-side** storage) are **admin-only**. A plugin has **no direct network
+  access** — the sandbox blocks all egress (`connect-src 'none'`); to reach the
+  web it must **declare each endpoint** in its manifest, and the host brokers every
+  request, refusing anything off the declared allowlist (including redirects) and
+  sending no ambient cookies. Before anything runs, a
   **pre-install review** shows the package's identity, capabilities (each
   explained), contributions, and settings so the user can decide whether to trust
   it. Signed packages show a **domain-verified** badge: the manifest declares a
@@ -204,7 +208,8 @@ contributions, and its settings:
   "version": "1.0.0",
   "entry": "plugin.js",
   "domain": "plugins.example.com",
-  "capabilities": ["ui", "commands", "storage", "indexer"],
+  "capabilities": ["ui", "commands", "storage", "indexer", "network"],
+  "network": ["https://api.example.com/v1/"],
   "settings": [{ "key": "apiKey", "type": "string", "title": "API key", "secret": true }]
 }
 ```
@@ -226,6 +231,12 @@ trove.activate(async (ctx) => {
 
   // Read a secret the user entered in settings (never stored in plaintext prefs).
   const key = await ctx.settings.getSecret('apiKey');
+
+  // Reach the web only through the host, and only to declared endpoints ("network").
+  const res = await ctx.net.fetch('https://api.example.com/v1/status', {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  const data = await res.json();
 
   // Push search documents under this plugin's namespace (declare "indexer").
   ctx.contributes.indexer({ id: 'labels', title: 'Image labels' });

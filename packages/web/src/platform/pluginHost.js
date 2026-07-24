@@ -17,8 +17,13 @@ import SDK_SOURCE from '@trove/plugin-sdk/browser.js?raw';
 import { PluginRegistry, PluginDataStore } from './pluginStore.js';
 import { assessTrust } from './pluginSigning.js';
 import { entrySource, ADMIN_ONLY_CAPS } from './pluginPackage.js';
+import { isAllowedUrl } from './pluginNet.js';
 
-const ALL_CAPABILITIES = ['files', 'storage', 'serverStorage', 'ui', 'commands', 'indexer', 'opener'];
+const ALL_CAPABILITIES = ['files', 'storage', 'serverStorage', 'ui', 'commands', 'indexer', 'opener', 'network'];
+
+// Response bodies larger than this are refused, so a plugin can't exhaust host
+// memory through the brokered fetch.
+const MAX_FETCH_BYTES = 25 * 1024 * 1024;
 
 export class PluginHost {
   constructor(platform, { heartbeatMs = 20000 } = {}) {
@@ -44,6 +49,7 @@ export class PluginHost {
       id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, status: p.status,
       capabilities: p.grants, error: p.error || null, hasUi: p.hasUi, badge: p.badge || null,
       trust: p.trust || null, settingsSchema: p.manifest.settings || [],
+      endpoints: p.manifest.network || [],
       responsive: !!p.responsive, manifest: p.live || null, features: this.#featureList(p),
     }));
   }
@@ -243,6 +249,10 @@ export class PluginHost {
         return this.platform.api.pushIndex(ns, params.nodeId, params.documents, params.facet);
       }
 
+      // Network — brokered by the host and confined to declared endpoints. The
+      // sandboxed frame has no direct network at all (connect-src 'none').
+      case 'net:fetch': cap('network'); return this.#brokerFetch(record, params);
+
       // Persistent storage — local (default) or server (needs serverStorage).
       case 'db:get': cap('storage'); return this.#data(record, params.scope).get(params.key);
       case 'db:set': cap('storage'); return this.#data(record, params.scope).set(params.key, params.value);
@@ -272,6 +282,34 @@ export class PluginHost {
       return serverData(this.platform.api, record.manifest.id);
     }
     return record.data;
+  }
+
+  /**
+   * Perform a network request on a plugin's behalf, but only to a URL it declared
+   * in its manifest `network` allowlist. The request runs from the host with
+   * credentials omitted (no ambient cookies/auth), and any redirect that lands
+   * off the allowlist is rejected. Returns { ok, status, statusText, url, headers,
+   * bytes } — the SDK wraps it in a Response-like object.
+   */
+  async #brokerFetch(record, { url, method = 'GET', headers, body }) {
+    const allow = record.manifest.network || [];
+    if (!isAllowedUrl(allow, url)) {
+      throw new Error(`Blocked: "${url}" is not one of this plugin's declared network endpoints`);
+    }
+    const init = { method, credentials: 'omit', redirect: 'follow', headers: sanitizeHeaders(headers) };
+    if (body != null && method !== 'GET' && method !== 'HEAD') {
+      init.body = body instanceof ArrayBuffer ? new Uint8Array(body) : body;
+    }
+    const res = await fetch(url, init);
+    // A redirect chain must not escape the declared endpoints.
+    if (res.url && res.url !== url && !isAllowedUrl(allow, res.url)) {
+      throw new Error(`Blocked: request redirected off this plugin's declared endpoints (${res.url})`);
+    }
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > MAX_FETCH_BYTES) throw new Error('Response too large');
+    const outHeaders = {};
+    res.headers.forEach((v, k) => { outHeaders[k] = v; });
+    return { ok: res.ok, status: res.status, statusText: res.statusText, url: res.url, headers: outHeaders, bytes: buf };
   }
 
   #hostEvent(record, method, params) {
@@ -418,11 +456,37 @@ function mapFromFiles(files) {
   return m;
 }
 function bootstrapHtml(entryJs) {
-  // The SDK + the plugin entry, both inline; nothing loads over the network.
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src blob: data:; connect-src *"></head><body>
+  // The SDK + the plugin entry, both inline. `connect-src 'none'` means the frame
+  // cannot make ANY direct network request (fetch/XHR/WebSocket/beacon) — all web
+  // access is brokered by the host and confined to the plugin's declared
+  // endpoints. img/media/font are limited to in-frame blob:/data: so remote loads
+  // can't be used as an exfiltration side-channel either.
+  const csp = [
+    "default-src 'none'",
+    "script-src 'unsafe-inline' 'unsafe-eval'",
+    "style-src 'unsafe-inline'",
+    'img-src blob: data:',
+    'media-src blob: data:',
+    "font-src 'none'",
+    "connect-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ');
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body>
 <script>${SDK_SOURCE}<\/script>
 <script>${entryJs}<\/script>
 </body></html>`;
+}
+
+// Drop headers the plugin isn't allowed to set (the browser forbids most of these
+// anyway; we strip explicitly so intent is clear and cookies never ride along).
+const FORBIDDEN_HEADERS = new Set(['host', 'cookie', 'cookie2', 'set-cookie', 'origin', 'referer', 'content-length', 'connection']);
+function sanitizeHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (!FORBIDDEN_HEADERS.has(String(k).toLowerCase())) out[k] = v;
+  }
+  return out;
 }
 
 // Server-backed per-plugin storage (mirrors the local PluginDataStore shape).

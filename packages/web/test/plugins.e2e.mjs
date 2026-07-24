@@ -55,7 +55,11 @@ async function main() {
   await page.waitForSelector('.shell');
 
   // Install the demo plugin package (zip bytes) and wait for its live manifest.
-  const { zip } = await buildPackage();
+  // Declare this origin as the plugin's one allowed network endpoint so the
+  // brokered-fetch enforcement can be exercised below.
+  const { zip } = await buildPackage({
+    manifest: { capabilities: ['storage', 'ui', 'commands', 'network'], network: [base + '/'] },
+  });
   const b64 = Buffer.from(zip).toString('base64');
   await page.evaluate(async (data) => {
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
@@ -75,6 +79,11 @@ async function main() {
 
   // Online: both plugin commands are available.
   check('online: both plugin commands available', (await availOf(page, 'demo.tap')) && (await availOf(page, 'demo.sync')));
+
+  // Brokered network: the declared endpoint succeeds; an undeclared host is blocked.
+  const net = await page.evaluate(() => window.__trove.platform.commands.execute('demo.net'));
+  check('brokered fetch to a declared endpoint succeeds', net?.ok === true && net?.status === 200, JSON.stringify(net));
+  check('fetch to an undeclared endpoint is blocked', net?.blocked === 'BLOCKED', JSON.stringify(net));
 
   // Go offline — the host notifies the plugin, which re-announces.
   await page.context().setOffline(true);

@@ -3,6 +3,7 @@
 import { test, expect } from 'bun:test';
 import { parsePackage, reviewSummary } from '../src/platform/pluginPackage.js';
 import { verifyPackage, assessTrust, checkAssetlinks, displayFingerprint } from '../src/platform/pluginSigning.js';
+import { isAllowedUrl, endpointSummary, parseEndpoint } from '../src/platform/pluginNet.js';
 import { buildPackage, assetlinksFor } from './pluginFixture.mjs';
 
 test('parsePackage reads + validates the manifest', async () => {
@@ -65,6 +66,35 @@ test('checkAssetlinks matches ignoring colon formatting + wildcard', () => {
   expect(checkAssetlinks(assetlinksFor(displayFingerprint(fp), 'x'), fp, 'x')).toBe(true);
   expect(checkAssetlinks({ version: 1, keys: [{ fingerprint: fp, plugins: ['*'] }] }, fp, 'anything')).toBe(true);
   expect(checkAssetlinks(assetlinksFor(fp, 'other'), fp, 'x')).toBe(false);
+});
+
+test('network allowlist: host/path/port/scheme + wildcard matching', () => {
+  const eps = ['https://api.example.com/v1/', 'https://*.cdn.example.com/', 'http://localhost:8080/'];
+  expect(isAllowedUrl(eps, 'https://api.example.com/v1/users?q=1')).toBe(true);
+  expect(isAllowedUrl(eps, 'https://api.example.com/v2/users')).toBe(false); // path prefix
+  expect(isAllowedUrl(eps, 'http://api.example.com/v1/users')).toBe(false); // scheme
+  expect(isAllowedUrl(eps, 'https://img.cdn.example.com/a.png')).toBe(true); // wildcard subdomain
+  expect(isAllowedUrl(eps, 'https://cdn.example.com/a.png')).toBe(true); // wildcard matches apex
+  expect(isAllowedUrl(eps, 'https://evil.com/?x=https://api.example.com/v1/')).toBe(false);
+  expect(isAllowedUrl(eps, 'http://localhost:8080/x')).toBe(true);
+  expect(isAllowedUrl(eps, 'http://localhost:9090/x')).toBe(false); // port
+  expect(isAllowedUrl([], 'https://api.example.com/')).toBe(false); // nothing declared → nothing allowed
+});
+
+test('parseEndpoint rejects non-http(s) + endpointSummary is review-friendly', () => {
+  expect(() => parseEndpoint('ftp://example.com/')).toThrow(/http/i);
+  expect(() => parseEndpoint('not a url')).toThrow(/http/i);
+  const s = endpointSummary(['https://*.example.com/v1/']);
+  expect(s[0]).toEqual({ scheme: 'https', host: '*.example.com', path: '/v1/', raw: 'https://*.example.com/v1/' });
+});
+
+test('package with a bad network endpoint is rejected; good ones surface in review', async () => {
+  const bad = await buildPackage({ manifest: { network: ['ws://nope.example.com'] } });
+  expect(() => parsePackage(bad.zip)).toThrow(/http/i);
+  const { zip } = await buildPackage({ manifest: { capabilities: ['network', 'ui'], network: ['https://api.example.com/'] } });
+  const s = reviewSummary(parsePackage(zip), { status: 'unverified' });
+  expect(s.capabilities.find((c) => c.id === 'network')).toBeTruthy();
+  expect(s.network.map((e) => e.host)).toEqual(['api.example.com']);
 });
 
 test('reviewSummary surfaces caps, contributions, settings + admin-only flag', async () => {

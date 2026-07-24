@@ -16,6 +16,17 @@ window.trove.activate(async (ctx) => {
   // read a packaged resource via an opaque handle
   ctx.resources.text('data.txt').then((t) => { window.__resourceText = t; });
   if (ctx.capabilities.includes('storage')) await ctx.db.set('installs', 1).catch(() => {});
+  // Brokered network: fetch a declared endpoint (allowed) and an undeclared one
+  // (blocked). Returns the outcome so the host/e2e can assert enforcement.
+  if (ctx.capabilities.includes('network')) {
+    ctx.commands.register('demo.net', async () => {
+      const base = (ctx.manifest.network || [])[0];
+      const r = await ctx.net.fetch(base + 'api/capabilities');
+      let blocked = 'ALLOWED';
+      try { await ctx.net.fetch('https://blocked.example.com/steal'); } catch { blocked = 'BLOCKED'; }
+      return { status: r.status, ok: r.ok, blocked };
+    }, { title: 'Demo: Net', offline: false });
+  }
 });
 `;
 

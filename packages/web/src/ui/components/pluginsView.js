@@ -40,6 +40,10 @@ function installedCard(pl, state, ui) {
     ),
     pl.error ? div({ className: 'desc', $styling: { color: 'var(--danger)' } }, pl.error) : null,
     div({ className: 'caps' }, ...(pl.capabilities || []).map((c) => span({ className: 'cap' }, c))),
+    (pl.endpoints || []).length
+      ? div({ className: 'plugin-endpoints', $styling: { fontSize: '11px', color: 'var(--text-faint)', marginTop: '2px' } },
+          icon('plug', { size: 11 }), ' Network: ', (pl.endpoints || []).map((e) => e.host).join(', '))
+      : null,
     pl.status === 'active'
       ? div({ className: 'plugin-features' },
           div({ className: 'pf-head' }, span(`Features · ${connectivity}`), span({ className: 'muted' }, `${features.filter((f) => f.available).length}/${features.length} available`)),

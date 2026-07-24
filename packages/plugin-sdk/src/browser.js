@@ -74,6 +74,20 @@
 
   function requireCap(cap) { if (!capabilities.includes(cap)) throw new Error('Plugin lacks capability "' + cap + '"'); }
 
+  function hasHeader(h, name) { name = name.toLowerCase(); for (var k in h) if (k.toLowerCase() === name) return true; return false; }
+  // Wrap the host's brokered-fetch result in a minimal Response-like object.
+  function makeResponse(r) {
+    var bytes = new Uint8Array(r.bytes || new ArrayBuffer(0));
+    var decode = function () { return new TextDecoder().decode(bytes); };
+    return {
+      ok: r.ok, status: r.status, statusText: r.statusText, url: r.url, headers: r.headers || {},
+      arrayBuffer: function () { return Promise.resolve(bytes.slice().buffer); },
+      bytes: function () { return Promise.resolve(bytes); },
+      text: function () { return Promise.resolve(decode()); },
+      json: function () { return Promise.resolve(JSON.parse(decode())); },
+    };
+  }
+
   function makeContext() {
     return {
       manifest, capabilities,
@@ -110,6 +124,24 @@
         showPanel: () => call('ui:showPanel', {}),
         setBadge: (text) => emit('ui:badge', { text }),
         setContext: (key, value) => emit('context:set', { key, value }),
+      },
+      // Network — there is no direct fetch in the sandbox; the host performs the
+      // request, but ONLY to endpoints declared in the manifest's `network` list
+      // (and only with the "network" capability). Returns a Response-like object.
+      net: {
+        fetch(url, opts) {
+          requireCap('network');
+          opts = opts || {};
+          var body = opts.body;
+          var headers = Object.assign({}, opts.headers);
+          if (body && typeof body === 'object' && !(body instanceof ArrayBuffer) && !(body instanceof Uint8Array)) {
+            body = JSON.stringify(body);
+            if (!hasHeader(headers, 'content-type')) headers['Content-Type'] = 'application/json';
+          }
+          if (body instanceof Uint8Array) body = body.buffer;
+          return call('net:fetch', { url: String(url), method: opts.method || 'GET', headers: headers, body: body })
+            .then(makeResponse);
+        },
       },
       files: {
         read: (id, opts) => (requireCap('files'), call('files:read', Object.assign({ id }, opts))),

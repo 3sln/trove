@@ -4,6 +4,7 @@
 // code — that only happens later, inside a sandboxed iframe.
 
 import { unzipSync } from 'fflate';
+import { parseEndpoint, endpointSummary } from './pluginNet.js';
 
 const CAP_DESCRIPTIONS = {
   files: 'Read your files, folders, and search index (via the host).',
@@ -13,6 +14,7 @@ const CAP_DESCRIPTIONS = {
   commands: 'Add commands to the palette.',
   opener: 'Preview/open file types.',
   indexer: 'Add searchable content to your files.',
+  network: 'Connect to the internet — only the endpoints it declares (shown below).',
 };
 
 // Capabilities that a normal user may grant themselves vs. those that need an
@@ -55,6 +57,10 @@ function validateManifest(m, files) {
   need(files.has(m.entry), `entry "${m.entry}" is not in the package`);
   need(Array.isArray(m.capabilities || []), 'capabilities must be an array');
   if (m.icon) need(files.has(m.icon), `icon "${m.icon}" is not in the package`);
+  if (m.network != null) {
+    need(Array.isArray(m.network), 'manifest.network must be an array of endpoint URLs');
+    for (const ep of m.network) parseEndpoint(ep); // throws on anything but an http(s) URL
+  }
 }
 
 /** Fetch a package from a URL (must be a zip). */
@@ -99,6 +105,7 @@ export function reviewSummary(pkg, trust) {
     capabilities: (m.capabilities || []).map((cap) => ({ id: cap, description: describeCapability(cap), adminOnly: ADMIN_ONLY_CAPS.has(cap) })),
     contributions,
     settings: (m.settings || []).map((s) => ({ key: s.key, title: s.title || s.key, type: s.type, secret: !!s.secret })),
+    network: endpointSummary(m.network),
     fileCount: pkg.files.size,
     sizeBytes: [...pkg.files.values()].reduce((n, b) => n + b.length, 0),
     trust,
