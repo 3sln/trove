@@ -27,7 +27,7 @@ export function notificationBell(state, ui) {
   const social = ui.app.social;
   return div({ className: 'bell-wrap' },
     button({ className: 'iconbtn bell', title: 'Notifications' },
-      icon('info', { size: 17 }),
+      icon('bell', { size: 19 }),
       n.unread ? span({ className: 'bell-badge' }, String(n.unread > 9 ? '9+' : n.unread)) : null,
     ).on({ click: () => social.toggleInbox() }),
     state.so.inboxOpen ? inboxDropdown(state, ui) : null,

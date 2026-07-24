@@ -9,7 +9,6 @@
   --radius-sm: 5px;
   --activity-w: 52px;
   --sidebar-w: 280px;
-  --titlebar-h: 40px;
   --statusbar-h: 24px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
@@ -100,6 +99,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 input, select, textarea { font: inherit; color: inherit; }
 ::selection { background: var(--accent); color: var(--accent-text); }
 
+/* Keyboard focus only (never on mouse click): a consistent, visible ring so the
+   app is navigable without a pointer. Components with their own :focus styles
+   (inputs) keep them; this covers buttons and other interactive elements. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+button:focus-visible, .launch-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:focus:not(:focus-visible) { outline: none; }
+
 ::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: content-box; }
@@ -109,42 +115,16 @@ input, select, textarea { font: inherit; color: inherit; }
 /* ---- Shell layout -------------------------------------------------------- */
 .shell {
   display: grid;
-  grid-template-rows: var(--titlebar-h) 1fr var(--statusbar-h);
+  grid-template-rows: 1fr var(--statusbar-h);
   height: 100vh;
   height: 100dvh;
 }
 .body {
   display: grid;
-  grid-template-columns: var(--activity-w) auto 1fr;
+  grid-template-columns: var(--activity-w) 1fr;
   min-height: 0;
   overflow: hidden;
 }
-/* No sidebar element any more: activity bar + main area. */
-.body.no-sidebar { grid-template-columns: var(--activity-w) 1fr; }
-
-/* ---- Title bar ----------------------------------------------------------- */
-.titlebar {
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 12px;
-  background: var(--bg-activity);
-  border-bottom: 1px solid var(--border);
-  -webkit-app-region: drag;
-  user-select: none;
-}
-.titlebar .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .2px; }
-.titlebar .brand img { width: 20px; height: 20px; }
-.titlebar .center {
-  flex: 1; display: flex; justify-content: center; -webkit-app-region: no-drag;
-}
-.titlebar .omni {
-  display: flex; align-items: center; gap: 8px;
-  width: min(520px, 46vw); height: 26px; padding: 0 10px;
-  background: var(--bg-input); border: 1px solid var(--border);
-  border-radius: 7px; color: var(--text-dim); font-size: 12px;
-  transition: border-color .15s var(--ease), background .15s var(--ease);
-}
-.titlebar .omni:hover { border-color: var(--border-strong); }
-.titlebar .omni kbd { margin-left: auto; }
 
 kbd {
   font-family: var(--font-ui); font-size: 10.5px; color: var(--text-dim);
@@ -152,21 +132,29 @@ kbd {
   border-radius: 4px; padding: 1px 5px; min-width: 16px; text-align: center;
 }
 
-/* ---- Activity bar -------------------------------------------------------- */
+/* ---- Activity bar (the left rail) --------------------------------------- */
 .activitybar {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 8px 0; background: var(--bg-activity); border-right: 1px solid var(--border);
+  padding: 8px 0 10px; background: var(--bg-activity); border-right: 1px solid var(--border);
 }
+.activitybar .brand-mark {
+  width: 40px; height: 40px; border: 0; background: transparent; border-radius: 10px;
+  display: grid; place-items: center; margin-bottom: 6px; cursor: pointer;
+  transition: background .12s var(--ease), transform .12s var(--ease);
+}
+.activitybar .brand-mark img { width: 24px; height: 24px; }
+.activitybar .brand-mark:hover { background: var(--bg-hover); }
+.activitybar .brand-mark:active { transform: translateY(1px); }
 .activitybar .item {
   position: relative; width: 40px; height: 40px; border: 0; background: transparent;
   color: var(--text-faint); border-radius: 9px; display: grid; place-items: center;
   transition: color .12s var(--ease), background .12s var(--ease);
 }
 .activitybar .item:hover { color: var(--text); background: var(--bg-hover); }
-.activitybar .item.active { color: var(--text); }
+.activitybar .item.active { color: var(--text); background: var(--bg-active); }
 .activitybar .item.active::before {
-  content: ''; position: absolute; left: -8px; top: 9px; bottom: 9px; width: 3px;
-  border-radius: 3px; background: linear-gradient(var(--accent), var(--accent-2));
+  content: ''; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: linear-gradient(var(--accent), var(--accent-2));
 }
 .activitybar .item .badge {
   position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px;
@@ -174,6 +162,11 @@ kbd {
   font-size: 9.5px; font-weight: 700; display: grid; place-items: center;
 }
 .activitybar .spacer { flex: 1; }
+/* Bottom-cluster controls (notifications, principal) styled to match nav items. */
+.activitybar .bell-wrap { display: grid; place-items: center; }
+.activitybar .iconbtn { width: 40px; height: 40px; border-radius: 9px; color: var(--text-faint); }
+.activitybar .iconbtn:hover { color: var(--text); background: var(--bg-hover); }
+.activitybar .principal { margin: 4px 0 0; cursor: default; }
 
 /* ---- Sidebar ------------------------------------------------------------- */
 .sidebar {
@@ -446,7 +439,7 @@ kbd {
 .plugin-card .actions { display: flex; gap: 8px; margin-top: 12px; }
 
 .plugin-panel {
-  position: fixed; top: calc(var(--titlebar-h) + 8px); right: 12px; z-index: 55;
+  position: fixed; top: 12px; right: 12px; z-index: 55;
   background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 12px;
   box-shadow: var(--shadow); overflow: hidden; animation: pop .13s var(--ease);
 }
@@ -546,15 +539,14 @@ kbd {
 }
 .editor, .sidebar { position: relative; }
 
-/* ---- Title-bar right cluster: info toggle, bell, avatar ------------------ */
-.titlebar-right { display: flex; align-items: center; gap: 4px; -webkit-app-region: no-drag; }
-.titlebar .iconbtn.active { color: var(--accent); background: var(--bg-active); }
-.principal { width: 28px; height: 28px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; margin-left: 4px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; font-size: 12px; }
+/* ---- Notifications + principal (bottom of the rail) --------------------- */
+.principal { width: 30px; height: 30px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; font-size: 12px; }
 .principal .avatar-img { width: 100%; height: 100%; object-fit: cover; }
 
 .bell-wrap { position: relative; }
-.bell-badge { position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 3px; background: var(--danger); color: #fff; border-radius: 8px; font-size: 9.5px; font-weight: 700; display: grid; place-items: center; }
-.inbox { position: absolute; top: 36px; right: 0; width: 340px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); z-index: 55; overflow: hidden; animation: pop .12s var(--ease); }
+.bell-badge { position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; background: var(--danger); color: #fff; border-radius: 8px; font-size: 9.5px; font-weight: 700; display: grid; place-items: center; }
+/* Opens up-and-to-the-right of the rail, anchored to the bottom cluster. */
+.inbox { position: fixed; left: calc(var(--activity-w) + 8px); bottom: 8px; width: 340px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); z-index: 55; overflow: hidden; animation: pop .12s var(--ease); }
 .inbox-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
 .inbox-head .link, .link { background: none; border: 0; color: var(--accent); font-size: 12px; }
 .inbox-head .muted, .muted { color: var(--text-faint); }

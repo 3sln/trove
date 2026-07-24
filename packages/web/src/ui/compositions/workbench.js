@@ -6,7 +6,6 @@
 
 import { dd, ObservableSubject } from '../../runtime.js';
 import { NavigateAction } from '../../bl/actions.js';
-import titleBar from '../components/titleBar.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
 import launcher from '../components/launcher.js';
@@ -53,8 +52,7 @@ export default function workbench({ engine, app, platform, plugins }) {
 
 function view(state, ui) {
   return div({ className: `shell ${state.settings['workbench.density'] === 'compact' ? 'compact' : ''}` },
-    titleBar(state, ui),
-    div({ className: 'body no-sidebar' },
+    div({ className: 'body' },
       activityBar(state, ui),
       mainArea(state, ui),
     ),

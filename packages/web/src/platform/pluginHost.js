@@ -570,10 +570,10 @@ export class PluginHost {
   // Float `frame`'s iframe over `targetEl` and keep its inset aligned. We recompute
   // on intersection/resize/scroll rather than every animation frame — the app's
   // viewer area only moves on layout changes, so this stays idle when nothing shifts.
-  #place(frame, targetEl, z) {
+  #place(frame, targetEl, z, radius = '') {
     this.#stopPlace(frame);
     const f = frame.iframe;
-    f.style.cssText = `position:fixed;border:0;visibility:visible;display:block;background:transparent;z-index:${z};margin:0;padding:0;`;
+    f.style.cssText = `position:fixed;border:0;visibility:visible;display:block;background:transparent;z-index:${z};margin:0;padding:0;border-radius:${radius};`;
     const sync = () => {
       const r = targetEl.getBoundingClientRect();
       const shown = r.width > 0 && r.height > 0 && document.contains(targetEl);
@@ -632,7 +632,8 @@ export class PluginHost {
     el.style.height = `${clampDim(min.height, 56, 360) + 26}px`; // + header
     el.querySelector('.vd-title').textContent = frame.node?.name || frame.record.manifest.name;
     el.style.display = 'flex';
-    this.#place(frame, el.querySelector('.vd-body'), 61);
+    // Round the frame's bottom corners to match the dock's rounded body.
+    this.#place(frame, el.querySelector('.vd-body'), 61, '0 0 11px 11px');
     this._dockedFrame = frame;
     frame.docked = true;
     frame.channel?.emit('dock:state', { docked: true });
