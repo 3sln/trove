@@ -1,247 +1,32 @@
-// @trove/plugin-sdk — the API a Trove plugin uses from inside its sandboxed
-// iframe. A plugin ships a small module that calls `activate(register => {...})`;
-// the SDK handshakes with the host (adopting the transferred MessagePort),
-// exposes the host's services behind `ctx`, and routes contribution callbacks
-// (command handlers, openers, indexers) back over RPC.
-//
-// The plugin never has DOM access to the host. To show UI it either renders into
-// its own iframe body (surfaced by the host as a popup/panel) or contributes
-// declarative items (commands, status entries). Capabilities it didn't declare
-// in its manifest are simply absent from `ctx`.
+// @trove/plugin-sdk — the ESM entry a plugin author imports when building or
+// bundling a plugin outside the sandbox:
 //
 //   import { activate } from '@trove/plugin-sdk';
 //   activate(async (ctx) => {
 //     ctx.commands.register('hello.world', () => ctx.ui.toast('Hi from a plugin!'));
-//     ctx.contributes.opener({ id: 'my.viewer', selector: { ext: ['.xyz'] } }, openXyz);
 //   });
+//
+// Inside a running Trove sandbox the host injects the SAME implementation directly
+// (see ./browser.js) and exposes it as the global `trove`. To keep exactly one
+// source of truth — so what an author imports can never drift from what actually
+// runs — this module loads that implementation for its side effect and re-exports
+// its surface. Importing is side-effect-safe: it only DEFINES the SDK (and sets
+// `globalThis.trove`); nothing talks to the host until you call `activate()`.
 
-import { RpcChannel } from './rpc.js';
+import './browser.js';
 
-let channel = null;
-let manifest = null;
-let capabilities = [];
-const commandHandlers = new Map();
-const openerHandlers = new Map();
-const indexerHandlers = new Map();
-// The live capability catalog the plugin announces to the host. Each spec keeps
-// an `offline` flag; the host uses it (plus whether we're responding at all) to
-// decide which of the plugin's features work while the app is offline.
-const contributions = { commands: new Map(), openers: new Map(), indexers: new Map(), statusItems: new Map() };
-let online = true;
-let onConnectivity = null;
-let onDeactivate = null;
-
-/** Build the live manifest: what this plugin currently contributes + offline caps. */
-function buildManifest() {
-  return {
-    id: manifest?.id,
-    name: manifest?.name,
-    online,
-    ts: nowMs(),
-    contributions: {
-      commands: [...contributions.commands.values()],
-      openers: [...contributions.openers.values()],
-      indexers: [...contributions.indexers.values()],
-      statusItems: [...contributions.statusItems.values()],
-    },
-  };
-}
-function nowMs() {
-  try {
-    return Date.now();
-  } catch {
-    return 0;
-  }
-}
-/** Push the current manifest to the host (also happens on request). */
-function announce() {
-  channel?.emit('manifest', buildManifest());
-}
-
-/** Wait for the host's init message (carrying our MessagePort + manifest). */
-function handshake() {
-  return new Promise((resolve) => {
-    function onInit(e) {
-      if (e.data?.__trove !== 'init') return;
-      window.removeEventListener('message', onInit);
-      manifest = e.data.manifest;
-      capabilities = e.data.capabilities || [];
-      online = e.data.online ?? true;
-      const port = e.ports[0];
-      channel = new RpcChannel(port, { onCall: dispatch, onEvent: dispatchEvent });
-      resolve();
-    }
-    window.addEventListener('message', onInit);
-    // Announce readiness so the host knows the frame's SDK has loaded.
-    parent.postMessage({ __trove: 'ready' }, '*');
-  });
-}
-
-// Host → plugin calls (openers, command execution, indexing).
-async function dispatch(method, params) {
-  switch (method) {
-    case 'command:execute': {
-      const fn = commandHandlers.get(params.id);
-      if (!fn) throw new Error(`No such command ${params.id}`);
-      return fn(...(params.args || []));
-    }
-    case 'opener:open': {
-      const fn = openerHandlers.get(params.openerId);
-      if (!fn) throw new Error(`No such opener ${params.openerId}`);
-      return fn(params.file, params.context);
-    }
-    case 'indexer:run': {
-      const fn = indexerHandlers.get(params.indexerId);
-      if (!fn) throw new Error(`No such indexer ${params.indexerId}`);
-      return fn(params.file);
-    }
-    // The host asks "what do you contribute right now, and what works offline?".
-    // Answering at all proves the plugin is alive; the manifest says which
-    // features are available in the current connectivity state.
-    case 'manifest':
-      return buildManifest();
-    default:
-      throw new Error(`Unknown host call ${method}`);
-  }
-}
-
-async function dispatchEvent(method, params) {
-  if (method === 'deactivate') return onDeactivate?.();
-  if (method === 'connectivity') {
-    online = !!params.online;
-    // Let the plugin adapt (e.g. flip network-only features to unavailable),
-    // then re-announce so the host has an up-to-date capability picture.
-    try {
-      await onConnectivity?.({ online });
-    } catch (err) {
-      console.error('onConnectivity handler failed', err);
-    }
-    announce();
-  }
-}
-
-function requireCap(cap) {
-  if (!capabilities.includes(cap)) {
-    throw new Error(`Plugin lacks capability "${cap}" (declare it in the manifest)`);
-  }
-}
-
-/** The context object handed to a plugin's activate() callback. */
-function makeContext() {
-  const ctx = {
-    manifest,
-    capabilities,
-
-    // Contribution points -----------------------------------------------------
-    // Every contribution accepts an `offline` flag: true means it keeps working
-    // with no network (the host keeps it enabled offline), false (default) means
-    // it needs connectivity and the host disables it while offline.
-    commands: {
-      register(id, handler, opts = {}) {
-        commandHandlers.set(id, handler);
-        const spec = { id, title: opts.title, category: opts.category, icon: opts.icon, offline: !!opts.offline };
-        contributions.commands.set(id, spec);
-        return channel.call('contribute:command', spec);
-      },
-      execute(id, ...args) {
-        return channel.call('command:execute', { id, args });
-      },
-    },
-    contributes: {
-      opener(spec, handler) {
-        openerHandlers.set(spec.id, handler);
-        const entry = { ...spec, offline: !!spec.offline };
-        contributions.openers.set(spec.id, entry);
-        return channel.call('contribute:opener', entry);
-      },
-      indexer(spec, handler) {
-        indexerHandlers.set(spec.id, handler);
-        const entry = { ...spec, offline: !!spec.offline };
-        contributions.indexers.set(spec.id, entry);
-        return channel.call('contribute:indexer', entry);
-      },
-      statusItem(spec) {
-        contributions.statusItems.set(spec.id, { ...spec, offline: !!spec.offline });
-        return channel.call('contribute:statusItem', spec);
-      },
-      keybinding(spec) {
-        return channel.call('contribute:keybinding', spec);
-      },
-    },
-
-    // Host services -----------------------------------------------------------
-    ui: {
-      toast: (text, opts) => channel.emit('ui:toast', { text, ...opts }),
-      showPanel: () => channel.call('ui:showPanel', {}),
-      setBadge: (text) => channel.emit('ui:badge', { text }),
-      setContext: (key, value) => channel.emit('context:set', { key, value }),
-    },
-    // Files: read/list/search go through the host so the plugin inherits auth.
-    files: {
-      read: (id, opts) => channel.call('files:read', { id, ...opts }),
-      list: (pathOrId, opts) => channel.call('files:list', { pathOrId, ...opts }),
-      stat: (id) => channel.call('files:stat', { id }),
-      downloadUrl: (id) => channel.call('files:downloadUrl', { id }),
-      // Push search documents under THIS plugin's indexer namespace.
-      index: (indexerId, nodeId, documents, facet) =>
-        channel.call('files:index', { indexerId, nodeId, documents, facet }),
-    },
-    // Per-domain persistent DB (declare "storage").
-    db: {
-      get: (key) => (requireCap('storage'), channel.call('db:get', { key })),
-      set: (key, value) => (requireCap('storage'), channel.call('db:set', { key, value })),
-      delete: (key) => (requireCap('storage'), channel.call('db:delete', { key })),
-      query: (prefix) => (requireCap('storage'), channel.call('db:query', { prefix })),
-    },
-    // Register a service other plugins/host can call (VS Code-style).
-    services: {
-      expose(name, methods) {
-        for (const [m, fn] of Object.entries(methods)) commandHandlers.set(`service:${name}.${m}`, fn);
-        return channel.call('contribute:service', { name, methods: Object.keys(methods) });
-      },
-      call: (name, method, ...args) => channel.call('service:call', { name, method, args }),
-    },
-    // Connectivity: the host calls this handler when the app goes online/offline,
-    // so the plugin can flip network-dependent features. `online` reflects the
-    // host's current state.
-    get online() {
-      return online;
-    },
-    onConnectivity(fn) {
-      onConnectivity = fn;
-    },
-    /** Update a contribution's offline capability at runtime; re-announces. */
-    setAvailability(id, { offline } = {}) {
-      for (const kind of Object.values(contributions)) {
-        if (kind.has(id)) kind.get(id).offline = !!offline;
-      }
-      announce();
-    },
-    /** Force-push the current manifest to the host. */
-    announce,
-    onDeactivate(fn) {
-      onDeactivate = fn;
-    },
-  };
-  return ctx;
-}
+const trove = globalThis.trove;
 
 /**
- * Entry point. Call once at the top of your plugin module.
- * @param {(ctx: object) => (void|Promise<void>)} setup
+ * Entry point — call once at the top of your plugin. The host hands your callback
+ * a capability-scoped `ctx` (commands, resources, files, db, settings, net, ui).
+ * @param {(ctx: object) => (void | Promise<void>)} setup
+ * @returns {Promise<object>} the activated context
  */
-export async function activate(setup) {
-  await handshake();
-  const ctx = makeContext();
-  try {
-    await setup(ctx);
-    await channel.call('activated', { ok: true });
-    announce(); // publish the initial capability manifest
-  } catch (err) {
-    await channel.call('activated', { ok: false, error: err?.message });
-    throw err;
-  }
-  return ctx;
-}
+export const activate = trove.activate;
 
-export { RpcChannel };
+export default trove;
+
+// The host-side RPC channel — used by the workbench that hosts plugins, not by
+// plugins themselves. Re-exported here for convenience/parity with the subpath.
+export { RpcChannel } from './rpc.js';

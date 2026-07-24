@@ -275,6 +275,12 @@ publish the key's fingerprint at `https://<domain>/.well-known/trove-assetlinks.
 See `packages/web/test/pluginFixture.mjs` for a complete, self-contained example
 package.
 
+Inside the sandbox the host injects the SDK and exposes it as the global `trove`.
+When you build or bundle your plugin outside the sandbox, `import { activate } from
+'@trove/plugin-sdk'` resolves to the **same implementation** — the package entry is
+a thin re-export of the injected build, so there's no drift between what you import
+and what actually runs.
+
 ## Layout
 
 ```
