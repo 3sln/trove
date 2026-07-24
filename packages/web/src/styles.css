@@ -629,21 +629,23 @@ kbd {
 .launch-up:hover { background: var(--bg-hover); color: var(--text); }
 .launch-empty { padding: 8px 12px; color: var(--text-faint); font-size: 13px; }
 
-/* --- Workspace: launcher + opener as split or modal ------------------------- */
-.workspace { min-width: 0; overflow: hidden; }
-.workspace.split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.4fr); }
-.workspace.split .ws-pane { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
-.workspace.split .ws-launcher { border-right: 1px solid var(--border); }
-.workspace.split .ws-launcher .launcher { padding: 0 14px; max-width: none; }
-.workspace.split .ws-launcher .launch-box { margin-top: 18px; }
 
-.workspace.modal { position: relative; }
-.workspace.modal > .launcher { filter: saturate(.9); }
-.preview-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.42); z-index: 40; }
-.preview-modal { position: absolute; z-index: 41; inset: 4% 6%; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; }
+/* --- Viewer stack: nav bar (Back + breadcrumb trail) ----------------------- */
+.viewer-nav { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px; background: var(--bg-activity); border-bottom: 1px solid var(--border); }
+.vn-back { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-elevated); color: var(--text-dim); }
+.vn-back:hover { color: var(--text); background: var(--bg-hover); }
+.vn-trail { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; }
+.vn-crumb { display: inline-flex; align-items: center; gap: 5px; max-width: 240px; padding: 4px 8px; border: 0; background: none; color: var(--text-dim); border-radius: 6px; white-space: nowrap; }
+.vn-crumb .label { overflow: hidden; text-overflow: ellipsis; }
+.vn-crumb:hover { background: var(--bg-hover); color: var(--text); }
+.vn-crumb.active { color: var(--text); font-weight: 550; }
+.vn-crumb:not(:last-child)::after { content: '›'; margin-left: 6px; color: var(--text-faint); }
+.vn-actions { display: flex; gap: 2px; }
 
-.preview { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.preview > .editor, .preview > .editor-split { flex: 1; min-height: 0; }
-.preview-controls { position: absolute; top: 6px; right: 8px; z-index: 5; display: flex; gap: 4px; }
-.pc-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-elevated); color: var(--text-dim); cursor: pointer; opacity: .85; }
-.pc-btn:hover { color: var(--text); background: var(--bg-hover); opacity: 1; }
+/* --- Double-shift modal search --------------------------------------------- */
+.search-modal { position: fixed; inset: 0; z-index: 60; }
+.search-modal .scrim { position: absolute; inset: 0; z-index: 0; background: rgba(0,0,0,.45); }
+.search-modal-panel { z-index: 1; position: absolute; left: 50%; top: 12vh; transform: translateX(-50%); width: min(680px, 94vw); max-height: 72vh; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; }
+.search-modal-panel .launcher { max-width: none; padding: 0 12px; height: 100%; }
+.search-modal-panel .launch-box { margin: 12px 0 4px; }
+.search-modal-panel .launch-body { max-height: 56vh; }

@@ -33,13 +33,12 @@ export function createApp(platform) {
   // Wire the plugin panel opener hook to the workbench.
   platform.openPluginPanel = (pluginId) => platform.workbench.openPluginPanel(pluginId);
 
-  // Load a file's conversation/tags whenever the active editor tab changes.
+  // Load a file's conversation/tags whenever the active viewer panel changes.
   let lastTab = null;
   platform.workbench.observe().subscribe((wb) => {
     if (wb.activeTabId !== lastTab) {
       lastTab = wb.activeTabId;
-      const tab = wb.tabs.find((t) => t.id === wb.activeTabId);
-      if (tab) social.loadSidecar(tab.node.id);
+      if (wb.activeFile) social.loadSidecar(wb.activeFile.id);
     }
   });
 

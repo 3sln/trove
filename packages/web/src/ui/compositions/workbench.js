@@ -16,9 +16,8 @@ import editorArea from '../components/editorArea.js';
 import commandPalette from '../components/commandPalette.js';
 import { dialog, contextMenu, toasts, transferTray, pluginPanel } from '../components/overlays.js';
 import { infoPanel } from '../components/social.js';
-import { icon } from '../icon.js';
 
-const { alias, div, button } = dd;
+const { alias, div } = dd;
 
 export default function workbench({ engine, app, platform, plugins }) {
   const bump$ = new ObservableSubject(0);
@@ -61,6 +60,7 @@ function view(state, ui) {
     ),
     statusBar(state, ui),
     // Overlays.
+    searchModal(state, ui),
     commandPalette(state, ui),
     dialog(state, ui),
     contextMenu(state, ui),
@@ -74,42 +74,24 @@ function mainArea(state, ui) {
   switch (state.wb.activity) {
     case 'settings': return settingsView(state, ui);
     case 'plugins': return pluginsView(state, ui);
-    default:
-      // Home: the launcher; when a file is open, the opener is shown beside it
-      // (split) or over it (modal) — the user's last choice is the default.
-      return state.wb.activeTabId ? workspace(state, ui) : launcher(state, ui);
+    default: {
+      // Home: the top of the panel stack — the launcher (base search) or, once a
+      // file is open, its opener full-width (optionally split with the info panel).
+      if (!state.wb.activeTabId) return launcher(state, ui);
+      return state.wb.infoPanel
+        ? div({ className: 'editor-split' }, editorArea(state, ui), infoPanel(state, ui))
+        : editorArea(state, ui);
+    }
   }
 }
 
-function workspace(state, ui) {
-  const modal = state.wb.previewMode === 'modal';
-  if (!modal) {
-    return div({ className: 'workspace split' },
-      div({ className: 'ws-pane ws-launcher' }, launcher(state, ui)),
-      div({ className: 'ws-pane ws-preview' }, preview(state, ui)),
-    );
-  }
-  return div({ className: 'workspace modal' },
-    launcher(state, ui),
-    div({ className: 'preview-scrim' }).on({ click: () => ui.platform.workbench.showHome() }),
-    div({ className: 'preview-modal' }, preview(state, ui)),
-  );
-}
-
-function preview(state, ui) {
-  const wb = ui.platform.workbench;
-  const modal = state.wb.previewMode === 'modal';
-  const inner = state.wb.infoPanel
-    ? div({ className: 'editor-split' }, editorArea(state, ui), infoPanel(state, ui))
-    : editorArea(state, ui);
-  return div({ className: 'preview' },
-    div({ className: 'preview-controls' },
-      button({ className: 'pc-btn', title: modal ? 'Show beside (split)' : 'Show as modal' }, icon(modal ? 'columns' : 'window', { size: 15 }))
-        .on({ click: () => wb.togglePreviewMode() }),
-      button({ className: 'pc-btn', title: 'Close (Esc)' }, icon('close', { size: 15 }))
-        .on({ click: () => wb.showHome() }),
-    ),
-    inner,
+// Double-shift search: the launcher as a modal overlay. Picking an item resets the
+// viewer stack (starts over) — the launcher reads state.wb.searchModal to know.
+function searchModal(state, ui) {
+  if (!state.wb.searchModal) return div();
+  return div({ className: 'search-modal' },
+    div({ className: 'scrim' }).on({ click: () => ui.platform.workbench.closeSearchModal() }),
+    div({ className: 'search-modal-panel' }, launcher(state, ui, { modal: true })),
   );
 }
 

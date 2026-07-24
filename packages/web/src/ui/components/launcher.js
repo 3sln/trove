@@ -22,12 +22,13 @@ function runFilter(ui, filters, text) {
   searchTimer = setTimeout(() => ui.go(new FilterAction(filters, text)), 200);
 }
 
-export default function launcher(state, ui) {
+export default function launcher(state, ui, opts = {}) {
   const wb = ui.platform.workbench;
+  const modal = !!opts.modal; // rendered as the double-shift overlay → picks reset the stack
   const q = state.wb.launch.query;
   const mode = q.startsWith('!') ? 'command' : q.includes('#') ? 'filter' : 'search';
 
-  const groups = buildContent(state, ui, q, mode);
+  const groups = buildContent(state, ui, q, mode, modal);
   const flat = groups.flatMap((g) => g.items);
   const idx = flat.length ? Math.min(state.wb.launch.index, flat.length - 1) : 0;
 
@@ -47,26 +48,25 @@ export default function launcher(state, ui) {
   };
 
   let gi = -1;
-  return div({ className: 'editor' },
-    div({ className: 'launcher' },
-      div({ className: 'launch-box' },
-        icon(mode === 'command' ? 'command' : mode === 'filter' ? 'tag' : 'search', { size: 18 }),
-        input({ className: 'launch-input', value: q, autofocus: true, spellcheck: 'false',
-          placeholder: 'Search files · ! run a command · # filter by tag' })
-          .on({ input: onInput, keydown: onKey }),
-        q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
-          .on({ click: () => { wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false }); } }) : null,
-      ),
-      div({ className: 'launch-body' },
-        ...groups.map((group) => div({ className: 'launch-group' },
-          div({ className: 'launch-h' }, span(group.title), group.action || null),
-          group.items.length
-            ? div({ className: 'launch-list' }, ...group.items.map((it) => itemRow(it, (++gi) === idx)))
-            : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
-        )),
-      ),
+  const inner = div({ className: 'launcher' },
+    div({ className: 'launch-box' },
+      icon(mode === 'command' ? 'command' : mode === 'filter' ? 'tag' : 'search', { size: 18 }),
+      input({ className: 'launch-input', value: q, autofocus: true, spellcheck: 'false',
+        placeholder: 'Search files · ! run a command · # filter by tag' })
+        .on({ input: onInput, keydown: onKey }),
+      q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
+        .on({ click: () => { wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false }); } }) : null,
+    ),
+    div({ className: 'launch-body' },
+      ...groups.map((group) => div({ className: 'launch-group' },
+        div({ className: 'launch-h' }, span(group.title), group.action || null),
+        group.items.length
+          ? div({ className: 'launch-list' }, ...group.items.map((it) => itemRow(it, (++gi) === idx)))
+          : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
+      )),
     ),
   );
+  return modal ? inner : div({ className: 'editor' }, inner);
 }
 
 function itemRow(it, active) {
@@ -78,7 +78,8 @@ function itemRow(it, active) {
   ).on({ click: it.run, mouseenter: it.hover });
 }
 
-function buildContent(state, ui, q, mode) {
+function buildContent(state, ui, q, mode, modal) {
+  const done = () => { if (modal) ui.platform.workbench.closeSearchModal(); };
   if (mode === 'command') {
     const term = q.slice(1).trim().toLowerCase();
     const items = ui.platform.commands.paletteCommands()
@@ -87,7 +88,7 @@ function buildContent(state, ui, q, mode) {
       .filter((x) => term === '' || x.s > 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, 40)
-      .map(({ c }) => ({ icon: 'command', title: c.title, detail: c.category, badge: 'command', run: () => ui.exec(c.id) }));
+      .map(({ c }) => ({ icon: 'command', title: c.title, detail: c.category, badge: 'command', run: () => { ui.exec(c.id); done(); } }));
     return [{ title: 'Commands', items, empty: 'No matching commands.' }];
   }
 
@@ -99,7 +100,7 @@ function buildContent(state, ui, q, mode) {
     const label = filters.map(filterLabel).join(' ') + (text.trim() ? ` · "${text.trim()}"` : '');
     return [{
       title: state.se.loading ? 'Filtering…' : `Filtered · ${label}`,
-      items: nodes.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui))),
+      items: nodes.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui, modal))),
       empty: state.se.loading ? 'Filtering…' : 'No files match those filters.',
     }];
   }
@@ -108,14 +109,14 @@ function buildContent(state, ui, q, mode) {
   if (text.trim()) {
     return [{
       title: state.se.loading ? 'Searching…' : 'Results',
-      items: nodes.map((n) => fileItem(n, ui)),
+      items: nodes.map((n) => fileItem(n, ui, modal)),
       empty: state.se.loading ? 'Searching…' : 'No files match.',
     }];
   }
 
   // Home: recents + browse the current folder.
   const groups = [];
-  const recents = (state.wb.recents || []).map((r) => fileItem(r, ui));
+  const recents = (state.wb.recents || []).map((r) => fileItem(r, ui, modal));
   if (recents.length) groups.push({ title: 'Recent', items: recents });
 
   const ex = state.ex;
@@ -125,7 +126,7 @@ function buildContent(state, ui, q, mode) {
     ? button({ className: 'launch-up' }, icon('chevron-left', { size: 13 }), 'Up')
       .on({ click: () => ui.go(new NavigateAction(crumbs[crumbs.length - 2].id)) })
     : null;
-  const browse = (ex.items || []).map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui)));
+  const browse = (ex.items || []).map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui, modal)));
   groups.push({
     title: here ? `In ${here.name || '/'}` : 'Files',
     action: upAction,
@@ -135,12 +136,16 @@ function buildContent(state, ui, q, mode) {
   return groups;
 }
 
-function fileItem(node, ui) {
+function fileItem(node, ui, modal) {
   return {
     icon: fileIcon(node),
     title: node.name,
     detail: node.path && node.path !== '/' + node.name ? dirOf(node.path) : (node.contentType || ''),
-    run: () => ui.go(new OpenFileAction({ ...node, kind: 'file' })),
+    // From the modal search, `reset` starts a fresh viewer stack; then close it.
+    run: () => {
+      ui.go(new OpenFileAction({ ...node, kind: 'file' }, { reset: !!modal }));
+      if (modal) ui.platform.workbench.closeSearchModal();
+    },
   };
 }
 function folderItem(node, ui) {

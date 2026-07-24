@@ -1,8 +1,9 @@
 // WorkbenchService — the shell's ephemeral UI state (not the file data, which
-// ngin owns). Which activity is open, is the sidebar/palette/panel showing, the
-// list of open editor tabs and the active one, any modal (context menu, dialog).
-// It's reactive and also mirrors key bits into the ContextKeyService so
-// when-clauses (and thus keybindings/menus) react to it.
+// ngin owns). The main panel is a STACK of panels: the base is the root search
+// (launcher); opening a file pushes a viewer panel; back pops. The stack is mirrored
+// into the browser history (pushState/popState) so back/forward navigate it. A
+// double-shift opens a modal search overlay; picking from it resets the stack.
+// It also mirrors key bits into the ContextKeyService for when-clauses.
 
 import { ObservableSubject } from '../runtime.js';
 
@@ -13,18 +14,19 @@ export class WorkbenchService {
   constructor(context) {
     this.context = context;
     this.state = {
-      activity: 'home', // home (launcher) | plugins | settings
+      activity: 'home', // home (stack) | plugins | settings
       sidebarVisible: true,
       palette: null, // { mode: 'commands'|'files', query } when open
-      launch: { query: '', index: 0 }, // the main-panel launcher's query
-      tabs: [], // [{ id, node, openerId }]
-      activeTabId: null,
-      previewMode: loadPreviewMode(), // 'split' | 'modal' — how an opener is shown
-      recents: loadRecents(), // recently-opened files (for the launcher)
-      pluginPanel: null, // pluginId when a plugin popup is open
-      dialog: null, // { kind, ... } modal dialog
-      contextMenu: null, // { x, y, items }
-      infoPanel: false, // conversation/tags side panel for the active file
+      launch: { query: '', index: 0 }, // the launcher's query
+      searchModal: false, // the double-shift modal search overlay
+      stack: [{ kind: 'search' }], // [{kind:'search'}, {kind:'file', id, node, openerId}, …]
+      activeTabId: null, // top file panel id (or null)
+      activeFile: null, // top file panel node (or null)
+      recents: loadRecents(),
+      pluginPanel: null,
+      dialog: null,
+      contextMenu: null,
+      infoPanel: false,
     };
     this.subject = new ObservableSubject(this.state);
   }
@@ -41,20 +43,11 @@ export class WorkbenchService {
     this.#set({ activity, sidebarVisible: true });
     this.context.set('view.active', activity);
   }
-  /** Return to the launcher home (clearing the active opener). */
+  /** Return to the launcher home (reset the panel stack to the base search). */
   showHome() {
-    this.#set({ activity: 'home', activeTabId: null });
+    this.#set({ activity: 'home' });
+    this.#applyStack([{ kind: 'search' }]);
     this.context.set('view.active', 'home');
-  }
-  /** How an opened file is presented: 'split' (beside the launcher) or 'modal'. */
-  setPreviewMode(mode) {
-    if (mode !== 'split' && mode !== 'modal') return;
-    this.#set({ previewMode: mode });
-    savePreviewMode(mode);
-    this.context.set('preview.mode', mode);
-  }
-  togglePreviewMode() {
-    this.setPreviewMode(this.state.previewMode === 'split' ? 'modal' : 'split');
   }
   toggleSidebar(force) {
     const v = force ?? !this.state.sidebarVisible;
@@ -82,7 +75,7 @@ export class WorkbenchService {
     this.context.set('palette.open', false);
   }
 
-  // --- launcher (main-panel search / command / browse) ----------------------
+  // --- launcher --------------------------------------------------------------
   setLaunchQuery(query) {
     this.#set({ launch: { query, index: 0 } });
   }
@@ -95,40 +88,100 @@ export class WorkbenchService {
     this.#set({ launch: { ...this.state.launch, index } });
   }
 
+  // --- modal search (double-shift) ------------------------------------------
+  openSearchModal() {
+    this.#set({ searchModal: true, launch: { query: '', index: 0 } });
+    this.context.set('searchModal.open', true);
+  }
+  closeSearchModal() {
+    this.#set({ searchModal: false });
+    this.context.set('searchModal.open', false);
+  }
+
+  // --- panel stack -----------------------------------------------------------
+  #top() {
+    return this.state.stack[this.state.stack.length - 1];
+  }
+  /** The active file panel (top of the stack, if it's a file). */
+  activeTab() {
+    const t = this.#top();
+    return t && t.kind === 'file' ? t : null;
+  }
+
+  #applyStack(stack, { history = true } = {}) {
+    const top = stack[stack.length - 1];
+    const file = top && top.kind === 'file' ? top : null;
+    this.#set({ stack, activeTabId: file ? file.id : null, activeFile: file ? file.node : null, searchModal: false });
+    this.context.setMany({ 'editor.open': !!file, 'editor.openerId': file?.openerId || '', 'editor.contentType': file?.node.contentType || '' });
+    if (history) this.#pushHistory();
+  }
+
+  /**
+   * Open a file into the viewer stack. `reset` (used by the modal search) starts a
+   * fresh stack (base search + this file). Opening a file already in the stack
+   * jumps back to it; otherwise it's pushed on top.
+   */
+  openFile(node, openerId, { reset = false } = {}) {
+    const panel = { kind: 'file', id: node.id, node, openerId };
+    let stack;
+    if (reset) {
+      stack = [{ kind: 'search' }, panel];
+    } else {
+      const at = this.state.stack.findIndex((p) => p.kind === 'file' && p.id === node.id);
+      stack = at >= 0 ? this.state.stack.slice(0, at + 1) : [...this.state.stack, panel];
+    }
+    this.#set({ activity: 'home' });
+    this.#pushRecent(node);
+    this.#applyStack(stack);
+  }
+  // Back-compat alias (OpenFileAction historically called openTab).
+  openTab(node, openerId) {
+    this.openFile(node, openerId);
+  }
+  back() {
+    if (this.state.stack.length <= 1) return;
+    try { history.back(); } catch { this.pop(); }
+  }
+  pop() {
+    if (this.state.stack.length > 1) this.#applyStack(this.state.stack.slice(0, -1), { history: false });
+  }
+  closeTab(id) {
+    const stack = this.state.stack.filter((p) => !(p.kind === 'file' && p.id === id));
+    this.#applyStack(stack.length ? stack : [{ kind: 'search' }], { history: false });
+  }
+  updateTabNode(node) {
+    const stack = this.state.stack.map((p) => (p.kind === 'file' && p.id === node.id ? { ...p, node } : p));
+    this.#applyStack(stack, { history: false });
+  }
+
+  // --- history sync ----------------------------------------------------------
+  #pushHistory(replace = false) {
+    const top = this.#top();
+    const n = top?.node;
+    const entry = {
+      troveDepth: this.state.stack.length,
+      node: n ? { id: n.id, name: n.name, contentType: n.contentType, path: n.path, kind: 'file' } : null,
+      openerId: top?.openerId || null,
+    };
+    try { (replace ? history.replaceState : history.pushState).call(history, entry, ''); } catch { /* no history API */ }
+  }
+  /** Handle a browser back/forward: sync the stack depth (re-open on forward). */
+  onPopState(e) {
+    const s = e?.state || {};
+    const depth = s.troveDepth || 1;
+    if (depth <= this.state.stack.length) {
+      this.#applyStack(this.state.stack.slice(0, depth), { history: false });
+    } else if (s.node) {
+      this.#applyStack([...this.state.stack, { kind: 'file', id: s.node.id, node: s.node, openerId: s.openerId }], { history: false });
+    }
+  }
+
   #pushRecent(node) {
     if (!node || node.kind === 'folder') return;
-    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', path: node.path };
+    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', path: node.path, kind: 'file' };
     const recents = [entry, ...this.state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
     this.#set({ recents });
     saveRecents(recents);
-  }
-
-  openTab(node, openerId) {
-    const existing = this.state.tabs.find((t) => t.id === node.id);
-    const tabs = existing ? this.state.tabs : [...this.state.tabs, { id: node.id, node, openerId }];
-    this.#set({ tabs, activeTabId: node.id, activity: this.state.activity });
-    this.#pushRecent(node);
-    this.context.setMany({ 'editor.open': true, 'editor.openerId': openerId, 'editor.contentType': node.contentType || '' });
-  }
-  activateTab(id) {
-    const t = this.state.tabs.find((x) => x.id === id);
-    if (!t) return;
-    this.#set({ activeTabId: id });
-    this.context.setMany({ 'editor.open': true, 'editor.openerId': t.openerId, 'editor.contentType': t.node.contentType || '' });
-  }
-  closeTab(id) {
-    const tabs = this.state.tabs.filter((t) => t.id !== id);
-    let activeTabId = this.state.activeTabId;
-    if (activeTabId === id) activeTabId = tabs.length ? tabs[tabs.length - 1].id : null;
-    this.#set({ tabs, activeTabId });
-    this.context.set('editor.open', tabs.length > 0);
-  }
-  activeTab() {
-    return this.state.tabs.find((t) => t.id === this.state.activeTabId) || null;
-  }
-  updateTabNode(node) {
-    const tabs = this.state.tabs.map((t) => (t.id === node.id ? { ...t, node } : t));
-    this.#set({ tabs });
   }
 
   toggleInfoPanel(force) {
@@ -159,9 +212,10 @@ export class WorkbenchService {
   closeOverlays() {
     if (this.state.contextMenu) return this.closeContextMenu(), true;
     if (this.state.dialog) return this.closeDialog(), true;
+    if (this.state.searchModal) return this.closeSearchModal(), true;
     if (this.state.palette) return this.closePalette(), true;
     if (this.state.pluginPanel) return this.closePluginPanel(), true;
-    if (this.state.activeTabId) return this.showHome(), true; // close the open preview
+    if (this.state.stack.length > 1) return this.back(), true; // pop the top viewer panel
     return false;
   }
 }
@@ -171,10 +225,4 @@ function loadRecents() {
 }
 function saveRecents(recents) {
   try { localStorage.setItem(RECENTS_KEY, JSON.stringify(recents)); } catch { /* private mode / no storage */ }
-}
-function loadPreviewMode() {
-  try { return localStorage.getItem('trove.previewMode') === 'modal' ? 'modal' : 'split'; } catch { return 'split'; }
-}
-function savePreviewMode(mode) {
-  try { localStorage.setItem('trove.previewMode', mode); } catch { /* no storage */ }
 }

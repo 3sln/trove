@@ -1,76 +1,63 @@
-// The editor area: the tab strip plus the active opener's view. The opener host
-// returns a *stable* keyed alias per tab so dodo reuses its DOM across unrelated
-// workbench re-renders — critical for the audiobook player, whose <audio> must
-// keep playing while toasts, uploads, and other state churn around it.
+// The viewer — the top of the panel stack (a file's opener), full-width, with a
+// nav bar: a Back button, a breadcrumb trail of the stacked panels (Search › A › B),
+// and details/close actions. The opener host returns a *stable* keyed alias per
+// panel so dodo reuses its DOM across unrelated workbench re-renders — critical for
+// the audiobook player, whose <audio> must keep playing while state churns; the
+// DOM persists as long as the panel stays in the stack.
 
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { renderOpener } from './openers/index.js';
-import { prettyKey } from '../../platform/keybindings.js';
 
 const { div, span, button } = dd;
 
-const openerFns = new Map(); // `${tabId}:${openerId}` -> stable render fn
+const openerFns = new Map(); // `${panelId}:${openerId}` -> stable render fn
 
 export default function editorArea(state, ui) {
   const wb = state.wb;
-  pruneOpeners(wb.tabs);
-  const active = wb.tabs.find((t) => t.id === wb.activeTabId);
+  const files = wb.stack.filter((p) => p.kind === 'file');
+  pruneOpeners(files);
+  const active = files[files.length - 1];
+  if (!active) return div({ className: 'editor' });
   return div({ className: 'editor' },
-    wb.tabs.length ? tabStrip(wb, ui) : null,
-    div({ className: 'stage' }, active ? openerHost(active, ui) : welcome(state, ui)),
+    navBar(files, active, ui),
+    div({ className: 'stage' }, openerHost(active, ui)),
   );
 }
 
-function tabStrip(wb, ui) {
-  return div({ className: 'tabs' },
-    ...wb.tabs.map((t) =>
-      button({ className: `tab ${t.id === wb.activeTabId ? 'active' : ''}`, title: t.node.path },
-        icon(iconForNode(t.node), { size: 14 }),
-        span({ className: 'label' }, t.node.name),
-        span({ className: 'close' }, icon('close', { size: 13 }))
-          .on({ click: (e) => { e.stopPropagation(); ui.platform.workbench.closeTab(t.id); } }),
-      ).key(t.id).on({ click: () => ui.platform.workbench.activateTab(t.id) }),
+function navBar(files, active, ui) {
+  const w = ui.platform.workbench;
+  return div({ className: 'viewer-nav' },
+    button({ className: 'vn-back', title: 'Back (Esc)' }, icon('chevron-left', { size: 16 }))
+      .on({ click: () => w.back() }),
+    div({ className: 'vn-trail' },
+      button({ className: 'vn-crumb' }, icon('search', { size: 13 }), span('Search'))
+        .on({ click: () => w.showHome() }),
+      ...files.map((p) =>
+        button({ className: `vn-crumb ${p.id === active.id ? 'active' : ''}`, title: p.node.path },
+          icon(iconForNode(p.node), { size: 13 }), span({ className: 'label' }, p.node.name))
+          .on({ click: () => w.openFile(p.node, p.openerId) })),
+    ),
+    div({ className: 'vn-actions' },
+      button({ className: 'iconbtn', title: 'Details & comments' }, icon('info', { size: 15 }))
+        .on({ click: () => w.toggleInfoPanel() }),
+      button({ className: 'iconbtn', title: 'Close (Esc)' }, icon('close', { size: 15 }))
+        .on({ click: () => w.showHome() }),
     ),
   );
 }
 
-function openerHost(tab, ui) {
-  const key = `${tab.id}:${tab.openerId}`;
+function openerHost(panel, ui) {
+  const key = `${panel.id}:${panel.openerId}`;
   let fn = openerFns.get(key);
   if (!fn) {
-    fn = () => renderOpener(tab.node, tab.openerId, ui);
+    fn = () => renderOpener(panel.node, panel.openerId, ui);
     openerFns.set(key, fn);
   }
-  return dd.alias(fn)().key(tab.id);
+  return dd.alias(fn)().key(panel.id);
 }
 
-function pruneOpeners(tabs) {
-  const live = new Set(tabs.map((t) => `${t.id}:${t.openerId}`));
+function pruneOpeners(files) {
+  const live = new Set(files.map((p) => `${p.id}:${p.openerId}`));
   for (const k of openerFns.keys()) if (!live.has(k)) openerFns.delete(k);
-}
-
-function welcome(state, ui) {
-  const kp = (id, fallback) => ui.platform.keybindings.labelFor(id) || prettyKey(fallback);
-  return div({ className: 'welcome' },
-    div({ className: 'card' },
-      div({ className: 'logo' }, '🗄️'),
-      dd.h1('Welcome to Trove'),
-      dd.p('Your self-hosted drive with semantic search, media players, and plugins.'),
-      div({ className: 'hints' },
-        hint(ui, 'search', 'Search everything', kp('workbench.showCommandPalette', 'mod+shift+p'), () => ui.exec('workbench.showCommandPalette')),
-        hint(ui, 'upload', 'Upload files', kp('explorer.upload', 'mod+u'), () => ui.exec('explorer.upload')),
-        hint(ui, 'star', 'Semantic search', kp('workbench.view.home', 'mod+shift+f'), () => ui.exec('workbench.view.home')),
-        hint(ui, 'plug', 'Browse plugins', null, () => ui.exec('workbench.view.plugins')),
-      ),
-    ),
-  );
-}
-
-function hint(ui, ic, label, key, onClick) {
-  return div({ className: 'hint', $styling: { cursor: 'default' } },
-    icon(ic, { size: 16 }),
-    span({ $styling: { flex: '1' } }, label),
-    key ? span({ className: 'kbd' }, dd.h('kbd', key)) : null,
-  ).on({ click: onClick });
 }

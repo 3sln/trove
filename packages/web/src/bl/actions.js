@@ -124,9 +124,11 @@ export class MoveAction extends AppAction {
 }
 
 export class OpenFileAction extends AppAction {
-  constructor(node) {
+  /** @param {object} node @param {{reset?:boolean}} [opts] reset → start a fresh stack (modal search) */
+  constructor(node, opts = {}) {
     super();
     this.node = node;
+    this.opts = opts;
   }
   async execute({ app }) {
     if (this.node.kind === 'folder') return app.engine.dispatch(new NavigateAction(this.node.id));
@@ -138,7 +140,7 @@ export class OpenFileAction extends AppAction {
       (o) => app.platform.plugins.isAvailable(o),
     );
     const openerId = opener?.id || 'core.fallback';
-    app.platform.workbench.openTab(this.node, openerId);
+    app.platform.workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
   }
 }
 

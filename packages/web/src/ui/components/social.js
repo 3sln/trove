@@ -76,7 +76,7 @@ function inboxItem(note, ui) {
 
 export function infoPanel(state, ui) {
   const wb = state.wb;
-  const active = wb.tabs.find((t) => t.id === wb.activeTabId);
+  const active = wb.activeFile ? { id: wb.activeTabId, node: wb.activeFile } : null;
   const sc = state.so.sidecar;
   return div({ className: 'infopanel' },
     div({ className: 'ip-head' },

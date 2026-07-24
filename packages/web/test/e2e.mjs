@@ -103,22 +103,29 @@ async function main() {
   check('command palette filters commands', hasSettingsCmd);
   await page.keyboard.press('Escape');
 
-  // Open a file from the launcher → opener renders as a split beside the launcher.
+  // Open a file from the launcher → the opener takes the full viewer panel (a
+  // stacked panel over the base search), and the launcher is no longer shown.
   await page.locator('.launch-item', { hasText: 'welcome.md' }).first().click();
+  await page.waitForSelector('.viewer-nav', { timeout: 3000 });
   await page.waitForSelector('.viewer.text pre', { timeout: 3000 });
   const text = await page.locator('.viewer.text pre').textContent();
-  check('text opener shows content', /Welcome to Trove/.test(text));
-  check('opener opens split beside the launcher',
-    (await page.locator('.workspace.split .ws-launcher .launcher').count()) === 1 &&
-    (await page.locator('.workspace.split .ws-preview .viewer').count()) === 1);
+  check('opener takes the full viewer panel', /Welcome to Trove/.test(text) && (await page.locator('.launcher').count()) === 0);
 
-  // Swap split → modal, then back (last choice persists as the default).
-  await page.locator('.preview-controls .pc-btn').first().click();
-  await page.waitForSelector('.workspace.modal .preview-modal .viewer', { timeout: 2000 });
-  check('swap to modal shows the opener over the launcher', (await page.locator('.preview-modal').count()) === 1);
-  await page.locator('.preview-controls .pc-btn').first().click();
-  await page.waitForSelector('.workspace.split', { timeout: 2000 });
-  check('swap back to split', (await page.locator('.workspace.split').count()) === 1);
+  // Back pops the stack → the launcher again.
+  await page.locator('.viewer-nav .vn-back').click();
+  await page.waitForSelector('.launcher .launch-input', { timeout: 3000 });
+  check('back returns to the launcher', (await page.locator('.viewer-nav').count()) === 0);
+
+  // Double-shift opens a modal search overlay; picking an item opens it (new stack).
+  await page.keyboard.press('Shift');
+  await page.keyboard.press('Shift');
+  await page.waitForSelector('.search-modal .launch-input', { timeout: 2000 });
+  check('double-shift opens modal search', (await page.locator('.search-modal').count()) === 1);
+  await page.locator('.search-modal .launch-input').fill('welcome');
+  await page.waitForTimeout(600);
+  await page.locator('.search-modal .launch-item', { hasText: 'welcome.md' }).first().click();
+  await page.waitForSelector('.viewer.text pre', { timeout: 3000 });
+  check('modal search opens an item and closes', (await page.locator('.search-modal').count()) === 0 && (await page.locator('.viewer-nav').count()) === 1);
 
   await page.evaluate(() => window.__trove.platform.workbench.showHome());
 
