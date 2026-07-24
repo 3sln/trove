@@ -9,8 +9,7 @@ import { NavigateAction } from '../../bl/actions.js';
 import titleBar from '../components/titleBar.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
-import explorer from '../components/explorer.js';
-import searchView from '../components/searchView.js';
+import launcher from '../components/launcher.js';
 import settingsView from '../components/settingsView.js';
 import pluginsView from '../components/pluginsView.js';
 import editorArea from '../components/editorArea.js';
@@ -53,15 +52,10 @@ export default function workbench({ engine, app, platform, plugins }) {
 }
 
 function view(state, ui) {
-  const wb = state.wb;
-  const fullActivity = wb.activity === 'plugins' || wb.activity === 'settings';
-  const showSidebar = wb.sidebarVisible && !fullActivity;
-
   return div({ className: `shell ${state.settings['workbench.density'] === 'compact' ? 'compact' : ''}` },
     titleBar(state, ui),
-    div({ className: `body ${showSidebar ? '' : 'no-sidebar'}` },
+    div({ className: 'body no-sidebar' },
       activityBar(state, ui),
-      showSidebar ? sidebar(state, ui) : div(),
       mainArea(state, ui),
     ),
     statusBar(state, ui),
@@ -75,19 +69,14 @@ function view(state, ui) {
   );
 }
 
-function sidebar(state, ui) {
-  switch (state.wb.activity) {
-    case 'search': return searchView(state, ui);
-    case 'explorer':
-    default: return explorer(state, ui);
-  }
-}
-
 function mainArea(state, ui) {
   switch (state.wb.activity) {
     case 'settings': return settingsView(state, ui);
     case 'plugins': return pluginsView(state, ui);
     default: {
+      // Home: the launcher, unless a file tab is open (then the opener, optionally
+      // split with the info panel).
+      if (!state.wb.activeTabId) return launcher(state, ui);
       const showInfo = state.wb.infoPanel;
       if (!showInfo) return editorArea(state, ui);
       return div({ className: 'editor-split' }, editorArea(state, ui), infoPanel(state, ui));

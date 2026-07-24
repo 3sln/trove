@@ -27,6 +27,7 @@ const PATHS = {
   'chevron-left': [{ d: 'M15 6l-6 6 6 6' }],
   'chevron-down': [{ d: 'M6 9l6 6 6-6' }],
   close: [{ d: 'M6 6l12 12M18 6L6 18' }],
+  tag: [{ d: 'M4 4h6.5a1 1 0 0 1 .7.3l8.5 8.5a1 1 0 0 1 0 1.4l-5.5 5.5a1 1 0 0 1-1.4 0L4.3 11.2a1 1 0 0 1-.3-.7V4z' }, { d: 'M8 8a0.6 0.6 0 1 0 0-.01' }],
   play: [{ d: 'M8 5v14l11-7z', fill: 'currentColor', stroke: 'none' }],
   pause: [{ d: 'M8 5h3v14H8zM13 5h3v14h-3z', fill: 'currentColor', stroke: 'none' }],
   'skip-back': [{ d: 'M11 6v12L3 12zM13 6l8 6-8 6zM21 6v12', fill: 'none' }],

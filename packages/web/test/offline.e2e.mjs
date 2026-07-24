@@ -50,11 +50,11 @@ async function main() {
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.goto(base, { waitUntil: 'networkidle' });
-  await page.waitForSelector('.row');
+  await page.waitForSelector('.launch-item');
   // Wait for the service worker to control the page.
   await page.waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller, { timeout: 8000 }).catch(() => {});
   const controlled = await page.evaluate(() => !!navigator.serviceWorker.controller);
-  if (!controlled) { await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('.row'); }
+  if (!controlled) { await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('.launch-item'); }
   check('service worker controls the page', await page.evaluate(() => !!navigator.serviceWorker.controller));
 
   // Pin the file (make available offline).

@@ -4,8 +4,7 @@ import { icon } from '../icon.js';
 const { div, button, span } = dd;
 
 const ITEMS = [
-  { id: 'explorer', icon: 'files', title: 'Explorer', command: 'workbench.view.explorer' },
-  { id: 'search', icon: 'search', title: 'Search', command: 'workbench.view.search' },
+  { id: 'home', icon: 'search', title: 'Home', command: 'workbench.view.home' },
   { id: 'plugins', icon: 'plug', title: 'Plugins', command: 'workbench.view.plugins' },
 ];
 

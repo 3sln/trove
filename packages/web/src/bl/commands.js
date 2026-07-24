@@ -19,11 +19,9 @@ export function registerCommands(app) {
   // --- navigation / views ----------------------------------------------------
   cmd('workbench.showCommandPalette', 'Show All Commands', () => workbench.openPalette('commands'), { category: 'View', icon: 'command' });
   cmd('workbench.quickOpen', 'Go to File…', () => workbench.openPalette('files'), { category: 'File', icon: 'search' });
-  cmd('workbench.view.explorer', 'Show Explorer', () => workbench.setActivity('explorer'), { category: 'View' });
-  cmd('workbench.view.search', 'Show Search', () => workbench.setActivity('search'), { category: 'View' });
+  cmd('workbench.view.home', 'Go Home (search & browse)', () => workbench.showHome(), { category: 'View', icon: 'search' });
   cmd('workbench.view.plugins', 'Show Plugins', () => workbench.setActivity('plugins'), { category: 'View' });
   cmd('workbench.openSettings', 'Open Settings', () => workbench.setActivity('settings'), { category: 'Preferences', icon: 'gear' });
-  cmd('workbench.toggleSidebar', 'Toggle Sidebar', () => workbench.toggleSidebar(), { category: 'View' });
   cmd('workbench.closeOverlays', 'Close', () => workbench.closeOverlays(), { palette: false });
 
   // --- explorer --------------------------------------------------------------
@@ -115,7 +113,6 @@ export function registerCommands(app) {
   cmd('notifications.enablePush', 'Enable Push Notifications', () => app.social.enablePush(), { category: 'Notifications' });
 
   // --- plugins ---------------------------------------------------------------
-  cmd('workbench.view.plugins', 'Show Plugins', () => workbench.setActivity('plugins'), { category: 'View' });
   cmd('plugins.installFromUrl', 'Install Plugin from URL…', () => {
     workbench.showDialog({
       kind: 'prompt', title: 'Install plugin from URL', label: 'Plugin package (.zip) URL',

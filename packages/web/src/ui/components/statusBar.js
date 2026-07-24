@@ -24,9 +24,9 @@ export default function statusBar(state, ui) {
         ? span({ className: 'seg', title: 'Syncing offline changes' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span('Syncing…'))
         : null,
     off.queued ? span({ className: 'seg', title: 'Changes waiting to sync' }, `${off.queued} queued`) : null,
-    off.pins.length ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` }, icon('download', { size: 12 }), span(`${off.pins.length} offline`)).on({ click: () => ui.exec('workbench.view.search') }) : null,
+    off.pins.length ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` }, icon('download', { size: 12 }), span(`${off.pins.length} offline`)).on({ click: () => ui.exec('workbench.view.home') }) : null,
     button({ className: 'seg', title: 'Explorer' }, icon('files', { size: 13 }), span(ex.folder ? ex.folder.path : '/'))
-      .on({ click: () => ui.exec('workbench.view.explorer') }),
+      .on({ click: () => ui.exec('workbench.view.home') }),
     active.length
       ? button({ className: 'seg' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
         .on({ click: () => ui.platform.workbench.showContextMenu(0, 0, []) })
@@ -42,6 +42,6 @@ export default function statusBar(state, ui) {
       span(caps.storage?.presignDownload ? 'S3 direct' : 'proxied'),
     ) : null,
     caps?.features?.semanticSearch ? button({ className: 'seg', title: 'Semantic search enabled' }, icon('star', { size: 12 }), span('semantic'))
-      .on({ click: () => ui.exec('workbench.view.search') }) : null,
+      .on({ click: () => ui.exec('workbench.view.home') }) : null,
   );
 }

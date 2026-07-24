@@ -60,7 +60,7 @@ function welcome(state, ui) {
       div({ className: 'hints' },
         hint(ui, 'search', 'Search everything', kp('workbench.showCommandPalette', 'mod+shift+p'), () => ui.exec('workbench.showCommandPalette')),
         hint(ui, 'upload', 'Upload files', kp('explorer.upload', 'mod+u'), () => ui.exec('explorer.upload')),
-        hint(ui, 'star', 'Semantic search', kp('workbench.view.search', 'mod+shift+f'), () => ui.exec('workbench.view.search')),
+        hint(ui, 'star', 'Semantic search', kp('workbench.view.home', 'mod+shift+f'), () => ui.exec('workbench.view.home')),
         hint(ui, 'plug', 'Browse plugins', null, () => ui.exec('workbench.view.plugins')),
       ),
     ),

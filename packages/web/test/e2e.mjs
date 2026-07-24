@@ -76,14 +76,21 @@ async function main() {
   await page.goto(base, { waitUntil: 'networkidle' });
   await page.waitForSelector('.shell', { timeout: 5000 });
   check('workbench shell renders', await page.locator('.shell').count() === 1);
-  check('activity bar present', await page.locator('.activitybar .item').count() >= 3);
+  check('activity bar present', await page.locator('.activitybar .item').count() >= 1);
 
-  // Explorer shows seeded content.
-  await page.waitForSelector('.row', { timeout: 5000 });
-  const names = await page.locator('.row .name').allTextContents();
-  check('explorer lists seeded files', names.includes('welcome.md') && names.includes('documents'), names.join(', '));
+  // The launcher (main-panel home) browses the seeded content.
+  await page.waitForSelector('.launcher .launch-item', { timeout: 5000 });
+  const names = await page.locator('.launch-item .name').allTextContents();
+  check('launcher browses seeded files', names.includes('welcome.md') && names.includes('documents'), names.join(', '));
 
-  // Command palette opens and filters.
+  // `!` in the launcher switches to command execution.
+  await page.locator('.launch-input').fill('!settings');
+  await page.waitForTimeout(150);
+  const cmdNames = await page.locator('.launch-item .name').allTextContents();
+  check('launcher ! runs commands', cmdNames.some((t) => /settings/i.test(t)), cmdNames.slice(0, 5).join(', '));
+  await page.locator('.launch-clear').click();
+
+  // Command palette overlay still opens and filters.
   await page.keyboard.press('Control+Shift+KeyP');
   await page.waitForSelector('.palette', { timeout: 3000 });
   await page.locator('.palette input').fill('settings');
@@ -91,21 +98,20 @@ async function main() {
   check('command palette filters commands', hasSettingsCmd);
   await page.keyboard.press('Escape');
 
-  // Open a file → tab + opener render.
-  await page.locator('.row .name', { hasText: 'welcome.md' }).dblclick();
-  await page.waitForSelector('.tab', { timeout: 3000 });
-  check('opening a file creates a tab', await page.locator('.tab').count() >= 1);
+  // Open a file from the launcher → opener renders.
+  await page.locator('.launch-item', { hasText: 'welcome.md' }).first().click();
   await page.waitForSelector('.viewer.text pre', { timeout: 3000 });
   const text = await page.locator('.viewer.text pre').textContent();
   check('text opener shows content', /Welcome to Trove/.test(text));
+  await page.evaluate(() => window.__trove.platform.workbench.showHome());
 
-  // Semantic search.
-  await page.keyboard.press('Control+Shift+KeyF');
-  await page.waitForSelector('.searchview input', { timeout: 3000 });
-  await page.locator('.searchview input').fill('boat on the water');
-  await page.waitForTimeout(600);
-  const resultNames = await page.locator('.result .name').allTextContents();
+  // Semantic search in the launcher.
+  await page.waitForSelector('.launch-input', { timeout: 3000 });
+  await page.locator('.launch-input').fill('boat on the water');
+  await page.waitForTimeout(700);
+  const resultNames = await page.locator('.launch-item .name').allTextContents();
   check('semantic search returns results', resultNames.length > 0, resultNames.join(', '));
+  await page.locator('.launch-clear').click();
 
   // Plugins: install the sandboxed demo plugin from a package (zip bytes), the
   // same path a user's ZIP upload takes — parse, review-then-install with grants.

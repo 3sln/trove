@@ -6,15 +6,20 @@
 
 import { ObservableSubject } from '../runtime.js';
 
+const RECENTS_KEY = 'trove.recents';
+const RECENTS_MAX = 12;
+
 export class WorkbenchService {
   constructor(context) {
     this.context = context;
     this.state = {
-      activity: 'explorer', // explorer | search | plugins | settings
+      activity: 'home', // home (launcher) | plugins | settings
       sidebarVisible: true,
       palette: null, // { mode: 'commands'|'files', query } when open
+      launch: { query: '', index: 0 }, // the main-panel launcher's query
       tabs: [], // [{ id, node, openerId }]
       activeTabId: null,
+      recents: loadRecents(), // recently-opened files (for the launcher)
       pluginPanel: null, // pluginId when a plugin popup is open
       dialog: null, // { kind, ... } modal dialog
       contextMenu: null, // { x, y, items }
@@ -34,6 +39,11 @@ export class WorkbenchService {
   setActivity(activity) {
     this.#set({ activity, sidebarVisible: true });
     this.context.set('view.active', activity);
+  }
+  /** Return to the launcher home (clearing the active opener). */
+  showHome() {
+    this.#set({ activity: 'home', activeTabId: null });
+    this.context.set('view.active', 'home');
   }
   toggleSidebar(force) {
     const v = force ?? !this.state.sidebarVisible;
@@ -61,10 +71,32 @@ export class WorkbenchService {
     this.context.set('palette.open', false);
   }
 
+  // --- launcher (main-panel search / command / browse) ----------------------
+  setLaunchQuery(query) {
+    this.#set({ launch: { query, index: 0 } });
+  }
+  moveLaunch(delta, count) {
+    if (!count) return;
+    const index = (this.state.launch.index + delta + count) % count;
+    this.#set({ launch: { ...this.state.launch, index } });
+  }
+  setLaunchIndex(index) {
+    this.#set({ launch: { ...this.state.launch, index } });
+  }
+
+  #pushRecent(node) {
+    if (!node || node.kind === 'folder') return;
+    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', path: node.path };
+    const recents = [entry, ...this.state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
+    this.#set({ recents });
+    saveRecents(recents);
+  }
+
   openTab(node, openerId) {
     const existing = this.state.tabs.find((t) => t.id === node.id);
     const tabs = existing ? this.state.tabs : [...this.state.tabs, { id: node.id, node, openerId }];
     this.#set({ tabs, activeTabId: node.id, activity: this.state.activity });
+    this.#pushRecent(node);
     this.context.setMany({ 'editor.open': true, 'editor.openerId': openerId, 'editor.contentType': node.contentType || '' });
   }
   activateTab(id) {
@@ -120,4 +152,11 @@ export class WorkbenchService {
     if (this.state.pluginPanel) return this.closePluginPanel(), true;
     return false;
   }
+}
+
+function loadRecents() {
+  try { return JSON.parse(localStorage.getItem(RECENTS_KEY)) || []; } catch { return []; }
+}
+function saveRecents(recents) {
+  try { localStorage.setItem(RECENTS_KEY, JSON.stringify(recents)); } catch { /* private mode / no storage */ }
 }
