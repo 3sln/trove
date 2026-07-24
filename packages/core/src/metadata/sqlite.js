@@ -220,6 +220,33 @@ export class SqliteStore extends MetadataStore {
     return rows.map(row);
   }
 
+  async findByFacets(filters = [], opts = {}) {
+    const where = ['parentId IS NOT NULL'];
+    const params = [];
+    for (const f of filters) {
+      const path = '$.tags.' + '"' + String(f.key).replace(/["\\]/g, '') + '"';
+      if (f.present) {
+        where.push('json_extract(facets, ?) IS NOT NULL');
+        params.push(path);
+      } else if (f.op === '=' || f.op === '!=') {
+        where.push(`json_extract(facets, ?) ${f.op} ?`);
+        params.push(path, String(f.value));
+      } else {
+        const op = { '<': '<', '<=': '<=', '>': '>', '>=': '>=' }[f.op] || '=';
+        where.push(`CAST(json_extract(facets, ?) AS REAL) ${op} ?`);
+        params.push(path, Number(f.value));
+      }
+    }
+    if (opts.q) { where.push(`name LIKE ? ESCAPE '\\' COLLATE NOCASE`); params.push('%' + escapeLike(opts.q) + '%'); }
+    if (opts.collectionIds?.length) {
+      where.push(`collectionId IN (${opts.collectionIds.map(() => '?').join(',')})`);
+      params.push(...opts.collectionIds);
+    }
+    params.push(opts.limit ?? 100);
+    const rows = await this.db.all(`SELECT * FROM nodes WHERE ${where.join(' AND ')} ORDER BY updatedAt DESC LIMIT ?`, ...params);
+    return rows.map(row);
+  }
+
   // The provider owns the db handle's lifecycle; just drop our reference.
   async close() {
     this.db = null;

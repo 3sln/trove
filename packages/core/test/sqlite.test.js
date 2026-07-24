@@ -4,7 +4,7 @@
 
 import { test, expect } from 'bun:test';
 import {
-  LocalSqliteProvider, SqliteStore, SqliteKV,
+  LocalSqliteProvider, SqliteStore, SqliteKV, MemoryStore,
   assertSafePluginSql, stripSqlLiterals,
 } from '../src/index.js';
 
@@ -91,6 +91,37 @@ test('SqliteKV over the provider: set/get/list/delete with JSON values', async (
   expect((await kv.list('ns', 'k')).length).toBe(2);
   await kv.delete('ns', 'k1');
   expect(await kv.get('ns', 'k1')).toBe(null);
+});
+
+async function seedTagged(store) {
+  await store.init();
+  const a = await store.create({ parentId: 'root', name: 'a.txt', kind: 'file' });
+  const sub = await store.create({ parentId: 'root', name: 'sub', kind: 'folder' });
+  const b = await store.create({ parentId: sub.id, name: 'b.txt', kind: 'file' });
+  await store.create({ parentId: 'root', name: 'plain.txt', kind: 'file' });
+  await store.setFacet(a.id, 'tags', { fav: 'yes', rating: '5' });
+  await store.setFacet(b.id, 'tags', { fav: 'yes', rating: '2' }); // in a subfolder → drive-wide
+  return { a, b };
+}
+
+test('findByFacets (SqliteStore): drive-wide presence + numeric + string', async () => {
+  const store = new SqliteStore({ provider: provider(), key: 'metadata' });
+  await seedTagged(store);
+  const names = async (filters, opts) => (await store.findByFacets(filters, opts)).map((n) => n.name).sort();
+  expect(await names([{ key: 'fav', present: true }])).toEqual(['a.txt', 'b.txt']); // across folders
+  expect(await names([{ key: 'rating', op: '>=', value: 4 }])).toEqual(['a.txt']);   // numeric via CAST
+  expect(await names([{ key: 'rating', op: '<', value: 4 }])).toEqual(['b.txt']);
+  expect(await names([{ key: 'fav', op: '=', value: 'no' }])).toEqual([]);            // string
+  expect(await names([{ key: 'fav', present: true }], { q: 'b' })).toEqual(['b.txt']); // + name
+});
+
+test('findByFacets (MemoryStore) matches the SqliteStore behaviour', async () => {
+  const store = new MemoryStore();
+  await seedTagged(store);
+  const names = async (f) => (await store.findByFacets(f)).map((n) => n.name).sort();
+  expect(await names([{ key: 'fav', present: true }])).toEqual(['a.txt', 'b.txt']);
+  expect(await names([{ key: 'rating', op: '>=', value: 4 }])).toEqual(['a.txt']);
+  expect(await names([{ key: 'missing', present: true }])).toEqual([]);
 });
 
 test('assertSafePluginSql blocks ATTACH/DETACH but allows normal SQL', () => {

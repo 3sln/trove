@@ -70,5 +70,14 @@ export class MetadataStore {
   async searchByName(query, opts) {
     throw TroveError.unsupported('searchByName not implemented');
   }
+  /**
+   * Drive-wide tag/property query. `filters` is a list of
+   * `{ key, present } | { key, op, value }` (op ∈ = != < <= > >=), matched against
+   * a node's `facets.tags` (+ meta). `opts`: { q (name substring), collectionIds,
+   * limit }. Returns matching nodes newest-first.
+   */
+  async findByFacets(filters, opts) {
+    throw TroveError.unsupported('findByFacets not implemented');
+  }
   async close() {}
 }

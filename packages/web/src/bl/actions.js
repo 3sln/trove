@@ -6,6 +6,7 @@
 
 import { Action } from '@3sln/ngin';
 import { newId } from '@trove/core/util.js';
+import { matchesTagFilters } from './tagQuery.js';
 
 class AppAction extends Action {
   static deps = ['app'];
@@ -171,6 +172,35 @@ export class UploadFilesAction extends AppAction {
         transfers.finish(tid, 'error', err.message);
         platform.notifications.error(`Upload failed: ${file.name} — ${err.message}`);
       }
+    }
+  }
+}
+
+/** Drive-wide tag/property filter (`#tag`, `#key:op:value`), optionally narrowed
+ *  by free text. Falls back to filtering the loaded folder when offline. */
+export class FilterAction extends AppAction {
+  constructor(filters, text) {
+    super();
+    this.filters = filters || [];
+    this.text = text || '';
+  }
+  async execute({ app }) {
+    const { search, platform } = app;
+    if (!this.filters.length) {
+      search.set({ results: [], ran: false, filtered: false });
+      return;
+    }
+    search.set({ query: this.text, loading: true, error: null, filtered: true });
+    if (app.offline && !app.offline.state.online) {
+      const items = (app.explorer.state.items || []).filter((n) => n.kind === 'folder' || matchesTagFilters(n, this.filters));
+      search.set({ results: items.map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: true });
+      return;
+    }
+    try {
+      const res = await platform.api.tagSearch(this.filters, this.text.trim() || undefined, { limit: 100 });
+      search.set({ results: (res.items || []).map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: false });
+    } catch (err) {
+      search.set({ loading: false, error: err.message, ran: true, filtered: true });
     }
   }
 }

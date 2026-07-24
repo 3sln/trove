@@ -233,6 +233,21 @@ export function createRouter() {
     return { query: query.q, results };
   });
 
+  // Drive-wide tag/property filter (the launcher's `#tag` / `#key:op:value`).
+  r.post('/api/tags/search', async ({ vfs, collections, principal, req }) => {
+    const b = await body(req);
+    const filters = Array.isArray(b.filters) ? b.filters : [];
+    let collectionIds;
+    if (collections) {
+      const readable = (await collections.list(principal)).map((c) => c.id);
+      collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
+    }
+    const items = await vfs.metadata.findByFacets(filters, {
+      q: b.q, collectionIds, limit: b.limit ? Number(b.limit) : 100,
+    });
+    return { items };
+  });
+
   r.get('/api/indexers', ({ vfs }) => ({ indexers: vfs.indexers.list() }));
 
   // Plugin indexers push namespaced documents/facets here. The namespace is the

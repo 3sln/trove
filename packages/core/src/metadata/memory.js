@@ -180,10 +180,47 @@ export class MemoryStore extends MetadataStore {
       .slice(0, opts.limit ?? 50);
     return items.map(clone);
   }
+
+  async findByFacets(filters = [], opts = {}) {
+    const q = opts.q ? opts.q.toLowerCase() : null;
+    const out = [];
+    for (const node of this.nodes.values()) {
+      if (node.parentId === null) continue;
+      if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
+      if (q && !node.name.toLowerCase().includes(q)) continue;
+      if (matchFacets(node, filters)) out.push(node);
+    }
+    out.sort((a, b) => b.updatedAt - a.updatedAt);
+    return out.slice(0, opts.limit ?? 100).map(clone);
+  }
 }
 
 function clone(n) {
   return n ? JSON.parse(JSON.stringify(n)) : n;
+}
+
+// Server-side mirror of the client tag matcher (web/src/bl/tagQuery.js).
+function matchFacets(node, filters) {
+  const props = { ...(node.meta || {}), ...((node.facets && node.facets.tags) || {}) };
+  return (filters || []).every((f) => {
+    const v = props[f.key];
+    if (f.present) return v != null && v !== false && v !== '';
+    if (v == null) return false;
+    const na = Number(v);
+    const nb = Number(f.value);
+    const numeric = v !== '' && f.value !== '' && !Number.isNaN(na) && !Number.isNaN(nb);
+    const x = numeric ? na : String(v).toLowerCase();
+    const y = numeric ? nb : String(f.value).toLowerCase();
+    switch (f.op) {
+      case '=': return x === y;
+      case '!=': return x !== y;
+      case '<': return x < y;
+      case '<=': return x <= y;
+      case '>': return x > y;
+      case '>=': return x >= y;
+      default: return false;
+    }
+  });
 }
 
 export { ROOT_ID };

@@ -76,6 +76,10 @@ export class TroveApiClient {
   search(q, opts = {}) {
     return this.request('GET', '/api/search', { query: { q, ...opts } });
   }
+  // Drive-wide tag/property filter (launcher #tag / #key:op:value).
+  tagSearch(filters, q, opts = {}) {
+    return this.request('POST', '/api/tags/search', { body: { filters, q, ...opts } });
+  }
   indexers() {
     return this.request('GET', '/api/indexers');
   }

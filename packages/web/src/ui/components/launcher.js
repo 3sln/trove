@@ -6,8 +6,8 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { NavigateAction, OpenFileAction, SearchAction } from '../../bl/actions.js';
-import { parseTagQuery, matchesTagFilters, filterLabel } from '../../bl/tagQuery.js';
+import { NavigateAction, OpenFileAction, SearchAction, FilterAction } from '../../bl/actions.js';
+import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 
 const { div, span, input, button } = dd;
 
@@ -16,6 +16,10 @@ function runSearch(ui, query) {
   ui.app.search.set({ query });
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => ui.go(new SearchAction(query)), 240);
+}
+function runFilter(ui, filters, text) {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => ui.go(new FilterAction(filters, text)), 200);
 }
 
 export default function launcher(state, ui) {
@@ -30,8 +34,10 @@ export default function launcher(state, ui) {
   const onInput = (e) => {
     const v = e.target.value;
     wb.setLaunchQuery(v);
-    // Search only the free-text part; `#…` filter tokens are applied to results.
-    if (!v.startsWith('!')) runSearch(ui, parseTagQuery(v).text);
+    if (v.startsWith('!')) return; // command mode: no query dispatch
+    const { text, filters } = parseTagQuery(v);
+    if (filters.length) runFilter(ui, filters, text); // drive-wide tag/property query
+    else runSearch(ui, text);
   };
   const onKey = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); wb.moveLaunch(1, flat.length); }
@@ -86,26 +92,24 @@ function buildContent(state, ui, q, mode) {
   }
 
   const { text, filters } = parseTagQuery(q);
-  const filterLabelStr = filters.map(filterLabel).join(' ');
+  const nodes = (state.se.results || []).map((r) => r.node);
 
-  // Free-text search (optionally narrowed by #tag filters).
-  if (text.trim()) {
-    let results = (state.se.results || []).map((r) => r.node);
-    if (filters.length) results = results.filter((n) => matchesTagFilters(n, filters));
+  // Drive-wide tag/property filter (server-side), optionally narrowed by free text.
+  if (filters.length) {
+    const label = filters.map(filterLabel).join(' ') + (text.trim() ? ` · "${text.trim()}"` : '');
     return [{
-      title: state.se.loading ? 'Searching…' : (filters.length ? `Results · ${filterLabelStr}` : 'Results'),
-      items: results.map((n) => fileItem(n, ui)),
-      empty: state.se.loading ? 'Searching…' : 'No files match.',
+      title: state.se.loading ? 'Filtering…' : `Filtered · ${label}`,
+      items: nodes.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui))),
+      empty: state.se.loading ? 'Filtering…' : 'No files match those filters.',
     }];
   }
 
-  // Tag/property filter with no free text → filter the current folder.
-  if (filters.length) {
-    const items = (state.ex.items || []).filter((n) => n.kind === 'folder' || matchesTagFilters(n, filters));
+  // Free-text search.
+  if (text.trim()) {
     return [{
-      title: `Filtered · ${filterLabelStr}`,
-      items: items.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui))),
-      empty: 'No files here match those filters.',
+      title: state.se.loading ? 'Searching…' : 'Results',
+      items: nodes.map((n) => fileItem(n, ui)),
+      empty: state.se.loading ? 'Searching…' : 'No files match.',
     }];
   }
 
