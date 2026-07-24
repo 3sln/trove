@@ -1,6 +1,6 @@
 // Unit tests for the plugin package format, signing, and domain-verified trust.
 
-import { test, expect } from 'bun:test';
+import { test, expect } from './testkit.js';
 import { parsePackage, reviewSummary } from '../src/platform/pluginPackage.js';
 import { verifyPackage, assessTrust, checkAssetlinks, displayFingerprint } from '../src/platform/pluginSigning.js';
 import { isAllowedUrl, endpointSummary, parseEndpoint } from '../src/platform/pluginNet.js';

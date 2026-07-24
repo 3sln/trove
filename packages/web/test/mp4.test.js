@@ -3,7 +3,7 @@
 // Range-serving fetch stands in for the network, proving the parser locates
 // `moov` by walking top-level boxes and extracts chapters, metadata, and cover.
 
-import { test, expect } from 'bun:test';
+import { test, expect } from './testkit.js';
 import { readAudiobookInfo } from '../src/ui/mp4.js';
 
 const enc = new TextEncoder();

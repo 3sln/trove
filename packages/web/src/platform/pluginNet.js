@@ -12,18 +12,21 @@
 
 /** Parse one endpoint pattern; throws on anything that isn't an http(s) URL. */
 export function parseEndpoint(pattern) {
+  // Strip a leading `*.` wildcard BEFORE parsing — `*` isn't a valid host code
+  // point, and URL parsers disagree on how to mangle it (Chromium vs ada/Node),
+  // so we never hand it to `new URL()`.
+  const wild = /^([a-z][a-z0-9+.-]*:\/\/)\*\.(.+)$/i.exec(pattern);
+  const wildcard = !!wild;
   let u;
   try {
-    u = new URL(pattern);
+    u = new URL(wildcard ? wild[1] + wild[2] : pattern);
   } catch {
     throw new Error(`Invalid network endpoint "${pattern}" (must be an absolute http(s) URL)`);
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     throw new Error(`Network endpoint "${pattern}" must use http or https`);
   }
-  const rawHost = u.hostname.toLowerCase();
-  const wildcard = rawHost.startsWith('*.');
-  const host = wildcard ? rawHost.slice(2) : rawHost;
+  const host = u.hostname.toLowerCase();
   if (!host) throw new Error(`Network endpoint "${pattern}" has no host`);
   return { scheme: u.protocol, host, wildcard, port: u.port, pathPrefix: u.pathname || '/', raw: pattern };
 }

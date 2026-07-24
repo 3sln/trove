@@ -5,7 +5,8 @@
   "description": "Trove web client — a VS Code-style workbench with a contribution system, sandboxed plugins, semantic search, and media openers.",
   "scripts": {
     "dev": "web-dev-server --config web-dev-server.config.mjs",
-    "build": "bun build.mjs"
+    "build": "bun build.mjs",
+    "test:browser": "web-test-runner --config web-test-runner.config.mjs"
   },
   "dependencies": {
     "@3sln/bones": "^0.0.5",
@@ -16,7 +17,8 @@
     "fflate": "^0.8.3"
   },
   "devDependencies": {
-    "@web/dev-server": "^1.0.0"
+    "@web/dev-server": "^1.0.0",
+    "@web/test-runner": "^1.0.0"
   },
   "license": "MIT",
   "author": "Ray Stubbs"

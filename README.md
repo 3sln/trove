@@ -294,11 +294,16 @@ packages/
 ## Tests
 
 ```sh
-bun test                                # core + server + mp4 + plugin packages/signing
-node packages/web/test/e2e.mjs          # full workbench in headless Chromium
-node packages/web/test/plugins.e2e.mjs  # sandboxed plugin install + offline availability
-node packages/web/test/offline.e2e.mjs  # service worker, pinning, offline queue + sync
+bun test                                        # node-level units: core, server, plugin-sdk, mp4, plugin packages/signing
+npm run test:browser --prefix packages/web      # web units in real Chromium (@web/test-runner): signing, module graph, zip
+node packages/web/test/e2e.mjs                  # full workbench in headless Chromium
+node packages/web/test/plugins.e2e.mjs          # sandboxed plugin install, brokered network, offline availability
+node packages/web/test/offline.e2e.mjs          # service worker, pinning, offline queue + sync
 ```
+
+The web unit suites run under **both** `bun test` (fast, via `test/testkit.js`) and
+`@web/test-runner` (a real browser, the platform plugins ship to) — the same files,
+no duplication.
 
 ## License
 
