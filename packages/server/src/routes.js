@@ -266,9 +266,10 @@ export function createRouter() {
     if (!b.name) throw TroveError.invalid('name is required');
     const parent = await ctx.vfs.stat(await resolveParent(ctx.vfs, b), b.collection);
     await assertCap(ctx, parent.collectionId, 'write');
-    return ctx.vfs.createUpload({
+    const plan = await ctx.vfs.createUpload({
       parentId: parent.id, name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
     });
+    return uploadDescriptor(plan);
   });
 
   r.get('/api/uploads/:id/status', ({ vfs, params }) => vfs.uploadStatus(params.id));
@@ -536,6 +537,39 @@ async function runPluginSql(db, op, { sql, args, statements }) {
 function requirePluginStore(sqlite, principal) {
   if (!sqlite) throw TroveError.unsupported('Server plugin storage is not enabled');
   if (!principal) throw TroveError.unauthorized('Authentication required');
+}
+
+// Turn the core upload plan into a fully self-describing descriptor: how to send
+// the bytes (presigned straight to storage, or proxied through us), the limits/quota,
+// the auth headers a proxied transfer needs, and every lifecycle endpoint (status,
+// (re)sign, report, complete "finished" hook, abort). `{partNumber}` is a template.
+function uploadDescriptor(plan) {
+  const base = `/api/uploads/${encodeURIComponent(plan.uploadId)}`;
+  const transfer = plan.presigned
+    ? {
+        mode: 'presigned', // client uploads directly to storage; we never see the bytes
+        // `single` returns one `url`; multipart `presign` returns `parts[{partNumber,url}]`.
+        ...(plan.url ? { url: plan.url } : {}),
+        ...(plan.parts ? { parts: plan.parts } : {}),
+        requiredHeaders: plan.strategy === 'single' && plan.contentType ? { 'content-type': plan.contentType } : {},
+      }
+    : {
+        mode: 'proxied', // client PUTs each part to us; we stream it to storage
+        partUrl: `${base}/parts/{partNumber}`,
+        // Proxied PUTs hit our own origin, so they carry the session's ambient auth
+        // (cookie/proxy header) automatically — no extra headers needed by default.
+        authHeaders: {},
+      };
+  const endpoints = {
+    status: `${base}/status`,
+    complete: `${base}/complete`, // the "upload finished" hook — POST reported parts here
+    abort: base, // DELETE
+    sign: plan.strategy === 'presign' ? `${base}/parts/{partNumber}/sign` : null,
+    report: plan.strategy === 'presign' ? `${base}/parts/{partNumber}/report` : null,
+  };
+  // Drop the now-internal raw transfer fields in favour of `transfer`.
+  const { presigned, url, parts, ...rest } = plan;
+  return { ...rest, transfer, endpoints };
 }
 
 async function assertCap(ctx, collectionId, capability) {

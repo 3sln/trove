@@ -12,12 +12,13 @@
 // missing signed URL, and continues. `create` never allocates a node; the node
 // appears only on `complete`, so a half-finished upload leaves no ghost files.
 
-import { TroveError } from './errors.js';
+import { TroveError, ErrorCode } from './errors.js';
 import { newId, isValidName } from './util.js';
 
 export const DEFAULT_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
 const MIN_MULTIPART_PART = 5 * 1024 * 1024; // S3 floor (except final part)
 const SINGLE_PUT_LIMIT = 5 * 1024 * 1024; // below this, one PUT beats multipart
+const MAX_PARTS = 10_000; // S3 multipart ceiling
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 class MemorySessionStore {
@@ -45,11 +46,23 @@ export class UploadManager {
    * @param {object} [deps.sessions] session store (defaults in-memory)
    * @param {number} [deps.partSize]
    */
-  constructor({ storage, storageFor, sessions, partSize = DEFAULT_PART_SIZE }) {
+  constructor({ storage, storageFor, sessions, partSize = DEFAULT_PART_SIZE, maxBytes = null }) {
     // Either a single backend, or a resolver keyed by collectionId (collections).
     this.storageFor = storageFor ?? (async () => storage);
     this.sessions = sessions ?? new MemorySessionStore();
     this.partSize = partSize;
+    this.maxBytes = maxBytes || null; // per-file quota (null = unbounded)
+  }
+
+  // The self-describing limits the client gets back in every upload descriptor.
+  #limits() {
+    return {
+      maxBytes: this.maxBytes,          // per-file quota (null = unbounded)
+      partSize: this.partSize,
+      minPartSize: MIN_MULTIPART_PART,  // multipart floor, except the final part
+      singlePutLimit: SINGLE_PUT_LIMIT, // at/under this we use one PUT, not multipart
+      maxParts: MAX_PARTS,
+    };
   }
 
   #storage(collectionId) {
@@ -63,6 +76,9 @@ export class UploadManager {
   async create(req) {
     if (!isValidName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
     if (!(req.size >= 0)) throw TroveError.invalid('size must be a non-negative number');
+    if (this.maxBytes && req.size > this.maxBytes) {
+      throw new TroveError(ErrorCode.QUOTA, `File exceeds the maximum upload size of ${this.maxBytes} bytes`, { details: { maxBytes: this.maxBytes, size: req.size } });
+    }
     const collectionId = req.collectionId || 'default';
     const storage = await this.#storage(collectionId);
     const caps = storage.capabilities;
@@ -84,15 +100,17 @@ export class UploadManager {
       parts: {}, // partNumber -> { etag }
     };
 
-    // Small file + presign → single PUT.
+    const limits = this.#limits();
+
+    // Small file + presign → single PUT straight to storage (never through us).
     if (req.size <= SINGLE_PUT_LIMIT && caps.presignUpload) {
       session.strategy = 'single';
       await this.sessions.put(session);
       const url = await storage.presignPut(storageKey, { contentType });
-      return { ...planSummary(session), strategy: 'single', url };
+      return { ...planSummary(session), strategy: 'single', multipart: false, presigned: true, url, limits };
     }
 
-    // Multipart (presigned or direct).
+    // Multipart (presigned parts straight to storage, or streamed through us).
     if (caps.multipart) {
       session.strategy = caps.presignUpload ? 'presign' : 'direct';
       session.uploadId = await storage.createMultipart(storageKey, { contentType });
@@ -105,13 +123,13 @@ export class UploadManager {
           parts.push({ partNumber: n, url: await storage.presignPart(storageKey, session.uploadId, n) });
         }
       }
-      return { ...planSummary(session), strategy: session.strategy, partCount, parts };
+      return { ...planSummary(session), strategy: session.strategy, multipart: true, presigned: session.strategy === 'presign', partCount, parts, limits };
     }
 
     // Fallback: whole-object PUT streamed through us (tiny/simple backends).
     session.strategy = 'direct-single';
     await this.sessions.put(session);
-    return { ...planSummary(session), strategy: 'direct-single' };
+    return { ...planSummary(session), strategy: 'direct-single', multipart: false, presigned: false, limits };
   }
 
   /** Re-issue a signed URL for one part (resume after expiry). */
@@ -217,5 +235,5 @@ export class UploadManager {
 }
 
 function planSummary(s) {
-  return { uploadId: s.id, storageKey: s.storageKey, partSize: s.partSize, size: s.size, name: s.name };
+  return { uploadId: s.id, storageKey: s.storageKey, partSize: s.partSize, size: s.size, name: s.name, contentType: s.contentType };
 }

@@ -184,17 +184,20 @@ export class TroveApiClient {
     });
 
     const progress = new ProgressAggregator(size, opts.onProgress);
+    const t = plan.transfer || {};
+    const completeUrl = plan.endpoints?.complete || `/api/uploads/${plan.uploadId}/complete`;
 
     if (plan.strategy === 'single') {
-      await xhrPut(plan.url, file, { signal: opts.signal, onProgress: (l) => progress.set('single', l) });
-      const done = await this.request('POST', `/api/uploads/${plan.uploadId}/complete`, { body: {}, signal: opts.signal });
+      // One presigned PUT straight to storage (bytes never touch our server).
+      await xhrPut(t.url || plan.url, file, { headers: t.requiredHeaders, signal: opts.signal, onProgress: (l) => progress.set('single', l) });
+      const done = await this.request('POST', completeUrl, { body: {}, signal: opts.signal });
       return done.node;
     }
     if (plan.strategy === 'direct-single') {
-      await xhrPut(`${this.baseUrl}/api/uploads/${plan.uploadId}/parts/1`, file, {
-        signal: opts.signal, onProgress: (l) => progress.set(1, l),
+      await xhrPut(this.baseUrl + this.#partUrl(plan, 1), file, {
+        headers: t.authHeaders, signal: opts.signal, onProgress: (l) => progress.set(1, l),
       });
-      const done = await this.request('POST', `/api/uploads/${plan.uploadId}/complete`, { body: {}, signal: opts.signal });
+      const done = await this.request('POST', completeUrl, { body: {}, signal: opts.signal });
       return done.node;
     }
 
@@ -204,7 +207,8 @@ export class TroveApiClient {
     // Resume: which parts already exist?
     let received = new Set();
     try {
-      const status = await this.request('GET', `/api/uploads/${plan.uploadId}/status`, { signal: opts.signal });
+      const statusUrl = plan.endpoints?.status || `/api/uploads/${plan.uploadId}/status`;
+      const status = await this.request('GET', statusUrl, { signal: opts.signal });
       received = new Set(status.received || []);
     } catch { /* fresh upload */ }
 
@@ -238,28 +242,37 @@ export class TroveApiClient {
     await Promise.all(Array.from({ length: concurrency }, worker));
 
     const reportedParts = results.filter(Boolean);
-    const done = await this.request('POST', `/api/uploads/${plan.uploadId}/complete`, {
+    const done = await this.request('POST', completeUrl, {
       body: { parts: reportedParts }, signal: opts.signal,
     });
     return done.node;
   }
 
+  // Expand an endpoint/transfer URL template's {partNumber} placeholder.
+  #partUrl(plan, n) {
+    const tmpl = plan.transfer?.partUrl || `/api/uploads/${plan.uploadId}/parts/{partNumber}`;
+    return tmpl.replace('{partNumber}', String(n));
+  }
+
   async #uploadPart(plan, n, blob, { signal, onProgress }) {
+    const t = plan.transfer || {};
     if (plan.strategy === 'presign') {
-      const part = plan.parts?.find((p) => p.partNumber === n);
+      const part = (t.parts || plan.parts)?.find((p) => p.partNumber === n);
       let url = part?.url;
       if (!url) {
-        const r = await this.request('POST', `/api/uploads/${plan.uploadId}/parts/${n}/sign`, { signal });
+        const signTmpl = plan.endpoints?.sign || `/api/uploads/${plan.uploadId}/parts/{partNumber}/sign`;
+        const r = await this.request('POST', signTmpl.replace('{partNumber}', String(n)), { signal });
         url = r.url;
       }
       const res = await xhrPut(url, blob, { signal, onProgress, wantEtag: true });
       const etag = res.etag;
-      await this.request('POST', `/api/uploads/${plan.uploadId}/parts/${n}/report`, { body: { etag }, signal });
+      const reportTmpl = plan.endpoints?.report || `/api/uploads/${plan.uploadId}/parts/{partNumber}/report`;
+      await this.request('POST', reportTmpl.replace('{partNumber}', String(n)), { body: { etag }, signal });
       return etag;
     }
-    // direct: server records the etag; response body has it.
-    const res = await xhrPut(`${this.baseUrl}/api/uploads/${plan.uploadId}/parts/${n}`, blob, {
-      signal, onProgress, wantJson: true,
+    // proxied: server records the etag; response body has it.
+    const res = await xhrPut(this.baseUrl + this.#partUrl(plan, n), blob, {
+      headers: t.authHeaders, signal, onProgress, wantJson: true,
     });
     return res.json?.etag;
   }
@@ -286,10 +299,11 @@ class ProgressAggregator {
 }
 
 // XHR PUT with upload progress + abort. Returns { status, etag?, json? }.
-function xhrPut(url, body, { signal, onProgress, wantEtag, wantJson } = {}) {
+function xhrPut(url, body, { signal, onProgress, wantEtag, wantJson, headers } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
+    for (const [k, v] of Object.entries(headers || {})) { try { xhr.setRequestHeader(k, v); } catch { /* forbidden header */ } }
     if (signal) {
       if (signal.aborted) {
         xhr.abort();

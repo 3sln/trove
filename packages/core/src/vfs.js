@@ -22,7 +22,7 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  constructor({ storage, metadata, search, indexers, sidecar, collections, maxIndexBytes = 2 * 1024 * 1024 }) {
+  constructor({ storage, metadata, search, indexers, sidecar, collections, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null }) {
     if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage; // primary backend (default collection + capability reporting)
@@ -33,7 +33,7 @@ export class Vfs {
     this.indexers = indexers ?? new IndexerRegistry();
     if (!this.indexers.indexers.size) this.indexers.register(textIndexer);
     // One UploadManager; it resolves the right backend per session's collection.
-    this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid) });
+    this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes });
     this.maxIndexBytes = maxIndexBytes;
   }
 

@@ -158,7 +158,7 @@ export async function createServer(config = {}) {
         });
   }
 
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, maxUploadBytes: config.maxUploadBytes ?? null });
   await vfs.init();
 
   if (config.startFlusher !== false) notifications.start();
@@ -327,6 +327,9 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   config.creatorRoles = (env.TROVE_COLLECTION_CREATOR_ROLES || '').split(',').map((s) => s.trim()).filter(Boolean);
   // 'default' collection grants everyone all caps unless locked down.
   config.defaultOpen = env.TROVE_DEFAULT_OPEN !== 'false';
+
+  // Per-file upload quota (bytes). Unbounded unless set.
+  if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);
 
   // Cross-origin API access is off unless an origin (or '*') is configured.
   config.corsOrigin = env.TROVE_CORS_ORIGIN || null;
