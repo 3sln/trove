@@ -56,8 +56,7 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   host injects the SDK + the plugin's entry script into the frame and hands it a
   single `MessagePort`; **package resources arrive as opaque byte handles** over
   that port. Everything a plugin can do — file access, storage, UI — is gated by
-  the **capabilities the user grants at install time**, and some (e.g. writing to
-  **server-side** storage) are **admin-only**. A plugin has **no direct network
+  the **capabilities the user grants at install time**. A plugin has **no direct network
   access** — the sandbox blocks all egress (`connect-src 'none'`); to reach the
   web it must **declare each endpoint** in its manifest, and the host brokers every
   request, refusing anything off the declared allowlist (including redirects) and
@@ -67,8 +66,11 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   it. Signed packages show a **domain-verified** badge: the manifest declares a
   domain, and the host checks the signing key's fingerprint against an
   `assetlinks`-style document published at that domain (Digital Asset Links
-  style). Plugins get **persistent storage** — client-side (IndexedDB, per plugin)
-  or, with the capability, server-side — and Trove **tracks which plugin owns what
+  style). Plugins get **persistent SQLite storage** — an isolated database per
+  scope, both **server-side** (native SQLite via a keyed provider) and **on-device**
+  (sql.js/wasm run in the host, persisted to IndexedDB) behind one async SQL
+  interface. Scopes are `plugin` (private) and `domain` (shared across a vendor's
+  plugins — **verified packages only**); Trove **tracks which plugin owns what
   data** so uninstalling wipes it. They contribute commands, openers, indexers,
   status items, and keybindings, and can surface a popup UI panel. Plugins
   **announce a live capability manifest** on connect (and re-announce when the app
@@ -217,7 +219,7 @@ prefixes:
   "capabilities": {
     "ui": true,
     "commands": true,
-    "storage": true,
+    "storage": { "plugin": true, "domain": false },
     "indexer": true,
     "network": { "endpoints": ["https://api.example.com/v1/"] }
   },
@@ -251,9 +253,12 @@ trove.activate(async (ctx) => {
   // Read a packaged asset via an opaque handle (no URLs leak out of the frame).
   const banner = await ctx.resources.text('banner.txt');
 
-  // Persist state (declare "storage"); scope 'local' (default) or 'server'.
-  const seen = (await ctx.db.get('count')) || 0;
-  await ctx.db.set('count', seen + 1);
+  // Persist state in the plugin's own SQLite db (declare "storage"). Each scope
+  // has a `.server` (online) and `.client` (on-device, offline) handle.
+  const db = ctx.storage.plugin.server;
+  await db.exec('CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v TEXT)');
+  const row = await db.get('SELECT v FROM state WHERE k = ?', 'count');
+  await db.run('INSERT OR REPLACE INTO state VALUES (?, ?)', 'count', String(Number(row?.v || 0) + 1));
 
   // Read a secret the user entered in settings (never stored in plaintext prefs).
   const key = await ctx.settings.getSecret('apiKey');

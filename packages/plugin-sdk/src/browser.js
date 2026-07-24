@@ -86,11 +86,13 @@
       batch: function (statements) { return send('batch', { statements: statements }); },
     };
   }
+  function scopeHandle(scope) {
+    return { server: sqlHandle(scope, 'server'), client: sqlHandle(scope, 'client') };
+  }
   function makeStorage() {
     var s = {};
-    // Stage 3 adds an on-device `.client` handle alongside `.server`.
-    if (storageScopes.plugin) s.plugin = { server: sqlHandle('plugin', 'server') };
-    if (storageScopes.domain) s.domain = { server: sqlHandle('domain', 'server') };
+    if (storageScopes.plugin) s.plugin = scopeHandle('plugin');
+    if (storageScopes.domain) s.domain = scopeHandle('domain');
     return s;
   }
 

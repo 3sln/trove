@@ -6,6 +6,7 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { textModulePlugin } from './tooling/textModulePlugin.mjs';
+import { sqlWasmMiddleware } from './tooling/sqlWasmMiddleware.mjs';
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const API_TARGET = process.env.TROVE_API || 'http://localhost:8787';
@@ -18,6 +19,7 @@ export default {
   watch: true,
   plugins: [textModulePlugin({ rootDir })],
   middleware: [
+    sqlWasmMiddleware(),
     // Minimal /api proxy to the backend (dev only; prod serves both from one origin).
     async (ctx, next) => {
       if (!ctx.path.startsWith('/api')) return next();

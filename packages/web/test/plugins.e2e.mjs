@@ -15,7 +15,7 @@ import { buildPackage, buildModulePackage } from './pluginFixture.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(__dirname, '../dist');
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.wasm': 'application/wasm' };
 const results = [];
 const check = (n, ok, d = '') => { results.push({ n, ok }); console.log(`${ok ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); };
 
@@ -89,6 +89,10 @@ async function main() {
   // read it back through a command to prove the round-trip.
   const stored = await page.evaluate(() => window.__trove.platform.commands.execute('demo.store'));
   check('plugin server storage round-trips via SQLite', stored === '1', String(stored));
+
+  // Client-side (wasm SQLite in the host, persisted to IndexedDB).
+  const clientStored = await page.evaluate(() => window.__trove.platform.commands.execute('demo.storeClient'));
+  check('plugin client storage round-trips via wasm SQLite', clientStored === 'pong', String(clientStored));
 
   // Multi-file ESM package: entry under src/ imports a sibling module + the SDK as a
   // bare `trove` specifier. Proves the blob/import-map loader resolves them with no

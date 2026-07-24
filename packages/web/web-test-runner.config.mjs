@@ -10,6 +10,7 @@ import { chromeLauncher } from '@web/test-runner-chrome';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { textModulePlugin } from './tooling/textModulePlugin.mjs';
+import { sqlWasmMiddleware } from './tooling/sqlWasmMiddleware.mjs';
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -17,6 +18,7 @@ export default {
   rootDir,
   files: ['test/plugins.test.js', 'test/mp4.test.js'],
   nodeResolve: true,
+  middleware: [sqlWasmMiddleware()],
   plugins: [textModulePlugin({ rootDir })],
   browsers: [
     chromeLauncher({

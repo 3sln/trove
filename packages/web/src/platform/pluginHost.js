@@ -15,6 +15,7 @@
 import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
 import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
 import { PluginRegistry } from './pluginStore.js';
+import { ClientSqlProvider } from './pluginClientDb.js';
 import { assessTrust } from './pluginSigning.js';
 import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes } from './pluginPackage.js';
 import { isAllowedUrl, endpointSummary } from './pluginNet.js';
@@ -31,6 +32,7 @@ export class PluginHost {
     this.platform = platform;
     this.plugins = new Map(); // id -> record
     this.registry = new PluginRegistry();
+    this.clientDb = new ClientSqlProvider(); // on-device per-scope SQLite (wasm)
     this.online = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.heartbeatMs = heartbeatMs;
     this._heartbeat = null;
@@ -297,7 +299,13 @@ export class PluginHost {
     if (!record.storage?.[scope]) {
       throw new Error(`Storage scope "${scope}" not granted${scope === 'domain' ? ' (needs a verified domain)' : ''}`);
     }
-    if (side === 'client') throw new Error('Client-side storage is not available in this build');
+    if (side === 'client') {
+      // On-device: an isolated wasm SQLite db per scope, held by the host. Domain
+      // scope keys by the verified domain so a vendor's plugins share it.
+      const key = scope === 'domain' ? `dom:${record.manifest.domain}` : `plg:${record.manifest.id}`;
+      const db = await this.clientDb.obtain(key);
+      return runSqlOp(db, op, sql, params, statements);
+    }
     // Server: the host proxies to the scoped db over the authenticated API; the
     // domain (for the shared scope) comes from the verified install record, never
     // the plugin.
@@ -449,10 +457,10 @@ export class PluginHost {
       this.plugins.delete(pluginId);
     }
     if (wipeData) {
-      // Wipe the plugin's server-side private store (its domain scope, if any, is
-      // shared with the vendor's other plugins and left intact). Client-side stores
-      // are wiped in Stage 3.
+      // Wipe the plugin's private stores (server + on-device). Its domain scope, if
+      // any, is shared with the vendor's other plugins and left intact.
       await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => {});
+      await this.clientDb.drop(`plg:${pluginId}`).catch(() => {});
     }
     await this.registry.remove(pluginId);
     if (![...this.plugins.values()].some((r) => r.status === 'active')) this.#stopHeartbeat();
@@ -551,6 +559,19 @@ function sanitizeHeaders(headers) {
     if (!FORBIDDEN_HEADERS.has(String(k).toLowerCase())) out[k] = v;
   }
   return out;
+}
+
+// Dispatch one SQL op onto a SqliteDatabase-shaped handle (the client store; the
+// server mirrors this in routes.js).
+function runSqlOp(db, op, sql, params = [], statements) {
+  switch (op) {
+    case 'exec': return db.exec(sql);
+    case 'run': return db.run(sql, ...params);
+    case 'get': return db.get(sql, ...params);
+    case 'all': return db.all(sql, ...params);
+    case 'batch': return db.batch(statements);
+    default: throw new Error(`Unknown storage op "${op}"`);
+  }
 }
 
 function signature(live) {

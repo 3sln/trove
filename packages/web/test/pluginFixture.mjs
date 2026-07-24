@@ -23,6 +23,15 @@ window.trove.activate(async (ctx) => {
       const row = await db.get('SELECT v FROM kv WHERE k = ?', 'installs');
       return row && row.v;
     }, { title: 'Demo: Store round-trip', offline: false });
+
+    // On-device (wasm SQLite) store — works offline.
+    const cdb = ctx.storage.plugin.client;
+    await cdb.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
+    await cdb.run('INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)', 'ping', 'pong');
+    ctx.commands.register('demo.storeClient', async () => {
+      const row = await cdb.get('SELECT v FROM kv WHERE k = ?', 'ping');
+      return row && row.v;
+    }, { title: 'Demo: Client store round-trip', offline: true });
   }
   // Brokered network: fetch a declared endpoint (allowed) and an undeclared one
   // (blocked). Returns the outcome so the host/e2e can assert enforcement.

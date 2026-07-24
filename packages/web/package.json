@@ -14,7 +14,8 @@
     "@3sln/ngin": "^0.0.3",
     "@trove/plugin-sdk": "0.0.1",
     "es-module-lexer": "^1.7.0",
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@web/dev-server": "^1.0.0",
