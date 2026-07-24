@@ -34,9 +34,11 @@
     // A compact inline implementation of the @trove/plugin-sdk handshake, so the
     // plugin is a single self-hostable file on its own domain. (Real plugins can
     // `import { activate } from '@trove/plugin-sdk'` instead.)
-    let port, caps = [], manifest, seq = 0;
+    let port, caps = [], manifest, seq = 0, online = true;
     const pending = new Map();
     const commands = {};
+    // Live contribution catalog with per-feature offline flags.
+    const contribs = { commands: [], openers: [], indexers: [], statusItems: [] };
 
     const call = (method, params) =>
       new Promise((res, rej) => {
@@ -45,11 +47,14 @@
         port.postMessage({ __trove: 'req', id, method, params });
       });
     const emit = (method, params) => port.postMessage({ __trove: 'event', method, params });
+    const buildManifest = () => ({ id: manifest?.id, name: manifest?.name, online, contributions: contribs });
+    const announce = () => emit('manifest', buildManifest());
 
     window.addEventListener('message', (e) => {
       if (e.data?.__trove !== 'init') return;
       manifest = e.data.manifest;
       caps = e.data.capabilities || [];
+      online = e.data.online ?? true;
       port = e.ports[0];
       port.onmessage = onPort;
       start();
@@ -67,26 +72,41 @@
           .then(() => dispatch(m.method, m.params))
           .then((result) => port.postMessage({ __trove: 'res', id: m.id, result }))
           .catch((err) => port.postMessage({ __trove: 'res', id: m.id, error: { message: err.message } }));
+      } else if (m.__trove === 'event') {
+        if (m.method === 'connectivity') {
+          online = !!m.params.online;
+          $('status').textContent = online ? 'online' : 'offline (counter still works)';
+          announce(); // re-announce so the host sees the updated availability
+        }
       }
     }
-    const dispatch = (method, params) =>
-      method === 'command:execute' ? commands[params.id]?.(...(params.args || [])) : undefined;
+    // Answering `manifest` proves we're alive; the payload says what works offline.
+    const dispatch = (method, params) => {
+      if (method === 'command:execute') return commands[params.id]?.(...(params.args || []));
+      if (method === 'manifest') return buildManifest();
+      return undefined;
+    };
 
     const $ = (id) => document.getElementById(id);
     let count = 0;
 
     async function start() {
-      // Contribute a command + a status-bar item.
+      // Tapping the counter works OFFLINE (state is in the plugin's own DB)…
       commands['wordcount.tap'] = () => tap();
-      await call('contribute:command', { id: 'wordcount.tap' });
-      // Restore the counter from this plugin's own persistent DB.
-      if (caps.includes('storage')) {
-        count = (await call('db:get', { key: 'count' })) || 0;
-      }
+      contribs.commands.push({ id: 'wordcount.tap', title: 'Word Count: Tap', offline: true });
+      await call('contribute:command', { id: 'wordcount.tap', title: 'Word Count: Tap', offline: true });
+      // …but "sync to cloud" needs the network, so it's marked offline:false.
+      commands['wordcount.sync'] = () => emit('ui:toast', { text: online ? 'Synced ☁️' : 'Cannot sync while offline' });
+      contribs.commands.push({ id: 'wordcount.sync', title: 'Word Count: Sync to cloud', offline: false });
+      await call('contribute:command', { id: 'wordcount.sync', title: 'Word Count: Sync to cloud', offline: false });
+
+      if (caps.includes('storage')) count = (await call('db:get', { key: 'count' })) || 0;
       render();
-      await call('contribute:statusItem', { id: 'wordcount.status', align: 'right', text: `📊 ${count}`, tooltip: 'Word Count taps', command: 'wordcount.tap' });
+      contribs.statusItems.push({ id: 'wordcount.status', offline: true });
+      await call('contribute:statusItem', { id: 'wordcount.status', align: 'right', text: `📊 ${count}`, tooltip: 'Word Count taps', command: 'wordcount.tap', offline: true });
       $('status').textContent = 'connected · capabilities: ' + caps.join(', ');
       await call('activated', { ok: true });
+      announce(); // publish the initial capability manifest
     }
 
     async function tap() {

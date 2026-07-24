@@ -52,7 +52,12 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   domain** and talk to the workbench only over a `MessagePort`. They contribute
   commands, openers, indexers, status items, and keybindings; they can surface a
   popup UI panel (Chrome-extension style); and — when they declare the capability
-  — they get a **persistent per-domain database**.
+  — they get a **persistent per-domain database**. Plugins **announce a live
+  capability manifest** on connect (and re-announce when the app goes on/offline),
+  each contribution flagged offline-capable or not — so the workbench knows which
+  plugin features actually work right now, disables the ones that don't (e.g. a
+  network-only previewer while offline), and treats a plugin that sends no
+  manifest as not running.
 - **Conversations on every file** — threaded comments with @mentions, reactions,
   and tags, stored in a **CRDT sidecar document** kept cold in object storage
   (one `sidecars/<id>.json` next to your data — no extra database) and loaded

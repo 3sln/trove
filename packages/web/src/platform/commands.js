@@ -32,6 +32,9 @@ export class CommandService {
       icon: spec.icon,
       when: spec.when,
       palette: spec.palette ?? true,
+      // Provenance + offline capability, for availability filtering.
+      pluginId: spec.pluginId,
+      offline: spec.offline,
     });
     return () => {
       this.handlers.delete(spec.id);
@@ -51,13 +54,25 @@ export class CommandService {
 
   isEnabled(id) {
     const cmd = this.contributions.commands.get(id);
-    return !cmd?.when || this.context.evaluate(cmd.when);
+    if (cmd?.when && !this.context.evaluate(cmd.when)) return false;
+    return this.isAvailable(cmd);
+  }
+
+  /** A command is available unless it's a plugin command that's currently offline/dead. */
+  isAvailable(cmd) {
+    if (!cmd) return true;
+    return this.availability ? this.availability(cmd) : true;
   }
 
   async execute(id, ...args) {
     const handler = this.handlers.get(id);
     if (!handler) {
       this.notifications.error(`Command not found: ${id}`);
+      return;
+    }
+    const cmd = this.contributions.commands.get(id);
+    if (!this.isAvailable(cmd)) {
+      this.notifications.warn(`“${cmd?.title || id}” isn’t available${this.availability ? ' offline' : ''} right now.`);
       return;
     }
     if (!this.isEnabled(id)) return; // gated by when-clause

@@ -33,6 +33,9 @@ export function createPlatform({ baseUrl = '' } = {}) {
     openPluginPanel: null, // set by the workbench UI
   };
   platform.plugins = new PluginHost(platform);
+  // Commands consult the plugin host to hide/disable plugin commands that aren't
+  // available right now (offline, or the plugin isn't responding).
+  commands.availability = (cmd) => platform.plugins.isAvailable(cmd);
 
   registerDefaults(platform);
   return platform;

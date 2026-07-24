@@ -23,7 +23,40 @@ let capabilities = [];
 const commandHandlers = new Map();
 const openerHandlers = new Map();
 const indexerHandlers = new Map();
+// The live capability catalog the plugin announces to the host. Each spec keeps
+// an `offline` flag; the host uses it (plus whether we're responding at all) to
+// decide which of the plugin's features work while the app is offline.
+const contributions = { commands: new Map(), openers: new Map(), indexers: new Map(), statusItems: new Map() };
+let online = true;
+let onConnectivity = null;
 let onDeactivate = null;
+
+/** Build the live manifest: what this plugin currently contributes + offline caps. */
+function buildManifest() {
+  return {
+    id: manifest?.id,
+    name: manifest?.name,
+    online,
+    ts: nowMs(),
+    contributions: {
+      commands: [...contributions.commands.values()],
+      openers: [...contributions.openers.values()],
+      indexers: [...contributions.indexers.values()],
+      statusItems: [...contributions.statusItems.values()],
+    },
+  };
+}
+function nowMs() {
+  try {
+    return Date.now();
+  } catch {
+    return 0;
+  }
+}
+/** Push the current manifest to the host (also happens on request). */
+function announce() {
+  channel?.emit('manifest', buildManifest());
+}
 
 /** Wait for the host's init message (carrying our MessagePort + manifest). */
 function handshake() {
@@ -33,6 +66,7 @@ function handshake() {
       window.removeEventListener('message', onInit);
       manifest = e.data.manifest;
       capabilities = e.data.capabilities || [];
+      online = e.data.online ?? true;
       const port = e.ports[0];
       channel = new RpcChannel(port, { onCall: dispatch, onEvent: dispatchEvent });
       resolve();
@@ -61,13 +95,29 @@ async function dispatch(method, params) {
       if (!fn) throw new Error(`No such indexer ${params.indexerId}`);
       return fn(params.file);
     }
+    // The host asks "what do you contribute right now, and what works offline?".
+    // Answering at all proves the plugin is alive; the manifest says which
+    // features are available in the current connectivity state.
+    case 'manifest':
+      return buildManifest();
     default:
       throw new Error(`Unknown host call ${method}`);
   }
 }
 
-function dispatchEvent(method, params) {
-  if (method === 'deactivate') onDeactivate?.();
+async function dispatchEvent(method, params) {
+  if (method === 'deactivate') return onDeactivate?.();
+  if (method === 'connectivity') {
+    online = !!params.online;
+    // Let the plugin adapt (e.g. flip network-only features to unavailable),
+    // then re-announce so the host has an up-to-date capability picture.
+    try {
+      await onConnectivity?.({ online });
+    } catch (err) {
+      console.error('onConnectivity handler failed', err);
+    }
+    announce();
+  }
 }
 
 function requireCap(cap) {
@@ -82,11 +132,16 @@ function makeContext() {
     manifest,
     capabilities,
 
-    // Contribution points ----------------------------------------------------
+    // Contribution points -----------------------------------------------------
+    // Every contribution accepts an `offline` flag: true means it keeps working
+    // with no network (the host keeps it enabled offline), false (default) means
+    // it needs connectivity and the host disables it while offline.
     commands: {
-      register(id, handler) {
+      register(id, handler, opts = {}) {
         commandHandlers.set(id, handler);
-        return channel.call('contribute:command', { id });
+        const spec = { id, title: opts.title, category: opts.category, icon: opts.icon, offline: !!opts.offline };
+        contributions.commands.set(id, spec);
+        return channel.call('contribute:command', spec);
       },
       execute(id, ...args) {
         return channel.call('command:execute', { id, args });
@@ -95,13 +150,18 @@ function makeContext() {
     contributes: {
       opener(spec, handler) {
         openerHandlers.set(spec.id, handler);
-        return channel.call('contribute:opener', spec);
+        const entry = { ...spec, offline: !!spec.offline };
+        contributions.openers.set(spec.id, entry);
+        return channel.call('contribute:opener', entry);
       },
       indexer(spec, handler) {
         indexerHandlers.set(spec.id, handler);
-        return channel.call('contribute:indexer', spec);
+        const entry = { ...spec, offline: !!spec.offline };
+        contributions.indexers.set(spec.id, entry);
+        return channel.call('contribute:indexer', entry);
       },
       statusItem(spec) {
+        contributions.statusItems.set(spec.id, { ...spec, offline: !!spec.offline });
         return channel.call('contribute:statusItem', spec);
       },
       keybinding(spec) {
@@ -141,6 +201,24 @@ function makeContext() {
       },
       call: (name, method, ...args) => channel.call('service:call', { name, method, args }),
     },
+    // Connectivity: the host calls this handler when the app goes online/offline,
+    // so the plugin can flip network-dependent features. `online` reflects the
+    // host's current state.
+    get online() {
+      return online;
+    },
+    onConnectivity(fn) {
+      onConnectivity = fn;
+    },
+    /** Update a contribution's offline capability at runtime; re-announces. */
+    setAvailability(id, { offline } = {}) {
+      for (const kind of Object.values(contributions)) {
+        if (kind.has(id)) kind.get(id).offline = !!offline;
+      }
+      announce();
+    },
+    /** Force-push the current manifest to the host. */
+    announce,
     onDeactivate(fn) {
       onDeactivate = fn;
     },
@@ -158,6 +236,7 @@ export async function activate(setup) {
   try {
     await setup(ctx);
     await channel.call('activated', { ok: true });
+    announce(); // publish the initial capability manifest
   } catch (err) {
     await channel.call('activated', { ok: false, error: err?.message });
     throw err;

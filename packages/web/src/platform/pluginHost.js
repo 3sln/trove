@@ -30,6 +30,7 @@ export class PluginHost {
   constructor(platform) {
     this.platform = platform;
     this.plugins = new Map(); // id -> record
+    this.online = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.subject = platform.reactive.ObservableSubject
       ? new platform.reactive.ObservableSubject([])
       : null;
@@ -38,8 +39,47 @@ export class PluginHost {
   list() {
     return [...this.plugins.values()].map((p) => ({
       id: p.manifest.id, name: p.manifest.name, status: p.status,
-      capabilities: p.granted, error: p.error || null, hasUi: p.hasUi,
+      capabilities: p.granted, error: p.error || null, hasUi: p.hasUi, badge: p.badge || null,
+      // Live capability picture: whether the plugin is currently answering, and
+      // which of its contributions work in the present (online/offline) state.
+      responsive: !!p.responsive,
+      manifest: p.live || null,
+      features: this.#featureList(p),
     }));
+  }
+
+  /** Flatten a plugin's live contributions into availability rows for the UI. */
+  #featureList(record) {
+    const live = record.live;
+    if (!live) return [];
+    const rows = [];
+    const push = (kind, items) => {
+      for (const it of items || []) {
+        rows.push({ kind, id: it.id, title: it.title || it.id, offline: !!it.offline, available: this.#availableSpec(record, it) });
+      }
+    };
+    push('command', live.contributions?.commands);
+    push('opener', live.contributions?.openers);
+    push('indexer', live.contributions?.indexers);
+    push('statusItem', live.contributions?.statusItems);
+    return rows;
+  }
+
+  #availableSpec(record, spec) {
+    if (record.status !== 'active' || !record.responsive) return false;
+    return this.online || !!spec.offline;
+  }
+
+  /**
+   * Is a registered contribution available right now? Built-in contributions
+   * (no pluginId) are always available; plugin contributions require the plugin
+   * to be active + responsive, and — when offline — to be offline-capable.
+   */
+  isAvailable(contrib) {
+    if (!contrib?.pluginId) return true;
+    const record = this.plugins.get(contrib.pluginId);
+    if (!record) return false;
+    return this.#availableSpec(record, contrib);
   }
   observe() {
     return this.subject;
@@ -87,6 +127,9 @@ export class PluginHost {
     try {
       await this.#handshake(record);
       record.status = 'active';
+      record.responsive = true;
+      // Pull the initial manifest in case the push hasn't arrived yet.
+      this.#probe(record).then(() => this.#emit());
     } catch (err) {
       record.status = 'error';
       record.error = err?.message || String(err);
@@ -115,7 +158,7 @@ export class PluginHost {
         record._timer = timer;
 
         iframe.contentWindow.postMessage(
-          { __trove: 'init', manifest, capabilities: record.granted },
+          { __trove: 'init', manifest, capabilities: record.granted, online: this.online },
           record.origin,
           [channel.port2],
         );
@@ -143,9 +186,15 @@ export class PluginHost {
       }
       // Contributions — tagged with pluginId, registered into the shared registry.
       case 'contribute:command': {
-        const dispose = this.platform.commands.registerHandler(params.id, (...args) =>
-          record.channel.call('command:execute', { id: params.id, args }),
-        );
+        // Register the handler AND full metadata (title/offline/pluginId) so the
+        // command appears in the palette and carries its offline availability.
+        const dispose = this.platform.commands.register({
+          id: params.id,
+          title: params.title || `${record.manifest.name}: ${params.id}`,
+          category: params.category || record.manifest.name,
+          icon: params.icon, offline: !!params.offline, pluginId: pid,
+          handler: (...args) => record.channel.call('command:execute', { id: params.id, args }),
+        });
         record.disposers.push(dispose);
         return { ok: true };
       }
@@ -217,6 +266,13 @@ export class PluginHost {
   #hostEvent(record, method, params) {
     const pid = record.manifest.id;
     switch (method) {
+      case 'manifest':
+        // The plugin announced its live capability catalog — it's alive.
+        record.live = params;
+        record.responsive = true;
+        record.lastManifestAt = Date.now();
+        this.#emit();
+        break;
       case 'ui:toast':
         this.platform.notifications[params.level || 'info'](params.text);
         break;
@@ -227,6 +283,52 @@ export class PluginHost {
       case 'context:set':
         this.platform.context.scopedFor(pid).set(params.key, params.value);
         break;
+    }
+  }
+
+  /** Ask a plugin for its manifest as a liveness probe; false if it doesn't answer. */
+  async #probe(record) {
+    if (record.status !== 'active' || !record.channel) return false;
+    try {
+      const live = await record.channel.call('manifest', {}, { timeout: 4000 });
+      record.live = live;
+      record.responsive = true;
+      record.lastManifestAt = Date.now();
+      return true;
+    } catch {
+      // No manifest → the plugin isn't really working (e.g. its frame failed to
+      // load offline). Its contributions become unavailable.
+      record.responsive = false;
+      return false;
+    }
+  }
+
+  /**
+   * Tell every plugin the app's connectivity changed, then re-probe so the live
+   * capability picture (and thus what's available) reflects the new state.
+   */
+  async setOnline(online) {
+    if (this.online === online) return;
+    this.online = online;
+    await Promise.all(
+      [...this.plugins.values()]
+        .filter((r) => r.status === 'active')
+        .map(async (r) => {
+          try {
+            r.channel?.emit('connectivity', { online });
+          } catch { /* ignore */ }
+          await this.#probe(r);
+        }),
+    );
+    this.#emit();
+  }
+
+  /** Refresh a single plugin's manifest on demand. */
+  async refresh(pluginId) {
+    const record = this.plugins.get(pluginId);
+    if (record) {
+      await this.#probe(record);
+      this.#emit();
     }
   }
 

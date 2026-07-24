@@ -70,10 +70,10 @@ export class ContributionRegistry {
    * Pick the best opener for a node. Openers declare a selector; the highest
    * priority match wins. Returns the opener contribution or null.
    */
-  openerFor(node, evaluate) {
+  openerFor(node, evaluate, isAvailable) {
     const candidates = this.openers
       .all()
-      .filter((o) => matchesSelector(o.selector, node) && (!o.when || evaluate(o.when)))
+      .filter((o) => matchesSelector(o.selector, node) && (!o.when || evaluate(o.when)) && (!isAvailable || isAvailable(o)))
       .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
     return candidates[0] || null;
   }

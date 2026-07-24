@@ -333,6 +333,22 @@ kbd {
 .palette .opt .cat { color: var(--text-faint); font-size: 11px; }
 .palette .opt .kbd { margin-left: auto; }
 .palette .opt .sub { color: var(--text-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette .opt.unavailable { opacity: .5; }
+.palette .opt.unavailable .title { text-decoration: line-through; text-decoration-color: var(--text-faint); }
+.offline-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: 5px; padding: 1px 5px; }
+
+/* plugin live-capability report */
+.plugin-features { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.pf-head { display: flex; justify-content: space-between; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); margin-bottom: 8px; }
+.pf-list { display: flex; flex-direction: column; gap: 4px; }
+.pf-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 12.5px; }
+.pf-row.off { opacity: .55; }
+.pf-row .pf-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-row .pf-kind { font-size: 10px; color: var(--text-faint); }
+.pf-badge.offline-ok { font-size: 9.5px; color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 40%, transparent); border-radius: 5px; padding: 1px 5px; }
+.pf-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.pf-dot.on { background: var(--success); }
+.pf-dot.no { background: var(--text-faint); }
 .palette .none { padding: 22px; text-align: center; color: var(--text-faint); }
 
 .dialog {

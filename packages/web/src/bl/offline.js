@@ -39,13 +39,22 @@ export class OfflineService {
     await this.#refreshPins();
     await this.#refreshQueue();
     window.addEventListener('online', () => this.#onOnline());
-    window.addEventListener('offline', () => this.#set({ online: false }));
+    window.addEventListener('offline', () => this.#onOffline());
+    // Tell the plugin host our initial connectivity so it can probe plugins.
+    this.platform.plugins?.setOnline?.(this.state.online);
     if (this.state.online) this.flushQueue();
   }
 
   async #onOnline() {
     this.#set({ online: true });
+    // Plugins re-announce what works now that we're back online.
+    await this.platform.plugins?.setOnline?.(true);
     await this.flushQueue();
+  }
+  async #onOffline() {
+    this.#set({ online: false });
+    // Plugins re-announce; network-only features become unavailable.
+    await this.platform.plugins?.setOnline?.(false);
   }
 
   isPinned(id) {

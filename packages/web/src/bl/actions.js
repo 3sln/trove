@@ -129,7 +129,13 @@ export class OpenFileAction extends AppAction {
   }
   async execute({ app }) {
     if (this.node.kind === 'folder') return app.engine.dispatch(new NavigateAction(this.node.id));
-    const opener = app.platform.contributions.openerFor(this.node, (w) => app.platform.context.evaluate(w));
+    // Skip openers that aren't available right now (e.g. a plugin previewer that
+    // needs the network while we're offline) so we fall back to a built-in one.
+    const opener = app.platform.contributions.openerFor(
+      this.node,
+      (w) => app.platform.context.evaluate(w),
+      (o) => app.platform.plugins.isAvailable(o),
+    );
     const openerId = opener?.id || 'core.fallback';
     app.platform.workbench.openTab(this.node, openerId);
   }

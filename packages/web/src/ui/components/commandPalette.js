@@ -48,12 +48,14 @@ export default function commandPalette(state, ui) {
 
 function cmdOpt(cmd, active, ui, run) {
   const key = ui.platform.keybindings.labelFor(cmd.id);
-  return div({ className: `opt ${active ? 'active' : ''}` },
+  const available = ui.platform.commands.isAvailable(cmd);
+  return div({ className: `opt ${active ? 'active' : ''} ${available ? '' : 'unavailable'}` },
     span({ className: 'ico' }, icon(cmd.icon || 'command', { size: 16 })),
     cmd.category ? span({ className: 'cat' }, cmd.category + ' ›') : null,
     span({ className: 'title' }, cmd.title),
+    !available ? span({ className: 'offline-tag' }, 'offline') : null,
     key ? span({ className: 'kbd' }, dd.h('kbd', prettyKey(keyRaw(ui, cmd.id)))) : null,
-  ).on({ click: () => run(cmd), mousemove: () => {} });
+  ).on({ click: () => run(cmd) });
 }
 
 function keyRaw(ui, id) {
