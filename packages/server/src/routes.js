@@ -3,7 +3,7 @@
 // a presigned URL when the backend supports it, otherwise stream through here.
 
 import { Router, json, parseRange } from './router.js';
-import { TroveError } from '@trove/core';
+import { TroveError, assertSafePluginSql } from '@trove/core';
 
 async function body(req) {
   const text = await req.text();
@@ -396,13 +396,21 @@ export function createRouter() {
   return r;
 }
 
-async function runPluginSql(db, op, { sql, args = [], statements = [] }) {
+async function runPluginSql(db, op, { sql, args, statements }) {
+  const params = Array.isArray(args) ? args : [];
   switch (op) {
-    case 'exec': await db.exec(sql); return { ok: true };
-    case 'run': return db.run(sql, ...args);
-    case 'get': return db.get(sql, ...args);
-    case 'all': return db.all(sql, ...args);
-    case 'batch': await db.batch(statements); return { ok: true };
+    case 'exec': assertSafePluginSql(sql); await db.exec(sql); return { ok: true };
+    case 'run': assertSafePluginSql(sql); return db.run(sql, ...params);
+    case 'get': assertSafePluginSql(sql); return db.get(sql, ...params);
+    case 'all': assertSafePluginSql(sql); return db.all(sql, ...params);
+    case 'batch': {
+      const stmts = (Array.isArray(statements) ? statements : []).map((s) => {
+        assertSafePluginSql(s?.sql);
+        return { sql: s.sql, params: Array.isArray(s.params) ? s.params : [] };
+      });
+      await db.batch(stmts);
+      return { ok: true };
+    }
     default: throw TroveError.invalid(`Unknown storage op "${op}"`);
   }
 }

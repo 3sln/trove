@@ -31,7 +31,7 @@ export { VectorizeVectorStore } from './search/vectorize.js';
 
 // Server-side key/value store (subscriptions, inboxes, profiles).
 export { KeyValueStore, MemoryKV, SqliteKV } from './kv.js';
-export { SqliteDatabase, SqliteProvider, LocalSqliteProvider } from './sqlite.js';
+export { SqliteDatabase, SqliteProvider, LocalSqliteProvider, assertSafePluginSql, stripSqlLiterals } from './sqlite.js';
 
 // Identity (BYO IdP — Cloudflare Access / Zero Trust / a proxy).
 export {

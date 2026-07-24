@@ -77,3 +77,25 @@ test('plugin indexer pushes namespaced docs', async () => {
   const search = await jsonReq(handle, 'GET', '/api/search?q=puppy%20park');
   expect(search.json.results.some((r) => r.node.name === 'photo.jpg')).toBe(true);
 });
+
+test('plugin storage SQL: scoped round-trip + ATTACH rejected', async () => {
+  const { handle } = await createServer();
+  const sql = (op, extra) => jsonReq(handle, 'POST', '/api/plugins/com.acme.demo/sql', { op, ...extra });
+
+  // Create + write + read back in the plugin's private scope.
+  expect((await sql('exec', { sql: 'CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)' })).json.result.ok).toBe(true);
+  await sql('run', { sql: 'INSERT INTO kv VALUES (?,?)', params: ['a', '1'] });
+  const got = await sql('get', { sql: 'SELECT v FROM kv WHERE k=?', params: ['a'] });
+  expect(got.json.result.v).toBe('1');
+
+  // A different plugin id is a different database (isolation).
+  const other = await jsonReq(handle, 'POST', '/api/plugins/com.acme.other/sql', { op: 'all', sql: 'SELECT v FROM kv' });
+  expect(other.status).toBeGreaterThanOrEqual(400); // no such table in the other scope
+
+  // ATTACH is refused (would escape the isolated db on a shared filesystem).
+  const attach = await sql('exec', { sql: "ATTACH DATABASE 'x.db' AS y" });
+  expect(attach.status).toBeGreaterThanOrEqual(400);
+
+  // An unknown op is rejected.
+  expect((await sql('drop_table', { sql: 'x' })).status).toBeGreaterThanOrEqual(400);
+});

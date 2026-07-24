@@ -25,6 +25,44 @@ export class SqliteDatabase {
   async close() {}
 }
 
+// --- plugin SQL safety -------------------------------------------------------
+// Plugins run SQL against their OWN isolated database, but on a shared-filesystem
+// provider the sibling scope files are guessable, so `ATTACH DATABASE` would be an
+// isolation escape (and `DETACH` its pair). Strip comments + string/identifier
+// literals first so the keyword can't hide inside a value, then reject.
+
+const DANGEROUS_SQL = /\b(ATTACH|DETACH)\b/i;
+
+/** Blank out --/**-comments and '..'/".."/`..`/[..] literals, preserving length-ish. */
+export function stripSqlLiterals(sql) {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    const c = sql[i];
+    if (c === '-' && sql[i + 1] === '-') { const nl = sql.indexOf('\n', i); i = nl < 0 ? sql.length : nl; continue; }
+    if (c === '/' && sql[i + 1] === '*') { const e = sql.indexOf('*/', i + 2); i = e < 0 ? sql.length : e + 2; out += ' '; continue; }
+    if (c === "'" || c === '"' || c === '`') {
+      const q = c; i++;
+      while (i < sql.length) {
+        if (sql[i] === q) { if (sql[i + 1] === q) { i += 2; continue; } i++; break; }
+        i++;
+      }
+      out += ' '; continue;
+    }
+    if (c === '[') { const e = sql.indexOf(']', i); i = e < 0 ? sql.length : e + 1; out += ' '; continue; }
+    out += c; i++;
+  }
+  return out;
+}
+
+/** Throw if plugin-supplied SQL tries to escape its isolated database. */
+export function assertSafePluginSql(sql) {
+  if (typeof sql !== 'string' || !sql) throw TroveError.invalid('SQL statement is required');
+  if (DANGEROUS_SQL.test(stripSqlLiterals(sql))) {
+    throw TroveError.invalid('ATTACH/DETACH are not permitted in plugin storage');
+  }
+}
+
 /** A keyed pool/factory of databases. The shell injects one. */
 export class SqliteProvider {
   async init() {}

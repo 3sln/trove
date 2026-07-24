@@ -8,8 +8,14 @@
 let sqlPromise = null;
 function loadSql() {
   // locateFile points at the wasm we serve at the app root (build copies it; dev &
-  // test serve it via middleware). Only fetched on first use.
-  return (sqlPromise ??= import('sql.js').then((m) => (m.default || m)({ locateFile: () => '/sql-wasm.wasm' })));
+  // test serve it via middleware). Only fetched on first use. On failure we clear
+  // the cached promise so a later attempt can retry rather than wedging forever.
+  if (!sqlPromise) {
+    sqlPromise = import('sql.js')
+      .then((m) => (m.default || m)({ locateFile: () => '/sql-wasm.wasm' }))
+      .catch((err) => { sqlPromise = null; throw err; });
+  }
+  return sqlPromise;
 }
 
 // --- IndexedDB blob persistence (host origin) --------------------------------
