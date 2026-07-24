@@ -11,7 +11,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
-import { buildPackage } from './pluginFixture.mjs';
+import { buildPackage, buildModulePackage } from './pluginFixture.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(__dirname, '../dist');
@@ -84,6 +84,22 @@ async function main() {
   const net = await page.evaluate(() => window.__trove.platform.commands.execute('demo.net'));
   check('brokered fetch to a declared endpoint succeeds', net?.ok === true && net?.status === 200, JSON.stringify(net));
   check('fetch to an undeclared endpoint is blocked', net?.blocked === 'BLOCKED', JSON.stringify(net));
+
+  // Multi-file ESM package: entry under src/ imports a sibling module + the SDK as a
+  // bare `trove` specifier. Proves the blob/import-map loader resolves them with no
+  // bundler and no direct file fetch inside the sandbox.
+  const mod = Buffer.from(buildModulePackage().zip).toString('base64');
+  await page.evaluate(async (data) => {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const pkg = window.__trove.test.parsePackage(bytes);
+    await window.__trove.test.install(pkg, { grants: pkg.manifest.capabilities });
+  }, mod);
+  await page.waitForFunction(
+    () => window.__trove.platform.plugins.list().some((p) => p.id === 'com.trove.mod' && p.status === 'active'),
+    { timeout: 8000 },
+  );
+  const modResult = await page.evaluate(() => window.__trove.platform.commands.execute('mod.hello'));
+  check('multi-file ESM plugin loads & relative import resolves', modResult === 'hello-from-module', String(modResult));
 
   // Go offline — the host notifies the plugin, which re-announces.
   await page.context().setOffline(true);

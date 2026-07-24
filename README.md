@@ -214,8 +214,23 @@ contributions, and its settings:
 }
 ```
 
+A package can be a single entry script (`entry: "plugin.js"`) or **multiple ES
+modules**: put your code under `src/` and use ordinary relative imports — no
+bundler required. The host loads every `src/*.js` file as a `blob:` module inside
+the sandbox and wires them with an import map, so `import './lib/util.js'` and
+`import { activate } from 'trove'` both resolve; everything outside `src/` is an
+opaque asset you read via `ctx.resources`.
+
+```
+my-plugin.zip
+├─ manifest.json          # "entry": "src/index.js"
+├─ src/index.js           # imports ./lib/http.js, 'trove'
+├─ src/lib/http.js
+└─ assets/banner.png      # read via ctx.resources, not importable
+```
+
 The host injects `@trove/plugin-sdk` into the sandboxed frame; the entry script
-calls `trove.activate`:
+calls `trove.activate` (or `import { activate } from 'trove'`):
 
 ```js
 trove.activate(async (ctx) => {

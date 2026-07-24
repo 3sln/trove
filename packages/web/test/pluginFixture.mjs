@@ -78,6 +78,30 @@ export async function buildPackage(opts = {}) {
   return { zip: zipSync(entries), manifest, fingerprint };
 }
 
+// A multi-file package: entry under src/ importing a sibling module (relative) and
+// the SDK as a bare `trove` specifier — exercises the import-map/blob module loader.
+const MOD_INDEX = `
+import { greeting } from './lib/util.js';
+import { activate } from 'trove';
+activate(async (ctx) => {
+  ctx.commands.register('mod.hello', () => greeting(), { title: 'Mod: Hello', offline: true });
+});
+`;
+const MOD_UTIL = `export const greeting = () => 'hello-from-module';`;
+
+export function buildModulePackage() {
+  const manifest = {
+    id: 'com.trove.mod', name: 'Modular Demo', version: '1.0.0',
+    entry: 'src/index.js', capabilities: ['ui', 'commands'],
+  };
+  const entries = {
+    'manifest.json': strToU8(JSON.stringify(manifest)),
+    'src/index.js': strToU8(MOD_INDEX),
+    'src/lib/util.js': strToU8(MOD_UTIL),
+  };
+  return { zip: zipSync(entries), manifest };
+}
+
 /** An assetlinks doc that vouches for `fingerprint` for `pluginId`. */
 export function assetlinksFor(fingerprint, pluginId) {
   return { version: 1, keys: [{ fingerprint, plugins: [pluginId] }] };

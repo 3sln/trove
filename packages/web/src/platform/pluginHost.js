@@ -16,8 +16,9 @@ import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
 import SDK_SOURCE from '@trove/plugin-sdk/browser.js?raw';
 import { PluginRegistry, PluginDataStore } from './pluginStore.js';
 import { assessTrust } from './pluginSigning.js';
-import { entrySource, ADMIN_ONLY_CAPS } from './pluginPackage.js';
+import { ADMIN_ONLY_CAPS } from './pluginPackage.js';
 import { isAllowedUrl } from './pluginNet.js';
+import { buildModuleGraph, isModuleEntry, isSourceModule } from './pluginModules.js';
 
 const ALL_CAPABILITIES = ['files', 'storage', 'serverStorage', 'ui', 'commands', 'indexer', 'opener', 'network'];
 
@@ -133,7 +134,7 @@ export class PluginHost {
     // Opaque-origin sandbox: scripts only, no same-origin, no top navigation.
     iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
-    iframe.srcdoc = bootstrapHtml(entrySourceOf(record));
+    iframe.srcdoc = await buildSrcdoc(record.manifest, mapFromFiles(record.files));
 
     const runtime = {
       ...record, iframe, status: 'loading', error: null, disposers: [], channel: null,
@@ -164,7 +165,13 @@ export class PluginHost {
       const { iframe, manifest } = record;
       const timer = setTimeout(() => reject(new Error('Plugin handshake timed out')), 15000);
       const onReady = (e) => {
-        if (e.source !== iframe.contentWindow || e.data?.__trove !== 'ready') return;
+        if (e.source !== iframe.contentWindow) return;
+        if (e.data?.__trove === 'boot-error') {
+          window.removeEventListener('message', onReady);
+          clearTimeout(timer);
+          return reject(new Error(e.data.error || 'Plugin failed to load its modules'));
+        }
+        if (e.data?.__trove !== 'ready') return;
         window.removeEventListener('message', onReady);
         const channel = new MessageChannel();
         record.channel = new RpcChannel(channel.port1, {
@@ -229,10 +236,12 @@ export class PluginHost {
         record.disposers.push(this.platform.contributions.keybindings.register(params));
         return { ok: true };
 
-      // Package resources — opaque byte handles (transferred, no host URLs).
+      // Package resources — opaque byte handles (transferred, no host URLs). Code
+      // under src/ and the manifest are not resources (src/ is loaded as modules).
       case 'resources:list':
-        return [...record.files.keys()];
+        return [...record.files.keys()].filter(isResourcePath);
       case 'resources:read': {
+        if (!isResourcePath(params.path)) throw new Error(`No such resource ${params.path}`);
         const bytes = record.files.get(params.path);
         if (!bytes) throw new Error(`No such resource ${params.path}`);
         return { bytes: bytes.slice().buffer }; // copied into the iframe by structured clone
@@ -447,34 +456,76 @@ export class PluginHost {
   }
 }
 
-function entrySourceOf(record) {
-  return new TextDecoder().decode(record.files[record.manifest.entry] ?? new Uint8Array());
-}
 function mapFromFiles(files) {
   const m = new Map();
   for (const [k, v] of Object.entries(files)) m.set(k, v instanceof Uint8Array ? v : new Uint8Array(v));
   return m;
 }
-function bootstrapHtml(entryJs) {
-  // The SDK + the plugin entry, both inline. `connect-src 'none'` means the frame
-  // cannot make ANY direct network request (fetch/XHR/WebSocket/beacon) — all web
-  // access is brokered by the host and confined to the plugin's declared
-  // endpoints. img/media/font are limited to in-frame blob:/data: so remote loads
-  // can't be used as an exfiltration side-channel either.
-  const csp = [
-    "default-src 'none'",
-    "script-src 'unsafe-inline' 'unsafe-eval'",
-    "style-src 'unsafe-inline'",
-    'img-src blob: data:',
-    'media-src blob: data:',
-    "font-src 'none'",
-    "connect-src 'none'",
-    "base-uri 'none'",
-    "form-action 'none'",
-  ].join('; ');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body>
+
+/** True for files a plugin can read as opaque resources (not code, not manifest). */
+function isResourcePath(path) {
+  return path !== 'manifest.json' && !isSourceModule(path);
+}
+
+// The frame's CSP. `connect-src 'none'` means it cannot make ANY direct network
+// request (fetch/XHR/WebSocket/beacon) — all web access is brokered by the host and
+// confined to the plugin's declared endpoints. img/media/font are limited to
+// in-frame blob:/data: so remote loads can't be an exfiltration side-channel.
+// `blob:` in script-src is only for the plugin's own package modules (below), which
+// are same-origin blobs — no external code can load.
+const CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' blob:",
+  "style-src 'unsafe-inline'",
+  'img-src blob: data:',
+  'media-src blob: data:',
+  "font-src 'none'",
+  "connect-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
+const HEAD = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}"></head><body>`;
+
+/** Build the iframe document — classic single-file, or ESM module mode (src/). */
+async function buildSrcdoc(manifest, files) {
+  if (isModuleEntry(manifest)) return moduleBootstrapHtml(await buildModuleGraph({ manifest, files }));
+  const entryJs = new TextDecoder().decode(files.get(manifest.entry) ?? new Uint8Array());
+  return `${HEAD}
 <script>${SDK_SOURCE}<\/script>
 <script>${entryJs}<\/script>
+</body></html>`;
+}
+
+// Escape a value for safe inlining inside <script> (so `</script>` and JS line
+// separators in package code can't break out of the tag).
+function safeJson(value) {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
+// ESM module mode: ship every src/ module as a blob: URL and wire them with an
+// import map keyed by canonical `trove:/<path>` specifiers (the specifiers in the
+// code were rewritten to match). `trove` resolves to a shim over the injected SDK.
+function moduleBootstrapHtml(graph) {
+  const entryKey = safeJson('trove:/' + graph.entry);
+  return `${HEAD}
+<script>${SDK_SOURCE}<\/script>
+<script id="__trove_src" type="application/json">${safeJson(graph.modules)}<\/script>
+<script>
+(function () {
+  var src = JSON.parse(document.getElementById('__trove_src').textContent);
+  var imports = {};
+  for (var p in src) imports['trove:/' + p] = URL.createObjectURL(new Blob([src[p] + '\\n//# sourceURL=trove:/' + p], { type: 'text/javascript' }));
+  imports['trove'] = URL.createObjectURL(new Blob(['export const activate = globalThis.trove.activate;\\nexport default globalThis.trove;'], { type: 'text/javascript' }));
+  var im = document.createElement('script');
+  im.type = 'importmap';
+  im.textContent = JSON.stringify({ imports: imports });
+  document.head.appendChild(im);
+  import(${entryKey}).catch(function (e) {
+    try { parent.postMessage({ __trove: 'boot-error', error: String((e && e.message) || e) }, '*'); } catch (_) {}
+  });
+})();
+<\/script>
 </body></html>`;
 }
 

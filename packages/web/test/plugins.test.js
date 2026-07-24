@@ -4,6 +4,8 @@ import { test, expect } from 'bun:test';
 import { parsePackage, reviewSummary } from '../src/platform/pluginPackage.js';
 import { verifyPackage, assessTrust, checkAssetlinks, displayFingerprint } from '../src/platform/pluginSigning.js';
 import { isAllowedUrl, endpointSummary, parseEndpoint } from '../src/platform/pluginNet.js';
+import { buildModuleGraph, isModuleEntry, isSourceModule } from '../src/platform/pluginModules.js';
+import { strToU8 } from 'fflate';
 import { buildPackage, assetlinksFor } from './pluginFixture.mjs';
 
 test('parsePackage reads + validates the manifest', async () => {
@@ -95,6 +97,30 @@ test('package with a bad network endpoint is rejected; good ones surface in revi
   const s = reviewSummary(parsePackage(zip), { status: 'unverified' });
   expect(s.capabilities.find((c) => c.id === 'network')).toBeTruthy();
   expect(s.network.map((e) => e.host)).toEqual(['api.example.com']);
+});
+
+test('module graph: only src/ code is wired; relative imports are canonicalized', async () => {
+  const files = new Map([
+    ['manifest.json', strToU8('{}')],
+    ['src/index.js', strToU8("import { helper } from './lib/util.js';\nimport 'trove';\nconst d = () => import('../src/late.js');\nexport const x = helper;")],
+    ['src/lib/util.js', strToU8('export const helper = 1;')],
+    ['src/late.js', strToU8('export default 2;')],
+    ['data.txt', strToU8('an asset, not a module')],
+  ]);
+  const manifest = { entry: 'src/index.js' };
+  expect(isModuleEntry(manifest)).toBe(true);
+  expect(isSourceModule('data.txt')).toBe(false);
+
+  const g = await buildModuleGraph({ manifest, files });
+  expect(Object.keys(g.modules).sort()).toEqual(['src/index.js', 'src/late.js', 'src/lib/util.js']);
+  const idx = g.modules['src/index.js'];
+  expect(idx).toContain("from 'trove:/src/lib/util.js'");  // static relative → canonical key
+  expect(idx).toContain("import 'trove'");                  // bare specifier left as-is
+  expect(idx).toContain('import("trove:/src/late.js")');    // dynamic relative → re-quoted key
+});
+
+test('classic single-file packages stay in classic mode', () => {
+  expect(isModuleEntry({ entry: 'plugin.js' })).toBe(false);
 });
 
 test('reviewSummary surfaces caps, contributions, settings + admin-only flag', async () => {

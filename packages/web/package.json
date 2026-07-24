@@ -14,6 +14,7 @@
     "@3sln/dodo": "^0.0.9",
     "@3sln/ngin": "^0.0.3",
     "@trove/plugin-sdk": "0.0.1",
+    "es-module-lexer": "^1.7.0",
     "fflate": "^0.8.3"
   },
   "devDependencies": {
