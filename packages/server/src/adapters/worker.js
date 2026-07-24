@@ -25,6 +25,11 @@ async function getServer(env, buildVfs) {
   if (env.VECTORIZE) {
     config.vectorStore = { driver: 'vectorize', binding: env.VECTORIZE };
   }
+  // Cloudflare Workers AI binding → LLM-assisted search transformer (human text →
+  // semantic text + tag filters). Enabled just by binding `AI`; picks a cheap model.
+  if (env.AI) {
+    config.searchTransformer = { driver: 'workers-ai', ai: env.AI, model: env.TROVE_SEARCH_MODEL };
+  }
   // Serve static assets from the ASSETS binding (Workers Sites / assets).
   if (env.ASSETS) {
     config.assets = async (req) => {

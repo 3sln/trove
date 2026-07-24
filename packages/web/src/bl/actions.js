@@ -241,21 +241,23 @@ export class SearchAction extends AppAction {
       return;
     }
     const mode = this.mode || platform.settings.get('search.mode');
-    search.set({ query: this.query, mode, loading: true, error: null });
+    search.set({ query: this.query, mode, loading: true, error: null, resolved: null });
     const offline = app.offline;
     // Offline (or server unreachable) → search the pinned corpus locally.
     if (offline && !offline.state.online) {
       try {
         const results = await offline.searchOffline(q, { limit: 40 });
-        search.set({ results, loading: false, ran: true, offline: true });
+        search.set({ results, loading: false, ran: true, offline: true, resolved: null });
       } catch (err) {
         search.set({ results: [], loading: false, ran: true, offline: true, error: err.message });
       }
       return;
     }
     try {
-      const res = await platform.api.search(q, { mode, limit: 40 });
-      search.set({ results: res.results, loading: false, ran: true, offline: false });
+      // The server transforms the raw query (parse/LLM) and tells us what it actually
+      // searched — surfaced to the user via `resolved` so search is honest.
+      const res = await platform.api.query(q, { mode, limit: 40 });
+      search.set({ results: res.results, resolved: res.resolved || null, loading: false, ran: true, offline: false });
     } catch (err) {
       if (offline) {
         const results = await offline.searchOffline(q, { limit: 40 });

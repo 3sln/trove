@@ -317,6 +317,24 @@ export function createRouter() {
     return { query: query.q, results };
   });
 
+  // Unified query: a raw user string is run through the search transformer (default
+  // parses `#tag` syntax; a plugged-in one may use an LLM), then dispatched. Returns
+  // the results AND the `resolved` query (what was actually searched) so the client
+  // can honestly show it.
+  r.post('/api/query', async ({ vfs, collections, principal, req }) => {
+    const b = await body(req);
+    if (typeof b.q !== 'string' || !b.q.trim()) throw TroveError.invalid('q is required');
+    let collectionIds;
+    if (collections) {
+      const readable = (await collections.list(principal)).map((c) => c.id);
+      collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
+    }
+    const { results, resolved } = await vfs.query(b.q, {
+      mode: b.mode, limit: clampLimit(b.limit, 40), collectionIds,
+    });
+    return { query: b.q, results, resolved };
+  });
+
   // Drive-wide tag/property filter (the launcher's `#tag` / `#key:op:value`).
   r.post('/api/tags/search', async ({ vfs, collections, principal, req }) => {
     const b = await body(req);

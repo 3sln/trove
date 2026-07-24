@@ -47,6 +47,13 @@ export default function launcher(state, ui, opts = {}) {
     else if (e.key === 'Escape' && q) { e.preventDefault(); wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false }); }
   };
 
+  // What the server actually searched (transformer output) — shown when it differs
+  // from what the user typed, so an LLM-assisted transform stays honest.
+  const resolved = mode === 'search' ? state.se.resolved : null;
+  const showResolved = resolved && (resolved.source === 'llm'
+    || (resolved.tagFilters && resolved.tagFilters.length)
+    || (resolved.semanticText || '').trim() !== q.trim());
+
   let gi = -1;
   const inner = div({ className: 'launcher' },
     div({ className: 'launch-box' },
@@ -55,8 +62,9 @@ export default function launcher(state, ui, opts = {}) {
         placeholder: 'Search files · ! run a command · # filter by tag' })
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
-        .on({ click: () => { wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false }); } }) : null,
+        .on({ click: () => { wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false, resolved: null }); } }) : null,
     ),
+    showResolved ? resolvedBar(resolved) : null,
     div({ className: 'launch-body' },
       ...groups.map((group) => div({ className: 'launch-group' },
         div({ className: 'launch-h' }, span(group.title), group.action || null),
@@ -67,6 +75,17 @@ export default function launcher(state, ui, opts = {}) {
     ),
   );
   return modal ? inner : div({ className: 'editor' }, inner);
+}
+
+// An "under-bar" reflecting what the search actually ran (the transformer's output):
+// the semantic text it searched for + any tag filters it applied. Read-only and
+// honest — we don't rewrite the user's input, we just show what was dispatched.
+function resolvedBar(r) {
+  return div({ className: 'launch-resolved' },
+    span({ className: 'rq-label' }, r.source === 'llm' ? 'Interpreted as' : 'Searching'),
+    (r.semanticText || '').trim() ? span({ className: 'rq-text' }, `“${r.semanticText.trim()}”`) : null,
+    ...(r.tagFilters || []).map((f) => span({ className: 'rq-chip' }, icon('tag', { size: 11 }), filterLabel(f))),
+  );
 }
 
 function itemRow(it, active) {

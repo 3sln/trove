@@ -9,6 +9,7 @@
 import { TroveError } from './errors.js';
 import { UploadManager } from './uploads.js';
 import { IndexerRegistry, textIndexer } from './indexers/registry.js';
+import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
 import { basename, parentPath, extname } from './util.js';
 import { ROOT_ID, rootId } from './metadata/memory.js';
 
@@ -22,12 +23,14 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  constructor({ storage, metadata, search, indexers, sidecar, collections, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null }) {
+  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null }) {
     if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage; // primary backend (default collection + capability reporting)
     this.metadata = metadata;
     this.search = search ?? null;
+    // Turns a raw user query into { semanticText, tagFilters } we actually dispatch.
+    this.searchTransformer = searchTransformer ?? new ParsingSearchTransformer();
     this.sidecar = sidecar ?? null;
     this.collections = collections ?? null;
     this.indexers = indexers ?? new IndexerRegistry();
@@ -218,6 +221,33 @@ export class Vfs {
   }
 
   // --- search & indexing -----------------------------------------------------
+
+  /**
+   * Run a raw user query: transform it into { semanticText, tagFilters } (default =
+   * parse `#tag` syntax; a plugged-in transformer may use an LLM), dispatch semantic
+   * search narrowed by the tag filters (or a pure tag filter when there's no text),
+   * and return the results together with the `resolved` query the client can show.
+   */
+  async query(rawQuery, opts = {}) {
+    let resolved;
+    try {
+      resolved = await this.searchTransformer.transform(rawQuery, { tagKeys: opts.tagKeys });
+    } catch {
+      resolved = { semanticText: rawQuery, tagFilters: [], source: 'parse', note: 'transform-failed' };
+    }
+    const { semanticText, tagFilters = [] } = resolved;
+    let results;
+    if (semanticText && semanticText.trim()) {
+      results = await this.searchQuery(semanticText, opts);
+      if (tagFilters.length) results = results.filter((r) => matchTagFilters(r.node, tagFilters));
+    } else if (tagFilters.length) {
+      const nodes = await this.metadata.findByTags(tagFilters, { collectionIds: opts.collectionIds, limit: opts.limit });
+      results = nodes.map((node) => ({ nodeId: node.id, score: 1, node, snippet: null }));
+    } else {
+      results = [];
+    }
+    return { results, resolved };
+  }
 
   async searchQuery(query, opts = {}) {
     if (!this.search) {

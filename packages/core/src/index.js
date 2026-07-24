@@ -18,6 +18,7 @@ export { SqliteStore } from './metadata/sqlite.js';
 export { CollectionService, CAPABILITIES } from './collections/index.js';
 
 export { SearchService } from './search/index.js';
+export { SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer, parseTagFilters, matchTagFilters } from './search/transformer.js';
 export { VectorStore, MemoryVectorStore, QdrantVectorStore } from './search/vectorStore.js';
 export { KeywordStore, MemoryKeywordStore } from './search/keywordStore.js';
 export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/embeddings.js';
@@ -77,7 +78,7 @@ export async function createVfs(opts = {}) {
     new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
   if (!indexers.indexers.size) indexers.register(textIndexer);
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, searchTransformer: opts.searchTransformer, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes });
   await vfs.init();
   return vfs;
 }

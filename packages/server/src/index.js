@@ -10,6 +10,7 @@ import {
   Vfs, StorageBackend, MemoryStorage, FilesystemStorage, S3Storage,
   MetadataStore, MemoryStore, SqliteStore,
   SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,
+  SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer,
   VectorStore, MemoryVectorStore, QdrantVectorStore, VectorizeVectorStore,
   IndexerRegistry, textIndexer,
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
@@ -55,6 +56,15 @@ function buildVectorStore(cfg, dimensions) {
     case 'vectorize': return new VectorizeVectorStore({ dimensions, binding: cfg.binding, ...cfg.vectorize });
     case 'memory': default: return new MemoryVectorStore({ dimensions });
   }
+}
+// Search transformer factory. `parse` (default) is deterministic `#tag` parsing;
+// `workers-ai` uses a Cloudflare Workers AI binding (injected by the worker adapter
+// as config.searchTransformer.ai) or a REST runner, falling back to parsing.
+function buildSearchTransformer(cfg, config) {
+  if (cfg?.driver === 'workers-ai' || config?.ai) {
+    return new WorkersAiSearchTransformer({ ai: cfg?.ai || config?.ai, model: cfg?.model, run: cfg?.run });
+  }
+  return new ParsingSearchTransformer();
 }
 function buildIdentity(cfg) {
   switch (cfg.driver) {
@@ -109,6 +119,10 @@ export async function createServer(config = {}) {
   const indexers = config.indexers instanceof IndexerRegistry ? config.indexers : new IndexerRegistry();
   if (!indexers.indexers.size) indexers.register(textIndexer);
 
+  // Search transformer: raw query → { semanticText, tagFilters }. Default parses the
+  // `#tag` grammar; inject one (e.g. Workers AI) for LLM-assisted query understanding.
+  const searchTransformer = resolve(config.searchTransformer, SearchTransformer, (cfg) => buildSearchTransformer(cfg, config));
+
   // Identity: BYO IdP. Default anonymous (single shared user) so a zero-config
   // run still works; production injects a JwtIdentityProvider (Cloudflare Access).
   const identity = resolve(config.identity, IdentityProvider, buildIdentity);
@@ -158,7 +172,7 @@ export async function createServer(config = {}) {
         });
   }
 
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, maxUploadBytes: config.maxUploadBytes ?? null });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxUploadBytes: config.maxUploadBytes ?? null });
   await vfs.init();
 
   if (config.startFlusher !== false) notifications.start();
@@ -330,6 +344,12 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
 
   // Per-file upload quota (bytes). Unbounded unless set.
   if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);
+
+  // Search transformer: 'parse' (default) or 'workers-ai' (Cloudflare Workers AI —
+  // the binding is injected by the worker adapter; TROVE_SEARCH_MODEL picks the model).
+  if (env.TROVE_SEARCH_TRANSFORMER === 'workers-ai') {
+    config.searchTransformer = { driver: 'workers-ai', model: env.TROVE_SEARCH_MODEL };
+  }
 
   // Cross-origin API access is off unless an origin (or '*') is configured.
   config.corsOrigin = env.TROVE_CORS_ORIGIN || null;

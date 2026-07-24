@@ -76,6 +76,11 @@ export class TroveApiClient {
   search(q, opts = {}) {
     return this.request('GET', '/api/search', { query: { q, ...opts } });
   }
+  // Unified query: server transforms the raw string (parse/LLM) → runs it → returns
+  // { query, results, resolved }. `resolved` is what was actually searched.
+  query(q, opts = {}) {
+    return this.request('POST', '/api/query', { body: { q, ...opts } });
+  }
   // Drive-wide tag/property filter (launcher #tag / #key:op:value).
   tagSearch(filters, q, opts = {}) {
     return this.request('POST', '/api/tags/search', { body: { filters, q, ...opts } });
