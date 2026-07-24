@@ -113,13 +113,38 @@ function pluginOpenerView(opener, node, ui) {
   // position:fixed overlay whose box tracks this .pv-host element (moving an <iframe>
   // in the DOM would reload it). $attach hands .pv-host to mountViewer as the tracking
   // target; $detach lets it dock or tear down. `.opaque()` keeps dodo from reconciling
-  // the (childless) host so its lifecycle hooks stay stable across workbench re-renders.
+  // these (host-managed) nodes so their lifecycle hooks stay stable across re-renders.
+  // A .pv-status overlay shows a spinner until the plugin opens the file (the iframe
+  // is transparent while loading) and an error if it never does.
   return div({ className: 'viewer plugin-viewer' },
+    div({ className: 'pv-status' }).on({
+      $attach: (el) => {
+        el.innerHTML = '<div class="loading"><div class="spinner"></div><span>Opening…</span></div>';
+        el._ready = () => { el.style.display = 'none'; };
+        el._error = (msg) => { el.style.display = 'grid'; el.innerHTML = ''; el.appendChild(errorEl(msg)); };
+      },
+    }).opaque(),
     div({ className: 'pv-host' }).on({
-      $attach: (el) => { el._detach = ui.platform.plugins.mountViewer(opener.pluginId, el, node, opener.id); },
+      $attach: (el) => {
+        const status = el.parentElement?.querySelector('.pv-status');
+        el._detach = ui.platform.plugins.mountViewer(opener.pluginId, el, node, opener.id, {
+          onReady: () => status?._ready?.(),
+          onError: (msg) => status?._error?.(msg || 'This viewer failed to load'),
+        });
+      },
       $detach: (el) => { el._detach?.(); el._detach = null; },
     }).opaque(),
   );
+}
+
+// A plain DOM error node for the imperatively-managed .pv-status overlay.
+function errorEl(message) {
+  const wrap = document.createElement('div');
+  wrap.className = 'fallback';
+  const s = document.createElement('span');
+  s.textContent = message || 'Failed to open';
+  wrap.appendChild(s);
+  return wrap;
 }
 
 function errorView(message) {

@@ -180,34 +180,43 @@ export class PluginHost {
     iframe.setAttribute('referrerpolicy', 'no-referrer');
     record._srcdoc ||= await buildSrcdoc(record.manifest, record.files);
     iframe.srcdoc = record._srcdoc;
-    const frame = { role, iframe, channel: null, record, place: null, dock: null, docked: false, mediaOwner: false };
+    const frame = { role, iframe, channel: null, record, place: null, dock: null, docked: false, mediaActions: null };
     document.body.appendChild(iframe);
-    await this.#handshake(record, frame);
+    try {
+      await this.#handshake(record, frame);
+    } catch (err) {
+      // Never leave a hung/failed frame's iframe (or its channel) behind.
+      try { frame.channel?.dispose(); } catch { /* ignore */ }
+      iframe.remove();
+      throw err;
+    }
     return frame;
   }
 
+  // Resolves once the frame's plugin calls activate(); rejects (and fully cleans up
+  // its global message listener + timer) on boot error, iframe error, or timeout.
   #handshake(record, frame) {
     return new Promise((resolve, reject) => {
       const { iframe } = frame;
       const manifest = record.manifest;
-      const timer = setTimeout(() => reject(new Error('Plugin handshake timed out')), 15000);
+      let settled = false;
+      let timer = 0;
+      const cleanup = () => { window.removeEventListener('message', onReady); if (timer) clearTimeout(timer); };
+      const fail = (msg) => { if (settled) return; settled = true; cleanup(); reject(new Error(msg)); };
       const onReady = (e) => {
         if (e.source !== iframe.contentWindow) return;
-        if (e.data?.__trove === 'boot-error') {
-          window.removeEventListener('message', onReady);
-          clearTimeout(timer);
-          return reject(new Error(e.data.error || 'Plugin failed to load its modules'));
-        }
+        if (e.data?.__trove === 'boot-error') return fail(e.data.error || 'Plugin failed to load its modules');
         if (e.data?.__trove !== 'ready') return;
+        // Ready received — the transferred port takes over; stop listening globally.
         window.removeEventListener('message', onReady);
         const channel = new MessageChannel();
         frame.channel = new RpcChannel(channel.port1, {
           onCall: (m, p) => this.#hostCall(record, m, p, frame),
           onEvent: (m, p) => this.#hostEvent(record, m, p, frame),
         });
-        frame.resolveActivated = resolve;
-        frame.rejectActivated = reject;
-        frame._timer = timer;
+        // activate() success/failure settles this promise (and clears the timer).
+        frame.resolveActivated = (f) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); resolve(f); };
+        frame.rejectActivated = (err) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); reject(err); };
         // Opaque origin → target '*'; the transferred port is the real capability.
         iframe.contentWindow.postMessage(
           { __trove: 'init', manifest, capabilities: record.grants, storage: record.storage, online: this.online, role: frame.role },
@@ -215,8 +224,9 @@ export class PluginHost {
           [channel.port2],
         );
       };
+      timer = setTimeout(() => fail('Plugin handshake timed out'), 15000);
       window.addEventListener('message', onReady);
-      iframe.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Failed to load plugin iframe')); });
+      iframe.addEventListener('error', () => fail('Failed to load plugin iframe'));
     });
   }
 
@@ -354,14 +364,26 @@ export class PluginHost {
         ms.setPositionState({ duration: params.duration || 0, position: params.position || 0, playbackRate: params.playbackRate || 1 });
       } else if (kind === 'action') {
         ms.setActionHandler?.(params.action, params.on ? () => frame?.channel?.emit('media:action', { action: params.action }) : null);
+        // Remember which actions this frame registered, so we can release them when
+        // the frame goes away (otherwise the OS handler points at a dead channel).
+        if (frame) { frame.mediaActions ||= new Set(); params.on ? frame.mediaActions.add(params.action) : frame.mediaActions.delete(params.action); }
       } else if (kind === 'clear') {
         if (frame && this._mediaOwner && this._mediaOwner !== frame) return { ok: true }; // don't clear someone else's session
+        this.#releaseMediaActions(frame);
         ms.metadata = null;
         ms.playbackState = 'none';
         this._mediaOwner = null;
       }
     } catch { /* unsupported action/state */ }
     return { ok: true };
+  }
+
+  // Detach the OS media-transport handlers a frame registered (on teardown).
+  #releaseMediaActions(frame) {
+    const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : null;
+    if (!ms || !frame?.mediaActions) return;
+    for (const action of frame.mediaActions) { try { ms.setActionHandler?.(action, null); } catch { /* ignore */ } }
+    frame.mediaActions.clear();
   }
 
   // Plugin storage: run a SQL op against one scoped, isolated database. `scope` is
@@ -530,9 +552,9 @@ export class PluginHost {
    * if the viewer registered `dock`, its frame is kept alive as a floating dock,
    * otherwise it is destroyed.
    */
-  mountViewer(pluginId, container, node, openerId) {
+  mountViewer(pluginId, container, node, openerId, hooks = {}) {
     const record = this.plugins.get(pluginId);
-    if (!record) return null;
+    if (!record) { hooks.onError?.('Plugin is not available'); return null; }
 
     // Re-adopt the docked frame if it's the same file — preserves live playback
     // (the docked <video>/<audio> keeps running) instead of spawning a fresh viewer.
@@ -540,19 +562,28 @@ export class PluginHost {
     if (docked && docked.record === record && docked.node?.id === node.id && docked.openerId === openerId) {
       this.#undock(docked);
       this.#place(docked, container, 3);
+      hooks.onReady?.();
       return () => this.#detachViewer(docked);
     }
 
     const mount = { cancelled: false, frame: null };
-    this.#spawnFrame(record, 'viewer').then((frame) => {
+    this.#spawnFrame(record, 'viewer').then(async (frame) => {
       if (mount.cancelled) { this.#destroyFrame(frame); return; }
       mount.frame = frame;
       frame.node = node;
       frame.openerId = openerId;
       record.frames.add(frame);
       this.#place(frame, container, 3);
-      frame.channel?.call('opener:open', { openerId, file: node, context: {} }).catch(() => {});
-    }).catch((e) => console.error('viewer frame failed to load', e));
+      try {
+        await frame.channel?.call('opener:open', { openerId, file: node, context: {} });
+        if (!mount.cancelled) hooks.onReady?.();
+      } catch (err) {
+        if (!mount.cancelled) hooks.onError?.(err?.message || 'Failed to open');
+      }
+    }).catch((e) => {
+      console.error('viewer frame failed to load', e);
+      if (!mount.cancelled) hooks.onError?.(e?.message || 'This viewer failed to load');
+    });
     record.hasUi = true;
 
     return () => {
@@ -615,7 +646,8 @@ export class PluginHost {
     if (!frame) return;
     this.#stopPlace(frame);
     if (this._dockedFrame === frame) { this._dockedFrame = null; if (this._dockEl_) this._dockEl_.style.display = 'none'; }
-    if (this._mediaOwner === frame) this.#media(frame, 'clear', {});
+    if (this._mediaOwner === frame) { this._mediaOwner = null; this.#media(frame, 'clear', {}); }
+    this.#releaseMediaActions(frame); // drop any handlers even if this frame wasn't the owner
     try { frame.channel?.emit('deactivate'); } catch { /* ignore */ }
     try { frame.channel?.dispose(); } catch { /* ignore */ }
     frame.iframe.remove();
@@ -684,6 +716,8 @@ export class PluginHost {
       for (const d of record.disposers) { try { d(); } catch { /* ignore */ } }
       record._settingsDispose?.();
       for (const frame of [...(record.frames || [])]) this.#destroyFrame(frame); // viewer/dock frames
+      // The primary frame may have an open panel placement (observers + listeners).
+      if (record.frame) { this.#stopPlace(record.frame); this.#releaseMediaActions(record.frame); }
       record.channel?.dispose();
       record.iframe?.remove();
       this.plugins.delete(pluginId);

@@ -164,6 +164,12 @@ async function main() {
     return frame && frame.role === 'viewer' && frame.iframe !== r.iframe;
   }));
   check('viewer frame is responsive after mount (not reloaded)', await viewerResponsive());
+  // The loading overlay is dismissed once the opener finishes opening the file.
+  await page.waitForFunction(() => {
+    const s = document.querySelector('.viewer.plugin-viewer .pv-status');
+    return s && getComputedStyle(s).display === 'none';
+  }, { timeout: 4000 });
+  check('viewer loading overlay clears once the opener is ready', true);
   const v0 = await viewerFrame();
   check('viewer iframe shown as a fixed overlay', v0 && v0.vis === 'visible' && v0.w > 0);
   check('viewer iframe is on an opaque origin (sandboxed)', v0 && v0.sandbox.includes('allow-scripts') && !v0.sandbox.includes('allow-same-origin'));

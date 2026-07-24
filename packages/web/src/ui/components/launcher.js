@@ -94,23 +94,24 @@ function buildContent(state, ui, q, mode, modal) {
 
   const { text, filters } = parseTagQuery(q);
   const nodes = (state.se.results || []).map((r) => r.node);
+  const err = state.se.error;
 
   // Drive-wide tag/property filter (server-side), optionally narrowed by free text.
   if (filters.length) {
     const label = filters.map(filterLabel).join(' ') + (text.trim() ? ` · "${text.trim()}"` : '');
     return [{
-      title: state.se.loading ? 'Filtering…' : `Filtered · ${label}`,
+      title: state.se.loading ? 'Filtering…' : err ? 'Filter failed' : `Filtered · ${label}`,
       items: nodes.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui, modal))),
-      empty: state.se.loading ? 'Filtering…' : 'No files match those filters.',
+      empty: state.se.loading ? 'Filtering…' : err ? `Couldn’t filter: ${err}` : 'No files match those filters.',
     }];
   }
 
   // Free-text search.
   if (text.trim()) {
     return [{
-      title: state.se.loading ? 'Searching…' : 'Results',
+      title: state.se.loading ? 'Searching…' : err ? 'Search failed' : 'Results',
       items: nodes.map((n) => fileItem(n, ui, modal)),
-      empty: state.se.loading ? 'Searching…' : 'No files match.',
+      empty: state.se.loading ? 'Searching…' : err ? `Couldn’t search: ${err}` : 'No files match.',
     }];
   }
 

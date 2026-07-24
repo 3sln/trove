@@ -127,30 +127,26 @@ export function registerCommands(app) {
 
 // --- helpers ----------------------------------------------------------------
 
-function pickFiles(cb) {
+// Open a native file picker. The hidden <input> is removed on selection AND on
+// cancel — cancelling fires no `change`, so we also clean up on the next window
+// focus (which the OS dialog returns) to avoid leaking a growing pile of inputs.
+function pick(cb, configure) {
   const input = document.createElement('input');
   input.type = 'file';
-  input.multiple = true;
+  configure(input);
   input.style.display = 'none';
   document.body.appendChild(input);
-  input.addEventListener('change', () => {
-    cb(input.files);
-    input.remove();
-  }, { once: true });
+  const cleanup = () => { input.remove(); window.removeEventListener('focus', onFocus); };
+  const onFocus = () => setTimeout(() => { if (!input.files.length) cleanup(); }, 300);
+  input.addEventListener('change', () => { cb(input.files); cleanup(); }, { once: true });
+  window.addEventListener('focus', onFocus);
   input.click();
 }
-
+function pickFiles(cb) {
+  pick((files) => cb(files), (input) => { input.multiple = true; });
+}
 function pickZip(cb) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.zip,application/zip';
-  input.style.display = 'none';
-  document.body.appendChild(input);
-  input.addEventListener('change', () => {
-    cb(input.files[0]);
-    input.remove();
-  }, { once: true });
-  input.click();
+  pick((files) => cb(files[0]), (input) => { input.accept = '.zip,application/zip'; });
 }
 
 function triggerDownload(url, name) {

@@ -156,6 +156,14 @@ class Controller {
     else if (i > 0) this.gotoChapter(i - 1);
     else this.skip(-30);
   }
+  // Stop playback and free resources when the viewer closes (otherwise the detached
+  // <audio> keeps decoding with no transport to stop it, and the cover blob leaks).
+  dispose() {
+    this.#persist();
+    try { this.audio.pause(); } catch { /* ignore */ }
+    try { this.audio.removeAttribute('src'); this.audio.load(); } catch { /* ignore */ }
+    if (this.coverUrl) { try { URL.revokeObjectURL(this.coverUrl); } catch { /* ignore */ } this.coverUrl = null; }
+  }
 }
 
 export function audiobookOpener(node, ui) {
@@ -165,7 +173,10 @@ export function audiobookOpener(node, ui) {
     controllers.set(node.id, ctrl);
   }
   const { watch } = ui.platform.reactive;
-  return dd.alias(() => watch(ctrl.state$, (s) => render(s, ctrl, ui)))();
+  // A stable host wrapper so we get one $detach when the panel actually closes
+  // (the aliased inner tree swaps on every state change and can't carry teardown).
+  return div({ className: 'audiobook-host' }, dd.alias(() => watch(ctrl.state$, (s) => render(s, ctrl, ui)))())
+    .on({ $detach: () => { ctrl.dispose(); controllers.delete(node.id); } });
 }
 
 function render(s, ctrl, ui) {

@@ -88,8 +88,8 @@ function collectionDialog(d, ui) {
   );
 }
 function storeFields(form, set) {
-  const f = (lbl, k, ph = '') => div({ className: 'field', $styling: { marginBottom: '10px' } },
-    label(lbl), input({ className: 'input', placeholder: ph }).on({ input: set(k) }));
+  const f = (lbl, k, ph = '', type = 'text') => div({ className: 'field', $styling: { marginBottom: '10px' } },
+    label(lbl), input({ className: 'input', placeholder: ph, type, autocomplete: 'off' }).on({ input: set(k) }));
   if (form.driver === 'filesystem') return div({}, f('Root directory', 'root', './data/team'), f('Prefix (optional)', 'prefix'));
   if (form.driver === 's3') {
     return div({},
@@ -98,7 +98,7 @@ function storeFields(form, set) {
       f('Region', 'region', 'auto'),
       f('Endpoint (R2/MinIO; blank for AWS)', 'endpoint', 'https://<acct>.r2.cloudflarestorage.com'),
       f('Access key id', 'accessKeyId'),
-      f('Secret access key', 'secretAccessKey'),
+      f('Secret access key', 'secretAccessKey', '', 'password'),
     );
   }
   return div({ className: 'body', $styling: { fontSize: '12px' } }, 'Ephemeral — data is lost on restart. Good for testing.');

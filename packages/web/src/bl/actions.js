@@ -54,10 +54,14 @@ export class CreateCollectionAction extends AppAction {
     this.record = record;
   }
   async execute({ app }) {
-    const res = await app.platform.api.createCollection(this.record);
-    app.platform.notifications.success(`Created collection “${res.collection.name}”`);
-    await app.engine.dispatch(new LoadCollectionsAction());
-    app.engine.dispatch(new NavigateAction('/', res.collection.id));
+    try {
+      const res = await app.platform.api.createCollection(this.record);
+      app.platform.notifications.success(`Created collection “${res.collection.name}”`);
+      await app.engine.dispatch(new LoadCollectionsAction());
+      app.engine.dispatch(new NavigateAction('/', res.collection.id));
+    } catch (err) {
+      app.platform.notifications.error(`Couldn’t create collection: ${err.message}`);
+    }
   }
 }
 
@@ -75,9 +79,13 @@ export class CreateFolderAction extends AppAction {
   }
   async execute({ app }) {
     const parentId = app.explorer.state.folder?.id ?? 'root';
-    await app.platform.api.mkdir(parentId, this.name);
-    app.platform.notifications.success(`Created folder "${this.name}"`);
-    app.engine.dispatch(new NavigateAction(parentId));
+    try {
+      await app.platform.api.mkdir(parentId, this.name);
+      app.platform.notifications.success(`Created folder "${this.name}"`);
+      app.engine.dispatch(new NavigateAction(parentId));
+    } catch (err) {
+      app.platform.notifications.error(`Couldn’t create folder: ${err.message}`);
+    }
   }
 }
 
@@ -87,9 +95,13 @@ export class DeleteAction extends AppAction {
     this.ids = ids;
   }
   async execute({ app }) {
-    for (const id of this.ids) await app.platform.api.remove(id, true);
-    app.platform.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
-    for (const id of this.ids) app.platform.workbench.closeTab(id);
+    try {
+      for (const id of this.ids) await app.platform.api.remove(id, true);
+      app.platform.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
+      for (const id of this.ids) app.platform.workbench.closeTab(id);
+    } catch (err) {
+      app.platform.notifications.error(`Couldn’t delete: ${err.message}`);
+    }
     app.engine.dispatch(new RefreshAction());
   }
 }
@@ -101,9 +113,13 @@ export class RenameAction extends AppAction {
     this.newName = newName;
   }
   async execute({ app }) {
-    const node = await app.platform.api.rename(this.id, this.newName);
-    app.platform.workbench.updateTabNode(node.node);
-    app.engine.dispatch(new RefreshAction());
+    try {
+      const node = await app.platform.api.rename(this.id, this.newName);
+      app.platform.workbench.updateTabNode(node.node);
+      app.engine.dispatch(new RefreshAction());
+    } catch (err) {
+      app.platform.notifications.error(`Couldn’t rename: ${err.message}`);
+    }
   }
 }
 
@@ -114,11 +130,15 @@ export class MoveAction extends AppAction {
     this.destParentId = destParentId;
   }
   async execute({ app }) {
-    for (const id of this.ids) {
-      if (id === this.destParentId) continue;
-      await app.platform.api.move(id, this.destParentId);
+    try {
+      for (const id of this.ids) {
+        if (id === this.destParentId) continue;
+        await app.platform.api.move(id, this.destParentId);
+      }
+      app.platform.notifications.info(`Moved ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
+    } catch (err) {
+      app.platform.notifications.error(`Couldn’t move: ${err.message}`);
     }
-    app.platform.notifications.info(`Moved ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
     app.engine.dispatch(new RefreshAction());
   }
 }
@@ -225,8 +245,12 @@ export class SearchAction extends AppAction {
     const offline = app.offline;
     // Offline (or server unreachable) → search the pinned corpus locally.
     if (offline && !offline.state.online) {
-      const results = await offline.searchOffline(q, { limit: 40 });
-      search.set({ results, loading: false, ran: true, offline: true });
+      try {
+        const results = await offline.searchOffline(q, { limit: 40 });
+        search.set({ results, loading: false, ran: true, offline: true });
+      } catch (err) {
+        search.set({ results: [], loading: false, ran: true, offline: true, error: err.message });
+      }
       return;
     }
     try {
