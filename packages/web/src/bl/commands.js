@@ -7,6 +7,7 @@ import {
   NavigateAction, RefreshAction, CreateFolderAction, DeleteAction, RenameAction,
   UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction,
 } from './actions.js';
+import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;
@@ -112,6 +113,19 @@ export function registerCommands(app) {
   cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => workbench.toggleInfoPanel(), { category: 'View', icon: 'info' });
   cmd('notifications.show', 'Show Notifications', () => app.social.toggleInbox(true), { category: 'View' });
   cmd('notifications.enablePush', 'Enable Push Notifications', () => app.social.enablePush(), { category: 'Notifications' });
+
+  // --- plugins ---------------------------------------------------------------
+  cmd('workbench.view.plugins', 'Show Plugins', () => workbench.setActivity('plugins'), { category: 'View' });
+  cmd('plugins.installFromUrl', 'Install Plugin from URL…', () => {
+    workbench.showDialog({
+      kind: 'prompt', title: 'Install plugin from URL', label: 'Plugin package (.zip) URL',
+      placeholder: 'https://example.com/plugin.zip', confirmLabel: 'Fetch',
+      onSubmit: (url) => { workbench.closeDialog(); if (url?.trim()) beginInstallFromUrl(app, url.trim()); },
+    });
+  }, { category: 'Plugins', icon: 'plug' });
+  cmd('plugins.installFromFile', 'Install Plugin from File…', () => {
+    pickZip((file) => file && beginInstallFromFile(app, file));
+  }, { category: 'Plugins', icon: 'plug' });
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -124,6 +138,19 @@ function pickFiles(cb) {
   document.body.appendChild(input);
   input.addEventListener('change', () => {
     cb(input.files);
+    input.remove();
+  }, { once: true });
+  input.click();
+}
+
+function pickZip(cb) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.zip,application/zip';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.addEventListener('change', () => {
+    cb(input.files[0]);
     input.remove();
   }, { once: true });
   input.click();

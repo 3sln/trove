@@ -1,0 +1,170 @@
+// Injectable browser build of the Trove plugin SDK — a single self-contained IIFE
+// with NO imports, so the host can inline it into a sandboxed iframe's srcdoc
+// alongside the plugin's entry script. The iframe runs on an opaque origin
+// (sandbox="allow-scripts", no allow-same-origin), so it can't fetch its own
+// package files; instead it reaches everything — resources, files, settings,
+// storage — through the host over a transferred MessagePort. Package resources
+// are handed back as raw bytes (or iframe-local blob: URLs), never host URLs, so
+// the plugin only ever holds opaque handles.
+//
+// Plugins use it as:  trove.activate(async (ctx) => { ... })
+(function () {
+  'use strict';
+  let port = null, manifest = null, capabilities = [], online = true, seq = 0;
+  const pending = new Map();
+  const commandHandlers = new Map();
+  const openerHandlers = new Map();
+  const indexerHandlers = new Map();
+  const contributions = { commands: new Map(), openers: new Map(), indexers: new Map(), statusItems: new Map() };
+  let onConnectivity = null, onDeactivate = null, onSettingsChange = null;
+
+  const now = () => { try { return Date.now(); } catch { return 0; } };
+
+  function call(method, params, transfer) {
+    const id = ++seq;
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      port.postMessage({ __trove: 'req', id, method, params }, transfer || []);
+    });
+  }
+  const emit = (method, params) => port.postMessage({ __trove: 'event', method, params });
+
+  function buildManifest() {
+    return {
+      id: manifest && manifest.id, name: manifest && manifest.name, online, ts: now(),
+      contributions: {
+        commands: [...contributions.commands.values()],
+        openers: [...contributions.openers.values()],
+        indexers: [...contributions.indexers.values()],
+        statusItems: [...contributions.statusItems.values()],
+      },
+    };
+  }
+  const announce = () => port && emit('manifest', buildManifest());
+
+  function onPort(e) {
+    const m = e.data;
+    if (!m || m.__trove == null) return;
+    if (m.__trove === 'res') {
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      m.error ? p.reject(Object.assign(new Error(m.error.message), m.error)) : p.resolve(m.result);
+    } else if (m.__trove === 'req') {
+      Promise.resolve().then(() => dispatch(m.method, m.params))
+        .then((result) => port.postMessage({ __trove: 'res', id: m.id, result }))
+        .catch((err) => port.postMessage({ __trove: 'res', id: m.id, error: { message: err.message } }));
+    } else if (m.__trove === 'event') {
+      dispatchEvent(m.method, m.params);
+    }
+  }
+
+  function dispatch(method, params) {
+    if (method === 'command:execute') return commandHandlers.get(params.id) && commandHandlers.get(params.id)(...(params.args || []));
+    if (method === 'opener:open') { const f = openerHandlers.get(params.openerId); if (!f) throw new Error('no opener ' + params.openerId); return f(params.file, params.context); }
+    if (method === 'indexer:run') { const f = indexerHandlers.get(params.indexerId); if (!f) throw new Error('no indexer ' + params.indexerId); return f(params.file); }
+    if (method === 'manifest') return buildManifest();
+    throw new Error('Unknown host call ' + method);
+  }
+  async function dispatchEvent(method, params) {
+    if (method === 'deactivate') return onDeactivate && onDeactivate();
+    if (method === 'connectivity') { online = !!params.online; try { onConnectivity && (await onConnectivity({ online })); } catch (e) { console.error(e); } announce(); }
+    if (method === 'settings:changed') { try { onSettingsChange && onSettingsChange(params.key, params.value); } catch (e) { console.error(e); } }
+  }
+
+  function requireCap(cap) { if (!capabilities.includes(cap)) throw new Error('Plugin lacks capability "' + cap + '"'); }
+
+  function makeContext() {
+    return {
+      manifest, capabilities,
+      get online() { return online; },
+      commands: {
+        register(id, handler, opts) {
+          opts = opts || {};
+          commandHandlers.set(id, handler);
+          const spec = { id, title: opts.title, category: opts.category, icon: opts.icon, offline: !!opts.offline };
+          contributions.commands.set(id, spec);
+          return call('contribute:command', spec);
+        },
+        execute(id) { const a = [].slice.call(arguments, 1); return call('command:execute', { id, args: a }); },
+      },
+      contributes: {
+        opener(spec, handler) { openerHandlers.set(spec.id, handler); const e = Object.assign({}, spec, { offline: !!spec.offline }); contributions.openers.set(spec.id, e); return call('contribute:opener', e); },
+        indexer(spec, handler) { indexerHandlers.set(spec.id, handler); const e = Object.assign({}, spec, { offline: !!spec.offline }); contributions.indexers.set(spec.id, e); return call('contribute:indexer', e); },
+        statusItem(spec) { contributions.statusItems.set(spec.id, Object.assign({}, spec, { offline: !!spec.offline })); return call('contribute:statusItem', spec); },
+        keybinding(spec) { return call('contribute:keybinding', spec); },
+      },
+      // Package resources — opaque handles. read() copies bytes into the iframe;
+      // url() wraps them in an iframe-local blob: URL.
+      resources: {
+        list() { return call('resources:list', {}); },
+        async read(path) { const r = await call('resources:read', { path }); return new Uint8Array(r.bytes); },
+        async text(path) { return new TextDecoder().decode(await this.read(path)); },
+        async url(path, type) {
+          const bytes = await this.read(path);
+          return URL.createObjectURL(new Blob([bytes], { type: type || 'application/octet-stream' }));
+        },
+      },
+      ui: {
+        toast: (text, opts) => emit('ui:toast', Object.assign({ text }, opts)),
+        showPanel: () => call('ui:showPanel', {}),
+        setBadge: (text) => emit('ui:badge', { text }),
+        setContext: (key, value) => emit('context:set', { key, value }),
+      },
+      files: {
+        read: (id, opts) => (requireCap('files'), call('files:read', Object.assign({ id }, opts))),
+        list: (pathOrId, opts) => (requireCap('files'), call('files:list', Object.assign({ pathOrId }, opts))),
+        stat: (id) => (requireCap('files'), call('files:stat', { id })),
+        downloadUrl: (id) => (requireCap('files'), call('files:downloadUrl', { id })),
+        index: (indexerId, nodeId, documents, facet) => (requireCap('indexer'), call('files:index', { indexerId, nodeId, documents, facet })),
+      },
+      // Persistent per-plugin storage. Local by default; scope:'server' syncs
+      // (needs the serverStorage capability). The host tracks ownership for GC.
+      db: {
+        get: (key, scope) => (requireCap('storage'), call('db:get', { key, scope })),
+        set: (key, value, scope) => (requireCap('storage'), call('db:set', { key, value, scope })),
+        delete: (key, scope) => (requireCap('storage'), call('db:delete', { key, scope })),
+        query: (prefix, scope) => (requireCap('storage'), call('db:query', { prefix, scope })),
+      },
+      // The plugin's own settings (declared in the manifest). getSecret reads a
+      // secret-typed value the host stores separately.
+      settings: {
+        get: (key) => call('settings:get', { key }),
+        getSecret: (key) => call('settings:getSecret', { key }),
+        set: (key, value) => call('settings:set', { key, value }),
+        onChange: (fn) => { onSettingsChange = fn; },
+      },
+      onConnectivity: (fn) => { onConnectivity = fn; },
+      setAvailability: (id, opts) => { for (const k of Object.values(contributions)) if (k.has(id)) k.get(id).offline = !!(opts && opts.offline); announce(); },
+      announce,
+      onDeactivate: (fn) => { onDeactivate = fn; },
+    };
+  }
+
+  async function activate(setup) {
+    await new Promise((resolve) => {
+      function onInit(e) {
+        if (!e.data || e.data.__trove !== 'init') return;
+        window.removeEventListener('message', onInit);
+        manifest = e.data.manifest; capabilities = e.data.capabilities || []; online = e.data.online != null ? e.data.online : true;
+        port = e.ports[0];
+        port.onmessage = onPort;
+        resolve();
+      }
+      window.addEventListener('message', onInit);
+      parent.postMessage({ __trove: 'ready' }, '*');
+    });
+    const ctx = makeContext();
+    try {
+      await setup(ctx);
+      await call('activated', { ok: true });
+      announce();
+    } catch (err) {
+      await call('activated', { ok: false, error: err && err.message });
+      throw err;
+    }
+    return ctx;
+  }
+
+  globalThis.trove = { activate };
+})();

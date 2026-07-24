@@ -159,7 +159,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv });
     }
     if (config.assets) {
       const asset = await config.assets(req);

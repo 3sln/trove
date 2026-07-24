@@ -1,0 +1,105 @@
+// The pre-install review — everything a user needs to decide whether to trust
+// and install a plugin: its identity + signature/domain-verified status, the
+// capabilities it wants (each explained, admin-only ones flagged), what it
+// contributes, and its settings. Capabilities are opt-in checkboxes; admin-only
+// ones are disabled for non-admins. No plugin code has run at this point.
+
+import { dd } from '../../runtime.js';
+import { icon } from '../icon.js';
+import { bytes as fmtBytes } from '../format.js';
+
+const { div, span, button, h3, p, label, input } = dd;
+
+// Grant selection persists across re-renders, keyed to the dialog instance.
+let sel = { ref: null, grants: null };
+
+export function pluginReview(d, ui) {
+  const wb = ui.platform.workbench;
+  const s = d.summary;
+  if (sel.ref !== d) {
+    // Default: request everything the user is allowed to grant.
+    sel = { ref: d, grants: new Set(s.capabilities.filter((c) => !c.adminOnly || d.isAdmin).map((c) => c.id)) };
+  }
+  const toggle = (cap) => { sel.grants.has(cap) ? sel.grants.delete(cap) : sel.grants.add(cap); ui.rerender?.(); };
+
+  return div({},
+    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'dialog review', $styling: { width: 'min(560px, 96vw)' } },
+      header(s),
+      div({ className: 'review-body' },
+        s.description ? p({ className: 'review-desc' }, s.description) : null,
+        section('Capabilities it requests', s.capabilities.length
+          ? div({ className: 'cap-list' }, ...s.capabilities.map((c) => capRow(c, d.isAdmin, sel.grants.has(c.id), () => toggle(c.id))))
+          : muted('None — this plugin only runs in its sandbox.')),
+        s.contributions.length ? section('What it adds', div({ className: 'contrib-list' }, ...s.contributions.map(contribRow))) : null,
+        s.settings.length ? section('Settings', div({ className: 'contrib-list' }, ...s.settings.map(settingRow))) : null,
+        div({ className: 'review-meta' }, `${s.fileCount} files · ${fmtBytes(s.sizeBytes)} · id ${s.id}`),
+      ),
+      div({ className: 'row-actions' },
+        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn primary' }, icon('plug', { size: 15 }), 'Install').on({ click: () => d.onInstall([...sel.grants]) }),
+      ),
+    ),
+  );
+}
+
+function header(s) {
+  const t = s.trust || { status: 'unverified' };
+  return div({ className: 'review-head' },
+    div({ className: 'avatar' }, (s.name || '?')[0].toUpperCase()),
+    div({ className: 'rh-main' },
+      div({ className: 'rh-name' }, s.name, span({ className: 'rh-ver' }, 'v' + s.version)),
+      div({ className: 'rh-author' }, 'by ' + s.author),
+    ),
+    trustBadge(t),
+  );
+}
+
+function trustBadge(t) {
+  if (t.status === 'verified') {
+    return span({ className: 'trust verified', title: `Signed by a key published at ${t.domain}` }, icon('check', { size: 13 }), 'Verified · ' + t.domain);
+  }
+  if (t.status === 'signed') {
+    return span({ className: 'trust signed', title: t.reason || 'Signed, but the domain does not vouch for the key' }, icon('info', { size: 13 }), 'Signed');
+  }
+  return span({ className: 'trust unverified', title: t.reason || 'This plugin is not signed' }, icon('warn', { size: 13 }), 'Unverified');
+}
+
+function capRow(cap, isAdmin, checked, onToggle) {
+  const blocked = cap.adminOnly && !isAdmin;
+  return label({ className: `cap-row ${blocked ? 'blocked' : ''}` },
+    input({ type: 'checkbox', checked: checked && !blocked, disabled: blocked }).on({ change: () => !blocked && onToggle() }),
+    div({ className: 'cap-info' },
+      div({ className: 'cap-name' }, cap.id, cap.adminOnly ? span({ className: 'pf-badge', $styling: { color: 'var(--warn)', marginLeft: '6px' } }, 'admin only') : null),
+      div({ className: 'cap-desc' }, cap.description + (blocked ? ' — requires an administrator' : '')),
+    ),
+  );
+}
+
+function contribRow(c) {
+  const kindIcon = { command: 'command', opener: 'file', indexer: 'search' }[c.kind] || 'command';
+  return div({ className: 'contrib-row' },
+    icon(kindIcon, { size: 13 }),
+    span({ className: 'cr-title' }, c.title),
+    c.detail ? span({ className: 'cr-detail' }, c.detail) : null,
+    c.offline ? span({ className: 'pf-badge offline-ok' }, 'offline') : null,
+    span({ className: 'pf-kind' }, c.kind),
+  );
+}
+
+function settingRow(st) {
+  return div({ className: 'contrib-row' },
+    icon('gear', { size: 13 }),
+    span({ className: 'cr-title' }, st.title),
+    st.secret
+      ? span({ className: 'pf-badge', $styling: { color: 'var(--warn)' } }, 'secret')
+      : span({ className: 'pf-kind' }, st.type),
+  );
+}
+
+function section(title, content) {
+  return div({ className: 'review-section' }, div({ className: 'rs-title' }, title), content);
+}
+function muted(t) {
+  return div({ className: 'muted', $styling: { fontSize: '12.5px' } }, t);
+}

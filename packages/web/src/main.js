@@ -8,6 +8,7 @@ import { dd } from './runtime.js';
 import { createPlatform } from './platform/index.js';
 import { createApp } from './bl/index.js';
 import { NavigateAction, UploadFilesAction } from './bl/actions.js';
+import { parsePackage } from './platform/pluginPackage.js';
 import workbenchComposition from './ui/compositions/workbench.js';
 
 const root = document.querySelector('.workbench');
@@ -15,28 +16,12 @@ const root = document.querySelector('.workbench');
 const platform = createPlatform({ baseUrl: '' });
 const { engine, app } = createApp(platform);
 
-// --- plugin catalog ---------------------------------------------------------
-// A minimal example plugin ships with the app to exercise the sandbox end-to-end.
-// Real deployments discover plugins from a registry; each declares its own domain.
-const AVAILABLE_PLUGINS = [
-  {
-    id: 'com.trove.wordcount',
-    name: 'Word Count',
-    entry: new URL('/plugins/wordcount.html', location.origin).toString(),
-    capabilities: ['storage', 'ui', 'commands'],
-    description: 'A tiny demo plugin: a persistent click counter in its own database, a command, and a status-bar item — all from inside a sandboxed iframe.',
-  },
-];
+// Plugins are installed by the user (from a .zip or a URL) and persisted locally;
+// restore any that were installed on this device, then run.
+platform.plugins.restore();
 
 const plugins = {
-  available: AVAILABLE_PLUGINS,
-  async install(manifest) {
-    // In a real UI we'd show a capability-consent dialog here.
-    await platform.plugins.load(manifest);
-  },
-  async uninstall(id) {
-    await platform.plugins.unload(id);
-  },
+  uninstall: (id) => platform.plugins.uninstall(id),
 };
 
 // --- mount ------------------------------------------------------------------
@@ -94,4 +79,12 @@ window.addEventListener('drop', (e) => {
 })();
 
 // Expose for debugging / e2e.
-window.__trove = { platform, engine, app };
+window.__trove = {
+  platform, engine, app,
+  // Test/automation hook: install a package from raw zip bytes.
+  test: {
+    parsePackage,
+    assessTrust: (pkg) => platform.plugins.assessTrust(pkg),
+    install: (pkg, opts) => platform.plugins.install(pkg, opts),
+  },
+};

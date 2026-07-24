@@ -48,16 +48,30 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   for `.m4b`: chapter list, cover art, rich metadata, variable speed, ±30s skip,
   and **resumable progress** — chapters/metadata parsed straight from the MP4
   boxes via HTTP Range reads (opening a 600 MB book is instant).
-- **Sandboxed plugins** — plugins run in **hidden, sandboxed iframes on their own
-  domain** and talk to the workbench only over a `MessagePort`. They contribute
-  commands, openers, indexers, status items, and keybindings; they can surface a
-  popup UI panel (Chrome-extension style); and — when they declare the capability
-  — they get a **persistent per-domain database**. Plugins **announce a live
-  capability manifest** on connect (and re-announce when the app goes on/offline),
-  each contribution flagged offline-capable or not — so the workbench knows which
-  plugin features actually work right now, disables the ones that don't (e.g. a
-  network-only previewer while offline), and treats a plugin that sends no
-  manifest as not running. The host also **re-requests the manifest on a
+- **Sandboxed plugins** — plugins are **self-contained ZIP packages** (a
+  `manifest.json`, an entry script, and any assets) installed by **URL or file
+  upload** — no central catalogue. Each runs in a **hidden, sandboxed iframe on an
+  opaque origin** (`allow-scripts`, no `allow-same-origin`): it can't touch the
+  host DOM, cookies, or storage, and can't even fetch its own package files. The
+  host injects the SDK + the plugin's entry script into the frame and hands it a
+  single `MessagePort`; **package resources arrive as opaque byte handles** over
+  that port. Everything a plugin can do — file access, storage, UI — is gated by
+  the **capabilities the user grants at install time**, and some (e.g. writing to
+  **server-side** storage) are **admin-only**. Before anything runs, a
+  **pre-install review** shows the package's identity, capabilities (each
+  explained), contributions, and settings so the user can decide whether to trust
+  it. Signed packages show a **domain-verified** badge: the manifest declares a
+  domain, and the host checks the signing key's fingerprint against an
+  `assetlinks`-style document published at that domain (Digital Asset Links
+  style). Plugins get **persistent storage** — client-side (IndexedDB, per plugin)
+  or, with the capability, server-side — and Trove **tracks which plugin owns what
+  data** so uninstalling wipes it. They contribute commands, openers, indexers,
+  status items, and keybindings, and can surface a popup UI panel. Plugins
+  **announce a live capability manifest** on connect (and re-announce when the app
+  goes on/offline), each contribution flagged offline-capable or not — so the
+  workbench knows which plugin features work right now, disables the ones that
+  don't (e.g. a network-only previewer while offline), and treats a plugin that
+  sends no manifest as not running. The host also **re-requests the manifest on a
   heartbeat**, so a plugin that hangs or crashes between events is noticed and its
   features are marked unavailable.
 - **Conversations on every file** — threaded comments with @mentions, reactions,
@@ -179,30 +193,51 @@ const hits = await vfs.searchQuery('greeting');
 
 ## Writing a plugin
 
-A plugin is a web page on **its own domain** plus a manifest. From inside its
-sandboxed iframe it uses `@trove/plugin-sdk`:
+A plugin is a **ZIP** containing a `manifest.json`, an entry script, and any
+assets. The manifest declares the plugin's id, the capabilities it wants, its
+contributions, and its settings:
+
+```json
+{
+  "id": "com.example.hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "entry": "plugin.js",
+  "domain": "plugins.example.com",
+  "capabilities": ["ui", "commands", "storage", "indexer"],
+  "settings": [{ "key": "apiKey", "type": "string", "title": "API key", "secret": true }]
+}
+```
+
+The host injects `@trove/plugin-sdk` into the sandboxed frame; the entry script
+calls `trove.activate`:
 
 ```js
-import { activate } from '@trove/plugin-sdk';
-
-activate(async (ctx) => {
+trove.activate(async (ctx) => {
   // Contribute a command, a status item, an opener, or an indexer.
   ctx.commands.register('hello.world', () => ctx.ui.toast('Hi from a plugin!'));
 
-  // Persist state in this plugin's own database (declare "storage").
+  // Read a packaged asset via an opaque handle (no URLs leak out of the frame).
+  const banner = await ctx.resources.text('banner.txt');
+
+  // Persist state (declare "storage"); scope 'local' (default) or 'server'.
   const seen = (await ctx.db.get('count')) || 0;
   await ctx.db.set('count', seen + 1);
 
+  // Read a secret the user entered in settings (never stored in plaintext prefs).
+  const key = await ctx.settings.getSecret('apiKey');
+
   // Push search documents under this plugin's namespace (declare "indexer").
   ctx.contributes.indexer({ id: 'labels', title: 'Image labels' });
-  // …and later, when you have labels for a file:
   await ctx.files.index('labels', nodeId, [{ text: 'golden retriever, park' }], { tags: [...] });
 });
 ```
 
-Capabilities the manifest doesn't request (and you don't approve) are simply
-absent from `ctx`. See `packages/web/public/plugins/wordcount.html` for a
-complete, self-contained example.
+Capabilities the manifest doesn't request (or the user doesn't grant) are simply
+absent from `ctx`. To ship a **domain-verified** plugin, sign the package and
+publish the key's fingerprint at `https://<domain>/.well-known/trove-assetlinks.json`.
+See `packages/web/test/pluginFixture.mjs` for a complete, self-contained example
+package.
 
 ## Layout
 
@@ -217,8 +252,10 @@ packages/
 ## Tests
 
 ```sh
-bun test                       # core + server + mp4 parser (12 tests)
-node packages/web/test/e2e.mjs # full workbench in headless Chromium (9 checks)
+bun test                                # core + server + mp4 + plugin packages/signing
+node packages/web/test/e2e.mjs          # full workbench in headless Chromium
+node packages/web/test/plugins.e2e.mjs  # sandboxed plugin install + offline availability
+node packages/web/test/offline.e2e.mjs  # service worker, pinning, offline queue + sync
 ```
 
 ## License

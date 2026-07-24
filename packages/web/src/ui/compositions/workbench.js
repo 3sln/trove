@@ -27,8 +27,6 @@ export default function workbench({ engine, app, platform, plugins }) {
     go: (action) => engine.dispatch(action),
     exec: (id, ...args) => platform.commands.execute(id, ...args),
     rerender: () => bump$.next(Date.now()),
-    availablePlugins: plugins?.available || [],
-    installPlugin: (p) => plugins?.install(p),
     uninstallPlugin: (id) => plugins?.uninstall(id),
     _paletteFiles: [],
   };

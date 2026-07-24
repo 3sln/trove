@@ -1,123 +1,37 @@
-// PluginHost — loads plugins into hidden, sandboxed iframes and bridges them to
-// the workbench over a MessagePort. This is the security boundary: a plugin's
-// code runs in an iframe on the *plugin's own domain* (declared in its manifest),
-// never touching the host DOM or globals. The only channel is RPC.
+// PluginHost — installs and runs client-side plugin *packages* (zips). A plugin's
+// code runs inside a sandboxed iframe on an OPAQUE origin (sandbox allow-scripts,
+// no allow-same-origin): it can't touch the host DOM, can't read cookies/storage,
+// and can't even fetch its own package files. The host injects our browser SDK +
+// the plugin's entry script into the frame's srcdoc; everything else — package
+// resources (as opaque byte handles), file access, settings, storage — flows over
+// a single transferred MessagePort, capability-gated by what the user granted at
+// install time.
 //
-// A manifest:
-//   {
-//     id: 'com.example.audiobooks',
-//     name: 'Audiobooks',
-//     entry: 'https://plugin.example.com/trove-plugin.html',  // its own origin
-//     capabilities: ['storage', 'files'],   // gates what the host exposes
-//     contributes: { ... }                  // optional declarative contributions
-//   }
-//
-// Grant flow: the host only wires the capabilities the manifest asks for and the
-// user approved. Plugin contributions (commands/openers/indexers) are registered
-// into the shared ContributionRegistry, tagged with the plugin id, and revoked on
-// unload. Plugin-rendered UI is surfaced by resizing/showing its iframe as a
-// popup panel (Chrome-extension style) on request.
+// Plugins are persisted (PluginRegistry, IndexedDB) so they survive reloads, and
+// re-announce a live capability manifest so the workbench knows what works right
+// now (incl. offline). See pluginPackage.js / pluginSigning.js for install-time
+// validation and the domain-verified trust signal.
 
 import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
-import { PluginDataStore } from './pluginData.js';
+import SDK_SOURCE from '@trove/plugin-sdk/browser.js?raw';
+import { PluginRegistry, PluginDataStore } from './pluginStore.js';
+import { assessTrust } from './pluginSigning.js';
+import { entrySource, ADMIN_ONLY_CAPS } from './pluginPackage.js';
 
-const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener'];
+const ALL_CAPABILITIES = ['files', 'storage', 'serverStorage', 'ui', 'commands', 'indexer', 'opener'];
 
 export class PluginHost {
-  /**
-   * @param {object} platform the assembled platform (contributions, commands, api, …)
-   */
   constructor(platform, { heartbeatMs = 20000 } = {}) {
     this.platform = platform;
     this.plugins = new Map(); // id -> record
+    this.registry = new PluginRegistry();
     this.online = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.heartbeatMs = heartbeatMs;
     this._heartbeat = null;
     this._probing = false;
-    this.subject = platform.reactive.ObservableSubject
-      ? new platform.reactive.ObservableSubject([])
-      : null;
+    this.subject = platform.reactive.ObservableSubject ? new platform.reactive.ObservableSubject([]) : null;
   }
 
-  /** Poll every active plugin's manifest on a timer, independent of connectivity
-   *  changes. This catches plugins that hang/crash (they stop answering → their
-   *  contributions go unavailable) and silent capability updates a plugin didn't
-   *  push. Runs only while at least one plugin is loaded. */
-  #startHeartbeat() {
-    if (this._heartbeat || !this.heartbeatMs) return;
-    this._heartbeat = setInterval(() => this.#heartbeat(), this.heartbeatMs);
-    if (this._heartbeat?.unref) this._heartbeat.unref();
-  }
-  #stopHeartbeat() {
-    if (this._heartbeat) clearInterval(this._heartbeat);
-    this._heartbeat = null;
-  }
-  async #heartbeat() {
-    if (this._probing) return; // don't overlap slow probes
-    this._probing = true;
-    try {
-      let changed = false;
-      for (const r of this.plugins.values()) {
-        if (r.status === 'active') changed = (await this.#probe(r)) || changed;
-      }
-      if (changed) this.#emit();
-    } finally {
-      this._probing = false;
-    }
-  }
-
-  /** Change the heartbeat interval (0 disables); restarts the timer. */
-  setHeartbeat(ms) {
-    this.heartbeatMs = ms;
-    this.#stopHeartbeat();
-    if (ms && [...this.plugins.values()].some((r) => r.status === 'active')) this.#startHeartbeat();
-  }
-
-  list() {
-    return [...this.plugins.values()].map((p) => ({
-      id: p.manifest.id, name: p.manifest.name, status: p.status,
-      capabilities: p.granted, error: p.error || null, hasUi: p.hasUi, badge: p.badge || null,
-      // Live capability picture: whether the plugin is currently answering, and
-      // which of its contributions work in the present (online/offline) state.
-      responsive: !!p.responsive,
-      manifest: p.live || null,
-      features: this.#featureList(p),
-    }));
-  }
-
-  /** Flatten a plugin's live contributions into availability rows for the UI. */
-  #featureList(record) {
-    const live = record.live;
-    if (!live) return [];
-    const rows = [];
-    const push = (kind, items) => {
-      for (const it of items || []) {
-        rows.push({ kind, id: it.id, title: it.title || it.id, offline: !!it.offline, available: this.#availableSpec(record, it) });
-      }
-    };
-    push('command', live.contributions?.commands);
-    push('opener', live.contributions?.openers);
-    push('indexer', live.contributions?.indexers);
-    push('statusItem', live.contributions?.statusItems);
-    return rows;
-  }
-
-  #availableSpec(record, spec) {
-    if (record.status !== 'active' || !record.responsive) return false;
-    return this.online || !!spec.offline;
-  }
-
-  /**
-   * Is a registered contribution available right now? Built-in contributions
-   * (no pluginId) are always available; plugin contributions require the plugin
-   * to be active + responsive, and — when offline — to be offline-capable.
-   */
-  isAvailable(contrib) {
-    if (!contrib?.pluginId) return true;
-    const record = this.plugins.get(contrib.pluginId);
-    if (!record) return false;
-    return this.#availableSpec(record, contrib);
-  }
   observe() {
     return this.subject;
   }
@@ -125,67 +39,127 @@ export class PluginHost {
     this.subject?.next(this.list());
   }
 
-  domainOf(manifest) {
-    try {
-      return new URL(manifest.entry).hostname || manifest.id;
-    } catch {
-      return manifest.id;
-    }
+  list() {
+    return [...this.plugins.values()].map((p) => ({
+      id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, status: p.status,
+      capabilities: p.grants, error: p.error || null, hasUi: p.hasUi, badge: p.badge || null,
+      trust: p.trust || null, settingsSchema: p.manifest.settings || [],
+      responsive: !!p.responsive, manifest: p.live || null, features: this.#featureList(p),
+    }));
+  }
+
+  #featureList(record) {
+    const live = record.live;
+    if (!live) return [];
+    const rows = [];
+    const push = (kind, items) => { for (const it of items || []) rows.push({ kind, id: it.id, title: it.title || it.id, offline: !!it.offline, available: this.#availableSpec(record, it) }); };
+    push('command', live.contributions?.commands);
+    push('opener', live.contributions?.openers);
+    push('indexer', live.contributions?.indexers);
+    push('statusItem', live.contributions?.statusItems);
+    return rows;
+  }
+  #availableSpec(record, spec) {
+    if (record.status !== 'active' || !record.responsive) return false;
+    return this.online || !!spec.offline;
+  }
+  isAvailable(contrib) {
+    if (!contrib?.pluginId) return true;
+    const record = this.plugins.get(contrib.pluginId);
+    if (!record) return false;
+    return this.#availableSpec(record, contrib);
+  }
+
+  // --- install / restore -----------------------------------------------------
+
+  /** Whether the current user may grant a capability (some need admin). */
+  canGrant(cap, isAdmin) {
+    return !ADMIN_ONLY_CAPS.has(cap) || !!isAdmin;
   }
 
   /**
-   * Load and activate a plugin. `grant` limits capabilities (defaults to the
-   * intersection of requested and allowed). Returns when the plugin's
-   * activate() resolves (or rejects).
+   * Install a parsed package. `grants` is the subset of requested capabilities
+   * the user approved (the review UI filters admin-only caps for non-admins).
    */
-  async load(manifest, { grant } = {}) {
-    if (this.plugins.has(manifest.id)) return this.plugins.get(manifest.id);
-    const requested = manifest.capabilities || [];
-    const granted = (grant || requested).filter((c) => ALL_CAPABILITIES.includes(c) && requested.includes(c));
-
-    const iframe = document.createElement('iframe');
-    // Hidden by default; surfaced only when the plugin/user opens its panel.
-    iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
-    // Sandbox: scripts run, but same-origin is NOT granted to the host — the
-    // frame is on the plugin's own origin, isolated from ours.
-    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-same-origin');
-    iframe.setAttribute('referrerpolicy', 'no-referrer');
-    iframe.src = manifest.entry;
-
+  async install(pkg, { grants, trust } = {}) {
+    const id = pkg.manifest.id;
+    const requested = pkg.manifest.capabilities || [];
+    const granted = (grants || requested).filter((c) => ALL_CAPABILITIES.includes(c) && requested.includes(c));
     const record = {
-      manifest, granted, iframe, status: 'loading', error: null,
-      disposers: [], channel: null, hasUi: false, origin: new URL(manifest.entry).origin,
-      db: granted.includes('storage') ? new PluginDataStore(this.domainOf(manifest)) : null,
+      id, manifest: pkg.manifest,
+      files: Object.fromEntries([...pkg.files.entries()]),
+      grants: granted, trust: trust || null,
+      settings: {}, secrets: {}, installedAt: Date.now(),
     };
-    this.plugins.set(manifest.id, record);
+    await this.registry.save(record);
+    this.#registerSettings(record);
+    await this.#run(record);
+    return this.plugins.get(id);
+  }
+
+  /** Load all persisted plugins (call once at startup). */
+  async restore() {
+    let records = [];
+    try {
+      records = await this.registry.list();
+    } catch { /* no IndexedDB */ }
+    for (const rec of records) {
+      this.#registerSettings(rec);
+      this.#run(rec).catch((e) => console.error('restore plugin failed', rec.id, e));
+    }
+  }
+
+  #registerSettings(record) {
+    const schema = (record.manifest.settings || []).filter((s) => !s.secret);
+    if (schema.length) {
+      record._settingsDispose = this.platform.settings.scopedFor(record.id).register(
+        schema.map((s) => ({ ...s, category: record.manifest.name })),
+      );
+    }
+  }
+
+  // --- run (create the sandboxed iframe) -------------------------------------
+
+  async #run(record) {
+    if (this.plugins.get(record.id)?.status === 'active') return;
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
+    // Opaque-origin sandbox: scripts only, no same-origin, no top navigation.
+    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
+    iframe.setAttribute('referrerpolicy', 'no-referrer');
+    iframe.srcdoc = bootstrapHtml(entrySourceOf(record));
+
+    const runtime = {
+      ...record, iframe, status: 'loading', error: null, disposers: [], channel: null,
+      hasUi: false, responsive: false, data: new PluginDataStore(record.id),
+      files: mapFromFiles(record.files),
+    };
+    this.plugins.set(record.id, runtime);
     this.#emit();
     document.body.appendChild(iframe);
 
     try {
-      await this.#handshake(record);
-      record.status = 'active';
-      record.responsive = true;
-      // Pull the initial manifest in case the push hasn't arrived yet.
-      this.#probe(record).then(() => this.#emit());
-      this.#startHeartbeat(); // begin periodic liveness/capability polling
+      await this.#handshake(runtime);
+      runtime.status = 'active';
+      runtime.responsive = true;
+      this.#probe(runtime).then(() => this.#emit());
+      this.#startHeartbeat();
     } catch (err) {
-      record.status = 'error';
-      record.error = err?.message || String(err);
-      this.platform.notifications.error(`Plugin "${manifest.name}" failed to load: ${record.error}`);
+      runtime.status = 'error';
+      runtime.error = err?.message || String(err);
+      this.platform.notifications.error(`Plugin "${record.manifest.name}" failed to load: ${runtime.error}`);
     }
     this.#emit();
-    return record;
+    return runtime;
   }
 
   #handshake(record) {
     return new Promise((resolve, reject) => {
       const { iframe, manifest } = record;
       const timer = setTimeout(() => reject(new Error('Plugin handshake timed out')), 15000);
-
       const onReady = (e) => {
         if (e.source !== iframe.contentWindow || e.data?.__trove !== 'ready') return;
         window.removeEventListener('message', onReady);
-
         const channel = new MessageChannel();
         record.channel = new RpcChannel(channel.port1, {
           onCall: (m, p) => this.#hostCall(record, m, p),
@@ -194,43 +168,35 @@ export class PluginHost {
         record.resolveActivated = resolve;
         record.rejectActivated = reject;
         record._timer = timer;
-
+        // Opaque origin → target '*'; the transferred port is the real capability.
         iframe.contentWindow.postMessage(
-          { __trove: 'init', manifest, capabilities: record.granted, online: this.online },
-          record.origin,
+          { __trove: 'init', manifest, capabilities: record.grants, online: this.online },
+          '*',
           [channel.port2],
         );
       };
       window.addEventListener('message', onReady);
-      iframe.addEventListener('error', () => {
-        clearTimeout(timer);
-        reject(new Error('Failed to load plugin iframe'));
-      });
+      iframe.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Failed to load plugin iframe')); });
     });
   }
 
-  // Plugin → host RPC. Every branch is capability-checked.
+  // --- plugin → host RPC -----------------------------------------------------
+
   async #hostCall(record, method, params) {
-    const cap = (c) => {
-      if (!record.granted.includes(c)) throw new Error(`Capability "${c}" not granted`);
-    };
+    const cap = (c) => { if (!record.grants.includes(c)) throw new Error(`Capability "${c}" not granted`); };
     const pid = record.manifest.id;
     switch (method) {
-      case 'activated': {
+      case 'activated':
         clearTimeout(record._timer);
         if (params.ok) record.resolveActivated?.(record);
         else record.rejectActivated?.(new Error(params.error || 'activate() failed'));
         return { ok: true };
-      }
-      // Contributions — tagged with pluginId, registered into the shared registry.
+
       case 'contribute:command': {
-        // Register the handler AND full metadata (title/offline/pluginId) so the
-        // command appears in the palette and carries its offline availability.
         const dispose = this.platform.commands.register({
-          id: params.id,
-          title: params.title || `${record.manifest.name}: ${params.id}`,
-          category: params.category || record.manifest.name,
-          icon: params.icon, offline: !!params.offline, pluginId: pid,
+          id: params.id, title: params.title || `${record.manifest.name}: ${params.id}`,
+          category: params.category || record.manifest.name, icon: params.icon,
+          offline: !!params.offline, pluginId: pid,
           handler: (...args) => record.channel.call('command:execute', { id: params.id, args }),
         });
         record.disposers.push(dispose);
@@ -247,76 +213,79 @@ export class PluginHost {
       }
       case 'contribute:indexer': {
         cap('indexer');
-        const dispose = this.platform.contributions.indexers.register({ ...params, pluginId: pid });
-        record.disposers.push(dispose);
+        record.disposers.push(this.platform.contributions.indexers.register({ ...params, pluginId: pid }));
         return { ok: true };
       }
-      case 'contribute:statusItem': {
-        const dispose = this.platform.contributions.statusItems.register({ ...params, pluginId: pid });
-        record.disposers.push(dispose);
+      case 'contribute:statusItem':
+        record.disposers.push(this.platform.contributions.statusItems.register({ ...params, pluginId: pid }));
         return { ok: true };
-      }
-      case 'contribute:keybinding': {
-        const dispose = this.platform.contributions.keybindings.register(params);
-        record.disposers.push(dispose);
+      case 'contribute:keybinding':
+        record.disposers.push(this.platform.contributions.keybindings.register(params));
         return { ok: true };
+
+      // Package resources — opaque byte handles (transferred, no host URLs).
+      case 'resources:list':
+        return [...record.files.keys()];
+      case 'resources:read': {
+        const bytes = record.files.get(params.path);
+        if (!bytes) throw new Error(`No such resource ${params.path}`);
+        return { bytes: bytes.slice().buffer }; // copied into the iframe by structured clone
       }
+
       // Files — inherit the host's authenticated API client.
-      case 'files:read': {
-        cap('files');
-        return { text: await this.platform.api.readText(params.id) };
-      }
-      case 'files:list': {
-        cap('files');
-        return this.platform.api.list(params.pathOrId, params);
-      }
-      case 'files:stat': {
-        cap('files');
-        return this.platform.api.stat(params.id);
-      }
-      case 'files:downloadUrl': {
-        cap('files');
-        return { url: this.platform.api.downloadUrl(params.id) };
-      }
+      case 'files:read': return cap('files'), { text: await this.platform.api.readText(params.id) };
+      case 'files:list': return cap('files'), this.platform.api.list(params.pathOrId, params);
+      case 'files:stat': return cap('files'), this.platform.api.stat(params.id);
+      case 'files:downloadUrl': return cap('files'), { url: this.platform.api.downloadUrl(params.id) };
       case 'files:index': {
         cap('indexer');
-        // Namespace under the plugin id so it can only write its own facet.
         const ns = params.indexerId?.startsWith(pid) ? params.indexerId : `${pid}.${params.indexerId || 'default'}`;
         return this.platform.api.pushIndex(ns, params.nodeId, params.documents, params.facet);
       }
-      // Per-domain persistent DB.
-      case 'db:get': return cap('storage'), record.db.get(params.key);
-      case 'db:set': return cap('storage'), record.db.set(params.key, params.value);
-      case 'db:delete': return cap('storage'), record.db.delete(params.key);
-      case 'db:query': return cap('storage'), record.db.query(params.prefix);
-      // UI surface.
-      case 'ui:showPanel': {
+
+      // Persistent storage — local (default) or server (needs serverStorage).
+      case 'db:get': cap('storage'); return this.#data(record, params.scope).get(params.key);
+      case 'db:set': cap('storage'); return this.#data(record, params.scope).set(params.key, params.value);
+      case 'db:delete': cap('storage'); return this.#data(record, params.scope).delete(params.key);
+      case 'db:query': cap('storage'); return this.#data(record, params.scope).query(params.prefix);
+
+      // Plugin settings + secrets.
+      case 'settings:get': return this.platform.settings.get(`${pid}.${params.key}`);
+      case 'settings:getSecret': return record.secrets?.[params.key] ?? null;
+      case 'settings:set':
+        this.platform.settings.set(`${pid}.${params.key}`, params.value);
+        return { ok: true };
+
+      case 'ui:showPanel':
         record.hasUi = true;
         this.platform.openPluginPanel?.(pid);
         this.#emit();
         return { ok: true };
-      }
       default:
         throw new Error(`Unknown host method ${method}`);
     }
+  }
+
+  #data(record, scope) {
+    if (scope === 'server') {
+      if (!record.grants.includes('serverStorage')) throw new Error('serverStorage not granted');
+      return serverData(this.platform.api, record.manifest.id);
+    }
+    return record.data;
   }
 
   #hostEvent(record, method, params) {
     const pid = record.manifest.id;
     switch (method) {
       case 'manifest':
-        // The plugin announced its live capability catalog — it's alive.
-        record.live = params;
-        record.responsive = true;
-        record.lastManifestAt = Date.now();
+        record.live = params; record.responsive = true; record.lastManifestAt = Date.now();
         this.#emit();
         break;
       case 'ui:toast':
-        this.platform.notifications[params.level || 'info'](params.text);
+        this.platform.notifications[params.level || 'info'](`${record.manifest.name}: ${params.text}`);
         break;
       case 'ui:badge':
-        record.badge = params.text;
-        this.#emit();
+        record.badge = params.text; this.#emit();
         break;
       case 'context:set':
         this.platform.context.scopedFor(pid).set(params.key, params.value);
@@ -324,55 +293,77 @@ export class PluginHost {
     }
   }
 
-  /** Ask a plugin for its manifest as a liveness probe. Returns whether the
-   *  plugin's availability picture changed (responsiveness flipped or the
-   *  announced contributions changed), so callers know whether to re-render. */
+  // --- settings & secrets (host-side, for the UI) ----------------------------
+
+  async setSecret(pluginId, key, value) {
+    const rec = await this.registry.get(pluginId);
+    if (!rec) return;
+    rec.secrets = { ...rec.secrets, [key]: value };
+    await this.registry.save(rec);
+    const runtime = this.plugins.get(pluginId);
+    if (runtime) runtime.secrets = rec.secrets;
+    runtime?.channel?.emit('settings:changed', { key, value: '••••' });
+  }
+  async getSecret(pluginId, key) {
+    const rec = await this.registry.get(pluginId);
+    return rec?.secrets?.[key] ?? '';
+  }
+
+  // --- heartbeat / availability (unchanged behaviour) ------------------------
+
+  #startHeartbeat() {
+    if (this._heartbeat || !this.heartbeatMs) return;
+    this._heartbeat = setInterval(() => this.#heartbeat(), this.heartbeatMs);
+    if (this._heartbeat?.unref) this._heartbeat.unref();
+  }
+  #stopHeartbeat() {
+    if (this._heartbeat) clearInterval(this._heartbeat);
+    this._heartbeat = null;
+  }
+  async #heartbeat() {
+    if (this._probing) return;
+    this._probing = true;
+    try {
+      let changed = false;
+      for (const r of this.plugins.values()) if (r.status === 'active') changed = (await this.#probe(r)) || changed;
+      if (changed) this.#emit();
+    } finally {
+      this._probing = false;
+    }
+  }
+  setHeartbeat(ms) {
+    this.heartbeatMs = ms;
+    this.#stopHeartbeat();
+    if (ms && [...this.plugins.values()].some((r) => r.status === 'active')) this.#startHeartbeat();
+  }
   async #probe(record) {
     if (record.status !== 'active' || !record.channel) return false;
     const before = { responsive: record.responsive, sig: signature(record.live) };
     try {
-      const live = await record.channel.call('manifest', {}, { timeout: 4000 });
-      record.live = live;
+      record.live = await record.channel.call('manifest', {}, { timeout: 4000 });
       record.responsive = true;
       record.lastManifestAt = Date.now();
     } catch {
-      // No manifest → the plugin isn't really working (hung, crashed, or its
-      // frame failed to load offline). Its contributions become unavailable.
       record.responsive = false;
     }
     return before.responsive !== record.responsive || before.sig !== signature(record.live);
   }
-
-  /**
-   * Tell every plugin the app's connectivity changed, then re-probe so the live
-   * capability picture (and thus what's available) reflects the new state.
-   */
   async setOnline(online) {
     if (this.online === online) return;
     this.online = online;
-    await Promise.all(
-      [...this.plugins.values()]
-        .filter((r) => r.status === 'active')
-        .map(async (r) => {
-          try {
-            r.channel?.emit('connectivity', { online });
-          } catch { /* ignore */ }
-          await this.#probe(r);
-        }),
-    );
+    await Promise.all([...this.plugins.values()].filter((r) => r.status === 'active').map(async (r) => {
+      try { r.channel?.emit('connectivity', { online }); } catch { /* ignore */ }
+      await this.#probe(r);
+    }));
     this.#emit();
   }
-
-  /** Refresh a single plugin's manifest on demand. */
   async refresh(pluginId) {
     const record = this.plugins.get(pluginId);
-    if (record) {
-      await this.#probe(record);
-      this.#emit();
-    }
+    if (record) { await this.#probe(record); this.#emit(); }
   }
 
-  /** Show a plugin's iframe as a popup panel (Chrome-extension style). */
+  // --- panel / uninstall -----------------------------------------------------
+
   mountPanel(pluginId, container, { width = 380, height = 480 } = {}) {
     const record = this.plugins.get(pluginId);
     if (!record) return null;
@@ -381,38 +372,74 @@ export class PluginHost {
     container.appendChild(f);
     record.hasUi = true;
     return () => {
-      // Return the iframe to its hidden parking spot so the plugin stays alive.
       f.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
       document.body.appendChild(f);
     };
   }
 
-  async unload(pluginId) {
+  /** Uninstall: stop the plugin, forget it, and wipe everything it owns. */
+  async uninstall(pluginId, { wipeData = true } = {}) {
     const record = this.plugins.get(pluginId);
-    if (!record) return;
-    try {
-      record.channel?.emit('deactivate');
-    } catch { /* ignore */ }
-    for (const d of record.disposers) {
-      try {
-        d();
-      } catch { /* ignore */ }
+    if (record) {
+      try { record.channel?.emit('deactivate'); } catch { /* ignore */ }
+      for (const d of record.disposers) { try { d(); } catch { /* ignore */ } }
+      record._settingsDispose?.();
+      record.channel?.dispose();
+      record.iframe.remove();
+      if (wipeData) await record.data?.destroy().catch(() => {});
+      this.plugins.delete(pluginId);
     }
-    record.channel?.dispose();
-    record.iframe.remove();
-    this.plugins.delete(pluginId);
+    if (wipeData) {
+      // Server-side plugin data (ownership tracked by plugin id).
+      await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => {});
+      await new PluginDataStore(pluginId).destroy().catch(() => {});
+    }
+    await this.registry.remove(pluginId);
     if (![...this.plugins.values()].some((r) => r.status === 'active')) this.#stopHeartbeat();
     this.#emit();
   }
+
+  /** Fetch a domain's assetlinks doc through the server (avoids CORS). */
+  fetchAssetlinks = async (domain) => {
+    const res = await this.platform.api.request('GET', '/api/plugins/assetlinks', { query: { domain } });
+    return res?.assetlinks || null;
+  };
+  assessTrust(pkg) {
+    return assessTrust(pkg, this.fetchAssetlinks);
+  }
 }
 
-// A cheap change signature over a plugin's announced contributions + online flag,
-// so the heartbeat only re-renders when the availability picture actually moves.
+function entrySourceOf(record) {
+  return new TextDecoder().decode(record.files[record.manifest.entry] ?? new Uint8Array());
+}
+function mapFromFiles(files) {
+  const m = new Map();
+  for (const [k, v] of Object.entries(files)) m.set(k, v instanceof Uint8Array ? v : new Uint8Array(v));
+  return m;
+}
+function bootstrapHtml(entryJs) {
+  // The SDK + the plugin entry, both inline; nothing loads over the network.
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src blob: data:; connect-src *"></head><body>
+<script>${SDK_SOURCE}<\/script>
+<script>${entryJs}<\/script>
+</body></html>`;
+}
+
+// Server-backed per-plugin storage (mirrors the local PluginDataStore shape).
+function serverData(api, pluginId) {
+  const base = `/api/plugins/${encodeURIComponent(pluginId)}/data`;
+  return {
+    get: (key) => api.request('GET', base + '/' + encodeURIComponent(key)).then((r) => r?.value ?? null),
+    set: (key, value) => api.request('PUT', base + '/' + encodeURIComponent(key), { body: { value } }),
+    delete: (key) => api.request('DELETE', base + '/' + encodeURIComponent(key)),
+    query: (prefix) => api.request('GET', base, { query: { prefix: prefix || '' } }).then((r) => r?.items || []),
+  };
+}
+
 function signature(live) {
   if (!live) return '';
   const c = live.contributions || {};
-  const flat = ['commands', 'openers', 'indexers', 'statusItems']
-    .flatMap((k) => (c[k] || []).map((x) => `${k}:${x.id}:${x.offline ? 1 : 0}`));
+  const flat = ['commands', 'openers', 'indexers', 'statusItems'].flatMap((k) => (c[k] || []).map((x) => `${k}:${x.id}:${x.offline ? 1 : 0}`));
   return `${live.online ? 1 : 0}|${flat.sort().join(',')}`;
 }
 

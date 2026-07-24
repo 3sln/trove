@@ -6,7 +6,8 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./rpc.js": "./src/rpc.js"
+    "./rpc.js": "./src/rpc.js",
+    "./browser.js": "./src/browser.js"
   },
   "files": ["src/"],
   "license": "MIT",

@@ -11,6 +11,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
+import { buildPackage } from './pluginFixture.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(__dirname, '../dist');
@@ -53,36 +54,38 @@ async function main() {
   await page.goto(base, { waitUntil: 'networkidle' });
   await page.waitForSelector('.shell');
 
-  // Install the demo plugin and wait for its live manifest.
-  await page.evaluate(() => window.__trove.platform.plugins.load({
-    id: 'com.trove.wordcount', name: 'Word Count',
-    entry: new URL('/plugins/wordcount.html', location.origin).toString(),
-    capabilities: ['storage', 'ui', 'commands'],
-  }));
+  // Install the demo plugin package (zip bytes) and wait for its live manifest.
+  const { zip } = await buildPackage();
+  const b64 = Buffer.from(zip).toString('base64');
+  await page.evaluate(async (data) => {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const pkg = window.__trove.test.parsePackage(bytes);
+    await window.__trove.test.install(pkg, { grants: pkg.manifest.capabilities });
+  }, b64);
   await page.waitForFunction(() => {
-    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.wordcount');
+    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo');
     return p && p.responsive && (p.features || []).length >= 2;
   }, { timeout: 8000 });
   check('plugin announced a live manifest (is running)', true);
 
-  const features = await page.evaluate(() => window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.wordcount').features);
-  const tap = features.find((f) => f.id === 'wordcount.tap');
-  const sync = features.find((f) => f.id === 'wordcount.sync');
+  const features = await page.evaluate(() => window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo').features);
+  const tap = features.find((f) => f.id === 'demo.tap');
+  const sync = features.find((f) => f.id === 'demo.sync');
   check('offline-capable feature is flagged', tap?.offline === true && sync?.offline === false, `tap.offline=${tap?.offline} sync.offline=${sync?.offline}`);
 
   // Online: both plugin commands are available.
-  check('online: both plugin commands available', (await availOf(page, 'wordcount.tap')) && (await availOf(page, 'wordcount.sync')));
+  check('online: both plugin commands available', (await availOf(page, 'demo.tap')) && (await availOf(page, 'demo.sync')));
 
   // Go offline — the host notifies the plugin, which re-announces.
   await page.context().setOffline(true);
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
   await page.waitForFunction(() => {
-    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.wordcount');
+    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo');
     return p?.manifest?.online === false;
   }, { timeout: 5000 });
 
-  const tapOffline = await availOf(page, 'wordcount.tap');
-  const syncOffline = await availOf(page, 'wordcount.sync');
+  const tapOffline = await availOf(page, 'demo.tap');
+  const syncOffline = await availOf(page, 'demo.sync');
   check('offline: offline-capable command stays available', tapOffline === true);
   check('offline: network-only command becomes unavailable', syncOffline === false);
 
@@ -91,7 +94,7 @@ async function main() {
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await page.waitForFunction(async () => {
     const p = window.__trove.platform;
-    return p.commands.isAvailable(p.contributions.commands.get('wordcount.sync'));
+    return p.commands.isAvailable(p.contributions.commands.get('demo.sync'));
   }, { timeout: 5000 });
   check('reconnect: network-only command available again', true);
 
@@ -99,13 +102,15 @@ async function main() {
   // probes is detected as unresponsive (no connectivity change involved) and its
   // features become unavailable.
   await page.evaluate(() => window.__trove.platform.plugins.setHeartbeat(400));
-  await page.evaluate(() => window.__trove.platform.commands.execute('wordcount.hang'));
+  // Fire-and-forget: the command never returns (the frame is blocked), so its RPC
+  // will eventually time out — swallow that rejection here.
+  await page.evaluate(() => { window.__trove.platform.commands.execute('demo.hang').catch(() => {}); });
   await page.waitForFunction(() => {
-    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.wordcount');
+    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo');
     return p && p.responsive === false;
   }, { timeout: 6000 });
   check('heartbeat marks a hung plugin unresponsive', true);
-  check('hung plugin: even offline-capable command unavailable', (await availOf(page, 'wordcount.tap')) === false);
+  check('hung plugin: even offline-capable command unavailable', (await availOf(page, 'demo.tap')) === false);
 
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();

@@ -36,7 +36,7 @@ export class SocialService {
   async init() {
     try {
       const me = await this.api.me();
-      this.#set({ me: me.principal });
+      this.#set({ me: me.principal, admin: !!me.admin });
     } catch { /* anonymous / offline */ }
     await this.refreshNotifications();
     // Light polling; the service worker also nudges on push.

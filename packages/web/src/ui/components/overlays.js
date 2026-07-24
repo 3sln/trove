@@ -5,6 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
+import { pluginReview } from './pluginReview.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -13,6 +14,7 @@ export function dialog(state, ui) {
   const d = state.wb.dialog;
   if (!d) return null;
   if (d.kind === 'collection') return collectionDialog(d, ui);
+  if (d.kind === 'plugin-review') return pluginReview(d, ui);
   const wb = ui.platform.workbench;
   let value = d.value ?? '';
   const submit = () => (d.kind === 'confirm' ? d.onConfirm?.() : d.onSubmit?.(value));

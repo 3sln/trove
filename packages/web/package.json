@@ -13,7 +13,8 @@
     "@3sln/bones": "^0.0.5",
     "@3sln/dodo": "^0.0.9",
     "@3sln/ngin": "^0.0.3",
-    "@trove/plugin-sdk": "0.0.1"
+    "@trove/plugin-sdk": "0.0.1",
+    "fflate": "^0.8.3"
   },
   "devDependencies": {
     "vite": "^5.4.0"

@@ -1,60 +1,99 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 
-const { div, span, p, button, h2 } = dd;
+const { div, span, p, button, h2, input, label } = dd;
 
 export default function pluginsView(state, ui) {
   const plugins = state.plugins || [];
-  const available = ui.availablePlugins || [];
-  const installedIds = new Set(plugins.map((p) => p.id));
   return div({ className: 'editor' },
     div({ className: 'stage' },
       div({ className: 'plugins' },
         h2('Plugins'),
         p({ className: 'sub', $styling: { color: 'var(--text-dim)', margin: '0 0 8px' } },
-          'Plugins run in sandboxed iframes and talk to Trove only through a message channel. They can only use the capabilities they declare and you approve.'),
-        ...plugins.map((pl) => installedCard(pl, ui)),
-        ...available.filter((a) => !installedIds.has(a.id)).map((a) => availableCard(a, ui)),
-        !plugins.length && !available.length
-          ? div({ className: 'empty' }, icon('plug', { size: 30 }), span('No plugins available.'))
-          : null,
+          'Plugins are sandboxed packages you install from a file or URL. They run in an isolated iframe and reach Trove only through a message channel, using the capabilities you granted.'),
+        div({ className: 'plugin-install' },
+          button({ className: 'btn primary' }, icon('upload', { size: 15 }), 'Install from file…')
+            .on({ click: () => ui.exec('plugins.installFromFile') }),
+          button({ className: 'btn' }, icon('plug', { size: 15 }), 'Install from URL…')
+            .on({ click: () => ui.exec('plugins.installFromUrl') }),
+        ),
+        plugins.length
+          ? div({ $styling: { display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '14px' } }, ...plugins.map((pl) => installedCard(pl, state, ui)))
+          : div({ className: 'empty', $styling: { padding: '48px' } }, icon('plug', { size: 30 }), span('No plugins installed yet.')),
       ),
     ),
   );
 }
 
-function installedCard(pl, ui) {
-  // The plugin's live handshake tells us whether it's actually running and which
-  // of its features work in the current (online/offline) state.
+function installedCard(pl, state, ui) {
   const connectivity = !pl.responsive ? 'not responding' : pl.manifest?.online === false ? 'offline' : 'connected';
   const features = pl.features || [];
   return div({ className: 'plugin-card' },
     div({ className: 'top' },
       div({ className: 'avatar' }, (pl.name || '?')[0].toUpperCase()),
-      div({}, div({ className: 'name' }, pl.name), div({ $styling: { fontSize: '11px', color: 'var(--text-faint)' } }, pl.id)),
+      div({ $styling: { flex: '1' } },
+        div({ className: 'name' }, pl.name, pl.version ? span({ $styling: { color: 'var(--text-faint)', fontWeight: '400', marginLeft: '6px' } }, 'v' + pl.version) : null),
+        div({ $styling: { fontSize: '11px', color: 'var(--text-faint)' } }, pl.id),
+      ),
+      trustBadge(pl.trust),
       span({ className: `status ${pl.status}` }, pl.status),
     ),
     pl.error ? div({ className: 'desc', $styling: { color: 'var(--danger)' } }, pl.error) : null,
     div({ className: 'caps' }, ...(pl.capabilities || []).map((c) => span({ className: 'cap' }, c))),
-    // Live capability report — what works right now, and what's offline-capable.
     pl.status === 'active'
       ? div({ className: 'plugin-features' },
-          div({ className: 'pf-head' },
-            span(`Features · ${connectivity}`),
-            span({ className: 'muted' }, `${features.filter((f) => f.available).length}/${features.length} available`),
-          ),
+          div({ className: 'pf-head' }, span(`Features · ${connectivity}`), span({ className: 'muted' }, `${features.filter((f) => f.available).length}/${features.length} available`)),
           features.length
-            ? div({ className: 'pf-list' }, ...features.map((f) => featureRow(f)))
+            ? div({ className: 'pf-list' }, ...features.map(featureRow))
             : div({ className: 'muted', $styling: { fontSize: '12px' } }, pl.responsive ? 'No contributions announced.' : 'No manifest received — the plugin may not be running.'),
         )
       : null,
+    (pl.settingsSchema || []).length ? settingsSection(pl, ui) : null,
     div({ className: 'actions' },
-      pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel')
-        .on({ click: () => ui.platform.workbench.openPluginPanel(pl.id) }) : null,
+      pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.platform.workbench.openPluginPanel(pl.id) }) : null,
       button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.platform.plugins.refresh(pl.id) }),
-      button({ className: 'btn danger' }, 'Uninstall').on({ click: () => ui.uninstallPlugin(pl.id) }),
+      button({ className: 'btn danger' }, 'Uninstall').on({
+        click: () => ui.platform.workbench.showDialog({
+          kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
+          body: 'The plugin and all data it stored will be removed.',
+          onConfirm: () => { ui.platform.workbench.closeDialog(); ui.uninstallPlugin(pl.id); },
+        }),
+      }),
     ),
   );
+}
+
+function settingsSection(pl, ui) {
+  return div({ className: 'plugin-features' },
+    div({ className: 'pf-head' }, span('Settings')),
+    div({ $styling: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+      ...pl.settingsSchema.map((s) => settingRow(pl, s, ui)),
+    ),
+  );
+}
+
+function settingRow(pl, s, ui) {
+  const key = `${pl.id}.${s.key}`;
+  const value = s.secret ? '' : (ui.platform.settings.get(key) ?? s.default ?? '');
+  return div({ className: 'setting', $styling: { padding: '6px 0' } },
+    div({ className: 'info' }, div({ className: 't' }, s.title || s.key), s.description ? div({ className: 'd' }, s.description) : null),
+    div({ className: 'control' },
+      s.secret
+        ? input({ className: 'input', type: 'password', placeholder: 'Set secret…' }).on({
+            change: (e) => { if (e.target.value) { ui.platform.plugins.setSecret(pl.id, s.key, e.target.value); e.target.value = ''; e.target.placeholder = 'Saved ✓'; } },
+          })
+        : s.type === 'boolean'
+          ? label({ className: 'switch' }, input({ type: 'checkbox', checked: !!value }).on({ change: (e) => ui.platform.settings.set(key, e.target.checked) }), span({ className: 'track' }))
+          : input({ className: 'input', value }).on({ change: (e) => ui.platform.settings.set(key, e.target.value) }),
+    ),
+  );
+}
+
+function trustBadge(t) {
+  if (!t) return null;
+  if (t.status === 'verified') return span({ className: 'trust verified', title: 'Signed by ' + t.domain }, icon('check', { size: 12 }), t.domain);
+  if (t.status === 'signed') return span({ className: 'trust signed' }, icon('info', { size: 12 }), 'signed');
+  return span({ className: 'trust unverified' }, icon('warn', { size: 12 }), 'unverified');
 }
 
 const KIND_ICON = { command: 'command', opener: 'file', indexer: 'search', statusItem: 'info' };
@@ -65,21 +104,5 @@ function featureRow(f) {
     span({ className: 'pf-kind' }, f.kind),
     f.offline ? span({ className: 'pf-badge offline-ok', title: 'Works offline' }, 'offline ✓') : null,
     span({ className: `pf-dot ${f.available ? 'on' : 'no'}`, title: f.available ? 'Available now' : 'Unavailable now' }),
-  );
-}
-
-function availableCard(a, ui) {
-  return div({ className: 'plugin-card' },
-    div({ className: 'top' },
-      div({ className: 'avatar' }, (a.name || '?')[0].toUpperCase()),
-      div({}, div({ className: 'name' }, a.name), div({ $styling: { fontSize: '11px', color: 'var(--text-faint)' } }, a.id)),
-      span({ className: 'status loading' }, 'available'),
-    ),
-    a.description ? div({ className: 'desc' }, a.description) : null,
-    div({ className: 'caps' }, ...(a.capabilities || []).map((c) => span({ className: 'cap' }, c))),
-    div({ className: 'actions' },
-      button({ className: 'btn primary' }, icon('plus', { size: 14 }), 'Install')
-        .on({ click: () => ui.installPlugin(a) }),
-    ),
   );
 }

@@ -246,7 +246,11 @@ export function createRouter() {
 
   // --- identity --------------------------------------------------------------
 
-  r.get('/api/me', ({ principal }) => ({ principal: principal || null, authenticated: !!principal }));
+  r.get('/api/me', ({ principal, collections }) => ({
+    principal: principal || null,
+    authenticated: !!principal,
+    admin: collections ? collections.isAdmin(principal) : !!principal,
+  }));
 
   // --- conversations, tags, sidecar (per file) -------------------------------
   // The :id is a file node id; the sidecar is that file's CRDT document.
@@ -343,7 +347,58 @@ export function createRouter() {
     return notifications.unsubscribePush(principal.id, b.endpoint);
   });
 
+  // --- plugins: domain verification proxy + per-plugin server storage --------
+
+  // Fetch a plugin domain's assetlinks doc server-side (avoids browser CORS).
+  r.get('/api/plugins/assetlinks', async ({ query }) => {
+    const domain = String(query.domain || '');
+    if (!/^[a-z0-9.-]+$/i.test(domain)) throw TroveError.invalid('Invalid domain');
+    const url = `https://${domain}/.well-known/trove-assetlinks.json`;
+    try {
+      const res = await fetch(url, { redirect: 'follow' });
+      if (!res.ok) return { assetlinks: null };
+      return { assetlinks: await res.json() };
+    } catch {
+      return { assetlinks: null };
+    }
+  });
+
+  // Server-backed plugin storage, namespaced per (user, plugin) so ownership is
+  // tracked and everything can be wiped on uninstall.
+  const pdNs = (principal, pluginId) => `plugin:${principal.id}:${pluginId}`;
+  r.get('/api/plugins/:pluginId/data', async ({ kv, principal, params, query }) => {
+    requirePluginData(kv, principal);
+    const items = await kv.list(pdNs(principal, params.pluginId), query.prefix || '');
+    return { items };
+  });
+  r.get('/api/plugins/:pluginId/data/:key', async ({ kv, principal, params }) => {
+    requirePluginData(kv, principal);
+    return { value: await kv.get(pdNs(principal, params.pluginId), params.key) };
+  });
+  r.put('/api/plugins/:pluginId/data/:key', async ({ kv, principal, params, req }) => {
+    requirePluginData(kv, principal);
+    const b = await body(req);
+    await kv.set(pdNs(principal, params.pluginId), params.key, b.value);
+    return { ok: true };
+  });
+  r.delete('/api/plugins/:pluginId/data/:key', async ({ kv, principal, params }) => {
+    requirePluginData(kv, principal);
+    await kv.delete(pdNs(principal, params.pluginId), params.key);
+    return { ok: true };
+  });
+  r.delete('/api/plugins/:pluginId/data', async ({ kv, principal, params }) => {
+    requirePluginData(kv, principal);
+    const ns = pdNs(principal, params.pluginId);
+    for (const { key } of await kv.list(ns, '')) await kv.delete(ns, key);
+    return { ok: true };
+  });
+
   return r;
+}
+
+function requirePluginData(kv, principal) {
+  if (!kv) throw TroveError.unsupported('Server plugin storage is not enabled');
+  if (!principal) throw TroveError.unauthorized('Authentication required');
 }
 
 async function assertCap(ctx, collectionId, capability) {

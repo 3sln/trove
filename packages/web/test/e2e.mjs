@@ -12,6 +12,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
+import { buildPackage } from './pluginFixture.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(__dirname, '../dist');
@@ -106,14 +107,20 @@ async function main() {
   const resultNames = await page.locator('.result .name').allTextContents();
   check('semantic search returns results', resultNames.length > 0, resultNames.join(', '));
 
-  // Plugins: install the sandboxed demo plugin.
-  await page.locator('.activitybar .item', { hasText: '' }).nth(2).click();
-  await page.locator('button', { hasText: 'Show Plugins' }).count(); // no-op guard
-  await page.evaluate(() => window.__trove.platform.plugins); // ensure host exists
-  await page.locator('text=Install').first().click().catch(() => {});
-  await page.waitForTimeout(1500);
-  const pluginActive = await page.evaluate(() => window.__trove.platform.plugins.list().some((p) => p.status === 'active'));
-  check('sandboxed plugin loads & activates', pluginActive);
+  // Plugins: install the sandboxed demo plugin from a package (zip bytes), the
+  // same path a user's ZIP upload takes — parse, review-then-install with grants.
+  const { zip } = await buildPackage();
+  const b64 = Buffer.from(zip).toString('base64');
+  await page.evaluate(async (data) => {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const pkg = window.__trove.test.parsePackage(bytes);
+    await window.__trove.test.install(pkg, { grants: pkg.manifest.capabilities });
+  }, b64);
+  await page.waitForFunction(
+    () => window.__trove.platform.plugins.list().some((p) => p.status === 'active'),
+    { timeout: 8000 },
+  );
+  check('sandboxed plugin package installs & activates', true);
 
   await page.screenshot({ path: path.join(__dirname, 'screenshot.png'), fullPage: false });
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '));

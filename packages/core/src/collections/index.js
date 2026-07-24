@@ -128,6 +128,11 @@ export class CollectionService {
     return c;
   }
 
+  /** Global admin (can do anything, incl. grant admin-only plugin capabilities). */
+  isAdmin(principal) {
+    return !!principal && this.admins.has(principal.id);
+  }
+
   /** Global capability to create new collections. */
   canCreate(principal) {
     if (!principal) return false;
