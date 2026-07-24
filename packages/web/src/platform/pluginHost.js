@@ -132,30 +132,27 @@ export class PluginHost {
     }
   }
 
-  // --- run (create the sandboxed iframe) -------------------------------------
+  // --- run (create the plugin's primary sandboxed iframe) --------------------
 
   async #run(record) {
     if (this.plugins.get(record.id)?.status === 'active') return;
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
-    // Opaque-origin sandbox: scripts only, no same-origin, no top navigation.
-    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
-    iframe.setAttribute('referrerpolicy', 'no-referrer');
-    iframe.srcdoc = await buildSrcdoc(record.manifest, mapFromFiles(record.files));
-
     const runtime = {
-      ...record, iframe, status: 'loading', error: null, disposers: [], channel: null,
-      hasUi: false, responsive: false,
+      ...record, iframe: null, status: 'loading', error: null, disposers: [], channel: null,
+      hasUi: false, responsive: false, frame: null, frames: new Set(),
       // Storage scopes (defaulted for records saved before this field existed).
       storage: record.storage || (record.grants?.includes('storage') ? grantedStorageScopes(record.manifest, record.trust) : { plugin: false, domain: false }),
       files: mapFromFiles(record.files),
     };
     this.plugins.set(record.id, runtime);
     this.#emit();
-    document.body.appendChild(iframe);
 
     try {
-      await this.#handshake(runtime);
+      // The primary (background) frame: registers commands/indexers, does one-time
+      // setup. Its channel is the record's channel used for probes and commands.
+      const frame = await this.#spawnFrame(runtime, 'primary');
+      runtime.frame = frame;
+      runtime.iframe = frame.iframe;
+      runtime.channel = frame.channel;
       runtime.status = 'active';
       runtime.responsive = true;
       this.#probe(runtime).then(() => this.#emit());
@@ -169,9 +166,30 @@ export class PluginHost {
     return runtime;
   }
 
-  #handshake(record) {
+  /**
+   * Create ONE sandboxed iframe wired with `record`'s granted capabilities, run the
+   * handshake, and resolve to a live frame `{ role, iframe, channel, record }`. The
+   * primary frame is the plugin's background instance; each viewer/panel gets its
+   * own frame from this same helper (all share the record's caps + brokered APIs).
+   */
+  async #spawnFrame(record, role) {
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;border:0;visibility:hidden;';
+    // Opaque-origin sandbox: scripts only, no same-origin, no top navigation.
+    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
+    iframe.setAttribute('referrerpolicy', 'no-referrer');
+    record._srcdoc ||= await buildSrcdoc(record.manifest, record.files);
+    iframe.srcdoc = record._srcdoc;
+    const frame = { role, iframe, channel: null, record, place: null, dock: null, docked: false, mediaOwner: false };
+    document.body.appendChild(iframe);
+    await this.#handshake(record, frame);
+    return frame;
+  }
+
+  #handshake(record, frame) {
     return new Promise((resolve, reject) => {
-      const { iframe, manifest } = record;
+      const { iframe } = frame;
+      const manifest = record.manifest;
       const timer = setTimeout(() => reject(new Error('Plugin handshake timed out')), 15000);
       const onReady = (e) => {
         if (e.source !== iframe.contentWindow) return;
@@ -183,16 +201,16 @@ export class PluginHost {
         if (e.data?.__trove !== 'ready') return;
         window.removeEventListener('message', onReady);
         const channel = new MessageChannel();
-        record.channel = new RpcChannel(channel.port1, {
-          onCall: (m, p) => this.#hostCall(record, m, p),
-          onEvent: (m, p) => this.#hostEvent(record, m, p),
+        frame.channel = new RpcChannel(channel.port1, {
+          onCall: (m, p) => this.#hostCall(record, m, p, frame),
+          onEvent: (m, p) => this.#hostEvent(record, m, p, frame),
         });
-        record.resolveActivated = resolve;
-        record.rejectActivated = reject;
-        record._timer = timer;
+        frame.resolveActivated = resolve;
+        frame.rejectActivated = reject;
+        frame._timer = timer;
         // Opaque origin → target '*'; the transferred port is the real capability.
         iframe.contentWindow.postMessage(
-          { __trove: 'init', manifest, capabilities: record.grants, storage: record.storage, online: this.online },
+          { __trove: 'init', manifest, capabilities: record.grants, storage: record.storage, online: this.online, role: frame.role },
           '*',
           [channel.port2],
         );
@@ -204,17 +222,24 @@ export class PluginHost {
 
   // --- plugin → host RPC -----------------------------------------------------
 
-  async #hostCall(record, method, params) {
+  async #hostCall(record, method, params, frame) {
     const cap = (c) => { if (!record.grants.includes(c)) throw new Error(`Capability "${c}" not granted`); };
     const pid = record.manifest.id;
+    // Contributions are owned by the primary (background) frame. A viewer frame
+    // re-runs the plugin's activate() too, but its contribution calls are no-ops on
+    // the host — the primary already registered them (and its handlers route to it).
+    const primary = !frame || frame.role === 'primary';
     switch (method) {
-      case 'activated':
-        clearTimeout(record._timer);
-        if (params.ok) record.resolveActivated?.(record);
-        else record.rejectActivated?.(new Error(params.error || 'activate() failed'));
+      case 'activated': {
+        const f = frame || record.frame;
+        clearTimeout(f?._timer);
+        if (params.ok) f?.resolveActivated?.(f);
+        else f?.rejectActivated?.(new Error(params.error || 'activate() failed'));
         return { ok: true };
+      }
 
       case 'contribute:command': {
+        if (!primary) return { ok: true };
         const dispose = this.platform.commands.register({
           id: params.id, title: params.title || `${record.manifest.name}: ${params.id}`,
           category: params.category || record.manifest.name, icon: params.icon,
@@ -226,6 +251,7 @@ export class PluginHost {
       }
       case 'contribute:opener': {
         cap('opener');
+        if (!primary) return { ok: true };
         const dispose = this.platform.contributions.openers.register({
           ...params, pluginId: pid,
           open: (file, context) => record.channel.call('opener:open', { openerId: params.id, file, context }),
@@ -235,13 +261,16 @@ export class PluginHost {
       }
       case 'contribute:indexer': {
         cap('indexer');
+        if (!primary) return { ok: true };
         record.disposers.push(this.platform.contributions.indexers.register({ ...params, pluginId: pid }));
         return { ok: true };
       }
       case 'contribute:statusItem':
+        if (!primary) return { ok: true };
         record.disposers.push(this.platform.contributions.statusItems.register({ ...params, pluginId: pid }));
         return { ok: true };
       case 'contribute:keybinding':
+        if (!primary) return { ok: true };
         record.disposers.push(this.platform.contributions.keybindings.register(params));
         return { ok: true };
 
@@ -289,29 +318,31 @@ export class PluginHost {
         this.#emit();
         return { ok: true };
 
-      // Media session — the host owns navigator.mediaSession; a viewer surfaces its
-      // playback so the OS shows transport controls. Actions fire back over RPC.
-      case 'media:metadata': cap('media'); return this.#media(record, 'metadata', params);
-      case 'media:playbackState': cap('media'); return this.#media(record, 'playbackState', params);
-      case 'media:position': cap('media'); return this.#media(record, 'position', params);
-      case 'media:action': cap('media'); return this.#media(record, 'action', params);
-      case 'media:clear': return this.#media(record, 'clear', params);
+      // Media session — the host owns navigator.mediaSession; the calling frame
+      // (a viewer) surfaces its playback so the OS shows transport controls. Actions
+      // fire back over that same frame's RPC channel.
+      case 'media:metadata': cap('media'); return this.#media(frame, 'metadata', params);
+      case 'media:playbackState': cap('media'); return this.#media(frame, 'playbackState', params);
+      case 'media:position': cap('media'); return this.#media(frame, 'position', params);
+      case 'media:action': cap('media'); return this.#media(frame, 'action', params);
+      case 'media:clear': return this.#media(frame, 'clear', params);
 
-      // Dock — register/unregister this viewer for the floating "dock" mode.
-      case 'dock:enable': cap('dock'); record.dock = { enabled: true, minSize: params.minSize, maxSize: params.maxSize, dismissed: false }; return { ok: true };
-      case 'dock:disable': cap('dock'); if (record.dock) record.dock.enabled = false; if (this._dockedId === pid) this.#closeDock(record); return { ok: true };
-      case 'dock:close': this.#closeDock(record); return { ok: true };
+      // Dock — the calling frame registers/unregisters itself for the floating dock.
+      case 'dock:enable': cap('dock'); if (frame) frame.dock = { enabled: true, minSize: params.minSize, maxSize: params.maxSize, dismissed: false }; return { ok: true };
+      case 'dock:disable': cap('dock'); if (frame?.dock) frame.dock.enabled = false; if (frame && this._dockedFrame === frame) this.#closeDock(frame); return { ok: true };
+      case 'dock:close': if (frame) this.#closeDock(frame); return { ok: true };
 
       default:
         throw new Error(`Unknown host method ${method}`);
     }
   }
 
-  // Bridge a viewer's playback to navigator.mediaSession (only the currently-shown
-  // or docked viewer owns the session).
-  #media(record, kind, params) {
+  // Bridge a frame's playback to navigator.mediaSession. The last frame to touch it
+  // becomes the media owner; OS actions fire back over that frame's own channel.
+  #media(frame, kind, params) {
     const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : null;
     if (!ms) return { ok: false };
+    if (frame && kind !== 'clear') { this._mediaOwner = frame; frame.mediaOwner = true; }
     try {
       if (kind === 'metadata') {
         ms.metadata = typeof MediaMetadata !== 'undefined'
@@ -322,10 +353,12 @@ export class PluginHost {
       } else if (kind === 'position' && ms.setPositionState) {
         ms.setPositionState({ duration: params.duration || 0, position: params.position || 0, playbackRate: params.playbackRate || 1 });
       } else if (kind === 'action') {
-        ms.setActionHandler?.(params.action, params.on ? () => record.channel?.emit('media:action', { action: params.action }) : null);
+        ms.setActionHandler?.(params.action, params.on ? () => frame?.channel?.emit('media:action', { action: params.action }) : null);
       } else if (kind === 'clear') {
+        if (frame && this._mediaOwner && this._mediaOwner !== frame) return { ok: true }; // don't clear someone else's session
         ms.metadata = null;
         ms.playbackState = 'none';
+        this._mediaOwner = null;
       }
     } catch { /* unsupported action/state */ }
     return { ok: true };
@@ -380,10 +413,13 @@ export class PluginHost {
     return { ok: res.ok, status: res.status, statusText: res.statusText, url: res.url, headers: outHeaders, bytes: buf };
   }
 
-  #hostEvent(record, method, params) {
+  #hostEvent(record, method, params, frame) {
     const pid = record.manifest.id;
     switch (method) {
       case 'manifest':
+        // Only the primary frame's manifest defines the plugin's live feature list;
+        // a viewer frame re-announces its own (opener-only) manifest — ignore it.
+        if (frame && frame.role !== 'primary') break;
         record.live = params; record.responsive = true; record.lastManifestAt = Date.now();
         this.#emit();
         break;
@@ -459,6 +495,7 @@ export class PluginHost {
     this.online = online;
     await Promise.all([...this.plugins.values()].filter((r) => r.status === 'active').map(async (r) => {
       try { r.channel?.emit('connectivity', { online }); } catch { /* ignore */ }
+      for (const frame of r.frames || []) { try { frame.channel?.emit('connectivity', { online }); } catch { /* ignore */ } }
       await this.#probe(r);
     }));
     this.#emit();
@@ -470,105 +507,155 @@ export class PluginHost {
 
   // --- panel / viewer / dock -------------------------------------------------
   //
-  // A plugin's iframe is created once (in #run) and stays a child of <body> for
-  // its whole life — we NEVER re-parent it, because moving an <iframe> in the DOM
-  // reloads its document (per the HTML spec) and would kill the running plugin and
-  // its MessagePort. To show it "inside" a panel, viewer, or dock, we instead float
-  // it as a position:fixed overlay tracking the target element's box every frame.
+  // A frame's iframe is created once (#spawnFrame) and stays a child of <body> for
+  // its life — we NEVER re-parent it, because moving an <iframe> in the DOM reloads
+  // its document (per the HTML spec) and would kill the running plugin + MessagePort.
+  // To show a frame "inside" a panel/viewer/dock we float it as a position:fixed
+  // overlay whose inset tracks the target element's box (see #place).
 
   mountPanel(pluginId, container, { width = 380, height = 480 } = {}) {
     const record = this.plugins.get(pluginId);
-    if (!record) return null;
+    if (!record?.frame) return null;
     container.style.width = `${width}px`;
     container.style.height = `${height}px`;
-    this.#place(record, container, 50);
+    this.#place(record.frame, container, 50);
     record.hasUi = true;
-    return () => this.#hideIframe(record);
+    return () => this.#hide(record.frame);
   }
 
   /**
-   * Mount a plugin opener's iframe as the full viewer for `node`. Returns a detach
-   * fn the viewer calls when it goes away: if the opener registered `dock`, the
-   * iframe is kept alive as a floating dock instead of being hidden.
+   * Mount a plugin opener as the viewer for `node`. Each viewer runs in its OWN
+   * sandboxed iframe (spawned with the plugin's capabilities), so viewers are
+   * isolated from the background instance and from each other. Returns a detach fn:
+   * if the viewer registered `dock`, its frame is kept alive as a floating dock,
+   * otherwise it is destroyed.
    */
   mountViewer(pluginId, container, node, openerId) {
     const record = this.plugins.get(pluginId);
     if (!record) return null;
-    if (this._dockedId === pluginId) this.#undock(record); // re-opening a docked viewer
-    record.viewer = { node, openerId };
-    this.#place(record, container, 3);
+
+    // Re-adopt the docked frame if it's the same file — preserves live playback
+    // (the docked <video>/<audio> keeps running) instead of spawning a fresh viewer.
+    const docked = this._dockedFrame;
+    if (docked && docked.record === record && docked.node?.id === node.id && docked.openerId === openerId) {
+      this.#undock(docked);
+      this.#place(docked, container, 3);
+      return () => this.#detachViewer(docked);
+    }
+
+    const mount = { cancelled: false, frame: null };
+    this.#spawnFrame(record, 'viewer').then((frame) => {
+      if (mount.cancelled) { this.#destroyFrame(frame); return; }
+      mount.frame = frame;
+      frame.node = node;
+      frame.openerId = openerId;
+      record.frames.add(frame);
+      this.#place(frame, container, 3);
+      frame.channel?.call('opener:open', { openerId, file: node, context: {} }).catch(() => {});
+    }).catch((e) => console.error('viewer frame failed to load', e));
     record.hasUi = true;
-    record.channel?.call('opener:open', { openerId, file: node, context: {} }).catch(() => {});
+
     return () => {
-      if (record.dock?.enabled && !record.dock.dismissed) this.#dock(record);
-      else this.#hideIframe(record);
+      mount.cancelled = true;
+      if (mount.frame) this.#detachViewer(mount.frame);
     };
   }
 
-  // Float the (never-moved) iframe over `targetEl`, keeping it aligned each frame so
-  // it tracks layout/scroll/resize. Replaces any previous placement for this record.
-  #place(record, targetEl, z) {
-    this.#stopPlace(record);
-    const f = record.iframe;
+  // A viewer went off-screen: dock it (if it opted in and isn't dismissed) or destroy it.
+  #detachViewer(frame) {
+    if (frame.dock?.enabled && !frame.dock.dismissed) this.#dock(frame);
+    else this.#destroyFrame(frame);
+  }
+
+  // Float `frame`'s iframe over `targetEl` and keep its inset aligned. We recompute
+  // on intersection/resize/scroll rather than every animation frame — the app's
+  // viewer area only moves on layout changes, so this stays idle when nothing shifts.
+  #place(frame, targetEl, z) {
+    this.#stopPlace(frame);
+    const f = frame.iframe;
     f.style.cssText = `position:fixed;border:0;visibility:visible;display:block;background:transparent;z-index:${z};margin:0;padding:0;`;
     const sync = () => {
       const r = targetEl.getBoundingClientRect();
+      const shown = r.width > 0 && r.height > 0 && document.contains(targetEl);
       f.style.left = `${r.left}px`;
       f.style.top = `${r.top}px`;
       f.style.width = `${r.width}px`;
       f.style.height = `${r.height}px`;
+      f.style.visibility = shown ? 'visible' : 'hidden';
     };
     sync();
-    let raf = 0;
-    const loop = () => { sync(); raf = requestAnimationFrame(loop); };
-    if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(loop);
-    record._place = { stop: () => { if (raf) cancelAnimationFrame(raf); } };
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    ro?.observe(targetEl);
+    if (document.body) ro?.observe(document.body);
+    const io = typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver(sync, { threshold: [0, 1] }) : null;
+    io?.observe(targetEl);
+    window.addEventListener('scroll', sync, true);
+    window.addEventListener('resize', sync);
+    frame.place = {
+      target: targetEl,
+      stop: () => {
+        ro?.disconnect();
+        io?.disconnect();
+        window.removeEventListener('scroll', sync, true);
+        window.removeEventListener('resize', sync);
+      },
+    };
   }
-  #stopPlace(record) {
-    if (record._place) { record._place.stop(); record._place = null; }
+  #stopPlace(frame) {
+    if (frame.place) { frame.place.stop(); frame.place = null; }
+  }
+  #hide(frame) {
+    this.#stopPlace(frame);
+    frame.iframe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;border:0;visibility:hidden;';
   }
 
-  #hideIframe(record) {
-    this.#stopPlace(record);
-    record.iframe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;border:0;visibility:hidden;';
+  // Tear a frame down for good: stop tracking it, drop the media session if it owned
+  // it, close its RPC channel, and remove the iframe from the DOM.
+  #destroyFrame(frame) {
+    if (!frame) return;
+    this.#stopPlace(frame);
+    if (this._dockedFrame === frame) { this._dockedFrame = null; if (this._dockEl_) this._dockEl_.style.display = 'none'; }
+    if (this._mediaOwner === frame) this.#media(frame, 'clear', {});
+    try { frame.channel?.emit('deactivate'); } catch { /* ignore */ }
+    try { frame.channel?.dispose(); } catch { /* ignore */ }
+    frame.iframe.remove();
+    frame.record?.frames?.delete(frame);
   }
 
-  // Float the viewer's iframe as a single small dock (transparent), sized by the
+  // Float a viewer frame as the single floating dock (transparent), sized by the
   // viewer's declared min constraints. Click the header to reopen; × to dismiss.
-  #dock(record) {
-    if (this._dockedId && this._dockedId !== record.manifest.id) {
-      const prev = this.plugins.get(this._dockedId);
-      if (prev) this.#closeDock(prev);
-    }
-    const min = record.dock?.minSize || { width: 300, height: 90 };
+  #dock(frame) {
+    if (this._dockedFrame && this._dockedFrame !== frame) this.#closeDock(this._dockedFrame);
+    const min = frame.dock?.minSize || { width: 300, height: 90 };
     const el = this.#dockEl();
     el.style.width = `${clampDim(min.width, 200, 480)}px`;
     el.style.height = `${clampDim(min.height, 56, 360) + 26}px`; // + header
-    el.querySelector('.vd-title').textContent = record.viewer?.node?.name || record.manifest.name;
+    el.querySelector('.vd-title').textContent = frame.node?.name || frame.record.manifest.name;
     el.style.display = 'flex';
-    this.#place(record, el.querySelector('.vd-body'), 61);
-    this._dockedId = record.manifest.id;
-    record.docked = true;
-    record.channel?.emit('dock:state', { docked: true });
+    this.#place(frame, el.querySelector('.vd-body'), 61);
+    this._dockedFrame = frame;
+    frame.docked = true;
+    frame.channel?.emit('dock:state', { docked: true });
     this.#emit();
   }
 
-  #undock(record) {
+  // Un-dock without destroying — used when a docked frame is re-adopted into a viewer.
+  #undock(frame) {
     if (this._dockEl_) this._dockEl_.style.display = 'none';
-    if (this._dockedId === record.manifest.id) this._dockedId = null;
-    record.docked = false;
-    record.channel?.emit('dock:state', { docked: false });
+    if (this._dockedFrame === frame) this._dockedFrame = null;
+    frame.docked = false;
+    frame.channel?.emit('dock:state', { docked: false });
   }
 
-  #closeDock(record) {
-    if (this._dockedId === record.manifest.id || record.docked) {
-      if (this._dockEl_) this._dockEl_.style.display = 'none';
-      this._dockedId = null;
-      record.docked = false;
-      this.#hideIframe(record);
-      record.channel?.emit('dock:state', { docked: false, closed: true });
-      this.#emit();
-    }
+  // Dismiss the dock: the user closed it, or the viewer disabled docking. The frame
+  // is done, so tear it down.
+  #closeDock(frame) {
+    if (this._dockEl_) this._dockEl_.style.display = 'none';
+    if (this._dockedFrame === frame) this._dockedFrame = null;
+    frame.docked = false;
+    frame.channel?.emit('dock:state', { docked: false, closed: true });
+    this.#destroyFrame(frame);
+    this.#emit();
   }
 
   #dockEl() {
@@ -577,12 +664,11 @@ export class PluginHost {
     el.className = 'viewer-dock';
     el.innerHTML = '<div class="vd-bar"><span class="vd-title"></span><button class="vd-expand" title="Reopen">↗</button><button class="vd-close" title="Close">✕</button></div><div class="vd-body"></div>';
     el.querySelector('.vd-expand').addEventListener('click', () => {
-      const record = this.plugins.get(this._dockedId);
-      if (record?.viewer) this.platform.workbench.openFile(record.viewer.node, record.viewer.openerId);
+      const frame = this._dockedFrame;
+      if (frame?.node) this.platform.workbench.openFile(frame.node, frame.openerId);
     });
     el.querySelector('.vd-close').addEventListener('click', () => {
-      const record = this.plugins.get(this._dockedId);
-      if (record) this.#closeDock(record);
+      if (this._dockedFrame) this.#closeDock(this._dockedFrame);
     });
     document.body.appendChild(el);
     this._dockEl_ = el;
@@ -596,8 +682,9 @@ export class PluginHost {
       try { record.channel?.emit('deactivate'); } catch { /* ignore */ }
       for (const d of record.disposers) { try { d(); } catch { /* ignore */ } }
       record._settingsDispose?.();
+      for (const frame of [...(record.frames || [])]) this.#destroyFrame(frame); // viewer/dock frames
       record.channel?.dispose();
-      record.iframe.remove();
+      record.iframe?.remove();
       this.plugins.delete(pluginId);
     }
     if (wipeData) {

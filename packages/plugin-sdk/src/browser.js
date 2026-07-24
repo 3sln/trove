@@ -10,7 +10,7 @@
 // Plugins use it as:  trove.activate(async (ctx) => { ... })
 (function () {
   'use strict';
-  let port = null, manifest = null, capabilities = [], storageScopes = {}, online = true, seq = 0;
+  let port = null, manifest = null, capabilities = [], storageScopes = {}, online = true, seq = 0, role = 'primary';
   const pending = new Map();
   const commandHandlers = new Map();
   const openerHandlers = new Map();
@@ -118,6 +118,10 @@
   function makeContext() {
     return {
       manifest, capabilities,
+      // Which instance this is: 'primary' is the plugin's single background frame
+      // (register commands/indexers, do one-time setup here); 'viewer' is a
+      // per-open frame hosting an opener for one file (drive media/dock from here).
+      role,
       get online() { return online; },
       commands: {
         register(id, handler, opts) {
@@ -222,7 +226,7 @@
       function onInit(e) {
         if (!e.data || e.data.__trove !== 'init') return;
         window.removeEventListener('message', onInit);
-        manifest = e.data.manifest; capabilities = e.data.capabilities || []; storageScopes = e.data.storage || {}; online = e.data.online != null ? e.data.online : true;
+        manifest = e.data.manifest; capabilities = e.data.capabilities || []; storageScopes = e.data.storage || {}; online = e.data.online != null ? e.data.online : true; role = e.data.role || 'primary';
         port = e.ports[0];
         port.onmessage = onPort;
         resolve();

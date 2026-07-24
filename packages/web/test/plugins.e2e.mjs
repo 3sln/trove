@@ -134,34 +134,47 @@ async function main() {
   }, { timeout: 5000 });
   check('reconnect: network-only command available again', true);
 
-  // Open the .demo file → the plugin's opener mounts as a sandboxed viewer. The
-  // iframe is a fixed overlay floating over the .pv-host box (it is never re-parented
-  // — moving an <iframe> in the DOM would reload it and kill the plugin).
+  // Helpers reaching into the demo plugin's live frames. The primary (background)
+  // frame is record.frame; each open viewer runs in its OWN iframe, tracked in
+  // record.frames. viewerFrame() returns the one viewer frame's DOM/placement state.
+  const frameCount = () => page.evaluate(() => window.__trove.platform.plugins.plugins.get('com.trove.demo').frames.size);
+  const viewerFrame = () => page.evaluate(() => {
+    const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
+    const frame = [...r.frames][0];
+    if (!frame) return null;
+    const f = frame.iframe;
+    return { role: frame.role, sandbox: f.getAttribute('sandbox') || '', vis: f.style.visibility, w: parseFloat(f.style.width) || 0, z: f.style.zIndex, isPrimary: f === r.iframe };
+  });
+  const viewerResponsive = () => page.evaluate(async () => {
+    const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
+    const frame = [...r.frames][0];
+    if (!frame) return false;
+    try { const m = await frame.channel.call('manifest', {}, { timeout: 2000 }); return m && m.id === 'com.trove.demo'; } catch { return false; }
+  });
+
+  // Open the .demo file → the opener mounts in its OWN sandboxed iframe, floated as a
+  // fixed overlay over the .pv-host box (never re-parented — moving an <iframe> in the
+  // DOM reloads it). The opener autoplays: sets the media session + enables dock.
   await page.evaluate((node) => window.__trove.platform.workbench.openFile(node, 'demo.player'), demoFile);
   await page.waitForSelector('.viewer.plugin-viewer .pv-host', { timeout: 4000 });
-  // The demo plugin frame stays responsive after mount (it wasn't reloaded).
-  await page.waitForFunction(async () => {
+  await page.waitForFunction(() => window.__trove.platform.plugins.plugins.get('com.trove.demo').frames.size === 1, { timeout: 5000 });
+  check('viewer runs in its own iframe, separate from the background frame', await page.evaluate(() => {
     const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
-    try { const m = await r.channel.call('manifest', {}, { timeout: 2000 }); return m && m.id === 'com.trove.demo'; } catch { return false; }
-  }, { timeout: 5000 });
-  check('plugin opener mounts a still-responsive sandboxed viewer (no reload)', true);
-  const vis = () => page.evaluate(() => {
-    const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
-    const f = r && r.iframe;
-    return f ? { sandbox: f.getAttribute('sandbox') || '', vis: f.style.visibility, w: parseFloat(f.style.width) || 0, z: f.style.zIndex } : null;
-  });
-  const v0 = await vis();
+    const frame = [...r.frames][0];
+    return frame && frame.role === 'viewer' && frame.iframe !== r.iframe;
+  }));
+  check('viewer frame is responsive after mount (not reloaded)', await viewerResponsive());
+  const v0 = await viewerFrame();
   check('viewer iframe shown as a fixed overlay', v0 && v0.vis === 'visible' && v0.w > 0);
   check('viewer iframe is on an opaque origin (sandboxed)', v0 && v0.sandbox.includes('allow-scripts') && !v0.sandbox.includes('allow-same-origin'));
 
-  // Drive playback: the plugin sets the OS media session + enables dock mode.
-  await page.evaluate(() => window.__trove.platform.commands.execute('demo.play'));
+  // The opener drove the OS media session on open.
   await page.waitForFunction(() => navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.title === 'track.demo', { timeout: 4000 });
   check('viewer drives the OS media session (mediaSession.metadata)', true);
   check('media playbackState reflects playing', await page.evaluate(() => navigator.mediaSession.playbackState === 'playing'));
 
   // Navigate away while "playing" → the viewer floats into the dock instead of
-  // being torn down. The SAME iframe stays alive (still responsive).
+  // being torn down. The SAME viewer frame stays alive (still responsive).
   await page.evaluate(() => window.__trove.platform.workbench.showHome());
   await page.waitForFunction(() => {
     const d = document.querySelector('.viewer-dock');
@@ -169,39 +182,45 @@ async function main() {
   }, { timeout: 4000 });
   check('navigating away docks the viewer (floating frame)', true);
   check('dock removed the viewer host from the main area', await page.evaluate(() => document.querySelectorAll('.viewer.plugin-viewer').length === 0));
-  const vDock = await vis();
-  check('docked frame is the same iframe, still visible', vDock && vDock.vis === 'visible' && vDock.w > 0);
-  check('docked frame stayed responsive (never reloaded)', await page.evaluate(async () => {
-    const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
-    try { const m = await r.channel.call('manifest', {}, { timeout: 2000 }); return m && m.id === 'com.trove.demo'; } catch { return false; }
-  }));
+  check('docked frame is the same viewer frame, still one, still responsive', (await frameCount()) === 1 && (await viewerResponsive()));
+  const vDock = await viewerFrame();
+  check('docked frame visible over the dock body', vDock && vDock.vis === 'visible' && vDock.w > 0);
 
-  // Expand from the dock reopens the full viewer.
+  // Expand from the dock re-adopts the SAME frame (playback preserved) — no new frame.
   await page.evaluate(() => document.querySelector('.viewer-dock .vd-expand').click());
   await page.waitForSelector('.viewer.plugin-viewer .pv-host', { timeout: 4000 });
-  check('expanding the dock reopens the full viewer', await page.evaluate(() => getComputedStyle(document.querySelector('.viewer-dock')).display === 'none'));
+  check('expanding re-adopts the same frame (no respawn)', (await frameCount()) === 1);
+  check('expanding the dock hides the dock', await page.evaluate(() => getComputedStyle(document.querySelector('.viewer-dock')).display === 'none'));
 
-  // Disabling dock (e.g. playback stopped) means navigating away just closes it.
-  await page.evaluate(() => window.__trove.platform.commands.execute('demo.stop'));
+  // Fire the OS 'pause' transport action into the viewer frame → the plugin disables
+  // dock. Now navigating away just closes the viewer (no dock), destroying its frame.
+  await page.evaluate(() => {
+    const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
+    [...r.frames][0].channel.emit('media:action', { action: 'pause' });
+  });
+  await page.waitForTimeout(150);
   await page.evaluate(() => window.__trove.platform.workbench.showHome());
-  await page.waitForTimeout(200);
-  check('with dock disabled, navigating away does not dock', await page.evaluate(() => {
+  await page.waitForFunction(() => window.__trove.platform.plugins.plugins.get('com.trove.demo').frames.size === 0, { timeout: 4000 });
+  check('with dock disabled, navigating away closes the viewer (frame destroyed)', await page.evaluate(() => {
     const d = document.querySelector('.viewer-dock');
     return !d || getComputedStyle(d).display === 'none';
   }));
 
-  // Reopen, dock, then user closes the dock manually.
-  await page.evaluate(() => window.__trove.platform.commands.execute('demo.play'));
+  // Reopen (autoplay re-enables dock), dock, then the user closes the dock manually.
   await page.evaluate((node) => window.__trove.platform.workbench.openFile(node, 'demo.player'), demoFile);
   await page.waitForSelector('.viewer.plugin-viewer .pv-host', { timeout: 4000 });
+  await page.waitForFunction(() => navigator.mediaSession.metadata && navigator.mediaSession.metadata.title === 'track.demo', { timeout: 4000 });
   await page.evaluate(() => window.__trove.platform.workbench.showHome());
   await page.waitForFunction(() => { const d = document.querySelector('.viewer-dock'); return d && getComputedStyle(d).display !== 'none'; }, { timeout: 4000 });
   await page.evaluate(() => document.querySelector('.viewer-dock .vd-close').click());
-  await page.waitForFunction(() => { const d = document.querySelector('.viewer-dock'); return !d || getComputedStyle(d).display === 'none'; }, { timeout: 4000 });
-  check('user can manually close the dock', true);
-  check('closing the dock hides the iframe', await page.evaluate(() => {
+  await page.waitForFunction(() => window.__trove.platform.plugins.plugins.get('com.trove.demo').frames.size === 0, { timeout: 4000 });
+  check('user can manually close the dock (frame destroyed)', await page.evaluate(() => {
+    const d = document.querySelector('.viewer-dock');
+    return !d || getComputedStyle(d).display === 'none';
+  }));
+  check('background (primary) frame stayed responsive throughout', await page.evaluate(async () => {
     const r = window.__trove.platform.plugins.plugins.get('com.trove.demo');
-    return r.iframe.style.visibility === 'hidden';
+    try { const m = await r.channel.call('manifest', {}, { timeout: 2000 }); return m && m.id === 'com.trove.demo'; } catch { return false; }
   }));
 
   // Heartbeat (run last — it deliberately wedges the frame): with a short interval,

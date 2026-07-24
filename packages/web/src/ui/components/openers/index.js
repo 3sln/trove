@@ -108,14 +108,12 @@ function fallbackOpener(node, ui) {
 }
 
 function pluginOpenerView(opener, node, ui) {
-  // A plugin opener renders inside its own sandboxed iframe. We hand the plugin's
-  // persistent frame to mountViewer, which fills this container (transparent) and
-  // tells the plugin to open `node`. On $detach (navigating away) the returned fn
-  // either hides the frame or — if the viewer registered `dock` — floats it as a
-  // dock. The frame is host-owned and survives this vnode being torn down.
-  // `.opaque()`: dodo never reconciles this element's children, so the host-owned
-  // iframe we imperatively mount here survives workbench re-renders (it would
-  // otherwise be removed as an "undeclared" child). $attach/$detach still fire.
+  // A plugin opener renders in its OWN sandboxed iframe (spawned by mountViewer with
+  // the plugin's capabilities). That iframe is not a child here — it's a host-owned
+  // position:fixed overlay whose box tracks this .pv-host element (moving an <iframe>
+  // in the DOM would reload it). $attach hands .pv-host to mountViewer as the tracking
+  // target; $detach lets it dock or tear down. `.opaque()` keeps dodo from reconciling
+  // the (childless) host so its lifecycle hooks stay stable across workbench re-renders.
   return div({ className: 'viewer plugin-viewer' },
     div({ className: 'pv-host' }).on({
       $attach: (el) => { el._detach = ui.platform.plugins.mountViewer(opener.pluginId, el, node, opener.id); },

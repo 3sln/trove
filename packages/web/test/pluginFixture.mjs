@@ -9,6 +9,37 @@ import { signManifest, generateSigningKey, fingerprintOf } from '../src/platform
 // and a "hang" command that genuinely blocks the frame (for heartbeat tests).
 export const PLUGIN_ENTRY = `
 window.trove.activate(async (ctx) => {
+  // A sandboxed viewer for .demo files. Runs in this frame's OWN iframe (ctx.role
+  // is 'viewer' here); on open it renders a tiny player, drives the OS media
+  // session, and registers for dock mode. A 'pause' transport action disables the
+  // dock (so navigating away just closes it). This is the media/dock path, and it
+  // runs in EVERY instance (primary + each viewer) since a viewer frame needs it.
+  if (ctx.capabilities.includes('opener')) {
+    ctx.contributes.opener({ id: 'demo.player', title: 'Demo Player', selector: { ext: ['.demo'] }, offline: true }, async (file) => {
+      document.body.innerHTML = '';
+      const el = document.createElement('div');
+      el.id = 'demo-player';
+      el.textContent = 'Playing ' + (file && file.name || '');
+      el.style.cssText = 'color:#fff;font:13px sans-serif;padding:10px;background:rgba(0,0,0,.6);border-radius:8px;';
+      document.body.appendChild(el);
+      window.__openedDemo = file && file.name;
+      if (ctx.capabilities.includes('media')) {
+        await ctx.media.setMetadata({ title: (file && file.name) || 'Demo', artist: 'Trove' });
+        await ctx.media.setPlaybackState('playing');
+        await ctx.media.setActionHandler('pause', async () => {
+          await ctx.media.setPlaybackState('paused');
+          if (ctx.capabilities.includes('dock')) await ctx.dock.disable();
+        });
+      }
+      if (ctx.capabilities.includes('dock')) await ctx.dock.enable({ minSize: { width: 320, height: 80 } });
+    });
+  }
+
+  // Everything below is background work owned by the plugin's single primary
+  // instance — a viewer frame skips it (its contributions would be host no-ops
+  // anyway, and re-running storage/network setup per open is wasteful).
+  if (ctx.role !== 'primary') return;
+
   ctx.commands.register('demo.tap', () => ctx.ui.toast('tap'), { title: 'Demo: Tap', offline: true });
   ctx.commands.register('demo.sync', () => ctx.ui.toast(ctx.online ? 'synced' : 'offline'), { title: 'Demo: Sync to cloud', offline: false });
   ctx.commands.register('demo.hang', () => { for (;;) {} }, { title: 'Demo: (simulate hang)', offline: true });
@@ -32,36 +63,6 @@ window.trove.activate(async (ctx) => {
       const row = await cdb.get('SELECT v FROM kv WHERE k = ?', 'ping');
       return row && row.v;
     }, { title: 'Demo: Client store round-trip', offline: true });
-  }
-  // A sandboxed viewer: renders a tiny "player" for .demo files into its own
-  // iframe DOM, then drives the OS media session + registers for dock mode while
-  // "playing". Exercises ctx.media and ctx.dock end-to-end.
-  if (ctx.capabilities.includes('opener')) {
-    let current = null;
-    ctx.contributes.opener({ id: 'demo.player', title: 'Demo Player', selector: { ext: ['.demo'] }, offline: true }, (file) => {
-      current = file;
-      document.body.innerHTML = '';
-      const el = document.createElement('div');
-      el.id = 'demo-player';
-      el.textContent = 'Playing ' + (file && file.name || '');
-      el.style.cssText = 'color:#fff;font:13px sans-serif;padding:10px;background:rgba(0,0,0,.6);border-radius:8px;';
-      document.body.appendChild(el);
-      window.__openedDemo = file && file.name;
-    });
-    if (ctx.capabilities.includes('media')) {
-      ctx.commands.register('demo.play', async () => {
-        await ctx.media.setMetadata({ title: (current && current.name) || 'Demo', artist: 'Trove' });
-        await ctx.media.setPlaybackState('playing');
-        await ctx.media.setActionHandler('pause', () => { window.__mediaPause = true; });
-        if (ctx.capabilities.includes('dock')) await ctx.dock.enable({ minSize: { width: 320, height: 80 } });
-        return 'playing';
-      }, { title: 'Demo: Play', offline: true });
-      ctx.commands.register('demo.stop', async () => {
-        await ctx.media.setPlaybackState('paused');
-        if (ctx.capabilities.includes('dock')) await ctx.dock.disable();
-        return 'stopped';
-      }, { title: 'Demo: Stop', offline: true });
-    }
   }
   // Brokered network: fetch a declared endpoint (allowed) and an undeclared one
   // (blocked). Returns the outcome so the host/e2e can assert enforcement.
