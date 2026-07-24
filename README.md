@@ -159,11 +159,52 @@ TROVE_EMBEDDINGS_DIM=1536
 
 **Node / Docker** — `node packages/server/src/adapters/node.js` serves both the
 API and the built web app (`packages/web/dist`), with SPA fallback. See
-[`Dockerfile`](./Dockerfile).
+[`Dockerfile`](./Dockerfile). The Bun adapter (`adapters/bun.js`) is the
+recommended production runtime. Both trap `SIGTERM`/`SIGINT` and shut down
+gracefully (flush notifications, close SQLite) so redeploys don't lose in-flight
+work.
 
 **Cloudflare Workers** — use `packages/server/src/adapters/worker.js` with R2 (via
 the S3 API) for storage and a D1-backed `MetadataStore`. The SigV4 signer and
 presigned URLs work unchanged on the Workers runtime.
+
+### Before you expose it
+
+Trove ships **no login**, and a zero-config run is **open to anyone who can reach
+the port** (anonymous auth + an open default collection — you'll see a startup
+warning). Before putting it on a network:
+
+- **Authenticate.** Set `TROVE_AUTH=jwt` (verify a JWT via `TROVE_JWKS_URL`, e.g.
+  Cloudflare Access) or `TROVE_AUTH=header` (trust a header a verifying proxy
+  set), plus `TROVE_AUTH_REQUIRED=true` so unauthenticated requests are rejected
+  rather than treated as anonymous. Consider `TROVE_DEFAULT_OPEN=false` and
+  `TROVE_ADMINS=…`.
+- **Terminate TLS at a reverse proxy** (Caddy, nginx, Traefik, Cloudflare) — the
+  server itself speaks plaintext on `0.0.0.0:8787`. Front it with the proxy and
+  don't publish the port directly.
+- **CORS stays off** unless you set `TROVE_CORS_ORIGIN` (the app is same-origin).
+  A shell **CSP** is opt-in via `TROVE_CSP` (see `SAMPLE_CSP`); it's off by
+  default because sandboxed plugin iframes can't satisfy a strict one. The API
+  still forces attachment downloads + `nosniff` to neutralize uploaded HTML/SVG.
+
+### Data & backups
+
+State lives in two places, both configurable and mounted as a volume in the
+Dockerfile (`/data`):
+
+- **Objects** — `TROVE_FS_ROOT` (filesystem) or your S3/R2 bucket.
+- **Metadata + KV** — the SQLite file at `TROVE_DB_PATH` (WAL mode).
+
+To back up the SQLite database safely while running, use SQLite's online backup
+rather than copying the file mid-write:
+
+```sh
+sqlite3 ./data/trove.db ".backup './backups/trove-$(date +%F).db'"
+```
+
+Back up the object store with your storage's native tooling (`rsync` the
+filesystem root, or bucket replication/versioning for S3/R2). `/api/health` is a
+liveness check; `/api/ready` probes the store for readiness gating.
 
 ## Using the core as a library
 
