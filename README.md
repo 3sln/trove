@@ -181,7 +181,10 @@ warning). Before putting it on a network:
   `TROVE_ADMINS=…`.
 - **Terminate TLS at a reverse proxy** (Caddy, nginx, Traefik, Cloudflare) — the
   server itself speaks plaintext on `0.0.0.0:8787`. Front it with the proxy and
-  don't publish the port directly.
+  don't publish the port directly. Also cap the proxy's max request body size —
+  the server caps JSON bodies (`TROVE_MAX_JSON_BYTES`) but streams file-upload
+  parts straight to storage, so bound raw upload size at the proxy (and/or set
+  disk/bucket quotas) to prevent a write-capable user from filling the store.
 - **CORS stays off** unless you set `TROVE_CORS_ORIGIN` (the app is same-origin).
   A shell **CSP** is opt-in via `TROVE_CSP` (see `SAMPLE_CSP`); it's off by
   default because sandboxed plugin iframes can't satisfy a strict one. The API
