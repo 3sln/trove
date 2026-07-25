@@ -10,7 +10,7 @@ const CAP_DESCRIPTIONS = {
   files: 'Read your files, folders, and search index (via the host).',
   storage: 'Keep its own SQLite database(s) — on the server and/or on this device.',
   ui: 'Show a popup panel and toasts.',
-  commands: 'Add commands to the palette.',
+  commands: 'Add commands to the palette, and run the specific host commands it lists.',
   opener: 'Preview/open file types.',
   indexer: 'Add searchable content to your files.',
   network: 'Connect to the internet — only the endpoints it declares (shown below).',
@@ -81,6 +81,38 @@ export function networkEndpoints(manifest) {
   }
   if (Array.isArray(manifest.network)) return manifest.network; // legacy top-level
   return [];
+}
+
+/**
+ * The exact command ids this plugin may ASK THE HOST TO RUN (ctx.commands.execute).
+ * Like `network`, the capability carries its allowlist rather than being a blanket
+ * grant — "can run commands" is meaningless as a yes/no, because the interesting
+ * question is always *which* ones (`explorer.delete` is not `workbench.view.home`).
+ * Accepted shapes:
+ *   commands: true                          → contribute-only; executes nothing external
+ *   commands: ["explorer.download", …]      → exactly these
+ *   commands: { execute: ["…"] }            → exactly these
+ * A plugin may always execute its OWN commands (ids prefixed with its plugin id) —
+ * that's just calling itself, and needs no grant.
+ */
+export function executableCommands(manifest) {
+  const opt = capabilityOptions(manifest, 'commands');
+  if (!opt) return [];
+  if (Array.isArray(opt)) return opt.filter(Boolean);
+  if (Array.isArray(opt.execute)) return opt.execute.filter(Boolean);
+  return [];
+}
+
+/**
+ * Whether `commandId` is executable by the plugin described by `manifest`.
+ * `ownerPluginId` is who REGISTERED that command (from the contribution registry) —
+ * a plugin may always run its own commands. Ownership is a registry fact, not a
+ * naming convention: a plugin's command ids need not be prefixed with its plugin id.
+ */
+export function canExecuteCommand(manifest, commandId, ownerPluginId) {
+  if (!commandId) return false;
+  if (ownerPluginId && ownerPluginId === manifest?.id) return true; // its own command
+  return executableCommands(manifest).includes(commandId);
 }
 
 /** Parse zip bytes into { manifest, files:Map<path,Uint8Array>, raw }. */
@@ -166,6 +198,9 @@ export function reviewSummary(pkg, trust) {
     contributions,
     settings: (m.settings || []).map((s) => ({ key: s.key, title: s.title || s.key, type: s.type, secret: !!s.secret })),
     network: endpointSummary(networkEndpoints(m)),
+    // Exactly which host commands it may run. Resolved to titles by the review UI,
+    // which has the command registry; here we just surface the declared ids.
+    commands: executableCommands(m),
     // Which SQLite stores it wants. `domain` (shared across a vendor's plugins) is
     // only grantable for a verified package; flag it so the review can say why.
     storage: (scopes.plugin || scopes.domain)

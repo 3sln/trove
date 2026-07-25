@@ -49,6 +49,11 @@ window.trove.activate(async (ctx) => {
     try { await ctx.commands.execute('demo.tap'); window.__hostCmd = 'ok'; }
     catch (e) { window.__hostCmd = 'error: ' + (e && e.message); }
   }, { title: 'Demo: Run a host command', offline: true });
+  // Executing a command the manifest does NOT list must be refused by the host.
+  ctx.commands.register('demo.runUndeclared', async () => {
+    try { await ctx.commands.execute('explorer.delete'); return 'ALLOWED'; }
+    catch (e) { return 'REFUSED: ' + (e && e.message); }
+  }, { title: 'Demo: Run an undeclared command', offline: true });
   ctx.contributes.statusItem({ id: 'demo.status', align: 'right', text: 'demo', offline: true });
   // read a packaged resource via an opaque handle
   ctx.resources.text('data.txt').then((t) => { window.__resourceText = t; });

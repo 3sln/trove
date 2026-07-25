@@ -1,7 +1,7 @@
 // Unit tests for the plugin package format, signing, and domain-verified trust.
 
 import { test, expect } from './testkit.js';
-import { parsePackage, reviewSummary, storageScopes, grantedStorageScopes } from '../src/platform/pluginPackage.js';
+import { parsePackage, reviewSummary, storageScopes, grantedStorageScopes, executableCommands, canExecuteCommand } from '../src/platform/pluginPackage.js';
 import { verifyPackage, assessTrust, checkAssetlinks, displayFingerprint } from '../src/platform/pluginSigning.js';
 import { isAllowedUrl, endpointSummary, parseEndpoint } from '../src/platform/pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from '../src/platform/pluginModules.js';
@@ -160,4 +160,33 @@ test('storage scopes: plugin vs domain, and domain needs verification', async ()
   // Review flags the blocked domain scope for an unverified package.
   const s = reviewSummary(parsePackage((await buildPackage({ manifest: m })).zip), { status: 'unverified' });
   expect(s.storage).toEqual({ plugin: true, domain: true, domainBlocked: true });
+});
+
+test('the commands capability carries an explicit allowlist, not a blanket grant', async () => {
+  // A blanket `true` lets it contribute its own commands but execute nothing external.
+  expect(executableCommands({ id: 'p', capabilities: { commands: true } })).toEqual([]);
+  // Both declaration shapes are accepted.
+  expect(executableCommands({ id: 'p', capabilities: { commands: ['a.b'] } })).toEqual(['a.b']);
+  expect(executableCommands({ id: 'p', capabilities: { commands: { execute: ['a.b', 'c.d'] } } })).toEqual(['a.b', 'c.d']);
+  // Not declared at all → nothing.
+  expect(executableCommands({ id: 'p', capabilities: { ui: true } })).toEqual([]);
+});
+
+test('canExecuteCommand allows only listed commands, plus the plugin\'s own', async () => {
+  const m = { id: 'com.acme.p', capabilities: { commands: { execute: ['explorer.download'] } } };
+  expect(canExecuteCommand(m, 'explorer.download')).toBe(true);   // listed
+  expect(canExecuteCommand(m, 'explorer.delete')).toBe(false);    // NOT listed
+  // Ownership comes from the registry (who registered it), not a name prefix.
+  expect(canExecuteCommand(m, 'anything', 'com.acme.p')).toBe(true);
+  expect(canExecuteCommand(m, 'anything', 'com.other.p')).toBe(false);
+  // A package that never declared `commands` can still run its own.
+  const bare = { id: 'com.acme.q', capabilities: { ui: true } };
+  expect(canExecuteCommand(bare, 'q.thing', 'com.acme.q')).toBe(true);
+  expect(canExecuteCommand(bare, 'explorer.delete')).toBe(false);
+});
+
+test('the review summary lists exactly which commands a plugin may run', async () => {
+  const { zip } = await buildPackage({ manifest: { capabilities: { commands: { execute: ['explorer.download'] } } } });
+  const s = reviewSummary(parsePackage(zip), { status: 'unverified' });
+  expect(s.commands).toEqual(['explorer.download']);
 });

@@ -60,7 +60,14 @@ async function main() {
   // Declare this origin as the plugin's one allowed network endpoint so the
   // brokered-fetch enforcement can be exercised below.
   const { zip } = await buildPackage({
-    manifest: { capabilities: { storage: true, ui: true, commands: true, opener: true, media: true, dock: true, network: { endpoints: [base + '/'] } } },
+    manifest: {
+      capabilities: {
+        storage: true, ui: true, opener: true, media: true, dock: true,
+        // Scoped: exactly one host command is executable (plus the plugin's own).
+        commands: { execute: ['workbench.view.home'] },
+        network: { endpoints: [base + '/'] },
+      },
+    },
   });
   const b64 = Buffer.from(zip).toString('base64');
   await page.evaluate(async (data) => {
@@ -109,6 +116,11 @@ async function main() {
   await page.waitForTimeout(400);
   const toasted = await page.evaluate(() => window.__trove.platform.notifications.items.some((n) => /tap/.test(n.message)));
   check('plugin can execute a host command (ctx.commands.execute)', toasted === true, String(toasted));
+
+  // …but ONLY the commands its manifest lists. The allowlist is per-command, so a
+  // plugin granted `workbench.view.home` can't reach `explorer.delete`.
+  const undeclared = await page.evaluate(() => window.__trove.platform.commands.execute('demo.runUndeclared'));
+  check('a command outside the declared allowlist is refused', /^REFUSED/.test(String(undeclared)), String(undeclared));
 
   // Brokered network: the declared endpoint succeeds; an undeclared host is blocked.
   const net = await page.evaluate(() => window.__trove.platform.commands.execute('demo.net'));

@@ -8,7 +8,7 @@
 // `cap(...)` first. Extracted from PluginHost so the allow/deny logic is one focused
 // unit rather than sharing a class with iframe lifecycle and DOM placement.
 
-import { networkEndpoints } from './pluginPackage.js';
+import { networkEndpoints, canExecuteCommand } from './pluginPackage.js';
 import { isAllowedUrl } from './pluginNet.js';
 import { isSourceModule } from './pluginModules.js';
 
@@ -83,11 +83,15 @@ export class PluginRpcRouter {
         record.disposers.push(this.platform.contributions.statusItems.register({ ...params, pluginId: pid }));
         return { ok: true };
 
-      // Run a host command by id (the SDK's ctx.commands.execute). Gated: this can
-      // reach any registered command — including destructive ones — so it needs the
-      // `commands` capability, which the review UI shows at install time.
+      // Run a host command by id (the SDK's ctx.commands.execute). Gated per COMMAND,
+      // not per capability: the plugin's manifest lists exactly which command ids it
+      // may run (plus its own, implicitly). A blanket "commands" grant would let a
+      // plugin that wanted `workbench.view.home` also call `explorer.delete`.
       case 'command:execute': {
-        cap('commands');
+        const owner = this.platform.contributions.commands.get(params.id)?.pluginId;
+        if (!canExecuteCommand(record.manifest, params.id, owner)) {
+          throw new Error(`Command "${params.id}" is not in this plugin's declared commands`);
+        }
         const result = await this.platform.commands.execute(params.id, ...(params.args || []));
         return { ok: true, result: result ?? null };
       }

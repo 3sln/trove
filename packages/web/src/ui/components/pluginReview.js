@@ -32,6 +32,9 @@ export function pluginReview(d, ui) {
           ? div({ className: 'cap-list' }, ...s.capabilities.map((c) => capRow(c, d.isAdmin, sel.grants.has(c.id), () => toggle(c.id))))
           : muted('None — this plugin only runs in its sandbox.')),
         (s.network || []).length ? section('Network access', div({ className: 'contrib-list' }, ...s.network.map(endpointRow))) : null,
+        (s.commands || []).length
+          ? section('Commands it can run', div({ className: 'contrib-list' }, ...s.commands.map((id) => commandRow(id, ui))))
+          : null,
         s.storage ? section('Storage', storageRows(s.storage)) : null,
         s.contributions.length ? section('What it adds', div({ className: 'contrib-list' }, ...s.contributions.map(contribRow))) : null,
         s.settings.length ? section('Settings', div({ className: 'contrib-list' }, ...s.settings.map(settingRow))) : null,
@@ -89,6 +92,20 @@ function contribRow(c) {
     c.detail ? span({ className: 'cr-detail' }, c.detail) : null,
     c.offline ? span({ className: 'pf-badge offline-ok' }, 'offline') : null,
     span({ className: 'pf-kind' }, c.kind),
+  );
+}
+
+// One command the plugin may ask the host to run. Resolved against the live registry
+// so the user sees the human title and where it comes from (built-in vs another
+// plugin) — an id like "explorer.delete" alone doesn't convey what it does.
+function commandRow(id, ui) {
+  const cmd = ui?.platform?.contributions?.commands?.get?.(id);
+  const source = cmd?.pluginId ? 'plugin' : cmd ? 'built-in' : 'not installed';
+  return div({ className: `contrib-row ${cmd ? '' : 'blocked'}` },
+    icon('command', { size: 13 }),
+    span({ className: 'cr-title' }, cmd?.title || id),
+    span({ className: 'cr-detail' }, id),
+    span({ className: 'pf-kind' }, source),
   );
 }
 
