@@ -28,8 +28,11 @@ export default function statusBar(state, ui) {
     button({ className: 'seg', title: 'Explorer' }, icon('files', { size: 13 }), span(ex.folder ? ex.folder.path : '/'))
       .on({ click: () => ui.exec('workbench.view.home') }),
     active.length
-      ? button({ className: 'seg' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
-        .on({ click: () => ui.platform.workbench.showContextMenu(0, 0, []) })
+      ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
+        .on({ click: (e) => ui.platform.workbench.showContextMenu(e.clientX, e.clientY, active.map((t) => ({
+          label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
+          run: () => ui.app.transfers.cancel(t.id),
+        }))) })
       : span({ className: 'seg' }, `${files} files · ${folders} folders`),
     div({ className: 'spacer' }),
     ...pluginItems.filter((s) => s.align !== 'left').map((s) =>

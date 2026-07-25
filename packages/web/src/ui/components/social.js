@@ -136,12 +136,19 @@ function tagSection(sc, ui) {
 function conversationSection(state, sc, ui) {
   if (sc?.loading) return div({ className: 'ip-section' }, div({ className: 'spinner' }));
   const comments = sc?.comments || [];
+  // On a load failure, don't render a false "No comments yet" — say it couldn't load
+  // and offer a retry, so the user doesn't post into what looks like an empty thread.
+  const body = sc?.error
+    ? div({ className: 'conv-empty' },
+        span(`Couldn't load the conversation: ${sc.error}`),
+        button({ className: 'btn', $styling: { marginTop: '8px' } }, 'Retry').on({ click: () => ui.app.social.loadSidecar(sc.nodeId) }))
+    : comments.length
+      ? div({ className: 'thread' }, ...comments.map((c) => commentNode(c, state, ui, 0)))
+      : div({ className: 'conv-empty' }, 'No comments yet. Start the discussion — use @ to mention someone.');
   return div({ className: 'ip-section conv' },
     div({ className: 'ip-label' }, `Conversation${sc?.commentCount ? ` · ${sc.commentCount}` : ''}`),
-    comments.length
-      ? div({ className: 'thread' }, ...comments.map((c) => commentNode(c, state, ui, 0)))
-      : div({ className: 'conv-empty' }, 'No comments yet. Start the discussion — use @ to mention someone.'),
-    composer(state, ui),
+    body,
+    sc?.error ? null : composer(state, ui),
   );
 }
 

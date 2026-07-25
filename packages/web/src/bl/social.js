@@ -118,7 +118,11 @@ export class SocialService {
     const nodeId = this.state.sidecar?.nodeId;
     const comment = findComment(this.state.sidecar?.comments || [], cid);
     const on = !(comment?.reactions?.[emoji] || []).includes(this.state.me?.id);
-    await this.api.reactComment(nodeId, cid, emoji, on).catch(() => {});
+    try {
+      await this.api.reactComment(nodeId, cid, emoji, on);
+    } catch (err) {
+      this.platform.notifications.error(`Couldn't react: ${err.message}`);
+    }
     await this.#reload();
   }
   async addTag(name, value) {
@@ -134,7 +138,17 @@ export class SocialService {
   }
   async removeTag(name) {
     const nodeId = this.state.sidecar?.nodeId;
-    await this.api.removeTag(nodeId, name).catch(() => {});
+    // Offline → queue like addTag so the removal isn't silently lost.
+    if (this.offline && !this.offline.state.online) {
+      await this.offline.queueOp({ method: 'DELETE', path: `/api/files/${encodeURIComponent(nodeId)}/tags/${encodeURIComponent(name)}` });
+      this.platform.notifications.info('Offline — tag removal will sync when you reconnect.');
+      return;
+    }
+    try {
+      await this.api.removeTag(nodeId, name);
+    } catch (err) {
+      this.platform.notifications.error(`Couldn't remove tag: ${err.message}`);
+    }
     await this.#reload();
   }
 

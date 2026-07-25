@@ -440,11 +440,15 @@ export function createRouter() {
     return res;
   });
 
-  r.delete('/api/files/:id/tags/:name', async ({ sidecar, vfs, params, principal }) => {
-    requireSidecar(sidecar);
-    const res = await sidecar.removeTag(params.id, params.name, principal);
+  r.delete('/api/files/:id/tags/:name', async (ctx) => {
+    requireSidecar(ctx.sidecar);
+    // Removing a tag is a write — enforce the same per-collection ACL as adding one,
+    // or a read-only user could strip tags off files they can't modify.
+    const node = await ctx.vfs.stat(ctx.params.id);
+    await assertCap(ctx, node.collectionId, 'write');
+    const res = await ctx.sidecar.removeTag(ctx.params.id, ctx.params.name, ctx.principal);
     // Null clears the merged tag (the matcher reads null as "absent").
-    await vfs.metadata.setContribution(params.id, 'user', { tags: { [params.name]: null } }).catch(() => {});
+    await ctx.vfs.metadata.setContribution(ctx.params.id, 'user', { tags: { [ctx.params.name]: null } }).catch(() => {});
     return res;
   });
 

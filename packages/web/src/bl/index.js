@@ -38,7 +38,9 @@ export function createApp(platform) {
   platform.workbench.observe().subscribe((wb) => {
     if (wb.activeTabId !== lastTab) {
       lastTab = wb.activeTabId;
-      if (wb.activeFile) social.loadSidecar(wb.activeFile.id);
+      // Clear the sidecar when no file is active (last tab closed) so a stale
+      // conversation from the previous file doesn't linger.
+      social.loadSidecar(wb.activeFile ? wb.activeFile.id : null);
     }
   });
 

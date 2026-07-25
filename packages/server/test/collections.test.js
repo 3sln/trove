@@ -93,3 +93,27 @@ test('collections isolate data and enforce read/write/delete', async () => {
   const cantDelete = await api(handle, 'POST', '/api/fs/delete', { token: reader, body: { id: folder.json.node.id } });
   expect(cantDelete.status).toBe(403);
 });
+
+test('a read-only user cannot add OR remove tags (tag DELETE is write-gated)', async () => {
+  const { handle } = await adminServer();
+  const boss = await mint({ sub: 'boss' });
+  const reader = await mint({ sub: 'reader' });
+  const created = await api(handle, 'POST', '/api/collections', { token: boss, body: { name: 'Vault', store: { driver: 'memory' } } });
+  const cid = created.json.collection.id;
+  const root = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: boss });
+  const file = await api(handle, 'POST', '/api/fs/folder', { token: boss, body: { parentId: root.json.node.id, name: 'doc' } });
+  const id = file.json.node.id;
+  // Boss tags it.
+  const tagged = await api(handle, 'POST', `/api/files/${id}/tags`, { token: boss, body: { name: 'fav', value: 'yes' } });
+  expect(tagged.status).toBe(200);
+
+  await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
+  // Read-only reader can neither add nor remove tags.
+  const cantAdd = await api(handle, 'POST', `/api/files/${id}/tags`, { token: reader, body: { name: 'x', value: '1' } });
+  expect(cantAdd.status).toBe(403);
+  const cantRemove = await api(handle, 'DELETE', `/api/files/${id}/tags/fav`, { token: reader });
+  expect(cantRemove.status).toBe(403);
+  // And the tag survived the denied removal.
+  const boss2 = await api(handle, 'GET', `/api/fs/stat?id=${id}`, { token: boss });
+  expect(boss2.json.node.tags?.fav).toBe('yes');
+});
