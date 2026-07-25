@@ -10,7 +10,7 @@ import { OpenFileAction, QuickOpenAction } from '../../bl/actions.js';
 const { div, input, span } = dd;
 
 export default function commandPalette(state, ui) {
-  const pal = state.wb.palette;
+  const pal = state.overlay.palette;
   if (!pal) return null;
   const wb = ui.platform.workbench;
   const items = pal.mode === 'files' ? (state.se.paletteFiles || []) : filterCommands(state, ui, pal.query);

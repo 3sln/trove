@@ -6,6 +6,7 @@
 // It also mirrors key bits into the ContextKeyService for when-clauses.
 
 import { ObservableSubject } from '../runtime.js';
+import { OverlayService, wrapIndex } from './overlay.js';
 
 const RECENTS_KEY = 'trove.recents';
 const RECENTS_MAX = 12;
@@ -13,19 +14,18 @@ const RECENTS_MAX = 12;
 export class WorkbenchService {
   constructor(context) {
     this.context = context;
+    // Transient overlays (palette/dialog/contextMenu/pluginPanel) own their own state;
+    // the workbench delegates to this and coordinates the Esc close-order below.
+    this.overlay = new OverlayService(context);
     this.state = {
       activity: 'home', // home (stack) | plugins | settings
       sidebarVisible: true,
-      palette: null, // { mode: 'commands'|'files', query } when open
       launch: { query: '', index: 0 }, // the launcher's query
       searchModal: false, // the double-shift modal search overlay
       stack: [{ kind: 'search' }], // [{kind:'search'}, {kind:'file', id, node, openerId}, …]
       activeTabId: null, // top file panel id (or null)
       activeFile: null, // top file panel node (or null)
       recents: loadRecents(),
-      pluginPanel: null,
-      dialog: null,
-      contextMenu: null,
       infoPanel: false,
     };
     this.subject = new ObservableSubject(this.state);
@@ -34,10 +34,27 @@ export class WorkbenchService {
   observe() {
     return this.subject;
   }
+  observeOverlay() {
+    return this.overlay.observe();
+  }
   #set(patch) {
     this.state = { ...this.state, ...patch };
     this.subject.next(this.state);
   }
+
+  // --- overlay delegations (state lives in OverlayService) -------------------
+  openPalette(mode, query) { this.overlay.openPalette(mode, query); }
+  setPaletteQuery(query) { this.overlay.setPaletteQuery(query); }
+  movePalette(delta, count) { this.overlay.movePalette(delta, count); }
+  setPaletteIndex(index) { this.overlay.setPaletteIndex(index); }
+  closePalette() { this.overlay.closePalette(); }
+  showDialog(dialog) { this.overlay.showDialog(dialog); }
+  updateDialog(patch) { this.overlay.updateDialog(patch); }
+  closeDialog() { this.overlay.closeDialog(); }
+  showContextMenu(x, y, items) { this.overlay.showContextMenu(x, y, items); }
+  closeContextMenu() { this.overlay.closeContextMenu(); }
+  openPluginPanel(pluginId) { this.overlay.openPluginPanel(pluginId); }
+  closePluginPanel() { this.overlay.closePluginPanel(); }
 
   setActivity(activity) {
     this.#set({ activity, sidebarVisible: true });
@@ -53,25 +70,6 @@ export class WorkbenchService {
     const v = force ?? !this.state.sidebarVisible;
     this.#set({ sidebarVisible: v });
     this.context.set('sidebar.visible', v);
-  }
-
-  openPalette(mode = 'commands', query = '') {
-    this.#set({ palette: { mode, query, index: 0 } });
-    this.context.set('palette.open', true);
-  }
-  setPaletteQuery(query) {
-    if (this.state.palette) this.#set({ palette: { ...this.state.palette, query, index: 0 } });
-  }
-  movePalette(delta, count) {
-    if (!this.state.palette || !count) return;
-    this.#set({ palette: { ...this.state.palette, index: wrapIndex(this.state.palette.index, delta, count) } });
-  }
-  setPaletteIndex(index) {
-    if (this.state.palette) this.#set({ palette: { ...this.state.palette, index } });
-  }
-  closePalette() {
-    this.#set({ palette: null });
-    this.context.set('palette.open', false);
   }
 
   // --- launcher --------------------------------------------------------------
@@ -193,45 +191,19 @@ export class WorkbenchService {
     this.#set({ infoPanel: force ?? !this.state.infoPanel });
     this.context.set('infoPanel.open', this.state.infoPanel);
   }
-  openPluginPanel(pluginId) {
-    this.#set({ pluginPanel: pluginId });
-  }
-  closePluginPanel() {
-    this.#set({ pluginPanel: null });
-  }
 
-  showContextMenu(x, y, items) {
-    this.#set({ contextMenu: { x, y, items } });
-  }
-  closeContextMenu() {
-    this.#set({ contextMenu: null });
-  }
-  showDialog(dialog) {
-    this.#set({ dialog });
-  }
-  /** Merge a patch into the open dialog's state (reactive dialogs, e.g. the chooser). */
-  updateDialog(patch) {
-    if (this.state.dialog) this.#set({ dialog: { ...this.state.dialog, ...patch } });
-  }
-  closeDialog() {
-    this.#set({ dialog: null });
-  }
-
-  /** Close any transient overlay (Esc). Returns true if something closed. */
+  /** Close any transient overlay (Esc), in priority order across overlay + stack.
+   *  Returns true if something closed. */
   closeOverlays() {
-    if (this.state.contextMenu) return this.closeContextMenu(), true;
-    if (this.state.dialog) return this.closeDialog(), true;
+    const o = this.overlay.state;
+    if (o.contextMenu) return this.overlay.closeContextMenu(), true;
+    if (o.dialog) return this.overlay.closeDialog(), true;
     if (this.state.searchModal) return this.closeSearchModal(), true;
-    if (this.state.palette) return this.closePalette(), true;
-    if (this.state.pluginPanel) return this.closePluginPanel(), true;
+    if (o.palette) return this.overlay.closePalette(), true;
+    if (o.pluginPanel) return this.overlay.closePluginPanel(), true;
     if (this.state.stack.length > 1) return this.back(), true; // pop the top viewer panel
     return false;
   }
-}
-
-/** Wrap a list cursor by `delta` within `[0, count)` (shared by the palette + launcher). */
-function wrapIndex(index, delta, count) {
-  return (index + delta + count) % count;
 }
 
 function loadRecents() {

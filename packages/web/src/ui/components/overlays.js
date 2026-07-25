@@ -12,7 +12,7 @@ const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
 // ---- Dialog ----------------------------------------------------------------
 export function dialog(state, ui) {
-  const d = state.wb.dialog;
+  const d = state.overlay.dialog;
   if (!d) return null;
   if (d.kind === 'collection') return collectionDialog(d, ui);
   if (d.kind === 'plugin-review') return pluginReview(d, ui);
@@ -150,7 +150,7 @@ function storeFields(form, set) {
 
 // ---- Context menu ----------------------------------------------------------
 export function contextMenu(state, ui) {
-  const m = state.wb.contextMenu;
+  const m = state.overlay.contextMenu;
   if (!m || !m.items?.length) return null;
   const wb = ui.platform.workbench;
   const x = Math.min(m.x, window.innerWidth - 220);
@@ -221,7 +221,7 @@ export function transferTray(state, ui) {
 
 // ---- Plugin popup panel ----------------------------------------------------
 export function pluginPanel(state, ui) {
-  const pid = state.wb.pluginPanel;
+  const pid = state.overlay.pluginPanel;
   if (!pid) return null;
   const plugin = (state.plugins || []).find((p) => p.id === pid);
   return div({ className: 'plugin-panel', $styling: { width: '380px' } },
