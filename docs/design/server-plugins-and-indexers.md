@@ -299,11 +299,20 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
    `POST /api/plugins/install`, `GET /api/plugins/installed`,
    `GET /api/plugins/:id/package`, `DELETE /api/plugins/:id/install`.
    `assertCapability` enforces grants on `/api/plugins/:id/sql`.
-   *Transitional:* enforcement allows a call when no server install record exists
-   (device plugins predate this) — it flips to deny-by-default once the client
-   account-install flow (uploads packages to the server) lands. Server-side
-   **signature/trust** re-verification is still TODO (structure + capabilities are
-   validated today).
+
+   **Client account-install flow — ✅ implemented:** installing a plugin with a
+   server footprint (server `storage` or a server indexer) uploads its full package
+   to the server (`api.installPlugin`), `restore()` syncs account plugins the server
+   has but this device lacks (download → enable), and uninstall of an account plugin
+   cleans up server-side. Device-only plugins stay in IndexedDB. Scope is decided by
+   `accountScoped(manifest, grants, files)`.
+
+   *Still transitional:* server enforcement allows a call when no install record
+   exists, so plugins installed **before** this change (local-only, never uploaded)
+   keep working. Flipping to deny-by-default is safe for fresh deployments; existing
+   ones want a one-time **re-upload migration** (on `restore`, push any local
+   account plugin the server is missing) first. Server-side **signature/trust**
+   re-verification is also still TODO (structure + capabilities are validated today).
 2. **IndexerRuntime interface + Node (`isolated-vm`) impl + auto-trigger in `#indexNode`
    + backfill pass + output caps.**
 3. **`ctx.file.presignRead()`** (S3 native + self-signed URL).

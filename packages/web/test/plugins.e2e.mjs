@@ -74,6 +74,25 @@ async function main() {
   }, { timeout: 8000 });
   check('plugin announced a live manifest (is running)', true);
 
+  // The demo declares `storage`, so it's account-scoped: installing uploads the full
+  // package to the server (source of truth for cross-device sync + capability enforcement).
+  const installed = await page.evaluate(async () => (await window.__trove.platform.api.installedPlugins()).plugins.map((p) => p.pluginId));
+  check('account-scoped plugin uploaded to the server on install', installed.includes('com.trove.demo'), installed.join(', '));
+
+  // Cross-device sync: wipe this device's local copy, then re-run restore — it should
+  // pull the package back down from the server and re-enable it.
+  await page.evaluate(async () => {
+    await window.__trove.platform.plugins.registry.remove('com.trove.demo');
+    window.__trove.platform.plugins.plugins.get('com.trove.demo')?.iframe?.remove();
+    window.__trove.platform.plugins.plugins.delete('com.trove.demo');
+    await window.__trove.platform.plugins.restore();
+  });
+  await page.waitForFunction(() => {
+    const p = window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo');
+    return p && p.responsive;
+  }, { timeout: 8000 });
+  check('account plugin re-synced from the server on a fresh device', true);
+
   const features = await page.evaluate(() => window.__trove.platform.plugins.list().find((x) => x.id === 'com.trove.demo').features);
   const tap = features.find((f) => f.id === 'demo.tap');
   const sync = features.find((f) => f.id === 'demo.sync');

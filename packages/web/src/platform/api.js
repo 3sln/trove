@@ -88,6 +88,30 @@ export class TroveApiClient {
   indexers() {
     return this.request('GET', '/api/indexers');
   }
+
+  // --- server plugin installs (account-scoped, synced across devices) ---------
+  /** Upload a package zip for account install; returns the server install record. */
+  async installPlugin(bytes, grants) {
+    const q = grants && grants.length ? '?grants=' + encodeURIComponent(grants.join(',')) : '';
+    const res = await this._fetch(this.baseUrl + '/api/plugins/install' + q, { method: 'POST', body: bytes });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const e = json?.error || { code: 'internal', message: `Install failed (${res.status})` };
+      throw new TroveError(e.code, e.message, { details: e.details });
+    }
+    return json.install;
+  }
+  installedPlugins() {
+    return this.request('GET', '/api/plugins/installed');
+  }
+  async pluginPackage(id) {
+    const res = await this._fetch(`${this.baseUrl}/api/plugins/${encodeURIComponent(id)}/package`);
+    if (!res.ok) throw new TroveError('not_found', `Package for "${id}" not found`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+  uninstallPluginServer(id) {
+    return this.request('DELETE', `/api/plugins/${encodeURIComponent(id)}/install`);
+  }
   // contribution: { semanticTexts?, tags?, metadata? } (legacy { documents, facet } ok).
   pushIndex(indexerId, nodeId, contribution) {
     return this.request('POST', `/api/index/${encodeURIComponent(indexerId)}`, { body: { nodeId, ...contribution } });

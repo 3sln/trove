@@ -17,7 +17,7 @@ import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
 import { PluginRegistry } from './pluginStore.js';
 import { ClientSqlProvider } from './pluginClientDb.js';
 import { assessTrust } from './pluginSigning.js';
-import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes } from './pluginPackage.js';
+import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage } from './pluginPackage.js';
 import { isAllowedUrl, endpointSummary } from './pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from './pluginModules.js';
 
@@ -94,15 +94,23 @@ export class PluginHost {
     const id = pkg.manifest.id;
     const requested = capabilityList(pkg.manifest);
     const granted = (grants || requested).filter((c) => ALL_CAPABILITIES.includes(c) && requested.includes(c));
-    // Storage scopes actually available: plugin if declared+granted; domain only if
-    // declared, granted, AND the package is domain-verified.
+    // Account-scoped plugins (server storage or a server indexer) upload their full
+    // package to the server: it re-validates, gates admin-only packages, and becomes
+    // the canonical copy so the plugin syncs to the user's other devices and its
+    // capabilities are enforced server-side. Throws if the server rejects (e.g. admin
+    // required) — surfaced to the user by the install UI. Device-scoped plugins stay local.
+    const scope = accountScoped(pkg.manifest, granted, pkg.files) ? 'account' : 'device';
+    if (scope === 'account') {
+      if (!pkg.raw) throw new Error('Package bytes unavailable for a server install');
+      await this.platform.api.installPlugin(pkg.raw, granted);
+    }
     const storage = granted.includes('storage')
       ? grantedStorageScopes(pkg.manifest, trust)
       : { plugin: false, domain: false };
     const record = {
       id, manifest: pkg.manifest,
       files: Object.fromEntries([...pkg.files.entries()]),
-      grants: granted, storage, trust: trust || null,
+      grants: granted, storage, trust: trust || null, scope,
       settings: {}, secrets: {}, installedAt: Date.now(),
     };
     await this.registry.save(record);
@@ -111,15 +119,45 @@ export class PluginHost {
     return this.plugins.get(id);
   }
 
-  /** Load all persisted plugins (call once at startup). */
+  /** Load all persisted plugins (call once at startup), then sync account plugins. */
   async restore() {
     let records = [];
     try {
       records = await this.registry.list();
     } catch { /* no IndexedDB */ }
+    const localIds = new Set(records.map((r) => r.id));
     for (const rec of records) {
       this.#registerSettings(rec);
       this.#run(rec).catch((e) => console.error('restore plugin failed', rec.id, e));
+    }
+    // Pull down any account plugins installed on another device but not yet here.
+    this.#syncAccountPlugins(localIds).catch(() => {});
+  }
+
+  // Download + enable account plugins the server has that this device doesn't.
+  async #syncAccountPlugins(localIds) {
+    let list;
+    try { list = (await this.platform.api.installedPlugins()).plugins || []; } catch { return; }
+    for (const rec of list) {
+      if (localIds.has(rec.pluginId)) continue;
+      try {
+        const pkg = parsePackage(await this.platform.api.pluginPackage(rec.pluginId));
+        const grants = rec.grants || [];
+        const record = {
+          id: rec.pluginId, manifest: pkg.manifest,
+          files: Object.fromEntries([...pkg.files.entries()]),
+          grants,
+          // The server already gated storage scopes at install; expose what's declared.
+          storage: grants.includes('storage')
+            ? { plugin: true, domain: !!pkg.manifest.capabilities?.storage?.domain }
+            : { plugin: false, domain: false },
+          trust: null, scope: 'account',
+          settings: {}, secrets: {}, installedAt: rec.createdAt || Date.now(),
+        };
+        await this.registry.save(record);
+        this.#registerSettings(record);
+        await this.#run(record);
+      } catch (e) { console.error('sync plugin failed', rec.pluginId, e); }
     }
   }
 
@@ -714,6 +752,8 @@ export class PluginHost {
   /** Uninstall: stop the plugin, forget it, and wipe everything it owns. */
   async uninstall(pluginId, { wipeData = true } = {}) {
     const record = this.plugins.get(pluginId);
+    const isAccount = record?.scope === 'account'
+      || (await this.registry.get(pluginId).catch(() => null))?.scope === 'account';
     if (record) {
       try { record.channel?.emit('deactivate'); } catch { /* ignore */ }
       for (const d of record.disposers) { try { d(); } catch { /* ignore */ } }
@@ -727,8 +767,11 @@ export class PluginHost {
     }
     if (wipeData) {
       // Wipe the plugin's private stores (server + on-device). Its domain scope, if
-      // any, is shared with the vendor's other plugins and left intact.
-      await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => {});
+      // any, is shared with the vendor's other plugins and left intact. Account plugins
+      // uninstall through the server (removes the record, package blob, AND the data);
+      // device plugins just drop their scoped server data.
+      if (isAccount) await this.platform.api.uninstallPluginServer(pluginId).catch(() => {});
+      else await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => {});
       await this.clientDb.drop(`plg:${pluginId}`).catch(() => {});
     }
     await this.registry.remove(pluginId);
@@ -847,6 +890,16 @@ function runSqlOp(db, op, sql, params = [], statements) {
 // low bound when the viewer gives nothing).
 function clampDim(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v || lo));
+}
+
+// A plugin is account-scoped (must install to the server) if it has a server
+// footprint: server storage, or a server indexer (declared or embedded sub-package).
+// Purely client-side plugins stay device-local.
+function accountScoped(manifest, granted, files) {
+  if (granted.includes('storage')) return true;
+  if (Array.isArray(manifest.serverIndexers) && manifest.serverIndexers.length) return true;
+  for (const path of files.keys()) if (/^indexers\/[^/]+\/manifest\.json$/.test(path)) return true;
+  return false;
 }
 
 function signature(live) {
