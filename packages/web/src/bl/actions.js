@@ -184,12 +184,17 @@ export class UploadFilesAction extends AppAction {
     transfers.start(tid, file.name, file.size, controller);
     let uploadId = null;
     try {
-      await platform.api.upload(file, {
+      const node = await platform.api.upload(file, {
         parentId, concurrency, signal: controller.signal,
         onStart: (id) => { uploadId = id; },
         onProgress: (p) => transfers.progress(tid, p),
       });
       transfers.finish(tid, 'done');
+      // The server disambiguates a same-name collision rather than overwriting — tell
+      // the user when the saved name differs from what they dropped.
+      if (node?.name && node.name !== file.name) {
+        platform.notifications.info(`"${file.name}" already existed — saved as "${node.name}".`);
+      }
     } catch (err) {
       // Release the server-side session so a cancelled/failed multipart upload doesn't
       // leak an open multipart object (best-effort; the server also sweeps stale ones).

@@ -49,6 +49,25 @@ test('a full proxied upload drives entirely off the descriptor', async () => {
   expect(done.json.node.size).toBe(5);
 });
 
+test('an upload onto an existing name is disambiguated, not overwritten', async () => {
+  const { handle, vfs } = await createServer();
+  const original = await vfs.writeFile('root', 'note.txt', 'ORIGINAL', { contentType: 'text/plain' });
+
+  const create = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'note.txt', size: 3, contentType: 'text/plain' });
+  const d = create.json;
+  await handle(new Request(`http://t${d.transfer.partUrl.replace('{partNumber}', '1')}`, { method: 'PUT', body: 'new' }));
+  const done = await jsonReq(handle, 'POST', d.endpoints.complete, {});
+
+  // The new upload got a fresh name; the original file (id + bytes) is untouched.
+  expect(done.json.node.name).toBe('note (1).txt');
+  expect(done.json.node.id).not.toBe(original.id);
+  const keep = await vfs.metadata.getById(original.id);
+  expect(keep).toBeTruthy();
+  expect(keep.name).toBe('note.txt');
+  expect(keep.size).toBe(8); // 'ORIGINAL'
+  expect(keep.storageKey).toBe(original.storageKey); // bytes not replaced
+});
+
 test('per-file quota is enforced at create time', async () => {
   const { handle } = await createServer({ maxUploadBytes: 1024 });
   const ok = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'small', size: 512 });

@@ -63,6 +63,15 @@ export class TroveApiClient {
   capabilities() {
     return this.request('GET', '/api/capabilities');
   }
+  /** Single-shot reachability probe (short timeout, no retries) — is the server
+   *  actually reachable, vs. `navigator.onLine` merely reporting an up interface? */
+  async reachable(timeoutMs = 4000) {
+    try {
+      const signal = AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined;
+      const res = await this._fetch(this.baseUrl + '/api/capabilities', { method: 'GET', signal });
+      return res.ok;
+    } catch { return false; }
+  }
   list(pathOrId, opts = {}) {
     const key = pathOrId?.startsWith?.('/') ? 'path' : 'id';
     return this.request('GET', '/api/fs/list', { query: { [key]: pathOrId, ...opts } });

@@ -190,10 +190,29 @@ export class Vfs {
 
   async createUpload(req) {
     const parent = await this.resolve(req.parentId, req.collectionId);
+    // Never silently overwrite an existing same-named file (data loss). Disambiguate
+    // to "name (1).ext" so the drop is non-destructive; the client tells the user the
+    // final name differs. `overwrite:true` opts back into replacing in place.
+    const name = req.overwrite ? req.name : await this.#uniqueChildName(parent, req.name);
     return this.uploads.create({
-      ...req, parentId: parent.id, collectionId: parent.collectionId,
+      ...req, name, parentId: parent.id, collectionId: parent.collectionId,
       contentType: req.contentType || this.guessContentType(req.name),
     });
+  }
+
+  /** A child name that doesn't collide, appending " (n)" before the extension. */
+  async #uniqueChildName(parent, name) {
+    const cid = parent.collectionId;
+    const taken = async (n) => !!(await this.metadata.getByPath(cid, pathOf(parent, n)));
+    if (!(await taken(name))) return name;
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let i = 1; i < 1000; i++) {
+      const candidate = `${stem} (${i})${ext}`;
+      if (!(await taken(candidate))) return candidate;
+    }
+    return `${stem} (${Date.now()})${ext}`;
   }
   signUploadPart(uploadId, partNumber) {
     return this.uploads.signPart(uploadId, partNumber);

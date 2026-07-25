@@ -40,12 +40,19 @@ export class OfflineService {
     await this.#refreshQueue();
     window.addEventListener('online', () => this.#onOnline());
     window.addEventListener('offline', () => this.#onOffline());
+    // `navigator.onLine` only reflects that an interface is up — on a captive portal or
+    // dead uplink it's `true` while the server is unreachable, which would leave us
+    // falsely "online" with every request silently failing. Confirm real reachability.
+    if (this.state.online && !(await this.api.reachable())) this.#set({ online: false });
     // Tell the plugin host our initial connectivity so it can probe plugins.
     this.platform.plugins?.setOnline?.(this.state.online);
     if (this.state.online) this.flushQueue();
   }
 
   async #onOnline() {
+    // The interface came up, but verify the server is actually reachable before
+    // declaring online — a captive portal fires 'online' with no real connectivity.
+    if (!(await this.api.reachable())) { this.#set({ online: false }); await this.platform.plugins?.setOnline?.(false); return; }
     this.#set({ online: true });
     // Plugins re-announce what works now that we're back online.
     await this.platform.plugins?.setOnline?.(true);
