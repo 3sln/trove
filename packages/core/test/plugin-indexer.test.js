@@ -29,7 +29,7 @@ function demoPackage(id = 'com.acme.demo') {
     'manifest.json': strToU8(JSON.stringify({
       id, name: 'Demo', version: '1.0.0', entry: 'src/index.js', capabilities: { ui: true },
       contributes: {
-        indexers: [{ id: id + '.idx', match: { ext: ['.demo'] }, entry: 'src/indexers/demo.js', server: true }],
+        indexers: [{ id: id + '.idx', match: { ext: ['.demo'] }, entry: 'src/indexers/demo.js' }],
       },
     })),
     'src/index.js': strToU8('//'),

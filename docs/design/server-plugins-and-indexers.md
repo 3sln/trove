@@ -17,10 +17,11 @@ filtering, removable per contributor).
   `{ semanticTexts, tags, metadata }`. Built-in indexers (`textIndexer`) run
   server-side on upload via `Vfs.#indexNode`. `Vfs.removeContributions(node, id)`
   reverses one contributor cleanly.
-- **Plugin indexers (stub):** a plugin can *declare* an indexer client-side
-  (`ctx.contributes.indexer`), but the `indexer:run` path has **no caller** — nothing
-  triggers it. The only way contributions land is a manual `ctx.files.index(...)` from
-  a browser. There is **no server-side plugin execution and no automatic pipeline.**
+- **Plugin indexers — ✅ built:** declared in the manifest (`contributes.indexers`,
+  each naming an entry module) and run **server-side** by `PluginIndexers` +
+  `IndexerRuntime` on every upload, with backfill on install and purge on uninstall.
+  The old client-side `ctx.contributes.indexer` + `indexer:run` path was dead code —
+  nothing ever triggered it — and has been removed.
 - **Plugin storage & install (client-trusted):** plugins live in the browser
   (`PluginRegistry`, IndexedDB). The server never sees the package; it holds only the
   scoped SQLite keyed by `(user, pluginId)`. `POST /api/plugins/:id/sql` checks only
@@ -57,32 +58,47 @@ the server can sync it, enforce its caps, and clean it up.
 
 ## 3. Package format
 
-The plugin package (zip) may embed **indexer sub-packages** — each a self-contained ESM
-bundle with its own entry + manifest — under a conventional directory:
+A plugin is **one module tree**. Indexers and openers are not nested sub-packages —
+they're **contributions declared in the manifest**, each naming an entry module inside
+that same tree, so everything in a plugin shares modules and code.
 
 ```
 plugin.zip
-  manifest.json                      # plugin manifest (capabilities, network endpoints, settings…)
-  src/… | plugin.js                  # client code (iframe), as today
-  indexers/
-    <indexer-id>/
-      manifest.json                  # indexer manifest (below)
-      index.js                       # ESM entry: export default async (file, ctx) => Contribution
-      lib/…                          # sibling ESM modules
+  manifest.json                      # capabilities, network endpoints, settings, contributes…
+  src/index.js                       # the plugin's own entry (background frame)
+  src/shared.js                      # shared by everything below
+  src/indexers/pdf.js                # an indexer entry:  export default async (node, ctx) => Contribution
+  src/openers/player.js              # an opener entry:   activate(ctx => ctx.onOpen(file => …))
 ```
-
-Indexer manifest:
 
 ```jsonc
-{
-  "id": "com.acme.pdf",              // namespaced under the plugin id at registration
-  "displayName": "PDF text & metadata",
-  "match": { "mime": ["application/pdf"], "ext": [".pdf"] },
-  "entry": "index.js",
-  "offline": false,                  // needs network? (affects availability, batch scheduling)
-  "limits": { "maxMillis": 5000, "maxMemoryMb": 128 }   // hints; host enforces a ceiling
+"contributes": {
+  "indexers": [{
+    "id": "com.acme.pdf",
+    "title": "PDF text & metadata",
+    "match": { "mime": ["application/pdf"], "ext": [".pdf"] },
+    "entry": "src/indexers/pdf.js"
+  }],
+  "openers": [{
+    "id": "com.acme.pdfview",
+    "title": "PDF Viewer",
+    "match": { "ext": [".pdf"] },
+    "entry": "src/openers/pdf.js"
+  }],
+  "commands": [...], "statusItems": [...], "keybindings": [...]
 }
 ```
+
+**Indexers always run on the server.** There is no client-side indexer: indexing is a
+property of the drive, not of whoever happens to have a tab open — it must happen once
+per upload regardless of which client did it. (The separate `indexer` *capability* is a
+different thing: it lets a plugin push its own contributions for a file it's looking at,
+through the API.) Openers are the mirror image — they always run in the browser, in
+their own sandboxed iframe booted at the opener's entry module.
+
+**The manifest is authoritative.** The host registers exactly what's declared, before
+the plugin boots, so what the user approved at install is what the plugin gets — and
+contributions exist (and stay listed) even if the plugin's frame never comes up.
 
 An indexer **inherits** from its plugin: the declared `network` endpoint allowlist,
 the plugin config + secrets (API tokens), and optionally the plugin's scoped server

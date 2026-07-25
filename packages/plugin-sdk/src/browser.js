@@ -18,7 +18,6 @@
   const pending = new Map();
   const commandHandlers = new Map();
   const openerHandlers = new Map();
-  const indexerHandlers = new Map();
   const contributions = { commands: new Map(), openers: new Map(), indexers: new Map(), statusItems: new Map() };
   let onConnectivity = null, onDeactivate = null, onSettingsChange = null, onDock = null;
   const mediaHandlers = {}; // action -> handler, for OS media-session controls
@@ -73,7 +72,6 @@
       if (!f) throw new Error('no opener ' + params.openerId);
       return f(params.file, params.context);
     }
-    if (method === 'indexer:run') { const f = indexerHandlers.get(params.indexerId); if (!f) throw new Error('no indexer ' + params.indexerId); return f(params.file); }
     if (method === 'manifest') return buildManifest();
     throw new Error('Unknown host call ' + method);
   }
@@ -156,17 +154,17 @@
         openerHandlers.set(id, handler);
         return this;
       },
-      /** Implement a declared indexer. */
-      onIndex(idOrHandler, maybeHandler) {
-        const [id, handler] = typeof idOrHandler === 'function' ? ['*', idOrHandler] : [idOrHandler, maybeHandler];
-        indexerHandlers.set(id, handler);
-        return this;
-      },
-      /** @deprecated bind handlers with onOpen/onIndex/commands.handle and declare the
+      // NOTE: there is no onIndex(). Indexers run on the SERVER (in its isolate
+      // runtime), not in this sandbox — indexing has to happen once per upload for the
+      // drive, not in whichever tab is open. An indexer's entry module is plain ESM
+      // exporting `index(node, ctx)`; it doesn't use this SDK at all. What a plugin can
+      // do from here is PUSH contributions for a node via ctx.files.index (the
+      // `indexer` capability).
+      /** @deprecated bind handlers with onOpen/commands.handle and declare the
        *  contribution in the manifest. These no longer register anything. */
       contributes: {
         opener(spec, handler) { openerHandlers.set(spec.id, handler); contributions.openers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
-        indexer(spec, handler) { indexerHandlers.set(spec.id, handler); contributions.indexers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
+        indexer(spec) { contributions.indexers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
         statusItem(spec) { contributions.statusItems.set(spec.id, spec); return Promise.resolve({ ok: true }); },
         keybinding() { return Promise.resolve({ ok: true }); },
       },

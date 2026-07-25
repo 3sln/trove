@@ -66,31 +66,33 @@ export function declaredOpeners(manifest) {
   }));
 }
 
-/** Indexers a package declares. `server: true` runs in the server isolate runtime. */
+/**
+ * Indexers a package declares. Indexers ALWAYS run on the server, in the isolate
+ * runtime: indexing is a property of the drive, not of whoever happens to have a tab
+ * open — it must happen for every upload, once, regardless of which client did it.
+ * (Not to be confused with the `indexer` capability, which lets a plugin PUSH its own
+ * contributions for a node through the API; that's a client action, not an indexer.)
+ */
 export function declaredIndexers(manifest) {
   return declared(manifest, 'indexers').map((i) => ({
     id: i.id,
     title: i.title || i.id,
     selector: i.match || i.selector || {},
     entry: i.entry || manifest?.entry,
-    server: !!i.server,
-    offline: !!i.offline,
   }));
 }
 
 /**
- * The indexers a plugin runs SERVER-side (`contributes.indexers[].server: true`) — the
- * ones that make a package account-scoped and admin-gated, since they ship code the
- * server executes. Their `entry` is a module in the plugin's own tree, so a server
- * indexer shares code with the rest of the plugin.
+ * The indexers the server will run. Every declared indexer is one — shipping an
+ * indexer is what makes a package account-scoped and admin-gated, since it's code the
+ * server executes. Their `entry` is a module in the plugin's own tree, so an indexer
+ * shares code with the rest of the plugin.
  *
  * `manifest.serverIndexers: [{ id, match, entry }]` is still accepted as a legacy
  * top-level form.
  */
 export function serverIndexers(manifest) {
-  const out = declaredIndexers(manifest)
-    .filter((i) => i.server)
-    .map((i) => ({ id: i.id, match: i.selector, entry: i.entry }));
+  const out = declaredIndexers(manifest).map((i) => ({ id: i.id, match: i.selector, entry: i.entry }));
   for (const spec of manifest?.serverIndexers || []) {
     if (spec?.id && !out.some((o) => o.id === spec.id)) {
       out.push({ id: spec.id, match: spec.match || {}, entry: spec.entry || manifest?.entry });

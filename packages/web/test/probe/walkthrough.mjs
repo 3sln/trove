@@ -119,7 +119,8 @@ await page.keyboard.press('Escape');
 await page.evaluate(() => window.__trove.platform.workbench.openPalette('files'));
 await page.waitForSelector('.palette input', { timeout: 3000 });
 await page.locator('.palette input').fill('cooking');
-await page.waitForTimeout(900);
+// Debounced + a server round-trip — wait for the result, don't race a fixed timeout.
+await page.waitForFunction(() => (window.__trove.app.search.state.paletteFiles || []).length > 0, { timeout: 10000 }).catch(() => {});
 const qo = await page.evaluate(() => (window.__trove.app.search.state.paletteFiles || []).map((r) => r.node.name));
 check('quick-open finds files by name', qo.includes('cooking.txt'), qo.join(', '));
 await shot('quick-open');

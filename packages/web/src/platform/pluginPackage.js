@@ -12,6 +12,8 @@ const CAP_DESCRIPTIONS = {
   ui: 'Show a popup panel and toasts.',
   commands: 'Add commands to the palette, and run the specific host commands it lists.',
   opener: 'Preview/open file types.',
+  // Distinct from a declared indexer (which the SERVER runs on every upload): this
+  // capability lets the plugin itself push searchable content for a file it's looking at.
   indexer: 'Add searchable content to your files.',
   network: 'Connect to the internet — only the endpoints it declares (shown below).',
   media: 'Show playback controls on your lock screen and notifications while it plays media.',

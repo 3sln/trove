@@ -22,7 +22,7 @@ import { PluginRegistry } from './pluginStore.js';
 import { ClientSqlProvider } from './pluginClientDb.js';
 import { assessTrust } from './pluginSigning.js';
 import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage } from './pluginPackage.js';
-import { declaredOpeners, declaredIndexers } from '@trove/core/plugins/package.js';
+import { declaredOpeners } from '@trove/core/plugins/package.js';
 import { endpointSummary } from './pluginNet.js';
 import { MediaController } from './pluginMedia.js';
 import { FrameDock } from './pluginDock.js';
@@ -98,13 +98,11 @@ export class PluginHost {
         offline: o.offline, dock: o.dock, entry: o.entry, pluginId: pid,
       }));
     }
-    // Client-side indexers (server ones run in the server's isolate runtime).
-    for (const i of declaredIndexers(runtime.manifest)) {
-      if (i.server || !runtime.grants.includes('indexer')) continue;
-      keep(this.platform.contributions.indexers.register({
-        id: i.id, title: i.title, selector: i.selector, offline: i.offline, entry: i.entry, pluginId: pid,
-      }));
-    }
+    // NOTE: declared indexers are deliberately NOT registered here. They run on the
+    // server (PluginIndexers registers them into the Vfs registry from the install
+    // record), because indexing must happen once per upload for the drive — not in
+    // whichever browser tab happens to be open.
+    //
     // Commands: declared here, implemented by the plugin's primary frame (by id).
     for (const cmd of c.commands || []) {
       if (!cmd?.id) continue;
