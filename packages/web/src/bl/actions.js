@@ -182,13 +182,18 @@ export class UploadFilesAction extends AppAction {
     const tid = newId('xfer');
     const controller = new AbortController();
     transfers.start(tid, file.name, file.size, controller);
+    let uploadId = null;
     try {
       await platform.api.upload(file, {
         parentId, concurrency, signal: controller.signal,
+        onStart: (id) => { uploadId = id; },
         onProgress: (p) => transfers.progress(tid, p),
       });
       transfers.finish(tid, 'done');
     } catch (err) {
+      // Release the server-side session so a cancelled/failed multipart upload doesn't
+      // leak an open multipart object (best-effort; the server also sweeps stale ones).
+      if (uploadId) platform.api.abortUpload(uploadId).catch(() => {});
       if (err.code === 'aborted') transfers.finish(tid, 'cancelled');
       else {
         transfers.finish(tid, 'error', err.message);

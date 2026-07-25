@@ -143,21 +143,28 @@ export class OfflineService {
     const q = await idbAllWithKeys(this.db, 'queue');
     if (!q.length) return;
     this.#set({ syncing: true });
+    let synced = 0;
+    let dropped = 0;
     try {
       for (const { key, value } of q) {
         try {
           await this.api.request(value.method, value.path, { body: value.body });
           await idbDelete(this.db, 'queue', key);
+          synced++;
         } catch (err) {
           if (err.code === 'transient' || err.code === 'timeout') break; // retry later
-          // A permanent failure (e.g. deleted file) — drop it so we don't loop.
+          // A permanent failure (e.g. the file was deleted) — drop it so we don't loop,
+          // but don't pretend it synced.
           await idbDelete(this.db, 'queue', key);
+          dropped++;
         }
       }
     } finally {
       await this.#refreshQueue();
       this.#set({ syncing: false });
-      if (this.state.queued === 0) this.platform.notifications.info('Offline changes synced.');
+      // Be honest: only claim success for what actually applied, and surface drops.
+      if (dropped) this.platform.notifications.warn(`${dropped} offline change${dropped > 1 ? 's' : ''} couldn't be applied and ${dropped > 1 ? 'were' : 'was'} discarded.`);
+      if (synced && this.state.queued === 0) this.platform.notifications.info(`${synced} offline change${synced > 1 ? 's' : ''} synced.`);
     }
   }
 }

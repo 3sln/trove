@@ -33,6 +33,16 @@ export class TroveApiClient {
           signal,
         });
         if (res.status === 429 || res.status >= 500) {
+          // Read the structured error to decide retry: an explicitly non-retryable
+          // failure (e.g. a per-file size limit) must fail fast with its real message,
+          // not be retried 3× into a generic "Server 429". `raw` requests can't consume
+          // the body here, so they stay status-based.
+          if (!raw) {
+            let e;
+            try { const t = await res.text(); e = (t ? JSON.parse(t) : null)?.error; } catch { /* non-JSON body */ }
+            if (e && e.retryable === false) throw new TroveError(e.code, e.message, { retryable: false, details: e.details });
+            throw TroveError.transient(e?.message || `Server ${res.status}`);
+          }
           throw TroveError.transient(`Server ${res.status}`);
         }
         if (raw) return res;
@@ -212,6 +222,9 @@ export class TroveApiClient {
       body: { parentId: opts.parentId, name, size, contentType: file.type || undefined },
       signal: opts.signal,
     });
+    // Hand the caller the server upload id so a cancel/failure can abort the session
+    // (otherwise a multipart upload leaks server + storage state).
+    if (plan.uploadId) opts.onStart?.(plan.uploadId);
 
     const progress = new ProgressAggregator(size, opts.onProgress);
     const t = plan.transfer || {};

@@ -213,11 +213,18 @@ export class Vfs {
 
   async completeUpload(uploadId, parts) {
     const obj = await this.uploads.complete(uploadId, parts);
-    const parent = await this.metadata.getById(obj.parentId);
-    if (!parent) throw TroveError.notFound('Parent folder');
-    const node = await this.#upsertFileNode({ parent, name: obj.name, storageKey: obj.storageKey, size: obj.size, contentType: obj.contentType, etag: obj.etag });
-    this.#indexNode(node).catch((e) => console.error('index error', e));
-    return node;
+    // The bytes are now committed to storage. If we can't attach them to a node (parent
+    // deleted mid-upload, name collision), delete the object so it doesn't leak.
+    try {
+      const parent = await this.metadata.getById(obj.parentId);
+      if (!parent) throw TroveError.notFound('Parent folder');
+      const node = await this.#upsertFileNode({ parent, name: obj.name, storageKey: obj.storageKey, size: obj.size, contentType: obj.contentType, etag: obj.etag });
+      this.#indexNode(node).catch((e) => console.error('index error', e));
+      return node;
+    } catch (err) {
+      await (await this.storageFor(obj.collectionId)).delete(obj.storageKey).catch(() => {});
+      throw err;
+    }
   }
 
   // --- search & indexing -----------------------------------------------------

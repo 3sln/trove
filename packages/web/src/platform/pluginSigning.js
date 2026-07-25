@@ -124,12 +124,14 @@ export function checkAssetlinks(assetlinks, fingerprint, pluginId) {
 /**
  * Full trust status for a package.
  * @param {(domain:string)=>Promise<object|null>} fetchAssetlinks  resolves the domain's assetlinks doc (or null)
- * @returns {Promise<{status:'unverified'|'signed'|'verified', domain?:string, fingerprint?:string, reason?:string}>}
+ * @returns {Promise<{status:'unverified'|'invalid'|'signed'|'verified', domain?:string, fingerprint?:string, reason?:string}>}
  */
 export async function assessTrust({ manifest, files }, fetchAssetlinks) {
   const sig = await verifyPackage({ manifest, files });
   if (!sig.signed) return { status: 'unverified', reason: 'Package is not signed' };
-  if (!sig.valid) return { status: 'unverified', reason: sig.reason || 'Invalid signature' };
+  // A present-but-failed signature is evidence of tampering — a distinct, alarming
+  // status, NOT the same grey "unverified" as an ordinary unsigned package.
+  if (!sig.valid) return { status: 'invalid', reason: sig.reason || 'Invalid signature — the package may have been tampered with' };
   if (!manifest.domain) return { status: 'signed', fingerprint: sig.fingerprint };
   let doc = null;
   try {

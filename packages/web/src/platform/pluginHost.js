@@ -127,8 +127,15 @@ export class PluginHost {
       records = await this.registry.list();
     } catch { /* no IndexedDB */ }
     for (const rec of records) {
-      this.#registerSettings(rec);
-      this.#run(rec).catch((e) => console.error('restore plugin failed', rec.id, e));
+      // A single corrupt persisted record (missing manifest, etc.) must not abort the
+      // restore of every other plugin — guard per record.
+      try {
+        this.#registerSettings(rec);
+        this.#run(rec).catch((e) => console.error('restore plugin failed', rec.id, e));
+      } catch (e) {
+        console.error('skipping corrupt plugin record', rec?.id, e);
+        this.platform.notifications.warn(`Couldn't restore plugin "${rec?.manifest?.name || rec?.id || 'unknown'}" — its saved data looks corrupt.`);
+      }
     }
     // Reconcile with the server's account plugins (best-effort, offline-tolerant).
     this.#reconcile(records).catch(() => {});
@@ -142,13 +149,16 @@ export class PluginHost {
     try { serverList = (await this.platform.api.installedPlugins()).plugins || []; } catch { return; }
     const serverIds = new Set(serverList.map((p) => p.pluginId));
     const localIds = new Set(localRecords.map((r) => r.id));
+    let pushFailures = 0;
+    let pulled = 0;
+    let pullFailures = 0;
 
     // Push: local account plugins the server doesn't have → re-upload (re-zipped).
     for (const rec of localRecords) {
       if (rec.scope !== 'account' || serverIds.has(rec.id)) continue;
       try {
         await this.platform.api.installPlugin(zipSync(toU8Files(rec.files)), rec.grants || []);
-      } catch (e) { console.error('re-upload plugin failed', rec.id, e); }
+      } catch (e) { console.error('re-upload plugin failed', rec.id, e); pushFailures++; }
     }
 
     // Pull: server account plugins not on this device → download + enable.
@@ -171,7 +181,16 @@ export class PluginHost {
         await this.registry.save(record);
         this.#registerSettings(record);
         await this.#run(record);
-      } catch (e) { console.error('sync plugin failed', rec.pluginId, e); }
+        pulled++;
+      } catch (e) { console.error('sync plugin failed', rec.pluginId, e); pullFailures++; }
+    }
+
+    if (pulled) this.platform.notifications.info(`Synced ${pulled} account plugin${pulled > 1 ? 's' : ''} from the server.`);
+    if (pushFailures || pullFailures) {
+      const parts = [];
+      if (pullFailures) parts.push(`${pullFailures} couldn't be downloaded`);
+      if (pushFailures) parts.push(`${pushFailures} couldn't be uploaded`);
+      this.platform.notifications.warn(`Some account plugins didn't sync: ${parts.join(', ')}.`);
     }
   }
 
@@ -202,6 +221,9 @@ export class PluginHost {
       // The primary (background) frame: registers commands/indexers, does one-time
       // setup. Its channel is the record's channel used for probes and commands.
       const frame = await this.#spawnFrame(runtime, 'primary');
+      // Uninstalled while the handshake was in flight? The record is no longer in the
+      // map — tear this frame down instead of leaving a live, unreachable iframe.
+      if (this.plugins.get(record.id) !== runtime) { this.#destroyFrame(frame); return runtime; }
       runtime.frame = frame;
       runtime.iframe = frame.iframe;
       runtime.channel = frame.channel;
@@ -766,8 +788,22 @@ export class PluginHost {
   /** Uninstall: stop the plugin, forget it, and wipe everything it owns. */
   async uninstall(pluginId, { wipeData = true } = {}) {
     const record = this.plugins.get(pluginId);
+    const name = record?.manifest?.name || pluginId;
     const isAccount = record?.scope === 'account'
       || (await this.registry.get(pluginId).catch(() => null))?.scope === 'account';
+
+    // Account plugins: the server holds the canonical copy. Remove it there FIRST — if
+    // that fails we must NOT tear down locally, or the plugin silently resurrects on the
+    // next reload (server still lists it) with no sign anything went wrong.
+    if (wipeData && isAccount) {
+      try {
+        await this.platform.api.uninstallPluginServer(pluginId);
+      } catch (err) {
+        this.platform.notifications.error(`Couldn't uninstall "${name}" from the server: ${err.message}. It's still installed.`);
+        return;
+      }
+    }
+
     if (record) {
       try { record.channel?.emit('deactivate'); } catch { /* ignore */ }
       for (const d of record.disposers) { try { d(); } catch { /* ignore */ } }
@@ -779,18 +815,17 @@ export class PluginHost {
       record.iframe?.remove();
       this.plugins.delete(pluginId);
     }
+    // Best-effort cleanup of the plugin's private stores. A failure here doesn't block
+    // uninstall, but the user is told so leftover data isn't silently orphaned.
+    const wipeFailures = [];
     if (wipeData) {
-      // Wipe the plugin's private stores (server + on-device). Its domain scope, if
-      // any, is shared with the vendor's other plugins and left intact. Account plugins
-      // uninstall through the server (removes the record, package blob, AND the data);
-      // device plugins just drop their scoped server data.
-      if (isAccount) await this.platform.api.uninstallPluginServer(pluginId).catch(() => {});
-      else await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => {});
-      await this.clientDb.drop(`plg:${pluginId}`).catch(() => {});
+      if (!isAccount) await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => wipeFailures.push('server-side data'));
+      await this.clientDb.drop(`plg:${pluginId}`).catch(() => wipeFailures.push('on-device data'));
     }
-    await this.registry.remove(pluginId);
+    await this.registry.remove(pluginId).catch(() => {});
     if (![...this.plugins.values()].some((r) => r.status === 'active')) this.#stopHeartbeat();
     this.#emit();
+    if (wipeFailures.length) this.platform.notifications.warn(`Uninstalled "${name}", but couldn't clear its ${wipeFailures.join(' and ')}.`);
   }
 
   /** Fetch a domain's assetlinks doc through the server (avoids CORS). */

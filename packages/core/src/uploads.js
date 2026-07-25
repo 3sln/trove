@@ -77,7 +77,9 @@ export class UploadManager {
     if (!isValidName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
     if (!(req.size >= 0)) throw TroveError.invalid('size must be a non-negative number');
     if (this.maxBytes && req.size > this.maxBytes) {
-      throw new TroveError(ErrorCode.QUOTA, `File exceeds the maximum upload size of ${this.maxBytes} bytes`, { details: { maxBytes: this.maxBytes, size: req.size } });
+      // Deterministic per-file limit — retrying can't help, so it's non-retryable
+      // (capacity/rate quotas stay retryable via the default).
+      throw new TroveError(ErrorCode.QUOTA, `File exceeds the maximum upload size of ${this.maxBytes} bytes`, { retryable: false, details: { maxBytes: this.maxBytes, size: req.size } });
     }
     const collectionId = req.collectionId || 'default';
     const storage = await this.#storage(collectionId);

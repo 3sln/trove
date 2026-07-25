@@ -2,7 +2,7 @@
 // Each declares a selector (extensions / mime) and a component(node, ui) → vnode.
 // The editor area picks the highest-priority opener whose selector matches.
 
-import { dd, Observable } from '../../../runtime.js';
+import { dd, Observable, ObservableSubject, watch } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { bytes } from '../../format.js';
 import { audiobookOpener } from './audiobook.js';
@@ -76,31 +76,54 @@ function textOpener(node, ui) {
   )();
 }
 
+// A media element (img/audio/video) sets its `src` to a download URL that can 404 or
+// hold undecodable bytes. Those failures surface only as an async `error` event on the
+// element itself (media error events don't bubble), which would otherwise leave a
+// broken glyph / black box with no message. `mediaWithError` passes an `onError` the
+// caller MUST wire onto the actual media element, and swaps in the download fallback
+// (with a reason) the moment it fires.
+const MEDIA_ERR = "This file couldn't be loaded — it may be missing or in an unsupported format.";
+function mediaWithError(node, ui, makeEl) {
+  const state$ = new ObservableSubject({ error: null });
+  const onError = () => state$.next({ error: MEDIA_ERR });
+  const el = makeEl(onError);
+  return dd.alias(() =>
+    watch(state$, (s) => (s.error ? fallbackOpener(node, ui, s.error) : el)),
+  )();
+}
+
 function imageOpener(node, ui) {
-  return div({ className: 'viewer image' }, img({ src: ui.platform.api.downloadUrl(node.id), alt: node.name }));
+  return mediaWithError(node, ui, (onError) =>
+    div({ className: 'viewer image' }, img({ src: ui.platform.api.downloadUrl(node.id), alt: node.name }).on({ error: onError })),
+  );
 }
 
 function audioOpener(node, ui) {
-  return div({ className: 'viewer', $styling: { display: 'grid', placeItems: 'center', gap: '16px', padding: '40px' } },
-    icon('file-audio', { size: 48 }),
-    span({ $styling: { color: 'var(--text-dim)' } }, node.name),
-    audio({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { width: 'min(520px, 90%)' } }),
+  return mediaWithError(node, ui, (onError) =>
+    div({ className: 'viewer', $styling: { display: 'grid', placeItems: 'center', gap: '16px', padding: '40px' } },
+      icon('file-audio', { size: 48 }),
+      span({ $styling: { color: 'var(--text-dim)' } }, node.name),
+      audio({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { width: 'min(520px, 90%)' } }).on({ error: onError }),
+    ),
   );
 }
 
 function videoOpener(node, ui) {
-  return div({ className: 'viewer', $styling: { display: 'grid', placeItems: 'center', background: '#000' } },
-    video({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { maxWidth: '100%', maxHeight: '100%' } }),
+  return mediaWithError(node, ui, (onError) =>
+    div({ className: 'viewer', $styling: { display: 'grid', placeItems: 'center', background: '#000' } },
+      video({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { maxWidth: '100%', maxHeight: '100%' } }).on({ error: onError }),
+    ),
   );
 }
 
-function fallbackOpener(node, ui) {
+function fallbackOpener(node, ui, reason) {
   return div({ className: 'viewer' },
     div({ className: 'fallback' },
-      icon('file', { size: 44 }),
+      icon(reason ? 'warn' : 'file', { size: 44 }),
       span({ $styling: { fontWeight: 600 } }, node.name),
       span(`${node.contentType || 'Unknown type'} · ${bytes(node.size)}`),
-      span({ $styling: { color: 'var(--text-faint)', maxWidth: '340px' } }, 'No preview available for this file type. Install a plugin that handles it, or download the file.'),
+      span({ $styling: { color: 'var(--text-faint)', maxWidth: '340px' } },
+        reason || 'No preview available for this file type. Install a plugin that handles it, or download the file.'),
       button({ className: 'btn primary' }, icon('download', { size: 15 }), 'Download')
         .on({ click: () => ui.exec('explorer.download', node) }),
     ),

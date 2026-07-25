@@ -64,6 +64,9 @@ function trustBadge(t) {
   if (t.status === 'signed') {
     return span({ className: 'trust signed', title: t.reason || 'Signed, but the domain does not vouch for the key' }, icon('info', { size: 13 }), 'Signed');
   }
+  if (t.status === 'invalid') {
+    return span({ className: 'trust invalid', title: t.reason || 'Invalid signature — the package may have been tampered with' }, icon('warn', { size: 13 }), 'Invalid signature');
+  }
   return span({ className: 'trust unverified', title: t.reason || 'This plugin is not signed' }, icon('warn', { size: 13 }), 'Unverified');
 }
 

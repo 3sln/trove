@@ -50,10 +50,20 @@ function control(s, ui) {
     ).on({ change: (e) => set(e.target.value) });
   }
   if (s.type === 'number') {
+    // Guard against a cleared field (Number('') === 0) or a paste yielding NaN, and
+    // clamp to the declared range so downstream consumers never see an invalid value.
+    const commit = (e) => {
+      let n = Number(e.target.value);
+      if (e.target.value === '' || Number.isNaN(n)) { e.target.value = s.value; return; }
+      if (s.minimum != null) n = Math.max(s.minimum, n);
+      if (s.maximum != null) n = Math.min(s.maximum, n);
+      e.target.value = n;
+      set(n);
+    };
     return input({
       className: 'input', type: 'number', value: s.value,
       $attrs: { min: s.minimum ?? '', max: s.maximum ?? '' },
-    }).on({ change: (e) => set(Number(e.target.value)) });
+    }).on({ change: commit });
   }
   return input({ className: 'input', value: s.value ?? '' }).on({ change: (e) => set(e.target.value) });
 }
