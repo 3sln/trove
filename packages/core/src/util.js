@@ -80,6 +80,28 @@ export function isDescendant(ancestor, child) {
 
 // ---- byte helpers -----------------------------------------------------------
 
+/** Concatenate Uint8Array chunks into one. */
+export function concatBytes(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+/** Drain a web ReadableStream into a single Uint8Array. */
+export async function readAll(stream) {
+  const reader = stream.getReader();
+  const chunks = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value instanceof Uint8Array ? value : new Uint8Array(value));
+  }
+  return concatBytes(chunks);
+}
+
 export function humanBytes(n) {
   if (n == null || Number.isNaN(n)) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];

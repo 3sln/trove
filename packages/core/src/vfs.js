@@ -10,7 +10,7 @@ import { TroveError } from './errors.js';
 import { UploadManager } from './uploads.js';
 import { IndexerRegistry, textIndexer } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
-import { basename, parentPath, extname } from './util.js';
+import { basename, parentPath, extname, readAll } from './util.js';
 import { ROOT_ID, rootId } from './metadata/memory.js';
 
 const CONTENT_TYPES = {
@@ -454,24 +454,6 @@ function normalizeContribution(c = {}) {
 }
 function cryptoId() {
   return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)).replace(/-/g, '');
-}
-async function readAll(stream) {
-  const reader = stream.getReader();
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.length;
-  }
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
 }
 
 export { CONTENT_TYPES };

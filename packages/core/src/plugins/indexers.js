@@ -10,7 +10,7 @@
 // tests/first-party use the in-process runtime; a deployment can swap an isolate one.
 
 import { unzipSync } from 'fflate';
-import { extname } from '../util.js';
+import { extname, readAll } from '../util.js';
 
 export class PluginIndexers {
   /**
@@ -123,18 +123,3 @@ export function matchFromSelector(sel = {}) {
   };
 }
 
-async function readAll(stream) {
-  const reader = stream.getReader();
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.length;
-  }
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) { out.set(c, off); off += c.length; }
-  return out;
-}

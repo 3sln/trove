@@ -16,6 +16,10 @@
 // boundary). Every long operation must honour an AbortSignal in `opts.signal`.
 
 import { TroveError } from '../errors.js';
+import { readAll, concatBytes } from '../util.js';
+
+// Re-exported for storage backends (memory.js) that assemble chunks themselves.
+export { concatBytes as concat };
 
 /**
  * @typedef {object} StorageCapabilities
@@ -122,32 +126,9 @@ export async function toBytes(body) {
   if (typeof body?.[Symbol.asyncIterator] === 'function') {
     const chunks = [];
     for await (const c of body) chunks.push(c instanceof Uint8Array ? c : new Uint8Array(c));
-    return concat(chunks);
+    return concatBytes(chunks);
   }
   throw TroveError.invalid('Unsupported body type');
-}
-
-async function readAll(stream) {
-  const reader = stream.getReader();
-  const chunks = [];
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value instanceof Uint8Array ? value : new Uint8Array(value));
-  }
-  return concat(chunks);
-}
-
-export function concat(chunks) {
-  let total = 0;
-  for (const c of chunks) total += c.length;
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
 }
 
 /** A ReadableStream over an in-memory byte array (with optional range). */

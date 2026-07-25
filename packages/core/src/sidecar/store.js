@@ -6,28 +6,10 @@
 
 import { emptyDoc } from './document.js';
 import { wrapError } from '../errors.js';
+import { readAll } from '../util.js';
 
 function keyFor(nodeId) {
   return `sidecars/${nodeId}.json`;
-}
-
-async function readAll(stream) {
-  const reader = stream.getReader();
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.length;
-  }
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
 }
 
 export class SidecarStore {
