@@ -41,7 +41,7 @@ export class ExplorerService {
 
 export class SearchClientService {
   constructor() {
-    this.state = { query: '', mode: 'hybrid', results: [], loading: false, error: null, ran: false };
+    this.state = { query: '', mode: 'hybrid', results: [], loading: false, error: null, ran: false, paletteFiles: [] };
     this.subject = new ObservableSubject(this.state);
   }
   observe() {

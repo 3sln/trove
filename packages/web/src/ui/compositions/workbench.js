@@ -26,7 +26,6 @@ export default function workbench({ engine, app, platform, plugins }) {
     exec: (id, ...args) => platform.commands.execute(id, ...args),
     rerender: () => bump$.next(Date.now()),
     uninstallPlugin: (id) => plugins?.uninstall(id),
-    _paletteFiles: [],
   };
 
   const { watch, zip } = platform.reactive;

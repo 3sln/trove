@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { prettyKey } from '../../platform/keybindings.js';
-import { OpenFileAction } from '../../bl/actions.js';
+import { OpenFileAction, QuickOpenAction } from '../../bl/actions.js';
 
 const { div, input, span } = dd;
 
@@ -13,7 +13,7 @@ export default function commandPalette(state, ui) {
   const pal = state.wb.palette;
   if (!pal) return null;
   const wb = ui.platform.workbench;
-  const items = pal.mode === 'files' ? ui._paletteFiles || [] : filterCommands(state, ui, pal.query);
+  const items = pal.mode === 'files' ? (state.se.paletteFiles || []) : filterCommands(state, ui, pal.query);
   const index = Math.min(pal.index, Math.max(0, items.length - 1));
 
   const run = (item) => {
@@ -118,18 +118,8 @@ let fileTimer = null;
 function onQuery(ui, mode, value) {
   ui.platform.workbench.setPaletteQuery(value);
   if (mode !== 'files') return;
+  // Route the file search through an action; results land in the reactive search
+  // service (state.se.paletteFiles), so the palette re-renders without ad-hoc state.
   clearTimeout(fileTimer);
-  fileTimer = setTimeout(async () => {
-    const q = value.trim();
-    if (!q) {
-      ui._paletteFiles = [];
-      ui.rerender?.();
-      return;
-    }
-    try {
-      const res = await ui.platform.api.search(q, { mode: 'keyword', limit: 30 });
-      ui._paletteFiles = res.results.filter((r) => r.node.kind === 'file');
-      ui.rerender?.();
-    } catch { /* ignore */ }
-  }, 200);
+  fileTimer = setTimeout(() => ui.go(new QuickOpenAction(value)), 200);
 }

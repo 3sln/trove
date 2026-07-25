@@ -253,6 +253,24 @@ export class FilterAction extends AppAction {
   }
 }
 
+/** Command-palette quick-open: a keyword file search whose results live in the search
+ *  service (state.se.paletteFiles) instead of ad-hoc state hung off the UI. */
+export class QuickOpenAction extends AppAction {
+  constructor(query) {
+    super();
+    this.query = query;
+  }
+  async execute({ app }) {
+    const { search, platform } = app;
+    const q = (this.query || '').trim();
+    if (!q) { search.set({ paletteFiles: [] }); return; }
+    try {
+      const res = await platform.api.search(q, { mode: 'keyword', limit: 30 });
+      search.set({ paletteFiles: (res.results || []).filter((r) => r.node.kind === 'file') });
+    } catch { search.set({ paletteFiles: [] }); }
+  }
+}
+
 export class SearchAction extends AppAction {
   constructor(query, mode) {
     super();
@@ -263,7 +281,7 @@ export class SearchAction extends AppAction {
     const { search, platform } = app;
     const q = this.query.trim();
     if (!q) {
-      search.set({ query: '', results: [], ran: false, error: null });
+      search.set({ query: '', results: [], ran: false, error: null, resolved: null });
       return;
     }
     const mode = this.mode || platform.settings.get('search.mode');

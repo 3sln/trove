@@ -13,9 +13,13 @@ const { div, span, input, button } = dd;
 
 let searchTimer = null;
 function runSearch(ui, query) {
-  ui.app.search.set({ query });
+  // SearchAction owns search state; the launcher only dispatches (no direct .set).
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => ui.go(new SearchAction(query)), 240);
+}
+function clearSearch(ui) {
+  ui.platform.workbench.setLaunchQuery('');
+  ui.go(new SearchAction('')); // empty query resets results/ran/error in the service
 }
 function runFilter(ui, filters, text) {
   clearTimeout(searchTimer);
@@ -44,7 +48,7 @@ export default function launcher(state, ui, opts = {}) {
     if (e.key === 'ArrowDown') { e.preventDefault(); wb.moveLaunch(1, flat.length); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); wb.moveLaunch(-1, flat.length); }
     else if (e.key === 'Enter') { e.preventDefault(); flat[idx]?.run(); }
-    else if (e.key === 'Escape' && q) { e.preventDefault(); wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false }); }
+    else if (e.key === 'Escape' && q) { e.preventDefault(); clearSearch(ui); }
   };
 
   // What the server actually searched (transformer output) — shown when it differs
@@ -62,7 +66,7 @@ export default function launcher(state, ui, opts = {}) {
         placeholder: 'Search files · ! run a command · # filter by tag' })
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
-        .on({ click: () => { wb.setLaunchQuery(''); ui.app.search.set({ query: '', results: [], ran: false, resolved: null }); } }) : null,
+        .on({ click: () => clearSearch(ui) }) : null,
     ),
     showResolved ? resolvedBar(resolved) : null,
     div({ className: 'launch-body' },
