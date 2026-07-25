@@ -33,17 +33,16 @@ historical surface, so routes and PluginIndexers are unchanged. Vfs is a genuine
 tree/blob/query façade again. (The five trivial upload forwarders were left as-is —
 low value.)
 
-### 2b. `WorkbenchService` (web/src/platform/workbench.js) — HIGH ▶ recommended (partly ✅)
-One service + one subject owns ~10 shell concerns: activity, sidebar, palette,
-launcher, modal search, the **panel stack + browser-history sync + recents**, plugin
-panel, dialog, context menu, info panel. ✅ The duplicated list-cursor logic is now one
-`wrapIndex(index, delta, count)` helper.
-**Remaining refactor:** split into `NavigationService` (stack + history + recents),
-`OverlayService` (palette/dialog/contextMenu/pluginPanel/searchModal/`closeOverlays`),
-leaving `WorkbenchService` with activity/sidebar/infoPanel. **Deferred deliberately:**
-~50 call sites (13 `state.wb.*` reads + ~40 method calls across 10 UI files) for a
-split that fixes no bug and adds no feature; the history-sync/overlay-stacking/esc code
-is subtle and only ~70% covered by e2e. Best done staged, with review — not swept.
+### 2b. `WorkbenchService` (web/src/platform/workbench.js) — HIGH ✅ fixed
+Split into three focused services: `OverlayService` (palette/dialog/contextMenu/
+pluginPanel), `NavigationService` (panel stack + browser-history mirror + recents),
+and `WorkbenchService` itself (activity/sidebar/launcher-query/searchModal/infoPanel —
+the shell), which composes the other two and coordinates the couplings it must own
+(Esc close-order; opening a file sets the home activity + closes modal search, then
+delegates). Each sub-service owns its state + subject; the composition zips them and
+components read `state.overlay.*` / `state.nav.*`. WorkbenchService went 243 → 134
+lines. The duplicated list-cursor logic is one `wrapIndex` helper. Verified across
+e2e + offline + mutation/opener probes.
 
 ### 2c. `PluginHost` (web/src/platform/pluginHost.js, 969 lines) — HIGH ▶ recommended
 One class owns iframe lifecycle, the host↔plugin RPC router + capability brokering,
@@ -108,41 +107,49 @@ shared `pluginProtocol.js` + `CapabilityBroker` (§5) so the seams are clean fir
   search/kv/push/collections/packageStore/indexerRuntime use hand-rolled `instanceof`
   ladders. Route every provider through `resolve` (or drop it and standardize on one
   explicit style) so "every backend is pluggable the same way" is real.
-- **`/api/capabilities` reports only the primary backend** (server, MED ▶): storage is
-  per-collection, so a client picks the wrong upload strategy for a non-default
-  collection. Make it collection-scoped and have `SearchService` expose `describe()`
-  instead of route-side `constructor.name` introspection.
+- **`/api/capabilities` reports only the primary backend** (server, MED ✅ fixed):
+  now collection-scoped (`?collection=`, gated on read) with `SearchService.describe()`
+  replacing route-side `constructor.name` introspection.
 - **Plugin wire protocol is implicit + the RPC engine is implemented twice** (plugin,
   HIGH ▶): method names are bare strings matched by a `switch`, the sandbox re-hand-rolls
   its own RPC (no per-call timeout), and the init handshake carries **no
-  `protocolVersion`**. Introduce a `pluginProtocol.js` shared by both packages (envelope
-  + `METHODS` enum + `PROTOCOL_VERSION`); have the SDK reuse a trimmed `RpcChannel`.
-- **Capability model scattered across 4 modules** (plugin, HIGH ▶): client `cap()`
-  closure (re-created per call), client scope parsing, server `capabilityList`, server
-  `assertCapability` (transitional allow-by-default). `accountScoped` (client) and
-  `requiresAdmin` (server) even disagree on "needs the server." Consolidate into one
-  shared classifier + a single `CapabilityBroker.require(record, cap)`.
-- **Legacy `facet`/`documents` vocabulary** threaded through 4 layers as compat shims
+  `protocolVersion`**. A `pluginProtocol.js` (`METHODS` enum + `PROTOCOL_VERSION`) is the
+  right fix, but the SDK is injected into the sandbox **as a text blob** (`import … with
+  { type: 'text' }`), so it can't `import` a shared module — sharing needs a build step
+  that inlines it, or the host-side constants + a hardcoded version the SDK echoes. Best
+  bundled with the `PluginHost` split (§2c).
+- **Capability model spread across modules** (plugin, MED ▶): the client `cap()` closure
+  is re-created per `#hostCall`; a single `CapabilityBroker.require(record, cap)` would
+  centralize it (part of the §2c split). Note: `accountScoped` (client: "has a server
+  footprint → upload it") and `requiresAdmin` (server: "needs admin approval") are
+  **not** a divergence — they answer different questions and are correct as-is;
+  `ALL_CAPABILITIES` is already shared. The client `capabilityList` (rich per-cap entries
+  for the review UI) is intentionally distinct from the server's (a plain list).
+- **Legacy `facet`/`documents` vocabulary** threaded through layers as compat shims
   (server, MED ▶): normalize legacy→canonical once at the route boundary and delete the
-  interior shims.
+  interior shims. Low urgency (the shims are inert back-compat).
 
 ---
 
 ## 6. Sequencing — status
 
 1. ✅ **Shared utilities**: `selectorMatches` (shared), `fileType.js` table,
-   `textIndexer`-in-registry. (The `ReactiveStore` base was deferred — marginal DRY
+   `textIndexer`-in-registry. (The `ReactiveStore` base was skipped — marginal DRY
    across divergent services; the concrete layering violations it targeted were fixed
    directly instead.)
-2. ✅ **`IndexingCoordinator`** out of `Vfs` — the god-object remediation pattern proven.
+2. ✅ **`IndexingCoordinator`** out of `Vfs`.
 3. ✅ **`resolve`-everything DI** + collection-scoped `/api/capabilities`.
 4. ✅ **UI→service layering** violations closed (launcher/palette route through actions).
-5. ▶ **Plugin `pluginProtocol.js` + `CapabilityBroker`** (shared model + versioning) —
-   next; a clean prerequisite for splitting `PluginHost`.
-6. ▶ **Split `WorkbenchService`**, then **`PluginHost`** — the two highest-touch splits,
-   deferred deliberately (see §2b/§2c): pure internal reorganization, 50–100+ call
-   sites, the most fragile code, ~70% e2e coverage. Do staged, with review.
+5. ✅ **Split `WorkbenchService`** → `WorkbenchService` + `OverlayService` +
+   `NavigationService` (243 → 134 lines).
+6. ▶ **Split `PluginHost`** (§2c) — the one remaining structural item. It's genuinely
+   staged/reviewed work: 969 lines where iframe lifecycle, the security-critical RPC
+   router, frame placement, the dock/PiP overlay, and the OS media session are
+   *intertwined* (frame teardown calls into placement + media + dock together), for zero
+   user-facing payoff. Should be done seam-by-seam behind the plugin e2e (32) + probe5,
+   preceded by the shared `pluginProtocol.js`/`CapabilityBroker` (§5). Deliberately not
+   swept autonomously.
 
-Everything marked ✅ across this document is committed on this branch. The remaining ▶
-items are the three highest-touch, lowest-immediate-value refactors, intentionally left
-for deliberate/staged work rather than an autonomous sweep.
+Everything marked ✅ is committed on this branch. The only remaining ▶ is the
+`PluginHost` split (plus the low-urgency `facet`/`documents` shim cleanup) — the most
+fragile, highest-touch, lowest-immediate-value refactor, left for deliberate work.
