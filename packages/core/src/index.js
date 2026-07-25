@@ -27,6 +27,7 @@ export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js'
 export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, clampContribution, DEFAULT_CAPS, PluginIndexers, matchFromSelector } from './plugins/index.js';
 export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
+export { IndexingCoordinator, normalizeContribution } from './indexing.js';
 
 // Cloudflare Vectorize — first-class pluggable vector DB.
 export { VectorizeVectorStore } from './search/vectorize.js';

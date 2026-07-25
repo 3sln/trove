@@ -10,7 +10,8 @@ import { TroveError } from './errors.js';
 import { UploadManager } from './uploads.js';
 import { IndexerRegistry } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
-import { basename, parentPath, extname, readAll } from './util.js';
+import { basename, parentPath, extname } from './util.js';
+import { IndexingCoordinator } from './indexing.js';
 import { ROOT_ID, rootId } from './metadata/memory.js';
 
 const CONTENT_TYPES = {
@@ -37,6 +38,11 @@ export class Vfs {
     // One UploadManager; it resolves the right backend per session's collection.
     this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes });
     this.maxIndexBytes = maxIndexBytes;
+    // The indexing subsystem (run/backfill/purge/contributions) lives here.
+    this.indexing = new IndexingCoordinator({
+      metadata: this.metadata, search: this.search, indexers: this.indexers,
+      storageFor: (cid) => this.storageFor(cid), maxIndexBytes,
+    });
   }
 
   async init() {
@@ -111,7 +117,7 @@ export class Vfs {
     const node = await this.#upsertFileNode({ parent, name, storageKey, size: info.size, contentType: ct, etag: info.etag });
     // Small server-side writes index synchronously (search is ready on return);
     // large client uploads (completeUpload) index in the background instead.
-    await this.#indexNode(node).catch((e) => console.error('index error', e));
+    await this.indexing.indexNode(node).catch((e) => console.error('index error', e));
     return node;
   }
 
@@ -237,7 +243,7 @@ export class Vfs {
       const parent = await this.metadata.getById(obj.parentId);
       if (!parent) throw TroveError.notFound('Parent folder');
       const node = await this.#upsertFileNode({ parent, name: obj.name, storageKey: obj.storageKey, size: obj.size, contentType: obj.contentType, etag: obj.etag });
-      this.#indexNode(node).catch((e) => console.error('index error', e));
+      this.indexing.indexNode(node).catch((e) => console.error('index error', e));
       return node;
     } catch (err) {
       await (await this.storageFor(obj.collectionId)).delete(obj.storageKey).catch(() => {});
@@ -315,142 +321,18 @@ export class Vfs {
     return out;
   }
 
-  /**
-   * Apply one contributor's indexed contribution to a node. A contribution has up
-   * to three scopes: `semanticTexts` (→ search index), `tags` (filterable), and
-   * `metadata` (arbitrary, e.g. a chapter index). Each contributor is namespaced,
-   * so its contribution replaces only its own and can be removed independently.
-   * The legacy `{ documents, facet }` shape is accepted (documents→semanticTexts,
-   * facet→metadata).
-   */
-  async indexContributions(nodeId, contributorId, contribution) {
-    const node = await this.metadata.getById(nodeId);
-    if (!node) throw TroveError.notFound('Node');
-    await this.#applyContribution(nodeId, contributorId, contribution);
-    return { ok: true };
-  }
-
-  /** @deprecated positional form kept for existing callers; use indexContributions. */
-  async indexDocuments(nodeId, indexerId, documents, facet) {
-    return this.indexContributions(nodeId, indexerId, { documents, facet });
-  }
-
-  async #applyContribution(nodeId, contributorId, contribution) {
-    const { semanticTexts, tags, metadata } = normalizeContribution(contribution);
-    if (this.search && semanticTexts.length) await this.search.indexDocuments(nodeId, contributorId, semanticTexts);
-    // Indexer contributions live in the queryable metadata store (not the sidecar),
-    // so they show up in list/stat and drive tag filtering.
-    if (tags || metadata) await this.metadata.setContribution(nodeId, contributorId, { tags, metadata });
-  }
-
-  /** Remove everything a contributor added to a node (search + tags + metadata). */
-  async removeContributions(nodeId, contributorId) {
-    // Re-indexing with no docs clears this (node, contributor)'s vectors + keywords.
-    if (this.search) await this.search.indexDocuments(nodeId, contributorId, []).catch(() => {});
-    await this.metadata.clearContribution(nodeId, contributorId);
-  }
-
-  async #indexNode(node) {
-    if (node.kind !== 'file') return;
-    if (this.search) await this.search.indexName(node);
-    const matching = this.indexers.matching(node);
-    if (!matching.length) return;
-    const storage = await this.storageFor(node.collectionId);
-    const ctx = this.#indexCtx(node, storage);
-    for (const indexer of matching) await this.#runOneIndexer(indexer, node, ctx);
-  }
-
-  /** Build the context an indexer gets: capped reads + a time-limited read URL. */
-  #indexCtx(node, storage) {
-    const readRange = () => storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
-    return {
-      node: { id: node.id, name: node.name, path: node.path, size: node.size, contentType: node.contentType },
-      maxBytes: this.maxIndexBytes,
-      readBytes: async () => readAll((await readRange()).stream),
-      readText: async () => new TextDecoder().decode(await readAll((await readRange()).stream)),
-      // A time-limited URL a remote/isolated indexer can fetch the bytes from. S3-class
-      // backends presign directly; otherwise it's unsupported here (a self-managed,
-      // token-scoped server URL is a follow-up — see the design doc).
-      presignRead: async ({ expiresIn = 300 } = {}) => {
-        if (!storage.capabilities?.presignDownload) {
-          throw TroveError.unsupported('This collection cannot presign reads for indexers');
-        }
-        return storage.presignGet(node.storageKey, { expiresIn, responseContentType: node.contentType });
-      },
-    };
-  }
-
-  /** Run a single indexer against a node and apply (or clear) its contribution. */
-  async #runOneIndexer(indexer, node, ctx) {
-    try {
-      const contribution = await indexer.index(node, ctx ?? this.#indexCtx(node, await this.storageFor(node.collectionId)));
-      await this.#applyContribution(node.id, indexer.id, contribution);
-    } catch (err) {
-      console.error(`indexer ${indexer.id} failed on ${node.path}:`, err.message);
-    }
-  }
-
-  /**
-   * Re-run one indexer over every file it matches (e.g. right after an indexer is
-   * installed/enabled). Walks the metadata store in pages so a large drive doesn't
-   * load at once. Returns how many nodes it contributed to.
-   */
-  async backfillIndexer(indexer, { limit = Infinity, pageSize = 200 } = {}) {
-    let done = 0;
-    let afterId = null;
-    while (done < limit) {
-      const files = await this.metadata.listFiles({ afterId, limit: Math.min(pageSize, limit - done) });
-      if (!files.length) break;
-      for (const node of files) {
-        afterId = node.id;
-        let matches = false;
-        try { matches = indexer.match(node); } catch { matches = false; }
-        if (!matches) continue;
-        await this.#runOneIndexer(indexer, node);
-        done++;
-        if (done >= limit) break;
-      }
-      if (files.length < pageSize) break;
-    }
-    return { indexed: done };
-  }
-
-  /**
-   * Remove one contributor's contributions from every node (e.g. on uninstall).
-   * Scans in pages; returns how many nodes were cleared.
-   */
-  async purgeIndexer(contributorId, { pageSize = 500 } = {}) {
-    let cleared = 0;
-    let afterId = null;
-    for (;;) {
-      const files = await this.metadata.listFiles({ afterId, limit: pageSize });
-      if (!files.length) break;
-      for (const node of files) {
-        afterId = node.id;
-        if (node.contributions && node.contributions[contributorId]) {
-          await this.removeContributions(node.id, contributorId);
-          cleared++;
-        }
-      }
-      if (files.length < pageSize) break;
-    }
-    return { cleared };
-  }
+  // Indexing lives in IndexingCoordinator (this.indexing); these thin delegations keep
+  // the historical Vfs surface for existing callers.
+  indexContributions(nodeId, contributorId, contribution) { return this.indexing.indexContributions(nodeId, contributorId, contribution); }
+  removeContributions(nodeId, contributorId) { return this.indexing.removeContributions(nodeId, contributorId); }
+  backfillIndexer(indexer, opts) { return this.indexing.backfillIndexer(indexer, opts); }
+  purgeIndexer(contributorId, opts) { return this.indexing.purgeIndexer(contributorId, opts); }
 }
 
 function pathOf(parent, name) {
   return parent.path === '/' ? `/${name}` : `${parent.path}/${name}`;
 }
 
-// Normalize an indexer/plugin contribution to the three canonical scopes, accepting
-// the legacy `{ documents, facet }` shape (documents→semanticTexts, facet→metadata).
-function normalizeContribution(c = {}) {
-  return {
-    semanticTexts: c.semanticTexts || c.documents || [],
-    tags: c.tags || null,
-    metadata: c.metadata || c.facet || null,
-  };
-}
 function cryptoId() {
   return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)).replace(/-/g, '');
 }
