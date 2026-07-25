@@ -105,7 +105,8 @@ export class CollectionService {
     if (!c) return new Set(); // callers pass the record; unknown → none
     if (principal && this.admins.has(principal.id)) return expand(['admin']);
     const roles = new Set(principal?.roles || []);
-    if (principal && [...roles].some((r) => this.creatorRoles.has(r)) && false) { /* creator role != per-collection */ }
+    // Note: a creator role grants the ability to CREATE collections, not blanket
+    // access to every collection — per-collection access comes only from the ACL below.
     const granted = new Set();
     for (const g of c.acl?.grants || []) {
       const match =

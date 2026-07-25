@@ -280,22 +280,34 @@ function hardenAsset(res, config = {}) {
 }
 
 /** Map process.env → createServer config. */
+// Build an S3 config block from env vars under `prefix` (e.g. 'TROVE_' or
+// 'TROVE_PACKAGE_'), falling back through `fallbacks` prefixes then the standard AWS_*
+// vars for credentials — so the same mapping serves primary storage and the package
+// store without copy-paste.
+function s3FromEnv(env, prefix, fallbacks = []) {
+  const pick = (suffix, ...extra) => {
+    for (const k of [prefix + suffix, ...fallbacks.map((f) => f + suffix), ...extra]) {
+      if (env[k] != null && env[k] !== '') return env[k];
+    }
+    return undefined;
+  };
+  return {
+    bucket: pick('S3_BUCKET'),
+    region: pick('S3_REGION') || 'us-east-1',
+    endpoint: pick('S3_ENDPOINT'),
+    accessKeyId: pick('S3_ACCESS_KEY_ID', 'AWS_ACCESS_KEY_ID'),
+    secretAccessKey: pick('S3_SECRET_ACCESS_KEY', 'AWS_SECRET_ACCESS_KEY'),
+    sessionToken: pick('S3_SESSION_TOKEN'),
+    forcePathStyle: pick('S3_PATH_STYLE') === 'true',
+  };
+}
+
 export function configFromEnv(env = (typeof process !== 'undefined' ? process.env : {})) {
   const config = { storage: {}, metadata: {}, embeddings: {}, vectorStore: {} };
 
   config.storage.driver = env.TROVE_STORAGE || 'memory';
   if (config.storage.driver === 'filesystem') config.storage.root = env.TROVE_FS_ROOT || './data/objects';
-  if (config.storage.driver === 's3') {
-    config.storage.s3 = {
-      bucket: env.TROVE_S3_BUCKET,
-      region: env.TROVE_S3_REGION || 'us-east-1',
-      endpoint: env.TROVE_S3_ENDPOINT,
-      accessKeyId: env.TROVE_S3_ACCESS_KEY_ID || env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: env.TROVE_S3_SECRET_ACCESS_KEY || env.AWS_SECRET_ACCESS_KEY,
-      sessionToken: env.TROVE_S3_SESSION_TOKEN,
-      forcePathStyle: env.TROVE_S3_PATH_STYLE === 'true',
-    };
-  }
+  if (config.storage.driver === 's3') config.storage.s3 = s3FromEnv(env, 'TROVE_');
 
   config.metadata.driver = env.TROVE_METADATA || (config.storage.driver === 'memory' ? 'memory' : 'sqlite');
   config.metadata.path = env.TROVE_DB_PATH || './data/trove.db';
@@ -386,15 +398,7 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   if (env.TROVE_PACKAGE_STORE) {
     config.packageStore = { driver: env.TROVE_PACKAGE_STORE };
     if (env.TROVE_PACKAGE_STORE === 'filesystem') config.packageStore.root = env.TROVE_PACKAGE_FS_ROOT || './data/packages';
-    if (env.TROVE_PACKAGE_STORE === 's3') {
-      config.packageStore.s3 = {
-        bucket: env.TROVE_PACKAGE_S3_BUCKET, region: env.TROVE_PACKAGE_S3_REGION || 'us-east-1',
-        endpoint: env.TROVE_PACKAGE_S3_ENDPOINT,
-        accessKeyId: env.TROVE_PACKAGE_S3_ACCESS_KEY_ID || env.TROVE_S3_ACCESS_KEY_ID || env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: env.TROVE_PACKAGE_S3_SECRET_ACCESS_KEY || env.TROVE_S3_SECRET_ACCESS_KEY || env.AWS_SECRET_ACCESS_KEY,
-        forcePathStyle: env.TROVE_PACKAGE_S3_PATH_STYLE === 'true',
-      };
-    }
+    if (env.TROVE_PACKAGE_STORE === 's3') config.packageStore.s3 = s3FromEnv(env, 'TROVE_PACKAGE_', ['TROVE_']);
   }
 
   // Search transformer: 'parse' (default) or 'workers-ai' (Cloudflare Workers AI —

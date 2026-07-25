@@ -5,7 +5,7 @@
 // one place so a TroveError becomes the right status + JSON body, and anything
 // unexpected becomes a clean 500 without leaking internals.
 
-import { TroveError, wrapError } from '@trove/core';
+import { TroveError, wrapError, ErrorCode } from '@trove/core';
 
 export class Router {
   constructor() {
@@ -60,7 +60,7 @@ export class Router {
       return cors(res, origin);
     } catch (raw) {
       const err = raw instanceof TroveError ? raw : wrapError(raw);
-      if (err.code === 'internal') console.error('Unhandled:', err.cause || err);
+      if (err.code === ErrorCode.INTERNAL) console.error('Unhandled:', err.cause || err);
       return cors(json(err.toJSON(), err.status), origin);
     }
   }

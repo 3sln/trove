@@ -110,7 +110,7 @@ export function createRouter() {
       if (sqlite) { const db = await sqlite.obtain({ key: 'metadata' }); await db.get('SELECT 1'); }
       return { ok: true };
     } catch (err) {
-      throw new TroveError('transient', 'Storage not ready', { cause: err });
+      throw TroveError.transient('Storage not ready', { cause: err });
     }
   });
 
@@ -393,16 +393,14 @@ export function createRouter() {
 
   r.get('/api/files/:id/sidecar', async (ctx) => {
     requireSidecar(ctx.sidecar);
-    const node = await ctx.vfs.stat(ctx.params.id); // 404 if the file is gone
-    await assertCap(ctx, node.collectionId, 'read');
+    await nodeWithCap(ctx, ctx.params.id, 'read'); // 404 if the file is gone
     return ctx.sidecar.view(ctx.params.id);
   });
 
   r.post('/api/files/:id/comments', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'write');
+    await nodeWithCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
     return { comment: await ctx.sidecar.addComment(ctx.params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
   });
@@ -410,8 +408,7 @@ export function createRouter() {
   r.post('/api/files/:id/comments/:cid/edit', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'write'); // + authorship checked in the service
+    await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
     const b = await body(ctx.req);
     return { comment: await ctx.sidecar.editComment(ctx.params.id, ctx.params.cid, b.body, ctx.principal) };
   });
@@ -419,16 +416,14 @@ export function createRouter() {
   r.delete('/api/files/:id/comments/:cid', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'write'); // + authorship checked in the service
+    await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
     return ctx.sidecar.deleteComment(ctx.params.id, ctx.params.cid, ctx.principal);
   });
 
   r.post('/api/files/:id/comments/:cid/react', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'write');
+    await nodeWithCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
     if (!b.emoji) throw TroveError.invalid('emoji is required');
     return { comment: await ctx.sidecar.react(ctx.params.id, ctx.params.cid, b.emoji, b.on !== false, ctx.principal) };
@@ -454,16 +449,14 @@ export function createRouter() {
   r.post('/api/files/:id/subscribe', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'read');
+    await nodeWithCap(ctx, ctx.params.id, 'read');
     const b = await body(ctx.req);
     return ctx.sidecar.subscribe(ctx.params.id, ctx.principal, !!b.muted);
   });
   r.delete('/api/files/:id/subscribe', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'read');
+    await nodeWithCap(ctx, ctx.params.id, 'read');
     return ctx.sidecar.unsubscribe(ctx.params.id, ctx.principal);
   });
 
