@@ -8,9 +8,10 @@
 // `cap(...)` first. Extracted from PluginHost so the allow/deny logic is one focused
 // unit rather than sharing a class with iframe lifecycle and DOM placement.
 
-import { networkEndpoints, canExecuteCommand } from './pluginPackage.js';
+import { networkEndpoints, canExecuteCommand, displayName } from './pluginPackage.js';
 import { isAllowedUrl } from './pluginNet.js';
 import { isSourceModule } from './pluginModules.js';
+import { contribUri, parseContribUri } from '@trove/core/plugins/identity.js';
 
 // Response bodies larger than this are refused, so a plugin can't exhaust host
 // memory through the brokered fetch.
@@ -37,11 +38,7 @@ export class PluginRpcRouter {
 
   async hostCall(record, method, params, frame) {
     const cap = (c) => { if (!record.grants.includes(c)) throw new Error(`Capability "${c}" not granted`); };
-    const pid = record.manifest.id;
-    // Contributions are owned by the primary (background) frame. A viewer frame
-    // re-runs the plugin's activate() too, but its contribution calls are no-ops on
-    // the host — the primary already registered them (and its handlers route to it).
-    const primary = !frame || frame.role === 'primary';
+    const pid = record.id;
     switch (method) {
       case 'activated': {
         const f = frame || record.frame;
@@ -51,28 +48,39 @@ export class PluginRpcRouter {
         return { ok: true };
       }
 
-      // Contributions are declared in the manifest and registered by PluginHost before
-      // the plugin boots, so runtime registration no longer exists. Older SDKs may
-      // still send these; accept and ignore rather than erroring, since whatever they
-      // wanted to add is either already declared or was never approved.
-      case 'contribute:command':
-      case 'contribute:opener':
-      case 'contribute:indexer':
-      case 'contribute:statusItem':
-      case 'contribute:keybinding':
-        return { ok: true, ignored: 'declare contributions in the manifest' };
-
-      // Run a host command by id (the SDK's ctx.commands.execute). Gated per COMMAND,
-      // not per capability: the plugin's manifest lists exactly which command ids it
-      // may run (plus its own, implicitly). A blanket "commands" grant would let a
-      // plugin that wanted `workbench.view.home` also call `explorer.delete`.
+      // Run a command (the SDK's ctx.commands.execute). Gated per COMMAND, not per
+      // capability: the plugin's manifest lists exactly which commands it may run
+      // (plus its own, implicitly). A blanket "commands" grant would let a plugin that
+      // wanted `workbench.view.home` also call `explorer.delete`.
       case 'command:execute': {
-        const owner = this.platform.contributions.commands.get(params.id)?.pluginId;
-        if (!canExecuteCommand(record.manifest, params.id, owner)) {
+        const target = this.#resolveCommand(record, params.id);
+        if (!canExecuteCommand(record.manifest, target)) {
           throw new Error(`Command "${params.id}" is not in this plugin's declared commands`);
         }
-        const result = await this.platform.commands.execute(params.id, ...(params.args || []));
+        const result = await this.platform.commands.execute(target, ...(params.args || []));
         return { ok: true, result: result ?? null };
+      }
+
+      // Drive a DECLARED status slot: push sanitized HTML into it, or show/hide it.
+      // The slot itself is a manifest contribution — this only fills one in, so a
+      // plugin can never grow its footprint in the shell past what was approved.
+      case 'ui:status': {
+        cap('ui');
+        const slot = this.#ownContribution(record, params.name, 'statusItem');
+        this.platform.contributions.update(slot.uri, {
+          ...(params.html !== undefined ? { html: String(params.html ?? '') } : {}),
+          ...(params.tooltip !== undefined ? { tooltip: String(params.tooltip ?? '') } : {}),
+          ...(params.visible !== undefined ? { visible: !!params.visible } : { visible: true }),
+        });
+        return { ok: true };
+      }
+
+      // Set a DECLARED register — a context value slot other contributions' when-clauses
+      // can read, addressed by its contribution URI.
+      case 'context:setRegister': {
+        const slot = this.#ownContribution(record, params.name, 'register');
+        this.platform.context.set(slot.uri, params.value);
+        return { ok: true };
       }
       // Package resources — opaque byte handles (transferred, no host URLs). Code
       // under src/ and the manifest are not resources (src/ is loaded as modules).
@@ -92,7 +100,7 @@ export class PluginRpcRouter {
       case 'files:downloadUrl': return cap('files'), { url: this.platform.api.downloadUrl(params.id) };
       case 'files:index': {
         cap('indexer');
-        const ns = params.indexerId?.startsWith(pid) ? params.indexerId : `${pid}.${params.indexerId || 'default'}`;
+        const ns = parseContribUri(params.indexerId) ? params.indexerId : contribUri(record.manifest, params.indexerId || 'default');
         return this.platform.api.pushIndex(ns, params.nodeId, {
           semanticTexts: params.semanticTexts, tags: params.tags, metadata: params.metadata,
           documents: params.documents, facet: params.facet, // legacy
@@ -142,25 +150,48 @@ export class PluginRpcRouter {
   // --- plugin → host events (fire-and-forget) --------------------------------
 
   hostEvent(record, method, params, frame) {
-    const pid = record.manifest.id;
     switch (method) {
       case 'manifest':
         // Only the primary frame's manifest defines the plugin's live feature list;
         // a viewer frame re-announces its own (opener-only) manifest — ignore it.
         if (frame && frame.role !== 'primary') break;
-        record.live = params; record.responsive = true; record.lastManifestAt = Date.now();
+        record.live = params; record.responsive = true;
         this.onChange();
         break;
       case 'ui:toast':
-        this.platform.notifications[params.level || 'info'](`${record.manifest.name}: ${params.text}`);
+        this.platform.notifications[params.level || 'info'](`${displayName(record.manifest)}: ${params.text}`);
         break;
       case 'ui:badge':
         record.badge = params.text; this.onChange();
         break;
-      case 'context:set':
-        this.platform.context.scopedFor(pid).set(params.key, params.value);
-        break;
     }
+  }
+
+  // --- addressing ------------------------------------------------------------
+
+  /**
+   * Resolve a command reference from inside a plugin frame. A plugin names its OWN
+   * commands by their short contribution name (that's the only name it knows); anything
+   * else must be a full address — a built-in like `explorer.download`, or another
+   * plugin's contribution URI.
+   */
+  #resolveCommand(record, id) {
+    if (!id || parseContribUri(id)) return id;
+    const own = this.platform.contributions.get(contribUri(record.manifest, id));
+    return own?.type === 'command' ? own.uri : id;
+  }
+
+  /**
+   * The plugin's own contribution called `name`, of the expected type. Anything else —
+   * a name it never declared, or one of the wrong type — is refused: a plugin drives
+   * only slots the user saw and approved at install.
+   */
+  #ownContribution(record, name, type) {
+    const c = name ? this.platform.contributions.get(contribUri(record.manifest, name)) : null;
+    if (!c || c.pluginId !== record.id || c.type !== type) {
+      throw new Error(`"${name}" is not a ${type} declared by this plugin`);
+    }
+    return c;
   }
 
   // --- brokered capabilities -------------------------------------------------
@@ -203,7 +234,7 @@ export class PluginRpcRouter {
     if (side === 'client') {
       // On-device: an isolated wasm SQLite db per scope, held by the host. Domain
       // scope keys by the verified domain so a vendor's plugins share it.
-      const key = scope === 'domain' ? `dom:${record.manifest.domain}` : `plg:${record.manifest.id}`;
+      const key = scope === 'domain' ? `dom:${record.manifest.domain}` : `plg:${record.id}`;
       const db = await this.clientDb.obtain(key);
       return runSqlOp(db, op, sql, params, statements);
     }
@@ -211,7 +242,7 @@ export class PluginRpcRouter {
     // domain (for the shared scope) comes from the verified install record, never
     // the plugin.
     const body = { scope, op, sql, params, statements, domain: scope === 'domain' ? record.manifest.domain : undefined };
-    const res = await this.platform.api.request('POST', `/api/plugins/${encodeURIComponent(record.manifest.id)}/sql`, { body });
+    const res = await this.platform.api.request('POST', `/api/plugins/${encodeURIComponent(record.id)}/sql`, { body });
     return res.result;
   }
 }

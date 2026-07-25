@@ -90,12 +90,11 @@ export class FrameDock {
     const el = this.#dockEl();
     el.style.width = `${clampDim(min.width, 200, 480)}px`;
     el.style.height = `${clampDim(min.height, 56, 360) + 26}px`; // + header
-    el.querySelector('.vd-title').textContent = frame.node?.name || frame.record.manifest.name;
+    el.querySelector('.vd-title').textContent = frame.node?.name || (frame.record.manifest.displayName || frame.record.manifest.name);
     el.style.display = 'flex';
     // Round the frame's bottom corners to match the dock's rounded body.
     this.place(frame, el.querySelector('.vd-body'), 61, '0 0 11px 11px');
     this.docked = frame;
-    frame.docked = true;
     frame.channel?.emit('dock:state', { docked: true });
     this.onChange();
   }
@@ -104,7 +103,6 @@ export class FrameDock {
   undock(frame) {
     this.#hideEl();
     if (this.docked === frame) this.docked = null;
-    frame.docked = false;
     frame.channel?.emit('dock:state', { docked: false });
   }
 
@@ -113,7 +111,6 @@ export class FrameDock {
   closeDock(frame) {
     this.#hideEl();
     if (this.docked === frame) this.docked = null;
-    frame.docked = false;
     frame.channel?.emit('dock:state', { docked: false, closed: true });
     this.destroyFrame?.(frame);
     this.onChange();

@@ -59,7 +59,7 @@ export function rememberOpener(platform, typeKey, openerId) {
 export function listAssociations(platform) {
   const assoc = platform.settings.get(ASSOC_KEY) || {};
   return Object.entries(assoc).map(([typeKey, openerId]) => {
-    const opener = platform.contributions.openers.get(openerId);
+    const opener = platform.contributions.get(openerId);
     return { typeKey, openerId, openerTitle: opener?.title || openerId, missing: !opener };
   });
 }
@@ -67,5 +67,5 @@ export function listAssociations(platform) {
 /** A short source label for an opener ("Built-in" or the plugin's name). */
 export function openerSource(platform, opener) {
   if (!opener?.pluginId) return 'Built-in';
-  return platform.plugins.get?.(opener.pluginId)?.manifest?.name || 'Plugin';
+  return platform.plugins.plugins.get(opener.pluginId)?.manifest?.displayName || opener.pluginId;
 }

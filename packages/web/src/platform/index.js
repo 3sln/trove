@@ -21,8 +21,8 @@ export function createPlatform({ baseUrl = '' } = {}) {
   const context = new ContextKeyService({ 'view.active': 'explorer', 'sidebar.visible': true });
   const notifications = new NotificationService();
   const commands = new CommandService(contributions, context, notifications);
-  const keybindings = new KeybindingService(contributions, commands, context);
   const settings = new SettingsService();
+  const keybindings = new KeybindingService(contributions, commands, context, settings);
   const api = new TroveApiClient({ baseUrl });
   const workbench = new WorkbenchService(context);
 
@@ -53,19 +53,23 @@ function registerDefaults(p) {
     { key: 'uploads.concurrency', type: 'number', minimum: 1, maximum: 8, default: 4, title: 'Parallel upload parts', category: 'Transfers', order: 1 },
   ]);
 
-  // --- default keybindings (commands are registered in ../bl) ---------------
-  const kb = [
-    { key: 'mod+shift+p', command: 'workbench.showCommandPalette' },
-    { key: 'mod+p', command: 'workbench.quickOpen' },
-    { key: 'mod+shift+f', command: 'workbench.view.home' },
-    { key: 'mod+shift+e', command: 'workbench.view.home' },
-    { key: 'mod+,', command: 'workbench.openSettings' },
-    { key: 'mod+shift+n', command: 'explorer.newFolder' },
-    { key: 'mod+u', command: 'explorer.upload' },
-    { key: 'delete', command: 'explorer.delete', when: "view.active == 'home' && explorer.hasSelection" },
-    { key: 'escape', command: 'workbench.closeOverlays' },
-    { key: 'f5', command: 'explorer.refresh' },
-    { key: 'mod+shift+i', command: 'workbench.toggleInfoPanel' },
-  ];
-  for (const b of kb) p.contributions.keybindings.register(b);
+  // --- the built-in keymap (commands themselves are registered in ../bl) -----
+  // One `keymap` contribution, exactly like a plugin's — the host has no privileged
+  // path into the keybinding service.
+  p.contributions.register('keymap.default', {
+    type: 'keymap',
+    bindings: [
+      { key: 'mod+shift+p', command: 'workbench.showCommandPalette' },
+      { key: 'mod+p', command: 'workbench.quickOpen' },
+      { key: 'mod+shift+f', command: 'workbench.view.home' },
+      { key: 'mod+shift+e', command: 'workbench.view.home' },
+      { key: 'mod+,', command: 'workbench.openSettings' },
+      { key: 'mod+shift+n', command: 'explorer.newFolder' },
+      { key: 'mod+u', command: 'explorer.upload' },
+      { key: 'delete', command: 'explorer.delete', when: "view.active == 'home' && explorer.hasSelection" },
+      { key: 'escape', command: 'workbench.closeOverlays' },
+      { key: 'f5', command: 'explorer.refresh' },
+      { key: 'mod+shift+i', command: 'workbench.toggleInfoPanel' },
+    ],
+  });
 }

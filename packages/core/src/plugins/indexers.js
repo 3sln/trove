@@ -84,7 +84,7 @@ export class PluginIndexers {
     const runSpec = { id: spec.id, entry, files, cacheKey: `${record.digest || record.packageRef}\0${spec.id}` };
     return {
       id: spec.id,
-      displayName: spec.displayName || spec.id,
+      displayName: spec.title || spec.name || spec.id,
       match,
       index: (node, ctx) => runtime.run(runSpec, node, { ...ctx, config: record.config || {}, secrets: record.secrets || {} }),
     };

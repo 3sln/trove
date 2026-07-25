@@ -6,12 +6,12 @@ import { verifyPackage, assessTrust, checkAssetlinks, displayFingerprint } from 
 import { isAllowedUrl, endpointSummary, parseEndpoint } from '../src/platform/pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from '../src/platform/pluginModules.js';
 import { strToU8 } from 'fflate';
-import { buildPackage, assetlinksFor } from './pluginFixture.mjs';
+import { buildPackage, assetlinksFor, DEMO_ID, demoUri } from './pluginFixture.mjs';
 
 test('parsePackage reads + validates the manifest', async () => {
   const { zip } = await buildPackage();
   const pkg = parsePackage(zip);
-  expect(pkg.manifest.id).toBe('com.trove.demo');
+  expect(`${pkg.manifest.domain}/${pkg.manifest.name}`).toBe(DEMO_ID);
   // One module tree: the plugin entry, shared code, and the opener's entry module.
   expect(pkg.files.has('src/index.js')).toBe(true);
   expect(pkg.files.has('src/shared.js')).toBe(true);
@@ -23,6 +23,44 @@ test('parsePackage rejects a bad package', async () => {
   expect(() => parsePackage(new Uint8Array([1, 2, 3]))).toThrow(/zip/i);
   const { zip } = await buildPackage({ manifest: { entry: 'missing.js' } });
   expect(() => parsePackage(zip)).toThrow(/entry/i);
+});
+
+test('a package with no verifiable identity is not installable', async () => {
+  // No domain at all.
+  const anon = await buildPackage({ manifest: { domain: undefined } });
+  expect(() => parsePackage(anon.zip)).toThrow(/domain/i);
+  // A bare label is not a domain.
+  const bare = await buildPackage({ manifest: { domain: 'mystuff' } });
+  expect(() => parsePackage(bare.zip)).toThrow(/domain/i);
+  // No name within the domain.
+  const unnamed = await buildPackage({ manifest: { name: '' } });
+  expect(() => parsePackage(unnamed.zip)).toThrow(/name/i);
+  // `core` is reserved for the host's own contributions.
+  const impostor = await buildPackage({ manifest: { domain: 'core' } });
+  expect(() => parsePackage(impostor.zip)).toThrow(/reserved/i);
+});
+
+test('every contribution is addressed under the plugin, so kinds never collide', async () => {
+  const pkg = parsePackage((await buildPackage()).zip);
+  const s = reviewSummary(pkg, { status: 'unverified' });
+  const byUri = new Map(s.contributions.map((c) => [c.uri, c]));
+  expect(byUri.get(demoUri('status')).kind).toBe('statusItem');
+  expect(byUri.get(demoUri('busy')).kind).toBe('register');
+  expect(byUri.get(demoUri('player')).kind).toBe('opener');
+  expect(byUri.get(demoUri('tap')).kind).toBe('command');
+  // Names are unique within the plugin, so the map has one entry per contribution.
+  expect(byUri.size).toBe(s.contributions.length);
+});
+
+test('a malformed contribution fails the package rather than silently vanishing', async () => {
+  const badType = await buildPackage({ manifest: { contributes: { x: { type: 'gizmo' } } } });
+  expect(() => parsePackage(badType.zip)).toThrow(/unknown type/i);
+  const noEntry = await buildPackage({ manifest: { contributes: { x: { type: 'opener', match: {} } }, entry: undefined } });
+  expect(() => parsePackage(noEntry.zip)).toThrow(/entry/i);
+  const missingFile = await buildPackage({ manifest: { contributes: { x: { type: 'keymap', path: 'nope.json' } } } });
+  expect(() => parsePackage(missingFile.zip)).toThrow(/nope\.json/);
+  const legacy = await buildPackage({ manifest: { contributes: [{ id: 'a', type: 'command' }] } });
+  expect(() => parsePackage(legacy.zip)).toThrow(/map of name/i);
 });
 
 test('unsigned package → unverified', async () => {
@@ -53,7 +91,7 @@ test('assessTrust: verified when the domain vouches for the key', async () => {
   const pkg = parsePackage(zip);
 
   // Domain lists the key → verified.
-  const verified = await assessTrust(pkg, async () => assetlinksFor(fingerprint, 'com.trove.demo'));
+  const verified = await assessTrust(pkg, async () => assetlinksFor(fingerprint, 'demo'));
   expect(verified.status).toBe('verified');
   expect(verified.domain).toBe('plugins.example.com');
 
@@ -68,9 +106,12 @@ test('assessTrust: verified when the domain vouches for the key', async () => {
 
 test('checkAssetlinks matches ignoring colon formatting + wildcard', () => {
   const fp = 'aabbccddeeff00112233';
-  expect(checkAssetlinks(assetlinksFor(displayFingerprint(fp), 'x'), fp, 'x')).toBe(true);
-  expect(checkAssetlinks({ version: 1, keys: [{ fingerprint: fp, plugins: ['*'] }] }, fp, 'anything')).toBe(true);
-  expect(checkAssetlinks(assetlinksFor(fp, 'other'), fp, 'x')).toBe(false);
+  const m = { domain: 'acme.com', name: 'x' };
+  expect(checkAssetlinks(assetlinksFor(displayFingerprint(fp), 'x'), fp, m)).toBe(true);
+  // The fully-qualified form is accepted too.
+  expect(checkAssetlinks(assetlinksFor(fp, 'acme.com/x'), fp, m)).toBe(true);
+  expect(checkAssetlinks({ version: 1, keys: [{ fingerprint: fp, plugins: ['*'] }] }, fp, m)).toBe(true);
+  expect(checkAssetlinks(assetlinksFor(fp, 'other'), fp, m)).toBe(false);
 });
 
 test('network allowlist: host/path/port/scheme + wildcard matching', () => {
@@ -153,7 +194,7 @@ test('storage scopes: plugin vs domain, and domain needs verification', async ()
   // `storage: true` → the private plugin scope only.
   expect(storageScopes({ capabilities: { storage: true } })).toEqual({ plugin: true, domain: false });
   // Explicit scopes.
-  const m = { domain: 'x.example.com', capabilities: { storage: { plugin: true, domain: true } } };
+  const m = { domain: 'x.example.com', name: 'demo', capabilities: { storage: { plugin: true, domain: true } } };
   expect(storageScopes(m)).toEqual({ plugin: true, domain: true });
 
   // Domain scope is only granted when the package is domain-verified.
@@ -167,24 +208,26 @@ test('storage scopes: plugin vs domain, and domain needs verification', async ()
 
 test('the commands capability carries an explicit allowlist, not a blanket grant', async () => {
   // A blanket `true` lets it contribute its own commands but execute nothing external.
-  expect(executableCommands({ id: 'p', capabilities: { commands: true } })).toEqual([]);
+  expect(executableCommands({ domain: 'a.com', name: 'p', capabilities: { commands: true } })).toEqual([]);
   // Both declaration shapes are accepted.
-  expect(executableCommands({ id: 'p', capabilities: { commands: ['a.b'] } })).toEqual(['a.b']);
-  expect(executableCommands({ id: 'p', capabilities: { commands: { execute: ['a.b', 'c.d'] } } })).toEqual(['a.b', 'c.d']);
+  expect(executableCommands({ domain: 'a.com', name: 'p', capabilities: { commands: ['a.b'] } })).toEqual(['a.b']);
+  expect(executableCommands({ domain: 'a.com', name: 'p', capabilities: { commands: { execute: ['a.b', 'c.d'] } } })).toEqual(['a.b', 'c.d']);
   // Not declared at all → nothing.
-  expect(executableCommands({ id: 'p', capabilities: { ui: true } })).toEqual([]);
+  expect(executableCommands({ domain: 'a.com', name: 'p', capabilities: { ui: true } })).toEqual([]);
 });
 
 test('canExecuteCommand allows only listed commands, plus the plugin\'s own', async () => {
-  const m = { id: 'com.acme.p', capabilities: { commands: { execute: ['explorer.download'] } } };
+  const m = { domain: 'acme.com', name: 'p', capabilities: { commands: { execute: ['explorer.download'] } } };
   expect(canExecuteCommand(m, 'explorer.download')).toBe(true);   // listed
   expect(canExecuteCommand(m, 'explorer.delete')).toBe(false);    // NOT listed
-  // Ownership comes from the registry (who registered it), not a name prefix.
-  expect(canExecuteCommand(m, 'anything', 'com.acme.p')).toBe(true);
-  expect(canExecuteCommand(m, 'anything', 'com.other.p')).toBe(false);
+  // Ownership is decided by the ADDRESS: a contribution URI under this plugin's
+  // domain and name is its own by construction, and nobody else can mint one.
+  expect(canExecuteCommand(m, 'trove+contrib:acme.com/p/anything')).toBe(true);
+  expect(canExecuteCommand(m, 'trove+contrib:acme.com/other/anything')).toBe(false);
+  expect(canExecuteCommand(m, 'trove+contrib:evil.com/p/anything')).toBe(false);
   // A package that never declared `commands` can still run its own.
-  const bare = { id: 'com.acme.q', capabilities: { ui: true } };
-  expect(canExecuteCommand(bare, 'q.thing', 'com.acme.q')).toBe(true);
+  const bare = { domain: 'acme.com', name: 'q', capabilities: { ui: true } };
+  expect(canExecuteCommand(bare, 'trove+contrib:acme.com/q/thing')).toBe(true);
   expect(canExecuteCommand(bare, 'explorer.delete')).toBe(false);
 });
 

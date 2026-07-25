@@ -1,8 +1,28 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
+import { sanitizedVNodes, htmlToText } from '../sanitize.js';
 
 const { div, button, span } = dd;
+
+/**
+ * A plugin's status slot. The manifest declares the slot (name + side); the plugin
+ * pushes content into it at runtime over RPC. The content is untrusted HTML from a
+ * sandboxed frame, so it goes through the allowlist sanitizer before it becomes nodes.
+ * A slot with nothing in it, or one whose `when` doesn't hold, renders nothing at all
+ * rather than an empty chip.
+ */
+function statusSlot(item, ui) {
+  if (item.visible === false || !item.html) return null;
+  if (item.when && !ui.platform.context.evaluate(item.when)) return null;
+  if (!ui.platform.plugins.isAvailable(item)) return null;
+  const content = sanitizedVNodes(item.html, dd);
+  if (!content.length) return null;
+  const title = item.tooltip ? htmlToText(item.tooltip) : '';
+  return item.command
+    ? button({ className: 'seg', title }, ...content).on({ click: () => ui.exec(item.command) })
+    : span({ className: 'seg', title }, ...content);
+}
 
 export default function statusBar(state, ui) {
   const ex = state.ex;
@@ -13,8 +33,11 @@ export default function statusBar(state, ui) {
   const active = state.tr.items.filter((t) => t.status === 'active');
   const caps = ui.platform.capabilities;
 
-  // Plugin-contributed status items (right side).
-  const pluginItems = state.statusItems || [];
+  // Plugin-contributed status slots, ordered by their declared `order` then name.
+  const slots = [...(state.statusItems || [])]
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
+  const left = slots.filter((s) => s.slot === 'left').map((s) => statusSlot(s, ui));
+  const right = slots.filter((s) => s.slot !== 'left').map((s) => statusSlot(s, ui));
 
   const off = state.off || { online: true, pins: [], queued: 0, syncing: false };
   return div({ className: 'statusbar' },
@@ -34,11 +57,9 @@ export default function statusBar(state, ui) {
           run: () => ui.app.transfers.cancel(t.id),
         }))) })
       : span({ className: 'seg' }, `${files} files · ${folders} folders`),
+    ...left,
     div({ className: 'spacer' }),
-    ...pluginItems.filter((s) => s.align !== 'left').map((s) =>
-      button({ className: 'seg', title: s.tooltip || '' }, s.text || '')
-        .on({ click: () => s.command && ui.exec(s.command) }),
-    ),
+    ...right,
     span({ className: 'seg', title: 'Total size of this folder' }, bytes(totalBytes)),
     caps ? span({ className: 'seg', title: 'Storage backend capabilities' },
       icon(caps.storage?.presignDownload ? 'download' : 'files', { size: 12 }),

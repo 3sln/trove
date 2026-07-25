@@ -29,34 +29,31 @@ export function isCompatible(version) {
   return majorOf(version) === majorOf(PROTOCOL_VERSION);
 }
 
+// There are no `contribute:*` methods: contributions are DECLARED IN THE MANIFEST and
+// registered by the host before the plugin boots. A plugin can only ever drive what it
+// declared (`ui:status`, `context:setRegister`), never add to it.
+
 /** Canonical host methods a plugin may call. Grouped by namespace. */
 export const METHODS = {
   activated: 'activated',
-  contribute: {
-    command: 'contribute:command',
-    opener: 'contribute:opener',
-    indexer: 'contribute:indexer',
-    statusItem: 'contribute:statusItem',
-    keybinding: 'contribute:keybinding',
-  },
   // Note: 'command:execute' travels BOTH ways on the same channel — the host calls it
-  // to run a plugin-contributed command, and a plugin calls it (needs the `commands`
-  // capability) to run a host command. The direction disambiguates.
+  // to run a plugin-contributed command, and a plugin calls it (needs that command in
+  // its `commands` allowlist) to run someone else's. The direction disambiguates.
   command: { execute: 'command:execute' },
   resources: { list: 'resources:list', read: 'resources:read' },
   files: { read: 'files:read', list: 'files:list', stat: 'files:stat', downloadUrl: 'files:downloadUrl', index: 'files:index' },
   net: { fetch: 'net:fetch' },
   storage: { sql: 'storage:sql' },
   settings: { get: 'settings:get', set: 'settings:set', getSecret: 'settings:getSecret' },
-  ui: { showPanel: 'ui:showPanel' },
+  ui: { showPanel: 'ui:showPanel', status: 'ui:status' },
+  context: { setRegister: 'context:setRegister' },
   media: { metadata: 'media:metadata', playbackState: 'media:playbackState', position: 'media:position', action: 'media:action', clear: 'media:clear' },
   dock: { enable: 'dock:enable', disable: 'dock:disable', close: 'dock:close' },
 };
 
-/** Events a plugin may emit to the host. */
+/** Events a plugin may emit to the host (fire-and-forget, no reply). */
 export const EVENTS = {
   manifest: 'manifest',
   uiToast: 'ui:toast',
   uiBadge: 'ui:badge',
-  contextSet: 'context:set',
 };

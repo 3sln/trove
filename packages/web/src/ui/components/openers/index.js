@@ -9,46 +9,50 @@ import { audiobookOpener } from './audiobook.js';
 
 const { div, pre, img, span, button, video, audio } = dd;
 
-export function registerBuiltinOpeners(platform) {
-  const reg = platform.contributions.openers;
-
-  reg.register({
-    id: 'core.audiobook', title: 'Audiobook Player', priority: 50,
-    selector: { ext: ['.m4b', '.m4a'], mime: ['audio/mp4', 'audio/x-m4b'] },
+// Built-ins register the same way a plugin's manifest declares an opener — same
+// registry, same `match` selector, same priority ordering. The only difference is
+// that a built-in supplies a `component` (it runs in the host) where a plugin
+// supplies an `entry` module (it runs in its own sandboxed frame).
+const BUILT_IN = {
+  'core.audiobook': {
+    title: 'Audiobook Player', priority: 50,
+    match: { ext: ['.m4b', '.m4a'], mime: ['audio/mp4', 'audio/x-m4b'] },
     component: audiobookOpener,
-  });
-
-  reg.register({
-    id: 'core.audio', title: 'Audio Player', priority: 20,
-    selector: { mime: ['audio/*'], ext: ['.mp3', '.flac', '.wav', '.opus', '.ogg'] },
+  },
+  'core.audio': {
+    title: 'Audio Player', priority: 20,
+    match: { mime: ['audio/*'], ext: ['.mp3', '.flac', '.wav', '.opus', '.ogg'] },
     component: audioOpener,
-  });
-
-  reg.register({
-    id: 'core.video', title: 'Video Player', priority: 20,
-    selector: { mime: ['video/*'], ext: ['.mp4', '.webm', '.mkv', '.mov'] },
+  },
+  'core.video': {
+    title: 'Video Player', priority: 20,
+    match: { mime: ['video/*'], ext: ['.mp4', '.webm', '.mkv', '.mov'] },
     component: videoOpener,
-  });
-
-  reg.register({
-    id: 'core.image', title: 'Image Viewer', priority: 20,
-    selector: { mime: ['image/*'], ext: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif'] },
+  },
+  'core.image': {
+    title: 'Image Viewer', priority: 20,
+    match: { mime: ['image/*'], ext: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif'] },
     component: imageOpener,
-  });
-
-  reg.register({
-    id: 'core.text', title: 'Text Viewer', priority: 10,
-    selector: {
+  },
+  'core.text': {
+    title: 'Text Viewer', priority: 10,
+    match: {
       mime: ['text/*', 'application/json'],
       ext: ['.txt', '.md', '.json', '.js', '.mjs', '.ts', '.jsx', '.tsx', '.css', '.html', '.xml', '.yaml', '.yml', '.toml', '.ini', '.log', '.csv', '.py', '.rb', '.go', '.rs', '.sh', '.c', '.h', '.cpp', '.java'],
     },
     component: textOpener,
-  });
+  },
+};
+
+export function registerBuiltinOpeners(platform) {
+  for (const [name, spec] of Object.entries(BUILT_IN)) {
+    platform.contributions.register(name, { type: 'opener', ...spec });
+  }
 }
 
 /** Render a node with a resolved opener; falls back gracefully. */
 export function renderOpener(node, openerId, ui) {
-  const opener = ui.platform.contributions.openers.get(openerId);
+  const opener = ui.platform.contributions.get(openerId);
   if (opener?.component) {
     try {
       return opener.component(node, ui);

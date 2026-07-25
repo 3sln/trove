@@ -85,7 +85,7 @@ function capRow(cap, isAdmin, checked, onToggle) {
 }
 
 function contribRow(c) {
-  const kindIcon = { command: 'command', opener: 'file', indexer: 'search' }[c.kind] || 'command';
+  const kindIcon = { command: 'command', opener: 'file', indexer: 'search', statusItem: 'info', register: 'info', keymap: 'command' }[c.kind] || 'command';
   return div({ className: 'contrib-row' },
     icon(kindIcon, { size: 13 }),
     span({ className: 'cr-title' }, c.title),
@@ -99,7 +99,7 @@ function contribRow(c) {
 // so the user sees the human title and where it comes from (built-in vs another
 // plugin) — an id like "explorer.delete" alone doesn't convey what it does.
 function commandRow(id, ui) {
-  const cmd = ui?.platform?.contributions?.commands?.get?.(id);
+  const cmd = ui?.platform?.contributions?.get?.(id);
   const source = cmd?.pluginId ? 'plugin' : cmd ? 'built-in' : 'not installed';
   return div({ className: `contrib-row ${cmd ? '' : 'blocked'}` },
     icon('command', { size: 13 }),

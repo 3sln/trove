@@ -5,6 +5,8 @@
 
 import { unzipSync } from 'fflate';
 import { parseEndpoint, endpointSummary } from './pluginNet.js';
+import { assertIdentity, pluginId, ownsUri, parseContribUri } from '@trove/core/plugins/identity.js';
+import { declaredContributions } from '@trove/core/plugins/contributions.js';
 
 const CAP_DESCRIPTIONS = {
   files: 'Read your files, folders, and search index (via the host).',
@@ -85,17 +87,23 @@ export function networkEndpoints(manifest) {
   return [];
 }
 
+/** The human-facing name: `displayName` if given, else the package name. */
+export function displayName(manifest) {
+  return manifest?.displayName || manifest?.name || 'Plugin';
+}
+
 /**
- * The exact command ids this plugin may ASK THE HOST TO RUN (ctx.commands.execute).
- * Like `network`, the capability carries its allowlist rather than being a blanket
- * grant — "can run commands" is meaningless as a yes/no, because the interesting
- * question is always *which* ones (`explorer.delete` is not `workbench.view.home`).
+ * The exact commands this plugin may ASK THE HOST TO RUN (ctx.commands.execute), each
+ * named by the URI it's contributed at — a built-in like `explorer.download`, or
+ * another plugin's `trove+contrib:acme.com/docs/export`. Like `network`, the
+ * capability carries its allowlist rather than being a blanket grant: "can run
+ * commands" is meaningless as a yes/no, because the interesting question is always
+ * *which* ones (`explorer.delete` is not `workbench.view.home`).
  * Accepted shapes:
  *   commands: true                          → contribute-only; executes nothing external
  *   commands: ["explorer.download", …]      → exactly these
  *   commands: { execute: ["…"] }            → exactly these
- * A plugin may always execute its OWN commands (ids prefixed with its plugin id) —
- * that's just calling itself, and needs no grant.
+ * A plugin may always execute its own commands — that's just calling itself.
  */
 export function executableCommands(manifest) {
   const opt = capabilityOptions(manifest, 'commands');
@@ -106,15 +114,15 @@ export function executableCommands(manifest) {
 }
 
 /**
- * Whether `commandId` is executable by the plugin described by `manifest`.
- * `ownerPluginId` is who REGISTERED that command (from the contribution registry) —
- * a plugin may always run its own commands. Ownership is a registry fact, not a
- * naming convention: a plugin's command ids need not be prefixed with its plugin id.
+ * Whether `commandUri` is executable by the plugin described by `manifest`. A plugin
+ * always owns its own contributions (the URI is scoped under its domain and name), so
+ * ownership is decided by the address itself rather than by a naming convention or a
+ * registry lookup that could be raced.
  */
-export function canExecuteCommand(manifest, commandId, ownerPluginId) {
-  if (!commandId) return false;
-  if (ownerPluginId && ownerPluginId === manifest?.id) return true; // its own command
-  return executableCommands(manifest).includes(commandId);
+export function canExecuteCommand(manifest, commandUri, _ownerPluginId) {
+  if (!commandUri) return false;
+  if (parseContribUri(commandUri) && ownsUri(manifest, commandUri)) return true;
+  return executableCommands(manifest).includes(commandUri);
 }
 
 /** Parse zip bytes into { manifest, files:Map<path,Uint8Array>, raw }. */
@@ -143,8 +151,11 @@ export function parsePackage(zipBytes) {
 
 function validateManifest(m, files) {
   const need = (c, msg) => { if (!c) throw new Error(msg); };
-  need(m.id && /^[a-z0-9][a-z0-9._-]{2,}$/i.test(m.id), 'manifest.id is required (reverse-domain style)');
-  need(m.name, 'manifest.name is required');
+  // Identity is mandatory: a package must say which DOMAIN it belongs to and its NAME
+  // within that domain. There is no anonymous/self-identified install — every
+  // contribution is addressed under `<domain>/<name>`, and the domain is what makes
+  // that address verifiable rather than merely claimed.
+  assertIdentity(m);
   need(m.entry, 'manifest.entry (path to the plugin script) is required');
   need(files.has(m.entry), `entry "${m.entry}" is not in the package`);
   if (m.capabilities != null) {
@@ -152,6 +163,12 @@ function validateManifest(m, files) {
       'capabilities must be an object of { capability: options } (or an array of ids)');
   }
   if (m.icon) need(files.has(m.icon), `icon "${m.icon}" is not in the package`);
+  // Throws on a bad type, a missing entry module, or a malformed option — the review
+  // dialog must be able to show exactly what will be registered.
+  for (const c of declaredContributions(m)) {
+    if (c.entry) need(files.has(c.entry), `contribution "${c.name}" points at "${c.entry}", which is not in the package`);
+    if (c.type === 'keymap') need(files.has(c.path), `keymap "${c.name}" points at "${c.path}", which is not in the package`);
+  }
   for (const ep of networkEndpoints(m)) parseEndpoint(ep); // throws on anything but an http(s) URL
 }
 
@@ -168,34 +185,22 @@ export async function fetchPackage(url, fetchFn = globalThis.fetch.bind(globalTh
   return parsePackage(bytes);
 }
 
-/** The entry script text. */
-export function entrySource(pkg) {
-  return new TextDecoder().decode(pkg.files.get(pkg.manifest.entry));
-}
-
-/** A blob: URL for the icon, usable in the host UI (bytes copied into the host). */
-export function iconUrl(pkg) {
-  if (!pkg.manifest.icon) return null;
-  const bytes = pkg.files.get(pkg.manifest.icon);
-  if (!bytes) return null;
-  const mime = pkg.manifest.icon.endsWith('.svg') ? 'image/svg+xml' : pkg.manifest.icon.endsWith('.png') ? 'image/png' : 'image/*';
-  return URL.createObjectURL(new Blob([bytes], { type: mime }));
-}
-
 /** A flat, review-friendly summary of everything the package declares. */
 export function reviewSummary(pkg, trust) {
   const m = pkg.manifest;
-  const c = m.contributes || {};
-  const contributions = [
-    ...(c.commands || []).map((x) => ({ kind: 'command', title: x.title || x.id, offline: !!x.offline })),
-    ...(c.openers || []).map((x) => ({ kind: 'opener', title: x.title || x.id, detail: selectorText(x.selector), offline: !!x.offline })),
-    ...(c.indexers || []).map((x) => ({ kind: 'indexer', title: x.title || x.id })),
-  ];
+  const contributions = declaredContributions(m).map((c) => ({
+    kind: c.type, name: c.name, uri: c.uri,
+    title: c.title || c.name,
+    detail: c.type === 'opener' || c.type === 'indexer' ? selectorText(c.match)
+      : c.type === 'statusItem' ? `${c.slot} of the status bar`
+        : c.type === 'keymap' ? c.path : '',
+    offline: !!c.offline,
+  }));
   const verified = trust?.status === 'verified';
   const scopes = storageScopes(m);
   return {
-    id: m.id, name: m.name, version: m.version || '0.0.0', description: m.description || '',
-    author: m.author || 'Unknown', domain: m.domain || null,
+    id: pluginId(m), name: displayName(m), version: m.version || '0.0.0', description: m.description || '',
+    author: m.author || 'Unknown', domain: m.domain,
     capabilities: capabilityList(m).map((cap) => ({ id: cap, description: describeCapability(cap), adminOnly: ADMIN_ONLY_CAPS.has(cap) })),
     contributions,
     settings: (m.settings || []).map((s) => ({ key: s.key, title: s.title || s.key, type: s.type, secret: !!s.secret })),

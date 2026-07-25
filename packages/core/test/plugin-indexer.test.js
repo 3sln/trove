@@ -23,13 +23,18 @@ const INDEXER_SRC = `export default async (node, ctx) => {
 };`;
 
 // An indexer is an entry MODULE in the plugin's own tree, declared in the manifest —
-// not a nested sub-package — so it shares code with the rest of the plugin.
-function demoPackage(id = 'com.acme.demo') {
+// not a nested sub-package — so it shares code with the rest of the plugin. Its id is
+// the contribution URI it lives at, which is also the namespace its output lands under.
+const DEMO_ID = 'acme.com/demo';
+const IDX = 'trove+contrib:acme.com/demo/idx';
+
+function demoPackage(domain = 'acme.com') {
   return zipSync({
     'manifest.json': strToU8(JSON.stringify({
-      id, name: 'Demo', version: '1.0.0', entry: 'src/index.js', capabilities: { ui: true },
+      domain, name: 'demo', displayName: 'Demo', version: '1.0.0',
+      entry: 'src/index.js', capabilities: { ui: true },
       contributes: {
-        indexers: [{ id: id + '.idx', match: { ext: ['.demo'] }, entry: 'src/indexers/demo.js' }],
+        idx: { type: 'indexer', match: { ext: ['.demo'] }, entry: 'src/indexers/demo.js' },
       },
     })),
     'src/index.js': strToU8('//'),
@@ -64,8 +69,8 @@ test('installed indexer auto-runs on upload and namespaces its contribution', as
 
   const node = await write(vfs, 'notes.demo', 'alpha beta gamma\nsecond line');
   const fresh = await vfs.metadata.getById(node.id);
-  expect(fresh.contributions['com.acme.demo.idx'].tags).toEqual({ kind: 'demo', words: 5 });
-  expect(fresh.contributions['com.acme.demo.idx'].metadata.firstLine).toBe('alpha beta gamma');
+  expect(fresh.contributions[IDX].tags).toEqual({ kind: 'demo', words: 5 });
+  expect(fresh.contributions[IDX].metadata.firstLine).toBe('alpha beta gamma');
   // Merged tag view drives filtering.
   expect(fresh.tags.kind).toBe('demo');
   expect(fresh.tags.words).toBe(5);
@@ -76,11 +81,11 @@ test('installing an indexer backfills existing files', async () => {
   // File exists BEFORE the indexer is installed → only the text indexer (which
   // doesn't match .demo) has run, so no plugin contribution yet.
   const node = await write(vfs, 'old.demo', 'one two three');
-  expect((await vfs.metadata.getById(node.id)).contributions['com.acme.demo.idx']).toBeUndefined();
+  expect((await vfs.metadata.getById(node.id)).contributions[IDX]).toBeUndefined();
 
   await plugins.install({ principal, bytes: demoPackage() });
   const after = await vfs.metadata.getById(node.id);
-  expect(after.contributions['com.acme.demo.idx'].tags.words).toBe(3);
+  expect(after.contributions[IDX].tags.words).toBe(3);
 });
 
 test('uninstalling an indexer purges its contributions everywhere', async () => {
@@ -88,15 +93,15 @@ test('uninstalling an indexer purges its contributions everywhere', async () => 
   await plugins.install({ principal, bytes: demoPackage() });
   const a = await write(vfs, 'a.demo', 'x y');
   const b = await write(vfs, 'b.demo', 'p');
-  expect((await vfs.metadata.getById(a.id)).contributions['com.acme.demo.idx']).toBeDefined();
+  expect((await vfs.metadata.getById(a.id)).contributions[IDX]).toBeDefined();
 
-  await plugins.remove(principal, 'com.acme.demo');
-  expect((await vfs.metadata.getById(a.id)).contributions['com.acme.demo.idx']).toBeUndefined();
-  expect((await vfs.metadata.getById(b.id)).contributions['com.acme.demo.idx']).toBeUndefined();
+  await plugins.remove(principal, DEMO_ID);
+  expect((await vfs.metadata.getById(a.id)).contributions[IDX]).toBeUndefined();
+  expect((await vfs.metadata.getById(b.id)).contributions[IDX]).toBeUndefined();
 
   // And it no longer runs on new uploads.
   const c = await write(vfs, 'c.demo', 'q');
-  expect((await vfs.metadata.getById(c.id)).contributions['com.acme.demo.idx']).toBeUndefined();
+  expect((await vfs.metadata.getById(c.id)).contributions[IDX]).toBeUndefined();
 });
 
 test('init() re-activates installed indexers (live hook restored, no double backfill)', async () => {
@@ -104,12 +109,12 @@ test('init() re-activates installed indexers (live hook restored, no double back
   await plugins.install({ principal, bytes: demoPackage() });
 
   // Simulate a restart: a brand-new service over the SAME stores/coordinator.
-  vfs.indexers.unregister('com.acme.demo.idx'); // drop the live registration
+  vfs.indexers.unregister(IDX); // drop the live registration
   const plugins2 = new PluginService({ packages: plugins.packages, installs, indexers: coordinator, isAdmin: () => true });
   await plugins2.init();
 
   const node = await write(vfs, 'after-restart.demo', 'a b c d e');
-  expect((await vfs.metadata.getById(node.id)).contributions['com.acme.demo.idx'].tags.words).toBe(5);
+  expect((await vfs.metadata.getById(node.id)).contributions[IDX].tags.words).toBe(5);
 });
 
 test('server-indexer plugins are refused when no runtime is configured', async () => {

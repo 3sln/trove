@@ -48,19 +48,29 @@ export const PLUGIN_ENTRY = `
 import { activate } from 'trove';
 import { BRAND } from './shared.js';
 activate(async (ctx) => {
-  ctx.commands.handle('demo.tap', () => ctx.ui.toast('tap'));
-  ctx.commands.handle('demo.sync', () => ctx.ui.toast(ctx.online ? 'synced' : 'offline'));
-  ctx.commands.handle('demo.hang', () => { for (;;) {} });
+  ctx.commands.handle('tap', () => ctx.ui.toast('tap'));
+  ctx.commands.handle('sync', () => ctx.ui.toast(ctx.online ? 'synced' : 'offline'));
+  ctx.commands.handle('hang', () => { for (;;) {} });
   // Ask the HOST to run a command (gated per-command by the manifest allowlist).
-  ctx.commands.handle('demo.runHostCommand', async () => {
-    try { await ctx.commands.execute('demo.tap'); window.__hostCmd = 'ok'; }
+  ctx.commands.handle('runHostCommand', async () => {
+    try { await ctx.commands.execute('tap'); window.__hostCmd = 'ok'; }
     catch (e) { window.__hostCmd = 'error: ' + (e && e.message); }
   });
-  ctx.commands.handle('demo.runUndeclared', async () => {
+  ctx.commands.handle('runUndeclared', async () => {
     try { await ctx.commands.execute('explorer.delete'); return 'ALLOWED'; }
     catch (e) { return 'REFUSED: ' + (e && e.message); }
   });
-  ctx.commands.handle('demo.brand', () => BRAND);
+  ctx.commands.handle('brand', () => BRAND);
+
+  // Drive the DECLARED status slot and register — the plugin fills in what its
+  // manifest declared; it can't add anything new.
+  await ctx.ui.status('status').set('<b>demo</b> ready');
+  await ctx.registers.set('busy', false);
+  ctx.commands.handle('setBusy', (v) => ctx.registers.set('busy', !!v));
+  ctx.commands.handle('badSlot', async () => {
+    try { await ctx.ui.status('nope').set('x'); return 'ALLOWED'; }
+    catch (e) { return 'REFUSED: ' + (e && e.message); }
+  });
 
   ctx.resources.text('data.txt').then((t) => { window.__resourceText = t; });
 
@@ -68,21 +78,21 @@ activate(async (ctx) => {
     const db = ctx.storage.plugin.server;
     await db.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
     await db.run('INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)', 'installs', '1');
-    ctx.commands.handle('demo.store', async () => {
+    ctx.commands.handle('store', async () => {
       const row = await db.get('SELECT v FROM kv WHERE k = ?', 'installs');
       return row && row.v;
     });
     const cdb = ctx.storage.plugin.client;
     await cdb.exec('CREATE TABLE IF NOT EXISTS t (k TEXT PRIMARY KEY, v TEXT)');
     await cdb.run('INSERT OR REPLACE INTO t (k,v) VALUES (?,?)', 'ping', 'pong');
-    ctx.commands.handle('demo.storeClient', async () => {
+    ctx.commands.handle('storeClient', async () => {
       const row = await cdb.get('SELECT v FROM t WHERE k = ?', 'ping');
       return row && row.v;
     });
   }
 
   if (ctx.capabilities.includes('network')) {
-    ctx.commands.handle('demo.net', async () => {
+    ctx.commands.handle('net', async () => {
       const netcap = (ctx.manifest.capabilities || {}).network;
       const base = (netcap && netcap.endpoints && netcap.endpoints[0]) || '';
       const r = await ctx.net.fetch(base + 'api/capabilities');
@@ -94,33 +104,54 @@ activate(async (ctx) => {
 });
 `;
 
+// The keymap file the manifest's `keys` contribution points at — a plain JSON array,
+// exactly like a VS Code keymap. `when` references the plugin's own `busy` register by
+// its contribution URI, which is how registers are addressed everywhere.
+export const KEYMAP = JSON.stringify([
+  { key: 'mod+alt+d', command: 'tap' },
+  { key: 'mod+alt+b', command: 'brand', when: 'trove+contrib:trove.test/demo/busy' },
+  // A binding to a command this plugin was never granted — the host must drop it, or
+  // a keymap would be a way around the per-command allowlist.
+  { key: 'mod+alt+x', command: 'explorer.delete' },
+  { command: 'tap' },        // no key    → skipped by the keymap parser
+  { key: 'mod+alt+z' },      // no command → skipped by the keymap parser
+]);
+
+export const DEMO_DOMAIN = 'trove.test';
+export const DEMO_NAME = 'demo';
+export const DEMO_ID = `${DEMO_DOMAIN}/${DEMO_NAME}`;
+/** The URI a demo contribution is addressed by. */
+export const demoUri = (name) => `trove+contrib:${DEMO_ID}/${name}`;
+
 export function baseManifest(overrides = {}) {
   return {
-    id: 'com.trove.demo',
-    name: 'Demo Plugin',
+    domain: DEMO_DOMAIN,
+    name: DEMO_NAME,
+    displayName: 'Demo Plugin',
     version: '1.2.3',
     description: 'A demo plugin used in tests — a couple of commands, a status item, and a packaged resource.',
     author: 'Trove Tests',
     entry: 'src/index.js',
     capabilities: { storage: true, ui: true, commands: true },
-    // Contributions are declared here and registered by the host before the plugin
-    // boots. Each opener/indexer names the entry MODULE that implements it.
+    // ONE map of name -> contribution, each declaring its own type and options. The
+    // host registers exactly this, before the plugin boots; the plugin only supplies
+    // behaviour for what's here (and drives its slots), never adds to it.
     contributes: {
-      commands: [
-        { id: 'demo.tap', title: 'Demo: Tap', offline: true },
-        { id: 'demo.sync', title: 'Demo: Sync to cloud', offline: false },
-        { id: 'demo.hang', title: 'Demo: (simulate hang)', offline: true },
-        { id: 'demo.runHostCommand', title: 'Demo: Run a host command', offline: true },
-        { id: 'demo.runUndeclared', title: 'Demo: Run an undeclared command', offline: true },
-        { id: 'demo.brand', title: 'Demo: Brand', offline: true },
-        { id: 'demo.store', title: 'Demo: Read store', offline: true },
-        { id: 'demo.storeClient', title: 'Demo: Read client store', offline: true },
-        { id: 'demo.net', title: 'Demo: Net', offline: false },
-      ],
-      openers: [
-        { id: 'demo.player', title: 'Demo Player', match: { ext: ['.demo'] }, entry: 'src/openers/player.js', offline: true },
-      ],
-      statusItems: [{ id: 'demo.status', align: 'right', text: 'demo', offline: true }],
+      tap: { type: 'command', title: 'Demo: Tap', offline: true },
+      sync: { type: 'command', title: 'Demo: Sync to cloud', offline: false },
+      hang: { type: 'command', title: 'Demo: (simulate hang)', offline: true },
+      runHostCommand: { type: 'command', title: 'Demo: Run a host command', offline: true },
+      runUndeclared: { type: 'command', title: 'Demo: Run an undeclared command', offline: true },
+      brand: { type: 'command', title: 'Demo: Brand', offline: true },
+      setBusy: { type: 'command', title: 'Demo: Set busy', offline: true },
+      badSlot: { type: 'command', title: 'Demo: Drive an undeclared slot', offline: true },
+      store: { type: 'command', title: 'Demo: Read store', offline: true },
+      storeClient: { type: 'command', title: 'Demo: Read client store', offline: true },
+      net: { type: 'command', title: 'Demo: Net', offline: false },
+      player: { type: 'opener', title: 'Demo Player', match: { ext: ['.demo'] }, entry: 'src/openers/player.js', offline: true },
+      status: { type: 'statusItem', slot: 'right', render: 'html', offline: true },
+      busy: { type: 'register', default: false, description: 'Whether the demo is working' },
+      keys: { type: 'keymap', path: 'keymaps/default.json' },
     },
     settings: [
       { key: 'greeting', type: 'string', title: 'Greeting', default: 'hi' },
@@ -144,6 +175,7 @@ export async function buildPackage(opts = {}) {
     ['src/index.js', strToU8(PLUGIN_ENTRY)],
     ['src/shared.js', strToU8(SHARED)],
     ['src/openers/player.js', strToU8(OPENER_ENTRY)],
+    ['keymaps/default.json', strToU8(KEYMAP)],
     ['data.txt', strToU8('hello from a packaged resource')],
   ]);
   let fingerprint;
@@ -163,16 +195,16 @@ const MOD_INDEX = `
 import { greeting } from './lib/util.js';
 import { activate } from 'trove';
 activate(async (ctx) => {
-  ctx.commands.handle('mod.hello', () => greeting());
+  ctx.commands.handle('hello', () => greeting());
 });
 `;
 const MOD_UTIL = `export const greeting = () => 'hello-from-module';`;
 
 export function buildModulePackage() {
   const manifest = {
-    id: 'com.trove.mod', name: 'Modular Demo', version: '1.0.0',
+    domain: 'trove.test', name: 'mod', displayName: 'Modular Demo', version: '1.0.0',
     entry: 'src/index.js', capabilities: { ui: true, commands: true },
-    contributes: { commands: [{ id: 'mod.hello', title: 'Mod: Hello', offline: true }] },
+    contributes: { hello: { type: 'command', title: 'Mod: Hello', offline: true } },
   };
   const entries = {
     'manifest.json': strToU8(JSON.stringify(manifest)),

@@ -1,13 +1,16 @@
 // Server-side plugin package parsing. The server independently re-parses an uploaded
 // package (never trusting the client that produced it), pulling out the manifest, the
-// declared capabilities, any server-indexer sub-packages, and a content digest used
-// for dedupe/integrity. Signature/trust re-verification is a follow-up (see the design
-// doc); this covers structure + capabilities, which the scope/authz gate needs.
+// verified identity, the declared capabilities and contributions, and a content digest
+// used for dedupe/integrity.
 
 import { unzipSync, strFromU8 } from 'fflate';
 import { TroveError } from '../errors.js';
+import { assertIdentity, pluginId } from './identity.js';
+import { declaredContributions, serverIndexers, declaredOpeners } from './contributions.js';
 
 export const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network', 'media', 'dock'];
+
+export { serverIndexers, declaredOpeners, declaredContributions };
 
 /** SHA-256 hex digest of the raw package bytes (content address). */
 export async function digestBytes(bytes) {
@@ -32,78 +35,9 @@ export function usesSharedStorage(manifest) {
 }
 
 /**
- * Contributions are DECLARED IN THE MANIFEST, and the manifest is authoritative: the
- * host registers exactly what's declared, so what the user approves at install is what
- * the plugin gets. (Contributions used to be dynamic `contribute:*` calls at runtime,
- * unrelated to the manifest the review dialog showed.)
- *
- *   "contributes": {
- *     "openers":  [{ id, title, match: {ext,mime}, entry: "src/openers/player.js", … }],
- *     "indexers": [{ id, title, match, entry: "src/indexers/pdf.js", server?: true }],
- *     "commands": [{ id, title, category?, icon?, when?, offline? }],
- *     "statusItems": [...], "keybindings": [...]
- *   }
- *
- * `entry` points at a module inside the plugin's ONE module tree — openers and indexers
- * are not nested packages, so everything in a plugin shares modules and code. What gets
- * opened/indexed just depends on which entry module runs.
- */
-function declared(manifest, kind) {
-  const list = manifest?.contributes?.[kind];
-  return Array.isArray(list) ? list.filter((x) => x && (x.id || x.key)) : [];
-}
-
-/** Openers a package declares, each pointing at its entry module. */
-export function declaredOpeners(manifest) {
-  return declared(manifest, 'openers').map((o) => ({
-    id: o.id,
-    title: o.title || o.id,
-    selector: o.match || o.selector || {},
-    entry: o.entry || manifest?.entry,
-    priority: o.priority ?? 50,
-    offline: !!o.offline,
-    dock: o.dock || null,
-  }));
-}
-
-/**
- * Indexers a package declares. Indexers ALWAYS run on the server, in the isolate
- * runtime: indexing is a property of the drive, not of whoever happens to have a tab
- * open — it must happen for every upload, once, regardless of which client did it.
- * (Not to be confused with the `indexer` capability, which lets a plugin PUSH its own
- * contributions for a node through the API; that's a client action, not an indexer.)
- */
-export function declaredIndexers(manifest) {
-  return declared(manifest, 'indexers').map((i) => ({
-    id: i.id,
-    title: i.title || i.id,
-    selector: i.match || i.selector || {},
-    entry: i.entry || manifest?.entry,
-  }));
-}
-
-/**
- * The indexers the server will run. Every declared indexer is one — shipping an
- * indexer is what makes a package account-scoped and admin-gated, since it's code the
- * server executes. Their `entry` is a module in the plugin's own tree, so an indexer
- * shares code with the rest of the plugin.
- *
- * `manifest.serverIndexers: [{ id, match, entry }]` is still accepted as a legacy
- * top-level form.
- */
-export function serverIndexers(manifest) {
-  const out = declaredIndexers(manifest).map((i) => ({ id: i.id, match: i.selector, entry: i.entry }));
-  for (const spec of manifest?.serverIndexers || []) {
-    if (spec?.id && !out.some((o) => o.id === spec.id)) {
-      out.push({ id: spec.id, match: spec.match || {}, entry: spec.entry || manifest?.entry });
-    }
-  }
-  return out;
-}
-
-/**
- * Parse an uploaded package zip. Returns { manifest, files, capabilities, indexers,
- * digest }. Throws INVALID on a missing/malformed manifest.
+ * Parse an uploaded package zip. Returns { manifest, pluginId, files, capabilities,
+ * contributions, indexers, openers, digest }. Throws INVALID on a missing/malformed
+ * manifest, an unverifiable identity, or a bad contribution declaration.
  * @param {Uint8Array} bytes
  */
 export async function parsePluginPackage(bytes) {
@@ -121,12 +55,17 @@ export async function parsePluginPackage(bytes) {
   } catch (err) {
     throw TroveError.invalid('manifest.json is not valid JSON', { cause: err });
   }
-  if (!manifest.id || typeof manifest.id !== 'string') throw TroveError.invalid('manifest.id is required');
+  // Identity first: everything else (contribution URIs, install records, storage
+  // scopes) is addressed under `<domain>/<name>`, so an anonymous package has no
+  // address space to live in and is rejected outright.
+  assertIdentity(manifest);
   const capabilities = capabilityList(manifest).filter((c) => ALL_CAPABILITIES.includes(c));
   return {
     manifest,
+    pluginId: pluginId(manifest),
     files,
     capabilities,
+    contributions: declaredContributions(manifest),
     indexers: serverIndexers(manifest),
     openers: declaredOpeners(manifest),
     sharedStorage: usesSharedStorage(manifest),

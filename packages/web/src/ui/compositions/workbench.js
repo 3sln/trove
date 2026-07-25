@@ -42,7 +42,7 @@ export default function workbench({ engine, app, platform, plugins }) {
     platform.context.observe(),
     platform.settings.observe(),
     platform.plugins.observe() || new ObservableSubject([]),
-    platform.contributions.statusItems.observe(),
+    platform.contributions.observeType('statusItem'),
     app.social.observe(),
     app.offline.observe(),
     bump$,

@@ -1,9 +1,15 @@
 // KeybindingService — turns keystrokes into command executions, honouring
-// when-clauses and chords (multi-key sequences like "ctrl+k ctrl+s"). Bindings
-// come from the contribution registry, so core and plugins share one keymap and
-// the Keyboard Shortcuts UI can render/rebind them. User overrides (from
-// settings) win over defaults. Typing in an input is respected: only bindings
-// with a modifier (or an explicit `when: 'inputFocus'`) fire while editing.
+// when-clauses and chords (multi-key sequences like "ctrl+k ctrl+s").
+//
+// Bindings come from `keymap` CONTRIBUTIONS: the host contributes one built-in keymap,
+// and a plugin contributes one by declaring `{ type: 'keymap', path: 'keymaps/x.json' }`
+// in its manifest (the host reads and validates that file at install). So core and
+// plugins share exactly one keymap and the shortcuts UI can render all of it.
+// User rebinds live in settings under `keybindings.overrides` (command -> key) and win
+// over whatever a keymap declared. Typing in an input is respected: only bindings with
+// a modifier (or Escape) fire while editing.
+
+export const OVERRIDES_KEY = 'keybindings.overrides';
 
 export function normalizeKey(str) {
   // Canonical form: sorted modifiers + key, lowercased. "Cmd+Shift+P" → "meta+shift+p"
@@ -39,12 +45,13 @@ export class KeybindingService {
    * @param {import('./contributions.js').ContributionRegistry} contributions
    * @param {import('./commands.js').CommandService} commands
    * @param {import('./context.js').ContextKeyService} context
+   * @param {import('./settings.js').SettingsService} [settings] source of user rebinds
    */
-  constructor(contributions, commands, context) {
+  constructor(contributions, commands, context, settings = null) {
     this.contributions = contributions;
     this.commands = commands;
     this.context = context;
-    this.overrides = new Map(); // command -> key (user rebinds)
+    this.settings = settings;
     this.chordPrefix = null;
     this.chordTimer = null;
     this._onKeyDown = this.#onKeyDown.bind(this);
@@ -55,17 +62,24 @@ export class KeybindingService {
     return () => target.removeEventListener('keydown', this._onKeyDown);
   }
 
-  setOverrides(map) {
-    this.overrides = new Map(Object.entries(map || {}));
+  /** User rebinds: `{ [commandId]: "mod+k" }` from settings. */
+  overrides() {
+    return this.settings?.get(OVERRIDES_KEY) || {};
+  }
+  /** Rebind one command (null clears it back to whatever its keymap declared). */
+  rebind(command, key) {
+    if (!this.settings) return;
+    const next = { ...this.overrides() };
+    if (key) next[command] = key; else delete next[command];
+    this.settings.set(OVERRIDES_KEY, next);
   }
 
-  /** Current effective bindings (defaults + user overrides), newest wins. */
+  /** Current effective bindings (every keymap's, plus user overrides). */
   resolved() {
-    const list = this.contributions.keybindings.all().map((b) => ({
-      ...b,
-      key: normalizeKey(this.overrides.get(b.command) || b.key),
-    }));
-    return list;
+    const overrides = this.overrides();
+    return this.contributions.keybindings()
+      .filter((b) => b?.key && b.command)
+      .map((b) => ({ ...b, key: normalizeKey(overrides[b.command] || b.key) }));
   }
 
   #matchFor(keyChord) {

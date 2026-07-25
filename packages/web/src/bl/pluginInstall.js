@@ -2,7 +2,8 @@
 // trust (signature + domain verification), and present the pre-install review so
 // the user can make an informed decision before any plugin code runs.
 
-import { parsePackage, fetchPackage, reviewSummary } from '../platform/pluginPackage.js';
+import { parsePackage, fetchPackage, reviewSummary, displayName } from '../platform/pluginPackage.js';
+import { pluginId } from '@trove/core/plugins/identity.js';
 
 export async function beginInstallFromFile(app, file) {
   try {
@@ -23,8 +24,9 @@ export async function beginInstallFromUrl(app, url) {
 }
 
 async function review(app, pkg) {
-  if (app.platform.plugins.plugins.has(pkg.manifest.id)) {
-    app.platform.notifications.warn(`“${pkg.manifest.name}” is already installed.`);
+  const label = displayName(pkg.manifest);
+  if (app.platform.plugins.plugins.has(pluginId(pkg.manifest))) {
+    app.platform.notifications.warn(`“${label}” is already installed.`);
     return;
   }
   // Trust assessment can hit the network (domain assetlinks); do it before review.
@@ -43,11 +45,11 @@ async function review(app, pkg) {
       // switch to the plugins view (which shows the plugin's loading state) and hold a
       // sticky "Installing…" toast so the user isn't left staring at nothing.
       app.platform.workbench.setActivity('plugins');
-      const pending = app.platform.notifications.info(`Installing “${pkg.manifest.name}”…`, { sticky: true });
+      const pending = app.platform.notifications.info(`Installing “${label}”…`, { sticky: true });
       try {
         await app.platform.plugins.install(pkg, { grants, trust });
         app.platform.notifications.dismiss(pending);
-        app.platform.notifications.success(`Installed “${pkg.manifest.name}”`);
+        app.platform.notifications.success(`Installed “${label}”`);
       } catch (err) {
         app.platform.notifications.dismiss(pending);
         app.platform.notifications.error(`Install failed: ${err.message}`);

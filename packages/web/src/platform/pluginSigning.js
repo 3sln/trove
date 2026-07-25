@@ -108,15 +108,21 @@ export async function verifyPackage({ manifest, files }) {
 }
 
 /**
- * Given the domain's assetlinks doc, is this key fingerprint vouched for this
- * plugin id? Format:
- *   { "version": 1, "keys": [ { "fingerprint": "<hex|colon-hex>", "plugins": ["id" | "*"] } ] }
+ * Given the domain's assetlinks doc, is this key fingerprint vouched for this plugin?
+ * Format:
+ *   { "version": 1, "keys": [ { "fingerprint": "<hex|colon-hex>", "plugins": ["docs" | "*"] } ] }
+ *
+ * The doc is served BY the domain, so a plugin is named by its name within that domain
+ * ("docs"); the fully-qualified "acme.com/docs" is accepted too, for docs that prefer
+ * to be explicit.
  */
-export function checkAssetlinks(assetlinks, fingerprint, pluginId) {
+export function checkAssetlinks(assetlinks, fingerprint, manifest) {
   const norm = (f) => (f || '').toLowerCase().replace(/:/g, '');
   const want = norm(fingerprint);
+  const names = [manifest.name, `${manifest.domain}/${manifest.name}`];
   for (const k of assetlinks?.keys || []) {
-    if (norm(k.fingerprint) === want && (k.plugins || []).some((p) => p === '*' || p === pluginId)) return true;
+    if (norm(k.fingerprint) !== want) continue;
+    if ((k.plugins || []).some((p) => p === '*' || names.includes(p))) return true;
   }
   return false;
 }
@@ -132,12 +138,11 @@ export async function assessTrust({ manifest, files }, fetchAssetlinks) {
   // A present-but-failed signature is evidence of tampering — a distinct, alarming
   // status, NOT the same grey "unverified" as an ordinary unsigned package.
   if (!sig.valid) return { status: 'invalid', reason: sig.reason || 'Invalid signature — the package may have been tampered with' };
-  if (!manifest.domain) return { status: 'signed', fingerprint: sig.fingerprint };
   let doc = null;
   try {
     doc = await fetchAssetlinks(manifest.domain);
   } catch { /* unreachable domain */ }
-  if (doc && checkAssetlinks(doc, sig.fingerprint, manifest.id)) {
+  if (doc && checkAssetlinks(doc, sig.fingerprint, manifest)) {
     return { status: 'verified', domain: manifest.domain, fingerprint: sig.fingerprint };
   }
   return { status: 'signed', domain: manifest.domain, fingerprint: sig.fingerprint, reason: doc ? 'Domain does not list this key' : 'Could not reach the domain' };

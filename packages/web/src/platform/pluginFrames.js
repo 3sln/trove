@@ -52,7 +52,7 @@ export class FrameManager {
       record._srcdoc ||= await buildSrcdoc(record.manifest, record.files);
       iframe.srcdoc = record._srcdoc;
     }
-    const frame = { role, iframe, channel: null, record, place: null, dock: null, docked: false, mediaActions: null };
+    const frame = { role, iframe, channel: null, record, place: null, dock: null, mediaActions: null };
     document.body.appendChild(iframe);
     try {
       await this.#handshake(record, frame, wiring);

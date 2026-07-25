@@ -6,6 +6,11 @@
 // Supported: bare keys (truthy), !key, ==, !=, >, <, >=, <=, =~ /re/, && , ||,
 // parentheses, string/number/boolean literals. Expressions are parsed once into
 // a predicate function and cached, so evaluation on every keydown is cheap.
+//
+// A key is either a core context key (`view.active`, `explorer.hasSelection`) or a
+// contribution URI naming a plugin's `register` — `trove+contrib:acme.com/docs/busy`.
+// Registers are addressed by their full URI precisely because they're contributions
+// like any other: a plugin can only ever gate on a value someone declared and owns.
 
 const cache = new Map();
 
@@ -27,7 +32,9 @@ export function evaluateWhen(expr, ctx) {
   return compileWhen(expr)(ctx || {});
 }
 
-const TOKEN = /\s*(=~|==|!=|>=|<=|&&|\|\||[()!<>]|\/(?:\\.|[^/])*\/|'(?:\\.|[^'])*'|"(?:\\.|[^"])*"|[A-Za-z0-9_.:-]+)/y;
+// Note the `trove+contrib:` alternative comes before the regex-literal one: a URI's
+// slashes would otherwise start a /…/ literal and swallow the rest of the expression.
+const TOKEN = /\s*(=~|==|!=|>=|<=|&&|\|\||[()!<>]|trove\+contrib:[A-Za-z0-9_./-]+|\/(?:\\.|[^/])*\/|'(?:\\.|[^'])*'|"(?:\\.|[^"])*"|[A-Za-z0-9_.:-]+)/y;
 
 class Parser {
   constructor(src) {

@@ -11,7 +11,9 @@ import { parsePluginPackage } from './package.js';
 
 export { PackageStore, StoragePackageStore } from './packageStore.js';
 export { PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore } from './installStore.js';
-export { parsePluginPackage, capabilityList, ALL_CAPABILITIES } from './package.js';
+export { parsePluginPackage, capabilityList, ALL_CAPABILITIES, serverIndexers, declaredOpeners, declaredContributions } from './package.js';
+export * from './identity.js';
+export { CONTRIBUTION_TYPES, contributionsOfType } from './contributions.js';
 export { IndexerRuntime, InProcessIndexerRuntime, clampContribution, DEFAULT_CAPS } from './runtime.js';
 export { PluginIndexers, matchFromSelector } from './indexers.js';
 
@@ -78,11 +80,11 @@ export class PluginService {
     }
 
     const version = pkg.manifest.version || '0';
-    const ref = `${encodeURIComponent(account)}/${encodeURIComponent(pkg.manifest.id)}/${encodeURIComponent(version)}.zip`;
+    const ref = `${encodeURIComponent(account)}/${encodeURIComponent(pkg.pluginId)}/${encodeURIComponent(version)}.zip`;
     if (!(await this.packages.has(ref))) await this.packages.put(ref, bytes);
 
     const record = {
-      account, pluginId: pkg.manifest.id, version,
+      account, pluginId: pkg.pluginId, version,
       scope: 'account', grants: granted, indexers: pkg.indexers, // full specs (id/match/entry/dir)
       config: {}, secrets: {},
       installedBy: principal.id, adminApprovedBy: this.requiresAdmin(pkg) ? principal.id : null,

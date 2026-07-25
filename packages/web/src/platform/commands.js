@@ -25,8 +25,8 @@ export class CommandService {
   register(idOrSpec, handler) {
     const spec = typeof idOrSpec === 'string' ? { id: idOrSpec, handler } : idOrSpec;
     if (spec.handler) this.handlers.set(spec.id, spec.handler);
-    const dispose = this.contributions.commands.register({
-      id: spec.id,
+    const dispose = this.contributions.register(spec.id, {
+      type: 'command',
       title: spec.title ?? spec.id,
       category: spec.category,
       icon: spec.icon,
@@ -53,7 +53,7 @@ export class CommandService {
   }
 
   isEnabled(id) {
-    const cmd = this.contributions.commands.get(id);
+    const cmd = this.contributions.get(id);
     if (cmd?.when && !this.context.evaluate(cmd.when)) return false;
     return this.isAvailable(cmd);
   }
@@ -70,7 +70,7 @@ export class CommandService {
       this.notifications.error(`Command not found: ${id}`);
       return;
     }
-    const cmd = this.contributions.commands.get(id);
+    const cmd = this.contributions.get(id);
     if (!this.isAvailable(cmd)) {
       this.notifications.warn(`“${cmd?.title || id}” isn’t available${this.availability ? ' offline' : ''} right now.`);
       return;
@@ -87,8 +87,8 @@ export class CommandService {
 
   /** Commands eligible for the palette right now (respecting when-clauses). */
   paletteCommands() {
-    return this.contributions.commands
-      .all()
+    return this.contributions
+      .ofType('command')
       .filter((c) => c.palette !== false && (!c.when || this.context.evaluate(c.when)))
       .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.title.localeCompare(b.title));
   }

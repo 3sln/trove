@@ -18,7 +18,6 @@
   const pending = new Map();
   const commandHandlers = new Map();
   const openerHandlers = new Map();
-  const contributions = { commands: new Map(), openers: new Map(), indexers: new Map(), statusItems: new Map() };
   let onConnectivity = null, onDeactivate = null, onSettingsChange = null, onDock = null;
   const mediaHandlers = {}; // action -> handler, for OS media-session controls
 
@@ -33,15 +32,15 @@
   }
   const emit = (method, params) => port.postMessage({ __trove: 'event', method, params });
 
+  // What this frame reports about itself on every heartbeat. Contributions are the
+  // host's own manifest reading — all the plugin can usefully say is which of its
+  // declared contributions it actually bound a handler to, plus whether it thinks
+  // it's online.
   function buildManifest() {
     return {
-      id: manifest && manifest.id, name: manifest && manifest.name, online, ts: now(),
-      contributions: {
-        commands: [...contributions.commands.values()],
-        openers: [...contributions.openers.values()],
-        indexers: [...contributions.indexers.values()],
-        statusItems: [...contributions.statusItems.values()],
-      },
+      domain: manifest && manifest.domain, name: manifest && manifest.name,
+      online, role, ts: now(),
+      handlers: [...commandHandlers.keys()],
     };
   }
   const announce = () => port && emit('manifest', buildManifest());
@@ -136,16 +135,14 @@
       // a plugin never registers anything at runtime — it only supplies the behaviour
       // for what it declared, addressed by id.
       commands: {
-        /** Implement a command this plugin's manifest declares. */
-        handle(id, handler) { commandHandlers.set(id, handler); return this; },
+        /** Implement a command this plugin's manifest declares, by its short name. */
+        handle(name, handler) { commandHandlers.set(name, handler); return this; },
+        /**
+         * Run a command. Its OWN commands by short name; anyone else's by full address
+         * (a built-in like 'explorer.download', or a `trove+contrib:` URI) — and only
+         * if the manifest's `commands` capability lists it.
+         */
         execute(id) { const a = [].slice.call(arguments, 1); return call('command:execute', { id, args: a }); },
-        /** @deprecated declare the command in `contributes.commands`; this only binds
-         *  the handler now (the host no longer accepts runtime registration). */
-        register(id, handler, opts) {
-          commandHandlers.set(id, handler);
-          contributions.commands.set(id, Object.assign({ id }, opts || {}));
-          return Promise.resolve({ ok: true });
-        },
       },
       /** Implement the opener this frame was booted for (its entry module). The id is
        *  optional — an opener frame runs exactly one opener. */
@@ -160,14 +157,6 @@
       // exporting `index(node, ctx)`; it doesn't use this SDK at all. What a plugin can
       // do from here is PUSH contributions for a node via ctx.files.index (the
       // `indexer` capability).
-      /** @deprecated bind handlers with onOpen/commands.handle and declare the
-       *  contribution in the manifest. These no longer register anything. */
-      contributes: {
-        opener(spec, handler) { openerHandlers.set(spec.id, handler); contributions.openers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
-        indexer(spec) { contributions.indexers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
-        statusItem(spec) { contributions.statusItems.set(spec.id, spec); return Promise.resolve({ ok: true }); },
-        keybinding() { return Promise.resolve({ ok: true }); },
-      },
       // Package resources — opaque handles. read() copies bytes into the iframe;
       // url() wraps them in an iframe-local blob: URL.
       resources: {
@@ -183,7 +172,27 @@
         toast: (text, opts) => emit('ui:toast', Object.assign({ text }, opts)),
         showPanel: () => call('ui:showPanel', {}),
         setBadge: (text) => emit('ui:badge', { text }),
-        setContext: (key, value) => emit('context:set', { key, value }),
+        /**
+         * Drive a status-bar slot this plugin's manifest declares. `html` is sanitized
+         * by the host down to a small inline-formatting allowlist before it renders.
+         *   ctx.ui.status('sync').set('<b>3</b> queued')
+         *   ctx.ui.status('sync').hide()
+         */
+        status(name) {
+          return {
+            set: (html, opts) => call('ui:status', Object.assign({ name, html, visible: true }, opts || {})),
+            show: () => call('ui:status', { name, visible: true }),
+            hide: () => call('ui:status', { name, visible: false }),
+          };
+        },
+      },
+      /**
+       * Registers — context value slots this plugin's manifest declares, which
+       * when-clauses (its own keymap's, its commands') read by contribution URI.
+       *   ctx.registers.set('busy', true)
+       */
+      registers: {
+        set: (name, value) => call('context:setRegister', { name, value }),
       },
       // Media session — surfaces this viewer's playback to the OS (lock-screen /
       // notification transport controls, so phones can play/pause/seek). The host
@@ -251,7 +260,6 @@
         onChange: (fn) => { onSettingsChange = fn; },
       },
       onConnectivity: (fn) => { onConnectivity = fn; },
-      setAvailability: (id, opts) => { for (const k of Object.values(contributions)) if (k.has(id)) k.get(id).offline = !!(opts && opts.offline); announce(); },
       announce,
       onDeactivate: (fn) => { onDeactivate = fn; },
     };

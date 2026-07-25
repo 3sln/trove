@@ -99,7 +99,7 @@ function openersSection(ui) {
 
 function keybindingsSection(ui) {
   const bindings = ui.platform.keybindings.resolved();
-  const cmds = ui.platform.contributions.commands;
+  const cmds = ui.platform.contributions;
   return div({ className: 'group' },
     h3('Keyboard Shortcuts'),
     ...bindings.slice(0, 40).map((b) => {

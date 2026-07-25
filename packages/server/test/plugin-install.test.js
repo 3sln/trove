@@ -17,7 +17,11 @@ async function req(handle, method, path, { body, headers } = {}) {
   return out;
 }
 
-const base = { id: 'com.acme.demo', name: 'Demo', version: '1.0.0' };
+// A package's identity is its domain + name; `<domain>/<name>` is the plugin id, and
+// it's URL-encoded into plugin API paths.
+const base = { domain: 'acme.com', name: 'demo', displayName: 'Demo', version: '1.0.0' };
+const DEMO = 'acme.com/demo';
+const enc = (id) => encodeURIComponent(id);
 
 test('install → list → download → remove lifecycle', async () => {
   const { handle } = await createServer();
@@ -25,24 +29,24 @@ test('install → list → download → remove lifecycle', async () => {
 
   const inst = await req(handle, 'POST', '/api/plugins/install?grants=ui,commands,storage', { body: zip });
   expect(inst.status).toBe(200);
-  expect(inst.json.install.pluginId).toBe('com.acme.demo');
+  expect(inst.json.install.pluginId).toBe(DEMO);
   expect(inst.json.install.grants.sort()).toEqual(['commands', 'storage', 'ui']);
   expect(inst.json.install.digest).toStartWith('sha256:');
   expect(inst.json.install.secrets).toBeUndefined(); // never exposed
 
   const list = await req(handle, 'GET', '/api/plugins/installed');
-  expect(list.json.plugins.map((p) => p.pluginId)).toContain('com.acme.demo');
+  expect(list.json.plugins.map((p) => p.pluginId)).toContain(DEMO);
 
-  const dl = await handle(new Request('http://t/api/plugins/com.acme.demo/package'));
+  const dl = await handle(new Request(`http://t/api/plugins/${enc(DEMO)}/package`));
   expect(dl.status).toBe(200);
   expect(dl.headers.get('content-type')).toBe('application/zip');
   expect((await dl.arrayBuffer()).byteLength).toBe(zip.byteLength);
 
-  const rm = await req(handle, 'DELETE', '/api/plugins/com.acme.demo/install');
-  expect(rm.json.removed).toBe('com.acme.demo');
+  const rm = await req(handle, 'DELETE', `/api/plugins/${enc(DEMO)}/install`);
+  expect(rm.json.removed).toBe(DEMO);
   const after = await req(handle, 'GET', '/api/plugins/installed');
   expect(after.json.plugins.length).toBe(0);
-  const gone = await handle(new Request('http://t/api/plugins/com.acme.demo/package'));
+  const gone = await handle(new Request(`http://t/api/plugins/${enc(DEMO)}/package`));
   expect(gone.status).toBe(404);
 });
 
@@ -50,15 +54,15 @@ test('capabilities are enforced for a server-installed plugin', async () => {
   const { handle } = await createServer();
   // Install WITHOUT storage granted.
   await req(handle, 'POST', '/api/plugins/install?grants=ui,commands', { body: pkg({ ...base, capabilities: { ui: true, commands: true, storage: true } }) });
-  const denied = await req(handle, 'POST', '/api/plugins/com.acme.demo/sql', {
+  const denied = await req(handle, 'POST', `/api/plugins/${enc(DEMO)}/sql`, {
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
   });
   expect(denied.status).toBe(403);
   expect(denied.json.error.code).toBe('forbidden');
 
   // A different plugin WITH storage granted → not blocked by the capability check.
-  await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ id: 'com.acme.store', name: 'S', version: '1', capabilities: { storage: true } }) });
-  const ok = await req(handle, 'POST', '/api/plugins/com.acme.store/sql', {
+  await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ domain: 'acme.com', name: 'store', version: '1', capabilities: { storage: true } }) });
+  const ok = await req(handle, 'POST', `/api/plugins/${enc('acme.com/store')}/sql`, {
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
   });
   expect(ok.status).toBe(200);
@@ -72,8 +76,8 @@ test('server-component / shared-resource packages need an admin', async () => {
 
   // A server indexer (embedded sub-package) also requires admin.
   const withIndexer = pkg({
-    ...base, id: 'com.acme.idx', entry: 'src/index.js',
-    contributes: { indexers: [{ id: 'com.acme.idx.pdf', match: { ext: ['.pdf'] }, entry: 'src/indexers/pdf.js' }] },
+    ...base, name: 'idx', entry: 'src/index.js',
+    contributes: { pdf: { type: 'indexer', match: { ext: ['.pdf'] }, entry: 'src/indexers/pdf.js' } },
   }, { 'src/indexers/pdf.js': strToU8('export default async () => ({})') });
   const idx = await req(handle, 'POST', '/api/plugins/install', { body: withIndexer });
   expect(idx.status).toBe(403);
@@ -82,14 +86,14 @@ test('server-component / shared-resource packages need an admin', async () => {
 test('strict mode denies plugin API calls with no install record', async () => {
   const { handle } = await createServer({ enforcePluginCaps: true });
   // No install record → strict deny (closes the "any client names any pluginId" gap).
-  const denied = await req(handle, 'POST', '/api/plugins/com.nope/sql', {
+  const denied = await req(handle, 'POST', `/api/plugins/${enc('nope.example/n')}/sql`, {
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
   });
   expect(denied.status).toBe(403);
 
   // Install it, and the same call is allowed.
-  await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ id: 'com.nope', name: 'N', version: '1', capabilities: { storage: true } }) });
-  const ok = await req(handle, 'POST', '/api/plugins/com.nope/sql', {
+  await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ domain: 'nope.example', name: 'n', version: '1', capabilities: { storage: true } }) });
+  const ok = await req(handle, 'POST', `/api/plugins/${enc('nope.example/n')}/sql`, {
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
   });
   expect(ok.status).toBe(200);

@@ -21,8 +21,9 @@ import { zipSync } from 'fflate';
 import { PluginRegistry } from './pluginStore.js';
 import { ClientSqlProvider } from './pluginClientDb.js';
 import { assessTrust } from './pluginSigning.js';
-import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage } from './pluginPackage.js';
-import { declaredOpeners } from '@trove/core/plugins/package.js';
+import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage, displayName, canExecuteCommand } from './pluginPackage.js';
+import { declaredContributions, parseKeymap, serverIndexers } from '@trove/core/plugins/contributions.js';
+import { pluginId, contribUri } from '@trove/core/plugins/identity.js';
 import { endpointSummary } from './pluginNet.js';
 import { MediaController } from './pluginMedia.js';
 import { FrameDock } from './pluginDock.js';
@@ -80,47 +81,106 @@ export class PluginHost {
   }
 
   /**
-   * Register everything the MANIFEST declares. The manifest is authoritative — this
-   * runs before the plugin boots, so: the user's install-time review matches exactly
-   * what gets registered, openers/indexers exist without activating the plugin, and
-   * they survive a plugin whose primary frame is broken or unresponsive.
+   * Register everything the MANIFEST declares, each at its own contribution URI. The
+   * manifest is authoritative — this runs before the plugin boots, so: the user's
+   * install-time review matches exactly what gets registered, openers/indexers exist
+   * without activating the plugin, and they survive a plugin whose primary frame is
+   * broken or unresponsive. Nothing a plugin does at runtime can add a contribution;
+   * it can only drive the ones declared here (push status content, set a register).
    */
   #registerContributions(runtime) {
-    const pid = runtime.manifest.id;
-    const c = runtime.manifest.contributes || {};
+    const pid = runtime.id;
+    const reg = this.platform.contributions;
     const keep = (dispose) => runtime.disposers.push(dispose);
+    const label = displayName(runtime.manifest);
 
-    // Openers: each names the entry module that renders it, in its own frame.
-    for (const o of declaredOpeners(runtime.manifest)) {
-      if (!runtime.grants.includes('opener')) break; // user declined "provides viewers"
-      keep(this.platform.contributions.openers.register({
-        id: o.id, title: o.title, selector: o.selector, priority: o.priority,
-        offline: o.offline, dock: o.dock, entry: o.entry, pluginId: pid,
-      }));
+    for (const c of declaredContributions(runtime.manifest)) {
+      const base = { ...c, pluginId: pid };
+      switch (c.type) {
+        // A viewer: `entry` names the module that renders it, in its own frame.
+        // Skipped entirely if the user declined "provides viewers" at install.
+        case 'opener':
+          if (runtime.grants.includes('opener')) keep(reg.register(c.uri, base));
+          break;
+
+        // Declared, implemented by the plugin's primary frame. The handler proxies
+        // over RPC using the contribution's short name — inside its own frame a
+        // plugin addresses its commands by name, not by URI.
+        case 'command':
+          keep(this.platform.commands.register({
+            id: c.uri, title: c.title || `${label}: ${c.name}`,
+            category: c.category || label, icon: c.icon,
+            when: c.when, offline: c.offline, palette: c.palette, pluginId: pid,
+            handler: (...args) => runtime.channel?.call('command:execute', { id: c.name, args }),
+          }));
+          break;
+
+        // A slot in the status bar, empty and hidden until the plugin pushes content.
+        case 'statusItem':
+          keep(reg.register(c.uri, { ...base, html: '', visible: false }));
+          break;
+
+        // A context value slot. Seed the context with its declared default so
+        // when-clauses referencing it evaluate sensibly before the plugin runs.
+        case 'register':
+          keep(reg.register(c.uri, base));
+          this.platform.context.set(c.uri, c.default);
+          keep(() => this.platform.context.remove(c.uri));
+          break;
+
+        // A keymap JSON file inside the package. Read + validated here, at register
+        // time, so a malformed keymap is a visible install-time problem rather than a
+        // shortcut that silently never fires.
+        case 'keymap': {
+          const bytes = runtime.files.get(c.path);
+          if (!bytes) {
+            this.platform.notifications.warn(`Plugin "${label}": keymap file "${c.path}" is not in the package.`);
+            break;
+          }
+          try {
+            const bindings = this.#resolveBindings(runtime, parseKeymap(new TextDecoder().decode(bytes)), label);
+            keep(reg.register(c.uri, { ...base, bindings }));
+          } catch (err) {
+            this.platform.notifications.warn(`Plugin "${label}": ${err.message}`);
+          }
+          break;
+        }
+
+        // Indexers are deliberately NOT registered client-side. They run on the server
+        // (PluginIndexers registers them from the install record), because indexing
+        // must happen once per upload for the drive — not in whichever tab is open.
+        case 'indexer':
+          break;
+      }
     }
-    // NOTE: declared indexers are deliberately NOT registered here. They run on the
-    // server (PluginIndexers registers them into the Vfs registry from the install
-    // record), because indexing must happen once per upload for the drive — not in
-    // whichever browser tab happens to be open.
-    //
-    // Commands: declared here, implemented by the plugin's primary frame (by id).
-    for (const cmd of c.commands || []) {
-      if (!cmd?.id) continue;
-      keep(this.platform.commands.register({
-        id: cmd.id, title: cmd.title || `${runtime.manifest.name}: ${cmd.id}`,
-        category: cmd.category || runtime.manifest.name, icon: cmd.icon,
-        when: cmd.when, offline: !!cmd.offline, pluginId: pid,
-        handler: (...args) => runtime.channel?.call('command:execute', { id: cmd.id, args }),
-      }));
+  }
+
+  /**
+   * Resolve a keymap's bindings into real addresses, and refuse the ones the plugin
+   * isn't allowed to trigger. A binding naming one of the plugin's own commands is
+   * rewritten to that contribution's URI (inside its package a plugin knows only short
+   * names); anything else is a foreign address and must be in the manifest's `commands`
+   * allowlist — a shortcut is still the plugin asking the host to run something, so it
+   * can't be a way around the per-command grant the user approved.
+   */
+  #resolveBindings(runtime, bindings, label) {
+    const out = [];
+    for (const b of bindings) {
+      const uri = contribUri(runtime.manifest, b.command);
+      const own = declaredContributions(runtime.manifest).some((c) => c.uri === uri && c.type === 'command');
+      const command = own ? uri : b.command;
+      if (!own && !canExecuteCommand(runtime.manifest, command)) {
+        this.platform.notifications.warn(`Plugin "${label}": shortcut ${b.key} is bound to "${b.command}", which it isn't allowed to run — ignored.`);
+        continue;
+      }
+      out.push({ ...b, command });
     }
-    // Pure data — no plugin code involved at all.
-    for (const s of c.statusItems || []) if (s?.id) keep(this.platform.contributions.statusItems.register({ ...s, pluginId: pid }));
-    for (const k of c.keybindings || []) if (k?.key) keep(this.platform.contributions.keybindings.register(k));
+    return out;
   }
 
   list() {
     return [...this.plugins.values()].map((p) => ({
-      id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, status: p.status,
+      id: p.id, name: displayName(p.manifest), version: p.manifest.version, status: p.status,
       capabilities: p.grants, error: p.error || null, hasUi: p.hasUi, badge: p.badge || null,
       trust: p.trust || null, settingsSchema: p.manifest.settings || [],
       endpoints: endpointSummary(networkEndpoints(p.manifest)),
@@ -134,14 +194,12 @@ export class PluginHost {
    * is only used for liveness/availability, not for what exists.
    */
   #featureList(record) {
-    const c = record.manifest?.contributes || {};
-    const rows = [];
-    const push = (kind, items) => { for (const it of items || []) if (it?.id) rows.push({ kind, id: it.id, title: it.title || it.id, offline: !!it.offline, available: this.#availableSpec(record, it) }); };
-    push('command', c.commands);
-    push('opener', c.openers);
-    push('indexer', c.indexers);
-    push('statusItem', c.statusItems);
-    return rows;
+    let declared;
+    try { declared = declaredContributions(record.manifest); } catch { return []; }
+    return declared.map((c) => ({
+      kind: c.type, id: c.uri, name: c.name, title: c.title || c.name,
+      offline: !!c.offline, available: this.#availableSpec(record, c),
+    }));
   }
   #availableSpec(record, spec) {
     if (record.status !== 'active' || !record.responsive) return false;
@@ -166,7 +224,7 @@ export class PluginHost {
    * the user approved (the review UI filters admin-only caps for non-admins).
    */
   async install(pkg, { grants, trust } = {}) {
-    const id = pkg.manifest.id;
+    const id = pluginId(pkg.manifest);
     const requested = capabilityList(pkg.manifest);
     const granted = (grants || requested).filter((c) => ALL_CAPABILITIES.includes(c) && requested.includes(c));
     // Account-scoped plugins (server storage or a server indexer) upload their full
@@ -174,7 +232,7 @@ export class PluginHost {
     // the canonical copy so the plugin syncs to the user's other devices and its
     // capabilities are enforced server-side. Throws if the server rejects (e.g. admin
     // required) — surfaced to the user by the install UI. Device-scoped plugins stay local.
-    const scope = accountScoped(pkg.manifest, granted, pkg.files) ? 'account' : 'device';
+    const scope = accountScoped(pkg.manifest, granted) ? 'account' : 'device';
     if (scope === 'account') {
       if (!pkg.raw) throw new Error('Package bytes unavailable for a server install');
       await this.platform.api.installPlugin(pkg.raw, granted);
@@ -208,7 +266,7 @@ export class PluginHost {
         this.#run(rec).catch((e) => console.error('restore plugin failed', rec.id, e));
       } catch (e) {
         console.error('skipping corrupt plugin record', rec?.id, e);
-        this.platform.notifications.warn(`Couldn't restore plugin "${rec?.manifest?.name || rec?.id || 'unknown'}" — its saved data looks corrupt.`);
+        this.platform.notifications.warn(`Couldn't restore plugin "${rec?.manifest ? displayName(rec.manifest) : rec?.id || 'unknown'}" — its saved data looks corrupt.`);
       }
     }
     // Reconcile with the server's account plugins (best-effort, offline-tolerant).
@@ -272,7 +330,7 @@ export class PluginHost {
     const schema = (record.manifest.settings || []).filter((s) => !s.secret);
     if (schema.length) {
       record._settingsDispose = this.platform.settings.scopedFor(record.id).register(
-        schema.map((s) => ({ ...s, category: record.manifest.name })),
+        schema.map((s) => ({ ...s, category: displayName(record.manifest) })),
       );
     }
   }
@@ -311,7 +369,7 @@ export class PluginHost {
     } catch (err) {
       runtime.status = 'error';
       runtime.error = err?.message || String(err);
-      this.platform.notifications.error(`Plugin "${record.manifest.name}" failed to load: ${runtime.error}`);
+      this.platform.notifications.error(`Plugin "${displayName(record.manifest)}" failed to load: ${runtime.error}`);
     }
     this.#emit();
     return runtime;
@@ -366,7 +424,6 @@ export class PluginHost {
     try {
       record.live = await record.channel.call('manifest', {}, { timeout: 4000 });
       record.responsive = true;
-      record.lastManifestAt = Date.now();
     } catch {
       record.responsive = false;
     }
@@ -427,7 +484,7 @@ export class PluginHost {
 
     // Boot the frame at the OPENER's entry module — not the plugin's main entry, so a
     // viewer loads only the code it needs and never re-runs the plugin's background setup.
-    const opener = this.platform.contributions.openers.get(openerId);
+    const opener = this.platform.contributions.get(openerId);
     const mount = { cancelled: false, frame: null };
     this.#spawnFrame(record, 'viewer', opener?.entry).then(async (frame) => {
       if (mount.cancelled) { this.frames.destroy(frame); return; }
@@ -465,7 +522,7 @@ export class PluginHost {
   /** Uninstall: stop the plugin, forget it, and wipe everything it owns. */
   async uninstall(pluginId, { wipeData = true } = {}) {
     const record = this.plugins.get(pluginId);
-    const name = record?.manifest?.name || pluginId;
+    const name = record?.manifest ? displayName(record.manifest) : pluginId;
     const isAccount = record?.scope === 'account'
       || (await this.registry.get(pluginId).catch(() => null))?.scope === 'account';
 
@@ -532,18 +589,16 @@ function toU8Files(files) {
 }
 
 // A plugin is account-scoped (must install to the server) if it has a server
-// footprint: server storage, or a server indexer (declared or embedded sub-package).
-// Purely client-side plugins stay device-local.
-function accountScoped(manifest, granted, files) {
+// footprint: server storage, or an indexer (which the SERVER runs). Purely
+// client-side plugins stay device-local.
+function accountScoped(manifest, granted) {
   if (granted.includes('storage')) return true;
-  if (Array.isArray(manifest.serverIndexers) && manifest.serverIndexers.length) return true;
-  for (const path of files.keys()) if (/^indexers\/[^/]+\/manifest\.json$/.test(path)) return true;
-  return false;
+  return serverIndexers(manifest).length > 0;
 }
 
+// A cheap fingerprint of a plugin's live self-report, used to tell whether a heartbeat
+// changed anything worth re-rendering for.
 function signature(live) {
   if (!live) return '';
-  const c = live.contributions || {};
-  const flat = ['commands', 'openers', 'indexers', 'statusItems'].flatMap((k) => (c[k] || []).map((x) => `${k}:${x.id}:${x.offline ? 1 : 0}`));
-  return `${live.online ? 1 : 0}|${flat.sort().join(',')}`;
+  return `${live.online ? 1 : 0}|${[...(live.handlers || [])].sort().join(',')}`;
 }
