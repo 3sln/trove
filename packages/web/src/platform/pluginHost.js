@@ -21,8 +21,9 @@ import { assessTrust } from './pluginSigning.js';
 import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage } from './pluginPackage.js';
 import { isAllowedUrl, endpointSummary } from './pluginNet.js';
 import { buildModuleGraph, isModuleEntry, isSourceModule } from './pluginModules.js';
-
-const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network', 'media', 'dock'];
+// The canonical capability list lives in core (the server's authority); import it so
+// client and server can't drift when a capability is added.
+import { ALL_CAPABILITIES } from '@trove/core/plugins/package.js';
 
 // Response bodies larger than this are refused, so a plugin can't exhaust host
 // memory through the brokered fetch.
@@ -966,4 +967,3 @@ function signature(live) {
   return `${live.online ? 1 : 0}|${flat.sort().join(',')}`;
 }
 
-export { ALL_CAPABILITIES };

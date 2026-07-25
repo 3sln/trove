@@ -7,7 +7,7 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import { TroveError } from '../errors.js';
 
-const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network', 'media', 'dock'];
+export const ALL_CAPABILITIES = ['files', 'storage', 'ui', 'commands', 'indexer', 'opener', 'network', 'media', 'dock'];
 
 /** SHA-256 hex digest of the raw package bytes (content address). */
 export async function digestBytes(bytes) {

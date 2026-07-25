@@ -11,7 +11,7 @@ import { parsePluginPackage } from './package.js';
 
 export { PackageStore, StoragePackageStore } from './packageStore.js';
 export { PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore } from './installStore.js';
-export { parsePluginPackage, capabilityList } from './package.js';
+export { parsePluginPackage, capabilityList, ALL_CAPABILITIES } from './package.js';
 export { IndexerRuntime, InProcessIndexerRuntime, clampContribution, DEFAULT_CAPS } from './runtime.js';
 export { PluginIndexers, matchFromSelector } from './indexers.js';
 

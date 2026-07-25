@@ -11,7 +11,8 @@
     "./util.js": "./src/util.js",
     "./storage/*": "./src/storage/*",
     "./metadata/*": "./src/metadata/*",
-    "./search/*": "./src/search/*"
+    "./search/*": "./src/search/*",
+    "./plugins/*": "./src/plugins/*"
   },
   "files": [
     "src/"
