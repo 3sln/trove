@@ -12,6 +12,7 @@
 // now (incl. offline). See pluginPackage.js / pluginSigning.js for install-time
 // validation and the domain-verified trust signal.
 
+import { zipSync } from 'fflate';
 import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
 import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
 import { PluginRegistry } from './pluginStore.js';
@@ -125,20 +126,33 @@ export class PluginHost {
     try {
       records = await this.registry.list();
     } catch { /* no IndexedDB */ }
-    const localIds = new Set(records.map((r) => r.id));
     for (const rec of records) {
       this.#registerSettings(rec);
       this.#run(rec).catch((e) => console.error('restore plugin failed', rec.id, e));
     }
-    // Pull down any account plugins installed on another device but not yet here.
-    this.#syncAccountPlugins(localIds).catch(() => {});
+    // Reconcile with the server's account plugins (best-effort, offline-tolerant).
+    this.#reconcile(records).catch(() => {});
   }
 
-  // Download + enable account plugins the server has that this device doesn't.
-  async #syncAccountPlugins(localIds) {
-    let list;
-    try { list = (await this.platform.api.installedPlugins()).plugins || []; } catch { return; }
-    for (const rec of list) {
+  // Two-way sync of account plugins with the server: push any local account plugin the
+  // server is missing (migration for pre-existing local installs), and pull any server
+  // account plugin not yet on this device (cross-device sync).
+  async #reconcile(localRecords) {
+    let serverList;
+    try { serverList = (await this.platform.api.installedPlugins()).plugins || []; } catch { return; }
+    const serverIds = new Set(serverList.map((p) => p.pluginId));
+    const localIds = new Set(localRecords.map((r) => r.id));
+
+    // Push: local account plugins the server doesn't have → re-upload (re-zipped).
+    for (const rec of localRecords) {
+      if (rec.scope !== 'account' || serverIds.has(rec.id)) continue;
+      try {
+        await this.platform.api.installPlugin(zipSync(toU8Files(rec.files)), rec.grants || []);
+      } catch (e) { console.error('re-upload plugin failed', rec.id, e); }
+    }
+
+    // Pull: server account plugins not on this device → download + enable.
+    for (const rec of serverList) {
       if (localIds.has(rec.pluginId)) continue;
       try {
         const pkg = parsePackage(await this.platform.api.pluginPackage(rec.pluginId));
@@ -895,6 +909,14 @@ function clampDim(v, lo, hi) {
 // A plugin is account-scoped (must install to the server) if it has a server
 // footprint: server storage, or a server indexer (declared or embedded sub-package).
 // Purely client-side plugins stay device-local.
+// Coerce a stored files object (path -> bytes, possibly ArrayBuffer after IndexedDB
+// round-trip) into the { path: Uint8Array } shape fflate's zipSync expects.
+function toU8Files(files) {
+  const out = {};
+  for (const [k, v] of Object.entries(files || {})) out[k] = v instanceof Uint8Array ? v : new Uint8Array(v);
+  return out;
+}
+
 function accountScoped(manifest, granted, files) {
   if (granted.includes('storage')) return true;
   if (Array.isArray(manifest.serverIndexers) && manifest.serverIndexers.length) return true;

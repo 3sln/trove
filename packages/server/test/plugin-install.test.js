@@ -79,6 +79,22 @@ test('server-component / shared-resource packages need an admin', async () => {
   expect(idx.status).toBe(403);
 });
 
+test('strict mode denies plugin API calls with no install record', async () => {
+  const { handle } = await createServer({ enforcePluginCaps: true });
+  // No install record → strict deny (closes the "any client names any pluginId" gap).
+  const denied = await req(handle, 'POST', '/api/plugins/com.nope/sql', {
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
+  });
+  expect(denied.status).toBe(403);
+
+  // Install it, and the same call is allowed.
+  await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ id: 'com.nope', name: 'N', version: '1', capabilities: { storage: true } }) });
+  const ok = await req(handle, 'POST', '/api/plugins/com.nope/sql', {
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
+  });
+  expect(ok.status).toBe(200);
+});
+
 test('admin can install an admin-gated package', async () => {
   // Grant the anonymous principal admin via config.
   const { handle } = await createServer({ admins: ['anonymous'] });

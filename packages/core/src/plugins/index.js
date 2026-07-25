@@ -28,11 +28,16 @@ export class PluginService {
    * @param {(principal:object)=>boolean} [deps.isAdmin]
    * @param {number} [deps.maxPackageBytes]
    */
-  constructor({ packages, installs, isAdmin, maxPackageBytes = 32 * 1024 * 1024 } = {}) {
+  constructor({ packages, installs, isAdmin, maxPackageBytes = 32 * 1024 * 1024, strict = false } = {}) {
     this.packages = packages;
     this.installs = installs;
     this._isAdmin = isAdmin || (() => false);
     this.maxPackageBytes = maxPackageBytes;
+    // strict = deny a plugin API call when there's no server install record. Off by
+    // default so plugins installed before server-installs existed keep working; a
+    // deployment flips it on (once its clients have re-uploaded) to fully close the
+    // "any client can name any pluginId" gap.
+    this.strict = strict;
   }
   async init() { await this.installs?.init?.(); }
 
@@ -105,7 +110,10 @@ export class PluginService {
    */
   async assertCapability(principal, pluginId, cap) {
     const r = await this.installs.get(accountOf(principal), pluginId);
-    if (!r) return; // transitional allow
+    if (!r) {
+      if (this.strict) throw TroveError.forbidden(`Plugin "${pluginId}" is not installed on this account`);
+      return; // transitional allow
+    }
     if (!r.grants.includes(cap)) {
       throw TroveError.forbidden(`Plugin "${pluginId}" was not granted the "${cap}" capability`);
     }

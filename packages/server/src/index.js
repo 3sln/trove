@@ -187,6 +187,7 @@ export async function createServer(config = {}) {
     installs: new SqlitePluginInstallStore({ provider: sqliteProvider }),
     isAdmin: (principal) => (collections ? collections.isAdmin(principal) : !!principal),
     maxPackageBytes: config.maxUploadBytes ?? undefined,
+    strict: config.enforcePluginCaps === true,
   });
   await plugins.init();
 
@@ -359,6 +360,11 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
 
   // Per-file upload quota (bytes). Unbounded unless set.
   if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);
+
+  // Deny plugin API calls with no server install record (fully closes the "any client
+  // can name any pluginId" gap). Off by default for back-compat with pre-existing
+  // local-only installs; flip on once clients have re-uploaded their account plugins.
+  if (env.TROVE_ENFORCE_PLUGIN_CAPS === 'true') config.enforcePluginCaps = true;
 
   // Plugin package blob store: defaults to the primary storage backend (prefixed).
   // Point it at a separate bucket/root with TROVE_PACKAGE_STORE (+ its own settings).
