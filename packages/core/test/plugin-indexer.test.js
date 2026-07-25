@@ -9,7 +9,7 @@ import {
   PluginService, StoragePackageStore, MemoryPluginInstallStore, PluginIndexers,
   InProcessIndexerRuntime, clampContribution, matchFromSelector,
 } from '../src/index.js';
-import { ROOT_ID } from '../src/metadata/memory.js';
+
 
 // An indexer that turns a .demo file into tags + metadata + one semantic chunk.
 const INDEXER_SRC = `export default async (node, ctx) => {
@@ -60,7 +60,7 @@ async function harness() {
 const principal = { id: 'user1' };
 
 async function write(vfs, name, text) {
-  return vfs.writeFile(ROOT_ID, name, strToU8(text), { contentType: 'application/octet-stream' });
+  return vfs.writeFile(name, strToU8(text), { contentType: 'application/octet-stream' });
 }
 
 test('installed indexer auto-runs on upload and namespaces its contribution', async () => {
@@ -153,15 +153,14 @@ test('clampContribution enforces the output caps', () => {
 
 test('matchFromSelector matches by extension and mime (exact + prefix)', () => {
   const byExt = matchFromSelector({ ext: ['.pdf', 'epub'] });
-  expect(byExt({ kind: 'file', name: 'a.pdf' })).toBe(true);
-  expect(byExt({ kind: 'file', name: 'a.epub' })).toBe(true);
-  expect(byExt({ kind: 'file', name: 'a.txt' })).toBe(false);
-  expect(byExt({ kind: 'folder', name: 'a.pdf' })).toBe(false);
+  expect(byExt({ name: 'a.pdf' })).toBe(true);
+  expect(byExt({ name: 'a.epub' })).toBe(true);
+  expect(byExt({ name: 'a.txt' })).toBe(false);
 
   const byMime = matchFromSelector({ mime: ['application/pdf', 'image/*'] });
-  expect(byMime({ kind: 'file', name: 'x', contentType: 'application/pdf' })).toBe(true);
-  expect(byMime({ kind: 'file', name: 'x', contentType: 'image/png' })).toBe(true);
-  expect(byMime({ kind: 'file', name: 'x', contentType: 'text/plain' })).toBe(false);
+  expect(byMime({ name: 'x', contentType: 'application/pdf' })).toBe(true);
+  expect(byMime({ name: 'x', contentType: 'image/png' })).toBe(true);
+  expect(byMime({ name: 'x', contentType: 'text/plain' })).toBe(false);
 
-  expect(matchFromSelector({})({ kind: 'file', name: 'x.pdf' })).toBe(false); // no selector → matches nothing
+  expect(matchFromSelector({})({ name: 'x.pdf' })).toBe(false); // no selector → matches nothing
 });

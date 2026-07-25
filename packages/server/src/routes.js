@@ -85,11 +85,10 @@ function assertPublicHost(hostname) {
   if (h.includes(':')) throw TroveError.invalid('Refusing to fetch from an IP literal');
 }
 
-// Accept either ?path=/x or ?id=... ; body may carry parentId or parentPath.
-async function resolveParent(vfs, src) {
-  if (src.parentId) return src.parentId;
-  if (src.parentPath) return (await vfs.stat(src.parentPath)).id;
-  return 'root';
+// Which collection a request targets. There is no folder to infer one from any more,
+// so it's named explicitly or it's the default.
+function collectionOf(src) {
+  return src?.collection || src?.collectionId || 'default';
 }
 
 export function createRouter() {
@@ -173,42 +172,40 @@ export function createRouter() {
 
   // --- browse ----------------------------------------------------------------
 
+  // Every item in a collection. There is nothing to descend into — a drive is browsed
+  // by search and by following links, and this is the "show me everything" fallback.
   r.get('/api/fs/list', async (ctx) => {
     const { vfs, query } = ctx;
-    const pathOrId = query.id || query.path || '/';
-    const node = await vfs.stat(pathOrId, query.collection);
-    await assertCap(ctx, node.collectionId, 'read');
-    const { items, nextCursor } = await vfs.list(node.id, {
+    const collectionId = collectionOf(query);
+    await assertCap(ctx, collectionId, 'read');
+    const { items, nextCursor } = await vfs.list(collectionId, {
       sort: query.sort, order: query.order,
       limit: clampLimit(query.limit, 500),
       cursor: query.cursor,
     });
-    const breadcrumb = await vfs.breadcrumb(node.id);
-    return { node, items, nextCursor, breadcrumb, collectionId: node.collectionId };
+    return { items, nextCursor, collectionId };
   });
 
+  // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.
   r.get('/api/fs/stat', async (ctx) => {
-    const node = await ctx.vfs.stat(ctx.query.id || ctx.query.path, ctx.query.collection);
+    const { query } = ctx;
+    const ref = query.id || query.uri || query.name;
+    if (!ref) throw TroveError.invalid('id, name or uri is required');
+    const node = await ctx.vfs.stat(ref, collectionOf(query));
     await assertCap(ctx, node.collectionId, 'read');
-    return { node, breadcrumb: await ctx.vfs.breadcrumb(node.id) };
+    return { node };
   });
 
-  r.post('/api/fs/folder', async (ctx) => {
-    const b = await body(ctx.req);
-    if (!b.name) throw TroveError.invalid('name is required');
-    const parent = await ctx.vfs.stat(await resolveParent(ctx.vfs, b), b.collection);
-    await assertCap(ctx, parent.collectionId, 'write');
-    return { node: await ctx.vfs.mkdir(parent.id, b.name) };
-  });
-
-  r.post('/api/fs/move', async (ctx) => {
-    const b = await body(ctx.req);
-    if (!b.id) throw TroveError.invalid('id is required');
-    const node = await ctx.vfs.stat(b.id);
-    await assertCap(ctx, node.collectionId, 'write');
-    const destParentId = b.destParentId || (b.destParentPath ? (await ctx.vfs.stat(b.destParentPath, b.collection)).id : undefined);
-    if (!destParentId) throw TroveError.invalid('destParentId is required');
-    return { node: await ctx.vfs.move(b.id, destParentId, b.newName) };
+  // What links to this item — the inverse of the links its own content declares, and
+  // what replaces "which folder is it in?".
+  r.get('/api/fs/backlinks', async (ctx) => {
+    const node = await nodeWithCap(ctx, ctx.query.id, 'read');
+    const items = await ctx.vfs.backlinks(node.id, { limit: clampLimit(ctx.query.limit, 100) });
+    const readable = [];
+    for (const item of items) {
+      if (await canRead(ctx, item.collectionId)) readable.push(item);
+    }
+    return { items: readable };
   });
 
   r.post('/api/fs/rename', async (ctx) => {
@@ -224,7 +221,7 @@ export function createRouter() {
     if (!b.id) throw TroveError.invalid('id is required');
     const node = await ctx.vfs.stat(b.id);
     await assertCap(ctx, node.collectionId, 'delete');
-    return ctx.vfs.remove(b.id, { recursive: b.recursive !== false });
+    return ctx.vfs.remove(b.id);
   });
 
   // --- download (presign redirect or range-aware proxy) ----------------------
@@ -269,10 +266,11 @@ export function createRouter() {
   r.post('/api/uploads', async (ctx) => {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    const parent = await ctx.vfs.stat(await resolveParent(ctx.vfs, b), b.collection);
-    await assertCap(ctx, parent.collectionId, 'write');
+    const collectionId = collectionOf(b);
+    await assertCap(ctx, collectionId, 'write');
     const plan = await ctx.vfs.createUpload({
-      parentId: parent.id, name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
+      collectionId, name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
+      overwrite: b.overwrite === true,
     });
     return uploadDescriptor(plan);
   });
@@ -651,6 +649,17 @@ function uploadDescriptor(plan) {
 async function assertCap(ctx, collectionId, capability) {
   if (!ctx.collections) return; // collections disabled → no per-collection ACL
   await ctx.collections.assert(ctx.principal, collectionId, capability);
+}
+// Same check as a boolean, for filtering a result set the caller may only partly see
+// (backlinks can cross collections — you must not learn that an item exists in one you
+// can't read just because something you can read points at it).
+async function canRead(ctx, collectionId) {
+  try {
+    await assertCap(ctx, collectionId, 'read');
+    return true;
+  } catch {
+    return false;
+  }
 }
 // Stat a node and enforce a capability on its collection in one step — the single
 // most repeated shape across the mutating routes.

@@ -16,8 +16,8 @@ async function jsonReq(handle, method, path, body) {
 }
 
 async function seed(vfs) {
-  await vfs.writeFile('root', 'dune.txt', 'Dune: desert planet Arrakis, spice, sandworms.', { contentType: 'text/plain' });
-  const fav = await vfs.writeFile('root', 'beach.txt', 'A sunny day at the beach with friends.', { contentType: 'text/plain' });
+  await vfs.writeFile('dune.txt', 'Dune: desert planet Arrakis, spice, sandworms.', { contentType: 'text/plain' });
+  const fav = await vfs.writeFile('beach.txt', 'A sunny day at the beach with friends.', { contentType: 'text/plain' });
   await vfs.metadata.setContribution(fav.id, 'user', { tags: { fav: 'yes' } });
 }
 

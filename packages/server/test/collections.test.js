@@ -24,12 +24,26 @@ async function api(handle, method, path, { token, body } = {}) {
   return { status: res.status, json: text ? JSON.parse(text) : null };
 }
 
+// Put an item into a collection THROUGH THE API, so the capability checks that gate a
+// real write are the ones exercised. Returns the created node (or the failing status).
+async function writeInto(handle, collection, token, name, content = 'x') {
+  const start = await api(handle, 'POST', '/api/uploads', {
+    token, body: { collection, name, size: content.length, contentType: 'text/plain' },
+  });
+  if (start.status !== 200) return { status: start.status };
+  await handle(new Request(`http://t${start.json.transfer.partUrl.replace('{partNumber}', '1')}`, {
+    method: 'PUT', headers: token ? { authorization: `Bearer ${token}` } : {}, body: content,
+  }));
+  const done = await api(handle, 'POST', start.json.endpoints.complete, { token, body: {} });
+  return { status: done.status, ...(done.json?.node || {}) };
+}
+
 test('default collection is open in zero-config', async () => {
   const { handle } = await createServer();
   const cols = await api(handle, 'GET', '/api/collections');
   expect(cols.json.collections[0].id).toBe('default');
-  // anonymous can create a folder in the default (open) collection
-  const f = await api(handle, 'POST', '/api/fs/folder', { body: { parentId: 'root', name: 'x' } });
+  // anonymous can list (and write to) the default (open) collection
+  const f = await api(handle, 'GET', '/api/fs/list');
   expect(f.status).toBe(200);
 });
 
@@ -66,31 +80,33 @@ test('collections isolate data and enforce read/write/delete', async () => {
   const created = await api(handle, 'POST', '/api/collections', { token: boss, body: { name: 'Vault', store: { driver: 'memory' } } });
   const cid = created.json.collection.id;
 
-  // Write a file into the new collection (its own memory store).
-  const root = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: boss });
-  expect(root.status).toBe(200);
-  const rootId = root.json.node.id;
-  expect(rootId).not.toBe('root'); // a distinct collection root
+  // The new collection is its own namespace, initially empty.
+  const listed = await api(handle, 'GET', `/api/fs/list?collection=${cid}`, { token: boss });
+  expect(listed.status).toBe(200);
+  expect(listed.json.items).toEqual([]);
+  expect(listed.json.collectionId).toBe(cid);
 
-  const folder = await api(handle, 'POST', '/api/fs/folder', { token: boss, body: { parentId: rootId, name: 'secret' } });
-  expect(folder.status).toBe(200);
-  expect(folder.json.node.collectionId).toBe(cid);
+  const secret = await writeInto(handle, cid, boss, 'secret.txt');
+  expect(secret.status).toBe(200);
+  expect(secret.collectionId).toBe(cid);
 
-  // The default collection does NOT see it.
-  const defaultList = await api(handle, 'GET', '/api/fs/list?path=/', { token: boss });
-  expect(defaultList.json.items.some((i) => i.name === 'secret')).toBe(false);
+  // The default collection does NOT see it — collections are separate namespaces, so
+  // the same name can exist in both without colliding.
+  const defaultList = await api(handle, 'GET', '/api/fs/list', { token: boss });
+  expect(defaultList.json.items.some((i) => i.name === 'secret.txt')).toBe(false);
+  expect((await writeInto(handle, 'default', boss, 'secret.txt')).status).toBe(200);
 
   // A reader with no grant can't even read the new collection.
-  const noAccess = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: reader });
+  const noAccess = await api(handle, 'GET', `/api/fs/list?collection=${cid}`, { token: reader });
   expect(noAccess.status).toBe(403);
 
   // Grant the reader read-only, then they can list but not write or delete.
   await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
-  const canRead = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: reader });
+  const canRead = await api(handle, 'GET', `/api/fs/list?collection=${cid}`, { token: reader });
   expect(canRead.status).toBe(200);
-  const cantWrite = await api(handle, 'POST', '/api/fs/folder', { token: reader, body: { parentId: rootId, name: 'nope' } });
-  expect(cantWrite.status).toBe(403);
-  const cantDelete = await api(handle, 'POST', '/api/fs/delete', { token: reader, body: { id: folder.json.node.id } });
+  expect(canRead.json.items.map((i) => i.name)).toEqual(['secret.txt']);
+  expect((await writeInto(handle, cid, reader, 'nope.txt')).status).toBe(403);
+  const cantDelete = await api(handle, 'POST', '/api/fs/delete', { token: reader, body: { id: secret.id } });
   expect(cantDelete.status).toBe(403);
 });
 
@@ -100,11 +116,10 @@ test('upload lifecycle routes re-check write on the session collection', async (
   const reader = await mint({ sub: 'reader' });
   const created = await api(handle, 'POST', '/api/collections', { token: boss, body: { name: 'Vault', store: { driver: 'memory' } } });
   const cid = created.json.collection.id;
-  const root = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: boss });
   await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
 
   // Boss starts an upload into the vault.
-  const start = await api(handle, 'POST', '/api/uploads', { token: boss, body: { parentId: root.json.node.id, name: 'f.bin', size: 4, contentType: 'application/octet-stream' } });
+  const start = await api(handle, 'POST', '/api/uploads', { token: boss, body: { collection: cid, name: 'f.bin', size: 4, contentType: 'application/octet-stream' } });
   const uploadId = start.json.uploadId;
 
   // A read-only principal can't inspect, drive, complete, or abort someone's upload.
@@ -121,9 +136,8 @@ test('a read-only user cannot add OR remove tags (tag DELETE is write-gated)', a
   const reader = await mint({ sub: 'reader' });
   const created = await api(handle, 'POST', '/api/collections', { token: boss, body: { name: 'Vault', store: { driver: 'memory' } } });
   const cid = created.json.collection.id;
-  const root = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: boss });
-  const file = await api(handle, 'POST', '/api/fs/folder', { token: boss, body: { parentId: root.json.node.id, name: 'doc' } });
-  const id = file.json.node.id;
+  const file = await writeInto(handle, cid, boss, 'doc.txt');
+  const id = file.id;
   // Boss tags it.
   const tagged = await api(handle, 'POST', `/api/files/${id}/tags`, { token: boss, body: { name: 'fav', value: 'yes' } });
   expect(tagged.status).toBe(200);

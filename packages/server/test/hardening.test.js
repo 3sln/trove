@@ -6,7 +6,7 @@ import { test, expect } from 'bun:test';
 import { createServer } from '../src/index.js';
 
 async function seed(vfs, name, bytes, contentType) {
-  return vfs.writeFile('root', name, new Uint8Array(bytes), { contentType });
+  return vfs.writeFile(name, new Uint8Array(bytes), { contentType });
 }
 
 test('download forces attachment + nosniff for non-inline-safe types (HTML/SVG)', async () => {
@@ -27,9 +27,9 @@ test('download stays inline for safe media types (images)', async () => {
 test('oversized JSON body is rejected', async () => {
   const { handle } = await createServer();
   const big = 'a'.repeat(4 * 1024 * 1024 + 32); // just over the 4 MiB default cap
-  const res = await handle(new Request('http://t/api/fs/folder', {
+  const res = await handle(new Request('http://t/api/fs/rename', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: big }),
+    body: JSON.stringify({ id: 'x', newName: big }),
   }));
   expect(res.status).toBe(400);
 });
@@ -61,8 +61,8 @@ test('readiness probe reports ok when the store answers', async () => {
 
 test('list limit is clamped (no error on an absurd limit)', async () => {
   const { handle, vfs } = await createServer();
-  await vfs.mkdir('root', 'a');
-  const res = await handle(new Request('http://t/api/fs/list?id=root&limit=99999999'));
+  await vfs.writeFile('a.txt', 'x', { contentType: 'text/plain' });
+  const res = await handle(new Request('http://t/api/fs/list?limit=99999999'));
   expect(res.status).toBe(200);
   expect(Array.isArray((await res.json()).items)).toBe(true);
 });

@@ -1,74 +1,49 @@
-// In-memory MetadataStore. Reference implementation + test double. Keeps nodes
-// in a Map keyed by id, with secondary indexes for (collectionId,path) and
-// (parentId,name). Every node belongs to a collection; each collection has its
-// own root, so paths are unique per collection, not globally.
+// In-memory MetadataStore. Reference implementation + test double. Nodes live in a
+// Map keyed by id, with one secondary index on (collectionId, name) — which is the
+// whole shape of the namespace now that there is no hierarchy: a collection is a flat
+// set of uniquely-named items, and structure comes from `trove:` links between them.
 
-import { MetadataStore, MERGED_TAGS, mergeContributionTags, splitContributions, applyContribution, rawFacetsFromNode } from './interface.js';
+import {
+  MetadataStore, MERGED_TAGS, LINKS_CONTRIBUTOR, LINKS_KEY,
+  mergeContributionTags, splitContributions, applyContribution, rawFacetsFromNode,
+} from './interface.js';
 import { TroveError } from '../errors.js';
-import { newId, joinPath, normalizePath } from '../util.js';
-
-const ROOT_ID = 'root';
-export function rootId(collectionId = 'default') {
-  return collectionId === 'default' ? ROOT_ID : `root_${collectionId}`;
-}
+import { newId } from '../util.js';
 
 export class MemoryStore extends MetadataStore {
   constructor() {
     super();
     this.nodes = new Map(); // id -> node
-    this.byPath = new Map(); // `${collectionId}\0${path}` -> id
-    this.childKey = new Map(); // `${parentId}\0${name}` -> id
+    this.byName = new Map(); // `${collectionId}\0${name}` -> id
   }
 
-  async init() {
-    await this.ensureRoot('default');
-  }
+  async init() {}
 
-  async ensureRoot(collectionId) {
-    const id = rootId(collectionId);
-    if (!this.nodes.has(id)) {
-      const now = Date.now();
-      this.#index({
-        id, collectionId, parentId: null, name: '', path: '/', kind: 'folder',
-        size: 0, contentType: null, storageKey: null, etag: null,
-        createdAt: now, updatedAt: now, meta: {}, facets: {},
-      });
-    }
-    return clone(this.nodes.get(id));
+  #key(collectionId, name) {
+    return `${collectionId}\0${name}`;
   }
-
   #index(node) {
     this.nodes.set(node.id, node);
-    this.byPath.set(`${node.collectionId}\0${node.path}`, node.id);
-    if (node.parentId) this.childKey.set(`${node.parentId}\0${node.name}`, node.id);
+    this.byName.set(this.#key(node.collectionId, node.name), node.id);
   }
   #deindex(node) {
     this.nodes.delete(node.id);
-    this.byPath.delete(`${node.collectionId}\0${node.path}`);
-    if (node.parentId) this.childKey.delete(`${node.parentId}\0${node.name}`);
+    this.byName.delete(this.#key(node.collectionId, node.name));
   }
 
   async getById(id) {
     return clone(this.nodes.get(id));
   }
-  async getByPath(collectionId, path) {
-    // Back-compat: getByPath(path) → default collection.
-    if (path === undefined) {
-      path = collectionId;
-      collectionId = 'default';
-    }
-    const id = this.byPath.get(`${collectionId}\0${normalizePath(path)}`);
+  async getByName(collectionId = 'default', name) {
+    const id = this.byName.get(this.#key(collectionId, name));
     return id ? clone(this.nodes.get(id)) : null;
   }
 
-  async listChildren(parentId, opts = {}) {
-    const parent = this.nodes.get(parentId);
-    if (!parent) throw TroveError.notFound('Folder');
-    let items = [...this.nodes.values()].filter((n) => n.parentId === parentId);
+  async listItems(collectionId = 'default', opts = {}) {
+    const items = [...this.nodes.values()].filter((n) => n.collectionId === collectionId);
     const sort = opts.sort ?? 'name';
     const dir = opts.order === 'desc' ? -1 : 1;
     items.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
       const av = a[sort], bv = b[sort];
       if (av < bv) return -1 * dir;
       if (av > bv) return 1 * dir;
@@ -77,23 +52,17 @@ export class MemoryStore extends MetadataStore {
     const limit = opts.limit ?? 500;
     const offset = opts.cursor ? Number(opts.cursor) : 0;
     const page = items.slice(offset, offset + limit);
-    const nextCursor = offset + limit < items.length ? String(offset + limit) : null;
-    return { items: page.map(clone), nextCursor };
+    return { items: page.map(clone), nextCursor: offset + limit < items.length ? String(offset + limit) : null };
   }
 
   async create(node) {
-    const parent = node.parentId ? this.nodes.get(node.parentId) : null;
-    if (node.parentId && !parent) throw TroveError.notFound('Parent folder');
-    if (parent && parent.kind !== 'folder') throw TroveError.invalid('Parent is not a folder');
-    const collectionId = parent ? parent.collectionId : node.collectionId || 'default';
-    const path = parent ? joinPath(parent.path, node.name) : normalizePath('/' + node.name);
-    if (this.childKey.has(`${node.parentId}\0${node.name}`)) {
-      throw TroveError.alreadyExists(node.name);
-    }
+    const collectionId = node.collectionId || 'default';
+    if (!node.name) throw TroveError.invalid('An item needs a name');
+    if (this.byName.has(this.#key(collectionId, node.name))) throw TroveError.alreadyExists(node.name);
     const now = Date.now();
     const full = {
-      id: node.id || newId(node.kind === 'folder' ? 'fld' : 'fil'),
-      collectionId, parentId: node.parentId, name: node.name, path, kind: node.kind,
+      id: node.id || newId('itm'),
+      collectionId, name: node.name,
       size: node.size ?? 0, contentType: node.contentType ?? null,
       storageKey: node.storageKey ?? null, etag: node.etag ?? null,
       createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: rawFacetsFromNode(node),
@@ -104,7 +73,7 @@ export class MemoryStore extends MetadataStore {
 
   async update(id, patch) {
     const node = this.nodes.get(id);
-    if (!node) throw TroveError.notFound('Node');
+    if (!node) throw TroveError.notFound('Item');
     for (const k of ['size', 'contentType', 'storageKey', 'etag', 'meta']) {
       if (k in patch) node[k] = patch[k];
     }
@@ -118,49 +87,22 @@ export class MemoryStore extends MetadataStore {
     this.#deindex(node);
   }
 
-  async descendants(id) {
-    const out = [];
-    const stack = [...this.nodes.values()].filter((n) => n.parentId === id);
-    while (stack.length) {
-      const n = stack.pop();
-      out.push(clone(n));
-      if (n.kind === 'folder') {
-        stack.push(...[...this.nodes.values()].filter((c) => c.parentId === n.id));
-      }
-    }
-    return out;
-  }
-
-  async move(id, newParentId, newName) {
+  async rename(id, newName) {
     const node = this.nodes.get(id);
-    if (!node) throw TroveError.notFound('Node');
-    const parent = this.nodes.get(newParentId);
-    if (!parent) throw TroveError.notFound('Destination folder');
-    if (parent.kind !== 'folder') throw TroveError.invalid('Destination is not a folder');
-    if (parent.collectionId !== node.collectionId) throw TroveError.invalid('Cannot move across collections');
-    const name = newName || node.name;
-    if (this.childKey.has(`${newParentId}\0${name}`)) throw TroveError.alreadyExists(name);
-
-    const subtree = await this.descendants(id);
+    if (!node) throw TroveError.notFound('Item');
+    if (!newName) throw TroveError.invalid('An item needs a name');
+    if (newName === node.name) return clone(node);
+    if (this.byName.has(this.#key(node.collectionId, newName))) throw TroveError.alreadyExists(newName);
     this.#deindex(node);
-    node.parentId = newParentId;
-    node.name = name;
-    const oldPath = node.path;
-    node.path = joinPath(parent.path, name);
+    node.name = newName;
     node.updatedAt = Date.now();
     this.#index(node);
-    for (const raw of subtree) {
-      const d = this.nodes.get(raw.id);
-      this.byPath.delete(`${d.collectionId}\0${d.path}`);
-      d.path = node.path + d.path.slice(oldPath.length);
-      this.byPath.set(`${d.collectionId}\0${d.path}`, d.id);
-    }
     return clone(node);
   }
 
   async setContribution(id, contributorId, contribution) {
     const node = this.nodes.get(id);
-    if (!node) throw TroveError.notFound('Node');
+    if (!node) throw TroveError.notFound('Item');
     node.facets = applyContribution(node.facets, contributorId, contribution);
     node.updatedAt = Date.now();
     return clone(node);
@@ -174,17 +116,15 @@ export class MemoryStore extends MetadataStore {
 
   async searchByName(query, opts = {}) {
     const q = query.toLowerCase();
-    const items = [...this.nodes.values()]
-      .filter((n) => n.parentId !== null && n.name.toLowerCase().includes(q))
+    return [...this.nodes.values()]
+      .filter((n) => n.name.toLowerCase().includes(q))
       .filter((n) => !opts.collectionId || n.collectionId === opts.collectionId)
-      .slice(0, opts.limit ?? 50);
-    return items.map(clone);
+      .slice(0, opts.limit ?? 50)
+      .map(clone);
   }
 
   async listFiles({ afterId = null, limit = 200 } = {}) {
-    const files = [...this.nodes.values()]
-      .filter((n) => n.kind === 'file')
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const files = [...this.nodes.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const start = afterId ? files.findIndex((n) => n.id > afterId) : 0;
     const from = start === -1 ? files.length : start;
     return files.slice(from, from + limit).map(clone);
@@ -194,10 +134,22 @@ export class MemoryStore extends MetadataStore {
     const q = opts.q ? opts.q.toLowerCase() : null;
     const out = [];
     for (const node of this.nodes.values()) {
-      if (node.parentId === null) continue;
       if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
       if (q && !node.name.toLowerCase().includes(q)) continue;
       if (matchTags(node, filters)) out.push(node);
+    }
+    out.sort((a, b) => b.updatedAt - a.updatedAt);
+    return out.slice(0, opts.limit ?? 100).map(clone);
+  }
+
+  async findLinksTo(uris = [], opts = {}) {
+    if (!uris.length) return [];
+    const want = new Set(uris);
+    const out = [];
+    for (const node of this.nodes.values()) {
+      if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
+      const links = node.facets?.[LINKS_CONTRIBUTOR]?.metadata?.[LINKS_KEY];
+      if (Array.isArray(links) && links.some((l) => want.has(l))) out.push(node);
     }
     out.sort((a, b) => b.updatedAt - a.updatedAt);
     return out.slice(0, opts.limit ?? 100).map(clone);
@@ -239,5 +191,3 @@ function matchTags(node, filters) {
     }
   });
 }
-
-export { ROOT_ID };

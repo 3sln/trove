@@ -67,7 +67,6 @@ export class IndexingCoordinator {
   /** Index a freshly written/uploaded node: its name (for keyword search) + every
    *  matching indexer's contribution. */
   async indexNode(node) {
-    if (node.kind !== 'file') return;
     if (this.search) await this.search.indexName(node);
     const matching = this.indexers.matching(node);
     if (!matching.length) return;
@@ -80,7 +79,7 @@ export class IndexingCoordinator {
   #indexCtx(node, storage) {
     const readRange = () => storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
     return {
-      node: { id: node.id, name: node.name, path: node.path, size: node.size, contentType: node.contentType },
+      node: { id: node.id, name: node.name, collectionId: node.collectionId, size: node.size, contentType: node.contentType },
       maxBytes: this.maxIndexBytes,
       readBytes: async () => readAll((await readRange()).stream),
       readText: async () => new TextDecoder().decode(await readAll((await readRange()).stream)),
@@ -102,7 +101,7 @@ export class IndexingCoordinator {
       const contribution = await indexer.index(node, ctx ?? this.#indexCtx(node, await this.storageFor(node.collectionId)));
       await this.#applyContribution(node.id, indexer.id, contribution);
     } catch (err) {
-      console.error(`indexer ${indexer.id} failed on ${node.path}:`, err.message);
+      console.error(`indexer ${indexer.id} failed on ${node.name}:`, err.message);
     }
   }
 

@@ -57,28 +57,45 @@ test('drop() destroys a key\'s database', async () => {
   expect(hasTable).toBe(false);
 });
 
-test('SqliteStore over the provider: create, list, move rewrites descendant paths', async () => {
+test('SqliteStore over the provider: create, list by collection, rename', async () => {
   const store = new SqliteStore({ provider: provider(), key: 'metadata' });
   await store.init();
-  const a = await store.create({ parentId: 'root', name: 'A', kind: 'folder' });
-  const sub = await store.create({ parentId: a.id, name: 'sub', kind: 'folder' });
-  const x = await store.create({ parentId: sub.id, name: 'x.txt', kind: 'file' });
-  const t = await store.create({ parentId: 'root', name: 'T', kind: 'folder' });
-  expect(x.path).toBe('/A/sub/x.txt');
+  const x = await store.create({ name: 'x.txt' });
+  await store.create({ name: 'a.txt' });
+  await store.create({ collectionId: 'other', name: 'x.txt' }); // same name, other collection
 
-  await store.move(a.id, t.id);
-  expect((await store.getById(a.id)).path).toBe('/T/A');
-  expect((await store.getById(x.id)).path).toBe('/T/A/sub/x.txt');
-  const kids = await store.listChildren(t.id);
-  expect(kids.items.map((n) => n.name)).toContain('A');
+  const listed = await store.listItems('default');
+  expect(listed.items.map((n) => n.name)).toEqual(['a.txt', 'x.txt']);
+  expect((await store.listItems('other')).items.map((n) => n.name)).toEqual(['x.txt']);
+
+  expect((await store.getByName('default', 'x.txt')).id).toBe(x.id);
+  const renamed = await store.rename(x.id, 'z.txt');
+  expect(renamed.name).toBe('z.txt');
+  expect(await store.getByName('default', 'x.txt')).toBe(null);
 });
 
-test('SqliteStore rejects duplicate names in a folder', async () => {
+test('SqliteStore findLinksTo answers backlinks from the links contribution', async () => {
   const store = new SqliteStore({ provider: provider() });
   await store.init();
-  await store.create({ parentId: 'root', name: 'dup', kind: 'folder' });
+  const target = await store.create({ name: 'target.md' });
+  const index = await store.create({ name: 'index.md' });
+  await store.create({ name: 'unrelated.md' });
+  await store.setContribution(index.id, 'core.links', {
+    metadata: { links: ['trove:default?name=target.md'] },
+  });
+
+  const hits = await store.findLinksTo(['trove:default?name=target.md', `trove:default?id=${target.id}`]);
+  expect(hits.map((n) => n.name)).toEqual(['index.md']);
+  expect(await store.findLinksTo(['trove:default?name=nobody.md'])).toEqual([]);
+  expect(await store.findLinksTo([])).toEqual([]);
+});
+
+test('SqliteStore rejects duplicate names in a collection', async () => {
+  const store = new SqliteStore({ provider: provider() });
+  await store.init();
+  await store.create({ name: 'dup' });
   let threw = false;
-  try { await store.create({ parentId: 'root', name: 'dup', kind: 'folder' }); } catch { threw = true; }
+  try { await store.create({ name: 'dup' }); } catch { threw = true; }
   expect(threw).toBe(true);
 });
 

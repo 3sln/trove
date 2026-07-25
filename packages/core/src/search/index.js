@@ -82,7 +82,7 @@ export class SearchService {
   /** Keep names/paths searchable regardless of content indexers. */
   async indexName(node) {
     await this.keywords.removeByNodeIndexer(node.id, 'core.name');
-    await this.keywords.add([{ id: `name:${node.id}`, nodeId: node.id, indexerId: 'core.name', text: node.name, fields: { name: node.name, path: node.path } }]);
+    await this.keywords.add([{ id: `name:${node.id}`, nodeId: node.id, indexerId: 'core.name', text: node.name, fields: { name: node.name, collectionId: node.collectionId } }]);
   }
 
   async removeNode(nodeId) {

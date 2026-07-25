@@ -10,9 +10,12 @@
 // This complements *plugin* indexers, which run in the browser sandbox and push
 // the same contribution shape through the API under their own namespace.
 //
-// A built-in text/markdown extractor is included as the reference indexer.
+// Two built-ins ship here: a text/markdown extractor (the reference indexer) and a
+// links extractor, which is what makes a drive with no folders navigable.
 
 import { extname } from '../util.js';
+import { extractTroveLinks } from '../links.js';
+import { LINKS_CONTRIBUTOR, LINKS_KEY } from '../metadata/interface.js';
 
 /**
  * @typedef {object} Indexer
@@ -41,7 +44,10 @@ export class IndexerRegistry {
   /** @param {{builtins?: boolean}} [opts] register the reference text indexer (default on) */
   constructor({ builtins = true } = {}) {
     this.indexers = new Map();
-    if (builtins) this.register(textIndexer);
+    if (builtins) {
+      this.register(textIndexer);
+      this.register(linksIndexer);
+    }
   }
   register(indexer) {
     if (!indexer?.id || typeof indexer.index !== 'function') {
@@ -76,14 +82,15 @@ const TEXT_EXTS = new Set([
   '.c', '.h', '.cpp', '.css', '.html', '.xml', '.sh',
 ]);
 
+function isTexty(node) {
+  if (node.contentType?.startsWith('text/')) return true;
+  return TEXT_EXTS.has(extname(node.name));
+}
+
 export const textIndexer = {
   id: 'core.text',
   displayName: 'Text & code',
-  match(node) {
-    if (node.kind !== 'file') return false;
-    if (node.contentType?.startsWith('text/')) return true;
-    return TEXT_EXTS.has(extname(node.name));
-  },
+  match: isTexty,
   async index(node, ctx) {
     const text = await ctx.readText();
     if (!text.trim()) return { semanticTexts: [] };
@@ -91,11 +98,36 @@ export const textIndexer = {
     const semanticTexts = chunks.map((chunk, i) => ({
       id: `${node.id}:${i}`,
       text: chunk,
-      fields: { name: node.name, path: node.path, chunk: i },
+      fields: { name: node.name, chunk: i },
     }));
     return {
       semanticTexts,
       metadata: { chars: text.length, chunks: chunks.length, excerpt: text.slice(0, 280) },
+    };
+  },
+};
+
+// --- Links indexer: what this item points at --------------------------------
+//
+// With no folder hierarchy, an item's place in the drive is defined by what links to
+// it. This indexer records the outbound `trove:` URIs found in an item's text, which
+// is what MetadataStore.findLinksTo reads to answer the inverse question — "what
+// gathers this up?" — for the backlinks panel.
+//
+// It stores the links as `metadata`, not `semanticTexts`: a URI is an edge, not prose,
+// and embedding it would only pollute semantic results. `links` is also surfaced as a
+// tag count so `#links > 0` finds the documents that act as indexes.
+
+export const linksIndexer = {
+  id: LINKS_CONTRIBUTOR,
+  displayName: 'Links',
+  match: isTexty,
+  async index(node, ctx) {
+    const text = await ctx.readText();
+    const links = extractTroveLinks(text).map((l) => l.uri);
+    return {
+      metadata: { [LINKS_KEY]: links },
+      tags: { links: links.length },
     };
   },
 };

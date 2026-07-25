@@ -77,7 +77,7 @@ export function extname(name) {
  * without leading dot), `mime`/`contentType` (exact or a `type/*` prefix).
  */
 export function selectorMatches(selector, node) {
-  if (!selector || node?.kind !== 'file') return false;
+  if (!selector || !node) return false;
   if (typeof selector.match === 'function') {
     try { if (selector.match(node)) return true; } catch { /* ignore a bad matcher */ }
   }

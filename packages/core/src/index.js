@@ -4,6 +4,7 @@
 export { TroveError, ErrorCode, wrapError, isRetryable } from './errors.js';
 export { withRetry, withTimeout } from './retry.js';
 export * from './util.js';
+export * from './links.js';
 
 export { StorageBackend } from './storage/interface.js';
 export { MemoryStorage } from './storage/memory.js';
@@ -12,7 +13,7 @@ export { S3Storage } from './storage/s3.js';
 export { PrefixedStorage } from './storage/prefixed.js';
 
 export { MetadataStore } from './metadata/interface.js';
-export { MemoryStore, ROOT_ID, rootId } from './metadata/memory.js';
+export { MemoryStore } from './metadata/memory.js';
 export { SqliteStore } from './metadata/sqlite.js';
 
 export { CollectionService, CAPABILITIES } from './collections/index.js';

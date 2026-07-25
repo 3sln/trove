@@ -40,7 +40,7 @@ test('JWT identity + comment mention → recipient inbox', async () => {
     identity: { driver: 'jwt', jwt: { secret: SECRET, now: NOW, algorithms: ['HS256'] } },
     startFlusher: false, // we flush manually for determinism
   });
-  const file = await vfs.writeFile('root', 'design.md', '# Design', { contentType: 'text/markdown' });
+  const file = await vfs.writeFile('design.md', '# Design', { contentType: 'text/markdown' });
 
   const aliceToken = await mint({ sub: 'alice', name: 'Alice', email: 'alice@x.io' });
   const bobToken = await mint({ sub: 'bob', name: 'Bob' });
@@ -77,7 +77,7 @@ test('JWT identity + comment mention → recipient inbox', async () => {
 
 test('tags round-trip through the API', async () => {
   const { handle, vfs } = await createServer();
-  const file = await vfs.writeFile('root', 'a.txt', 'hi', { contentType: 'text/plain' });
+  const file = await vfs.writeFile('a.txt', 'hi', { contentType: 'text/plain' });
   await req(handle, 'POST', `/api/files/${file.id}/tags`, { body: { name: 'starred' } });
   await req(handle, 'POST', `/api/files/${file.id}/tags`, { body: { name: 'priority', value: 'high' } });
   const view = await req(handle, 'GET', `/api/files/${file.id}/sidecar`);

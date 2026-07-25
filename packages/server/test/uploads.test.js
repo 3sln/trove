@@ -15,7 +15,7 @@ async function jsonReq(handle, method, path, body) {
 
 test('upload create returns a self-describing descriptor', async () => {
   const { handle } = await createServer(); // memory storage → proxied transfer
-  const r = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'big.bin', size: 20 * 1024 * 1024, contentType: 'application/octet-stream' });
+  const r = await jsonReq(handle, 'POST', '/api/uploads', { name: 'big.bin', size: 20 * 1024 * 1024, contentType: 'application/octet-stream' });
   const d = r.json;
   expect(d.uploadId).toBeTruthy();
   expect(typeof d.multipart).toBe('boolean');
@@ -40,7 +40,7 @@ test('upload create returns a self-describing descriptor', async () => {
 
 test('a full proxied upload drives entirely off the descriptor', async () => {
   const { handle } = await createServer();
-  const create = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'note.txt', size: 5, contentType: 'text/plain' });
+  const create = await jsonReq(handle, 'POST', '/api/uploads', { name: 'note.txt', size: 5, contentType: 'text/plain' });
   const d = create.json;
   const put = await handle(new Request(`http://t${d.transfer.partUrl.replace('{partNumber}', '1')}`, { method: 'PUT', body: 'hello' }));
   expect(put.status).toBe(200);
@@ -51,9 +51,9 @@ test('a full proxied upload drives entirely off the descriptor', async () => {
 
 test('an upload onto an existing name is disambiguated, not overwritten', async () => {
   const { handle, vfs } = await createServer();
-  const original = await vfs.writeFile('root', 'note.txt', 'ORIGINAL', { contentType: 'text/plain' });
+  const original = await vfs.writeFile('note.txt', 'ORIGINAL', { contentType: 'text/plain' });
 
-  const create = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'note.txt', size: 3, contentType: 'text/plain' });
+  const create = await jsonReq(handle, 'POST', '/api/uploads', { name: 'note.txt', size: 3, contentType: 'text/plain' });
   const d = create.json;
   await handle(new Request(`http://t${d.transfer.partUrl.replace('{partNumber}', '1')}`, { method: 'PUT', body: 'new' }));
   const done = await jsonReq(handle, 'POST', d.endpoints.complete, {});
@@ -70,9 +70,9 @@ test('an upload onto an existing name is disambiguated, not overwritten', async 
 
 test('per-file quota is enforced at create time', async () => {
   const { handle } = await createServer({ maxUploadBytes: 1024 });
-  const ok = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'small', size: 512 });
+  const ok = await jsonReq(handle, 'POST', '/api/uploads', { name: 'small', size: 512 });
   expect(ok.status).toBe(200);
-  const tooBig = await jsonReq(handle, 'POST', '/api/uploads', { parentId: 'root', name: 'huge', size: 4096 });
+  const tooBig = await jsonReq(handle, 'POST', '/api/uploads', { name: 'huge', size: 4096 });
   expect(tooBig.status).toBe(429); // QUOTA
   expect(tooBig.json.error.code).toBe('quota');
   expect(tooBig.json.error.details.maxBytes).toBe(1024);

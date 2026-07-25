@@ -24,16 +24,13 @@ test('capabilities + health', async () => {
   expect(caps.json.features.semanticSearch).toBe(true);
 });
 
-test('folder + upload + download + range + search', async () => {
+test('upload + download + range + search', async () => {
   const { handle } = await createServer();
-
-  const folder = await jsonReq(handle, 'POST', '/api/fs/folder', { parentId: 'root', name: 'books' });
-  expect(folder.json.node.path).toBe('/books');
 
   const content = 'Dune is a science fiction novel about desert planet Arrakis and spice.';
   const size = new TextEncoder().encode(content).length;
   const plan = await jsonReq(handle, 'POST', '/api/uploads', {
-    parentId: folder.json.node.id, name: 'dune.txt', size, contentType: 'text/plain',
+    name: 'dune.txt', size, contentType: 'text/plain',
   });
   expect(plan.json.strategy).toBe('direct');
 
@@ -67,7 +64,7 @@ test('folder + upload + download + range + search', async () => {
 
 test('plugin indexer pushes namespaced docs', async () => {
   const { handle, vfs } = await createServer();
-  const file = await vfs.writeFile('root', 'photo.jpg', new Uint8Array([1, 2, 3]), { contentType: 'image/jpeg' });
+  const file = await vfs.writeFile('photo.jpg', new Uint8Array([1, 2, 3]), { contentType: 'image/jpeg' });
   const idx = await jsonReq(handle, 'POST', '/api/index/plugin.vision', {
     nodeId: file.id,
     documents: [{ text: 'a golden retriever puppy playing on green grass in a park' }],
@@ -102,36 +99,48 @@ test('plugin storage SQL: scoped round-trip + ATTACH rejected', async () => {
 
 test('adding a tag exposes it in the node\'s merged tags (filterable)', async () => {
   const { handle, vfs } = await createServer();
-  const folder = await vfs.mkdir('root', 'tagged');
-  const file = await vfs.writeFile(folder.id, 'x.txt', 'hi', { contentType: 'text/plain' });
+  const file = await vfs.writeFile('x.txt', 'hi', { contentType: 'text/plain' });
   await jsonReq(handle, 'POST', `/api/files/${file.id}/tags`, { name: 'fav', value: 'yes' });
-  const list = await jsonReq(handle, 'GET', `/api/fs/list?id=${folder.id}`);
+  const list = await jsonReq(handle, 'GET', '/api/fs/list');
   const row = list.json.items.find((n) => n.id === file.id);
   expect(row.tags.fav).toBe('yes'); // merged view
   expect(row.contributions.user.tags.fav).toBe('yes'); // namespaced under the 'user' scope
 
   await jsonReq(handle, 'DELETE', `/api/files/${file.id}/tags/fav`);
-  const after = await jsonReq(handle, 'GET', `/api/fs/list?id=${folder.id}`);
+  const after = await jsonReq(handle, 'GET', '/api/fs/list');
   expect(after.json.items.find((n) => n.id === file.id).tags.fav).toBeFalsy(); // removed reads as absent
 });
 
-test('move + rename relocate a node and update its path', async () => {
+test('an item resolves by id, by name, and by its trove: URI', async () => {
   const { handle, vfs } = await createServer();
-  const from = await jsonReq(handle, 'POST', '/api/fs/folder', { parentId: 'root', name: 'from' });
-  const to = await jsonReq(handle, 'POST', '/api/fs/folder', { parentId: 'root', name: 'to' });
-  const node = await vfs.writeFile(from.json.node.id, 'notes.txt', 'hello', { contentType: 'text/plain' });
-  expect(node.path).toBe('/from/notes.txt');
+  const node = await vfs.writeFile('notes.txt', 'hello', { contentType: 'text/plain' });
 
-  const moved = await jsonReq(handle, 'POST', '/api/fs/move', { id: node.id, destParentId: to.json.node.id });
-  expect(moved.status).toBe(200);
-  expect(moved.json.node.path).toBe('/to/notes.txt');
+  const byId = await jsonReq(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  expect(byId.json.node.name).toBe('notes.txt');
+  const byName = await jsonReq(handle, 'GET', '/api/fs/stat?name=notes.txt');
+  expect(byName.json.node.id).toBe(node.id);
+  const byUri = await jsonReq(handle, 'GET', `/api/fs/stat?uri=${encodeURIComponent('trove:default?name=notes.txt')}`);
+  expect(byUri.json.node.id).toBe(node.id);
+  // No selector at all is a bad request, not a silent listing.
+  expect((await jsonReq(handle, 'GET', '/api/fs/stat')).status).toBe(400);
 
   const renamed = await jsonReq(handle, 'POST', '/api/fs/rename', { id: node.id, newName: 'renamed.txt' });
-  expect(renamed.json.node.path).toBe('/to/renamed.txt');
+  expect(renamed.json.node.name).toBe('renamed.txt');
+  // The old name is free, and no longer resolves.
+  expect((await jsonReq(handle, 'GET', '/api/fs/stat?name=notes.txt')).status).toBe(404);
 
-  // The old location no longer lists it; the new one does.
-  const listFrom = await jsonReq(handle, 'GET', `/api/fs/list?id=${from.json.node.id}`);
-  expect(listFrom.json.items.length).toBe(0);
-  const listTo = await jsonReq(handle, 'GET', `/api/fs/list?id=${to.json.node.id}`);
-  expect(listTo.json.items.map((n) => n.name)).toEqual(['renamed.txt']);
+  const listed = await jsonReq(handle, 'GET', '/api/fs/list');
+  expect(listed.json.items.map((n) => n.name)).toEqual(['renamed.txt']);
+  expect(listed.json.collectionId).toBe('default');
+});
+
+test('backlinks report what links to an item', async () => {
+  const { handle, vfs } = await createServer();
+  const target = await vfs.writeFile('sailing.txt', 'Tacking upwind.', { contentType: 'text/plain' });
+  await vfs.writeFile('trips.md', 'Trips\n\n- [Sailing](trove:default/sailing.txt)\n', { contentType: 'text/markdown' });
+  await vfs.writeFile('unrelated.md', 'Nothing here.', { contentType: 'text/markdown' });
+
+  const back = await jsonReq(handle, 'GET', `/api/fs/backlinks?id=${target.id}`);
+  expect(back.status).toBe(200);
+  expect(back.json.items.map((n) => n.name)).toEqual(['trips.md']);
 });

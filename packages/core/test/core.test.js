@@ -49,29 +49,56 @@ test('multipart round-trip (memory)', async () => {
   expect([...(await collect(stream))]).toEqual([1, 2, 3, 4, 5]);
 });
 
-test('vfs: mkdir, write, list, read, move, delete', async () => {
+test('vfs: a collection is a flat set of uniquely-named items', async () => {
   const vfs = await createVfs();
-  const folder = await vfs.mkdir('root', 'docs');
-  const file = await vfs.writeFile(folder.id, 'note.txt', 'the quick brown fox', { contentType: 'text/plain' });
-  expect(file.path).toBe('/docs/note.txt');
+  const file = await vfs.writeFile('note.txt', 'the quick brown fox', { contentType: 'text/plain' });
+  expect(file.name).toBe('note.txt');
+  expect(file.collectionId).toBe('default');
+  // No hierarchy: nothing carries a parent or a path.
+  expect(file.parentId).toBeUndefined();
+  expect(file.path).toBeUndefined();
 
-  const { items } = await vfs.list('/docs');
+  const { items } = await vfs.list('default');
   expect(items.map((i) => i.name)).toEqual(['note.txt']);
 
   const { stream } = await vfs.readStream(file.id);
   expect(new TextDecoder().decode(await collect(stream))).toBe('the quick brown fox');
 
-  const sub = await vfs.mkdir('root', 'archive');
-  const moved = await vfs.move(file.id, sub.id);
-  expect(moved.path).toBe('/archive/note.txt');
+  // An item resolves by id, by bare name, or by its trove: URI.
+  expect((await vfs.stat(file.id)).id).toBe(file.id);
+  expect((await vfs.stat('note.txt')).id).toBe(file.id);
+  expect((await vfs.stat('trove:default?name=note.txt')).id).toBe(file.id);
+  expect((await vfs.stat(`trove:default?id=${file.id}`)).id).toBe(file.id);
 
-  await vfs.remove(sub.id, { recursive: true });
-  await expect(vfs.stat('/archive')).rejects.toThrow();
+  const renamed = await vfs.rename(file.id, 'notes.txt');
+  expect(renamed.name).toBe('notes.txt');
+  expect(await vfs.find('note.txt')).toBe(null); // the old name is free again
+
+  await vfs.remove(file.id);
+  await expect(vfs.stat('notes.txt')).rejects.toThrow();
+});
+
+test('vfs: names are unique per collection, so a trove: link resolves to one item', async () => {
+  const vfs = await createVfs();
+  await vfs.writeFile('dup.txt', 'first');
+  // Writing the same name again REPLACES the item's bytes rather than making a second.
+  const again = await vfs.writeFile('dup.txt', 'second');
+  const { items } = await vfs.list('default');
+  expect(items.length).toBe(1);
+  expect(again.name).toBe('dup.txt');
+
+  // An upload negotiates a free name instead of clobbering (see createUpload).
+  const plan = await vfs.createUpload({ name: 'dup.txt', size: 1 });
+  expect(plan.name).toBe('dup (1).txt'); // suffix before the extension
+
+  // Renaming onto a taken name is refused, not silently merged.
+  const other = await vfs.writeFile('other.txt', 'x');
+  await expect(vfs.rename(other.id, 'dup.txt')).rejects.toThrow(/exists/i);
 });
 
 test('vfs: resumable multipart upload lifecycle', async () => {
   const vfs = await createVfs();
-  const plan = await vfs.createUpload({ parentId: 'root', name: 'movie.bin', size: 5, contentType: 'application/octet-stream' });
+  const plan = await vfs.createUpload({ name: 'movie.bin', size: 5, contentType: 'application/octet-stream' });
   expect(['direct', 'presign', 'single', 'direct-single']).toContain(plan.strategy);
 
   // memory storage → direct multipart
@@ -85,8 +112,8 @@ test('vfs: resumable multipart upload lifecycle', async () => {
 
 test('search: hybrid semantic + keyword finds content', async () => {
   const vfs = await createVfs();
-  await vfs.writeFile('root', 'recipes.md', 'How to bake sourdough bread with a crispy crust and open crumb.', { contentType: 'text/markdown' });
-  await vfs.writeFile('root', 'taxes.md', 'Filing quarterly estimated tax payments for freelancers.', { contentType: 'text/markdown' });
+  await vfs.writeFile('recipes.md', 'How to bake sourdough bread with a crispy crust and open crumb.', { contentType: 'text/markdown' });
+  await vfs.writeFile('taxes.md', 'Filing quarterly estimated tax payments for freelancers.', { contentType: 'text/markdown' });
 
   // keyword hit
   const kw = await vfs.searchQuery('sourdough');

@@ -71,7 +71,7 @@ export class UploadManager {
 
   /**
    * Begin an upload. Returns a plan the client follows.
-   * @param {{parentId:string, name:string, size:number, contentType?:string}} req
+   * @param {{collectionId?:string, name:string, size:number, contentType?:string}} req
    */
   async create(req) {
     if (!isValidName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
@@ -91,7 +91,6 @@ export class UploadManager {
       id: newId('up'),
       storageKey,
       collectionId,
-      parentId: req.parentId,
       name: req.name,
       size: req.size,
       contentType,
@@ -185,7 +184,7 @@ export class UploadManager {
   /**
    * Finalise. Verifies all parts are present, completes multipart, and returns
    * the object descriptor so the VFS can create the node.
-   * @returns {Promise<{storageKey, size, contentType, etag, parentId, name}>}
+   * @returns {Promise<{storageKey, size, contentType, etag, collectionId, name}>}
    */
   async complete(uploadId, reportedParts) {
     const s = await this.#session(uploadId);
@@ -216,7 +215,6 @@ export class UploadManager {
       contentType: s.contentType,
       etag,
       collectionId: s.collectionId,
-      parentId: s.parentId,
       name: s.name,
     };
   }
