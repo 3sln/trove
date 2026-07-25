@@ -39,11 +39,17 @@ async function review(app, pkg) {
     isAdmin: !!app.social.state.admin,
     onInstall: async (grants) => {
       app.platform.workbench.closeDialog();
+      // Account installs upload the package + run a handshake that can take a while —
+      // switch to the plugins view (which shows the plugin's loading state) and hold a
+      // sticky "Installing…" toast so the user isn't left staring at nothing.
+      app.platform.workbench.setActivity('plugins');
+      const pending = app.platform.notifications.info(`Installing “${pkg.manifest.name}”…`, { sticky: true });
       try {
         await app.platform.plugins.install(pkg, { grants, trust });
+        app.platform.notifications.dismiss(pending);
         app.platform.notifications.success(`Installed “${pkg.manifest.name}”`);
-        app.platform.workbench.setActivity('plugins');
       } catch (err) {
+        app.platform.notifications.dismiss(pending);
         app.platform.notifications.error(`Install failed: ${err.message}`);
       }
     },

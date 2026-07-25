@@ -275,8 +275,18 @@ export class TroveApiClient {
     const results = new Array(partCount);
     const concurrency = Math.min(opts.concurrency ?? 4, jobs.length);
     let cursor = 0;
+    // When one part fails for good, abort the sibling workers' in-flight parts instead
+    // of letting them keep PUTting bytes whose result we're about to discard. The inner
+    // controller is chained to the caller's signal so a user cancel still propagates.
+    const inner = new AbortController();
+    const onOuterAbort = () => inner.abort();
+    if (opts.signal) {
+      if (opts.signal.aborted) inner.abort();
+      else opts.signal.addEventListener('abort', onOuterAbort, { once: true });
+    }
     const worker = async () => {
       while (cursor < jobs.length) {
+        if (inner.signal.aborted) return;
         const { n, blob } = jobs[cursor++];
         if (received.has(n)) {
           progress.set(n, blob.size);
@@ -284,14 +294,21 @@ export class TroveApiClient {
         }
         const etag = await withRetry(
           () => this.#uploadPart(plan, n, blob, {
-            signal: opts.signal, onProgress: (l) => progress.set(n, l),
+            signal: inner.signal, onProgress: (l) => progress.set(n, l),
           }),
-          { signal: opts.signal, retries: 4 },
+          { signal: inner.signal, retries: 4 },
         );
         results[n - 1] = { partNumber: n, etag };
       }
     };
-    await Promise.all(Array.from({ length: concurrency }, worker));
+    try {
+      await Promise.all(Array.from({ length: concurrency }, worker));
+    } catch (err) {
+      inner.abort(); // stop the other workers before surfacing the failure
+      throw err;
+    } finally {
+      opts.signal?.removeEventListener('abort', onOuterAbort);
+    }
 
     const reportedParts = results.filter(Boolean);
     const done = await this.request('POST', completeUrl, {
@@ -341,6 +358,10 @@ class ProgressAggregator {
     this.parts = new Map();
   }
   set(key, loaded) {
+    // Monotonic per part: a retried part restarts its XHR progress at 0, which would
+    // otherwise pull the aggregate bar backwards. Never let a part's reported bytes drop.
+    const prev = this.parts.get(key) || 0;
+    if (loaded < prev) return;
     this.parts.set(key, loaded);
     if (!this.cb) return;
     let sum = 0;

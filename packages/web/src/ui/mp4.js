@@ -17,7 +17,11 @@ function u64(v, o) { return u32(v, o) * 2 ** 32 + u32(v, o + 4); }
 function typeAt(v, o) { return String.fromCharCode(v[o], v[o + 1], v[o + 2], v[o + 3]); }
 
 async function readRange(url, start, end, fetchFn) {
-  const res = await fetchFn(url, { headers: { Range: `bytes=${start}-${end}` } });
+  // Cap each range read so a stalled connection (socket open, no bytes) can't hang the
+  // player's "Reading audiobook…" spinner forever — a timeout throws, the caller treats
+  // it as "no metadata" and playback still proceeds.
+  const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined;
+  const res = await fetchFn(url, { headers: { Range: `bytes=${start}-${end}` }, signal });
   if (!res.ok && res.status !== 206) throw new Error(`Range read failed (${res.status})`);
   return new Uint8Array(await res.arrayBuffer());
 }
