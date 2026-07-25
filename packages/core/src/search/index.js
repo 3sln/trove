@@ -31,6 +31,17 @@ export class SearchService {
     this.semanticWeight = semanticWeight;
   }
 
+  /** A wire-safe description of the configured backends (for /api/capabilities), so the
+   *  route doesn't reach into internal class identities. */
+  describe() {
+    return {
+      vectorStore: this.vectors?.constructor?.name || null,
+      keywordStore: this.keywords?.constructor?.name || null,
+      embeddings: this.embeddings?.constructor?.name || null,
+      dimensions: this.vectors?.dimensions || null,
+    };
+  }
+
   /**
    * Index documents for a node under one indexer namespace. Replaces prior docs
    * from the same (nodeId, indexerId) so re-indexing is clean. Accepts { text }

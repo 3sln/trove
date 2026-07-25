@@ -114,28 +114,32 @@ export function createRouter() {
     }
   });
 
-  r.get('/api/capabilities', ({ vfs, config, sidecar, notifications, principal }) => ({
-    storage: vfs.storage.capabilities,
-    indexers: vfs.indexers.list(),
-    partSize: vfs.uploads.partSize,
-    features: {
-      semanticSearch: !!vfs.search,
-      conversations: !!sidecar,
-      notifications: !!notifications,
-      webPush: !!notifications?.vapidPublicKey(),
-      auth: !!principal,
-    },
-    principal: principal || null,
-    search: vfs.search
-      ? {
-          vectorStore: vfs.search.vectors?.constructor?.name || null,
-          keywordStore: vfs.search.keywords?.constructor?.name || null,
-          embeddings: vfs.search.embeddings?.constructor?.name || null,
-          dimensions: vfs.search.vectors?.dimensions || null,
-        }
-      : null,
-    ...(config?.clientConfig || {}),
-  }));
+  r.get('/api/capabilities', async (ctx) => {
+    const { vfs, config, sidecar, notifications, principal, query } = ctx;
+    // Storage is per-collection, so report the backend for the requested collection
+    // (else the client picks the wrong upload strategy on a non-default collection).
+    let storage = vfs.storage;
+    if (query.collection) {
+      await assertCap(ctx, query.collection, 'read');
+      storage = await vfs.storageFor(query.collection);
+    }
+    return {
+      collection: query.collection || 'default',
+      storage: storage.capabilities,
+      indexers: vfs.indexers.list(),
+      partSize: vfs.uploads.partSize,
+      features: {
+        semanticSearch: !!vfs.search,
+        conversations: !!sidecar,
+        notifications: !!notifications,
+        webPush: !!notifications?.vapidPublicKey(),
+        auth: !!principal,
+      },
+      principal: principal || null,
+      search: vfs.search ? vfs.search.describe() : null,
+      ...(config?.clientConfig || {}),
+    };
+  });
 
   // --- collections -----------------------------------------------------------
 

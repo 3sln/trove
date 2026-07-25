@@ -19,7 +19,7 @@ import {
   SidecarService, NotificationCenter, WebPushService,
   CollectionService,
   PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
-  InProcessIndexerRuntime, PluginIndexers,
+  IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
   TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
@@ -104,21 +104,17 @@ export async function createServer(config = {}) {
   // Always present so plugin storage works regardless of the metadata backend
   // (file-backed when metadata is sqlite, else ephemeral in-memory). Injectable, so
   // a Worker can supply a D1 / Durable-Object-backed provider instead.
-  const sqliteProvider = config.sqlite instanceof SqliteProvider
-    ? config.sqlite
-    : buildSqliteProvider(config.sqlite || { path: config.metadata?.driver === 'sqlite' ? config.metadata.path : ':memory:' });
+  const sqliteProvider = resolve(config.sqlite, SqliteProvider, () =>
+    buildSqliteProvider(config.sqlite || { path: config.metadata?.driver === 'sqlite' ? config.metadata.path : ':memory:' }));
   await sqliteProvider.init();
 
   const metadata = resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, (cfg) => buildMetadata(cfg, sqliteProvider));
   const embeddings = resolve(config.embeddings, EmbeddingProvider, buildEmbeddings);
   const vectorStore = resolve(config.vectorStore, VectorStore, (cfg) => buildVectorStore(cfg, embeddings.dimensions));
 
-  const search =
-    config.search instanceof SearchService
-      ? config.search
-      : new SearchService({ embeddings, vectorStore, keywordStore: config.keywordStore });
+  const search = resolve(config.search, SearchService, () => new SearchService({ embeddings, vectorStore, keywordStore: config.keywordStore }));
 
-  const indexers = config.indexers instanceof IndexerRegistry ? config.indexers : new IndexerRegistry();
+  const indexers = resolve(config.indexers, IndexerRegistry, () => new IndexerRegistry());
 
   // Search transformer: raw query → { semanticText, tagFilters }. Default parses the
   // `#tag` grammar; inject one (e.g. Workers AI) for LLM-assisted query understanding.
@@ -131,46 +127,41 @@ export async function createServer(config = {}) {
   // Shared KV (subscriptions, inboxes). When metadata is sqlite, KV shares the same
   // provider (co-located in the main db file) so it actually persists — memory
   // otherwise.
-  const kv = config.kv instanceof KeyValueStore
-    ? config.kv
-    : (sqliteProvider && (config.kv?.driver === 'sqlite' || metadata instanceof SqliteStore))
+  const kv = resolve(config.kv, KeyValueStore, (cfg) =>
+    (sqliteProvider && (cfg?.driver === 'sqlite' || metadata instanceof SqliteStore))
       ? new SqliteKV({ provider: sqliteProvider, key: 'kv' })
-      : new MemoryKV();
+      : new MemoryKV());
   await kv.init?.();
 
   // Web push (optional — only when VAPID keys are configured).
-  const push =
-    config.push instanceof WebPushService
-      ? config.push
-      : config.vapid?.publicKey && config.vapid?.privateKey
-        ? new WebPushService({ publicKey: config.vapid.publicKey, privateKey: config.vapid.privateKey, subject: config.vapid.subject || 'mailto:admin@example.com' })
-        : null;
+  const push = resolve(config.push, WebPushService, () =>
+    config.vapid?.publicKey && config.vapid?.privateKey
+      ? new WebPushService({ publicKey: config.vapid.publicKey, privateKey: config.vapid.privateKey, subject: config.vapid.subject || 'mailto:admin@example.com' })
+      : null);
 
   // Mention batcher + inbox. Flushes on an interval (bodyless web push).
   const notifications = new NotificationCenter({ kv, push, flushIntervalMs: config.mentionFlushMs ?? 30_000 });
 
   // Sidecar conversations/tags/facets; mentions are piped to the batcher.
-  const sidecar = config.sidecar ?? new SidecarService({
+  const sidecar = resolve(config.sidecar, SidecarService, () => new SidecarService({
     storage,
     onMentions: (mentions) => notifications.enqueue(mentions).catch((e) => console.error('enqueue mentions failed', e)),
-  });
+  }));
 
   // Collections — the ownership + permission boundary; each is a store config.
   // Disable with config.collections === false (single open storage, no ACLs).
   let collections = null;
   if (config.collections !== false) {
-    collections = config.collections instanceof CollectionService
-      ? config.collections
-      : new CollectionService({
-          kv,
-          storageFactory: (storeConfig) => buildStorage(storeConfig),
-          admins: config.admins || [],
-          creatorRoles: config.creatorRoles || [],
-          defaultOpen: config.defaultOpen !== false,
-          // Record the primary driver on 'default', but reuse its live instance.
-          defaultStore: (config.storage && !(config.storage instanceof StorageBackend)) ? config.storage : { driver: config.storageDriver || 'memory' },
-          storageOverrides: { default: storage },
-        });
+    collections = resolve(config.collections, CollectionService, () => new CollectionService({
+      kv,
+      storageFactory: (storeConfig) => buildStorage(storeConfig),
+      admins: config.admins || [],
+      creatorRoles: config.creatorRoles || [],
+      defaultOpen: config.defaultOpen !== false,
+      // Record the primary driver on 'default', but reuse its live instance.
+      defaultStore: (config.storage && !(config.storage instanceof StorageBackend)) ? config.storage : { driver: config.storageDriver || 'memory' },
+      storageOverrides: { default: storage },
+    }));
   }
 
   const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxUploadBytes: config.maxUploadBytes ?? null });
@@ -179,15 +170,14 @@ export async function createServer(config = {}) {
   // Server plugin installs: bulk package blobs go in a pluggable PackageStore
   // (default = the primary storage backend under a prefix; TROVE_PACKAGE_STORE points
   // it elsewhere), while install records live in the shared SQLite provider.
-  const packageStore = config.packages instanceof PackageStore
-    ? config.packages
-    : new StoragePackageStore(config.packageStore ? buildStorage(config.packageStore) : storage);
+  const packageStore = resolve(config.packages, PackageStore, () =>
+    new StoragePackageStore(config.packageStore ? buildStorage(config.packageStore) : storage));
   // Server indexer sub-packages run through a pluggable IndexerRuntime. The default is
   // the in-process (trusted) runner; a deployment swaps in an isolate runtime by
   // passing config.indexerRuntime. Set config.serverIndexers = false to disable them.
   const indexerRuntime = config.serverIndexers === false
     ? null
-    : (config.indexerRuntime || new InProcessIndexerRuntime());
+    : resolve(config.indexerRuntime, IndexerRuntime, () => new InProcessIndexerRuntime());
   const pluginIndexers = indexerRuntime
     ? new PluginIndexers({ vfs, runtime: indexerRuntime, packages: packageStore })
     : null;
