@@ -352,11 +352,19 @@ npm run test:browser --prefix packages/web      # web units in real Chromium (@w
 node packages/web/test/e2e.mjs                  # full workbench in headless Chromium
 node packages/web/test/plugins.e2e.mjs          # sandboxed plugin install, brokered network, offline availability
 node packages/web/test/offline.e2e.mjs          # service worker, pinning, offline queue + sync
+node packages/web/test/probe/run-all.mjs        # error-path probes: broken openers, server faults, retry, uninstall failure, opener choice
+node packages/web/test/probe/walkthrough.mjs    # full in-browser user journey + screenshots (test/screens/)
 ```
 
 The web unit suites run under **both** `bun test` (fast, via `test/testkit.js`) and
 `@web/test-runner` (a real browser, the platform plugins ship to) — the same files,
 no duplication.
+
+**Probes** (`test/probe/`) cover the error paths a happy-path e2e can't: an opener
+whose bytes are missing, a server that 500s at startup, a failed search, a plugin whose
+server-side uninstall fails. They deliberately trigger 404s and faults, so they live
+outside the strict e2e suites. The **walkthrough** drives the whole app end to end and
+screenshots each step — the "does it all still work together" check.
 
 ## License
 
