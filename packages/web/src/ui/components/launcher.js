@@ -151,7 +151,10 @@ function buildContent(state, ui, q, mode, modal) {
     title: here ? `In ${here.name || '/'}` : 'Files',
     action: upAction,
     items: browse,
-    empty: ex.loading ? 'Loading…' : 'This folder is empty.',
+    // Don't show a false "empty" when the load actually FAILED (e.g. server
+    // unreachable) — say so, so the user knows to retry rather than believing the
+    // folder is empty. (A toast also fires, but the persistent state must be honest.)
+    empty: ex.loading ? 'Loading…' : ex.error ? `Couldn’t load this folder: ${ex.error}` : 'This folder is empty.',
   });
   return groups;
 }

@@ -49,8 +49,19 @@ export async function boot({ serverConfig = {}, seed } = {}) {
   const { handle, vfs, ...rest } = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), ...serverConfig, assets: staticAssets });
   if (seed) await seed(vfs);
 
+  // Fault injection: a probe can make specific API paths fail (server unreachable / DB
+  // error) deterministically, without racing Playwright's client-side route setup.
+  const faults = new Set();
+  const setFault = (substr, on = true) => { on ? faults.add(substr) : faults.delete(substr); };
   const server = http.createServer(async (req, res) => {
     try {
+      for (const f of faults) {
+        if (req.url.includes(f)) {
+          res.statusCode = 500;
+          res.setHeader('content-type', 'application/json');
+          return res.end(JSON.stringify({ error: { code: 'internal', message: 'injected fault' } }));
+        }
+      }
       const webRes = await handle(await toWeb(req));
       res.statusCode = webRes.status;
       webRes.headers.forEach((v, k) => res.setHeader(k, v));
@@ -93,7 +104,7 @@ export async function boot({ serverConfig = {}, seed } = {}) {
     await page.goto(base + pathOrEmpty, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.shell', { timeout: 8000 });
   }
-  return { base, page, browser, server, vfs, handle, errors, close, goto, ...rest };
+  return { base, page, browser, server, vfs, handle, errors, close, goto, setFault, ...rest };
 }
 
 // A tiny check harness with a nonzero exit on failure.
