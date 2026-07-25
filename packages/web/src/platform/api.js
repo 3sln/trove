@@ -83,9 +83,6 @@ export class TroveApiClient {
   mkdir(parentId, name) {
     return this.request('POST', '/api/fs/folder', { body: { parentId, name } });
   }
-  move(id, destParentId, newName) {
-    return this.request('POST', '/api/fs/move', { body: { id, destParentId, newName } });
-  }
   rename(id, newName) {
     return this.request('POST', '/api/fs/rename', { body: { id, newName } });
   }
@@ -148,12 +145,6 @@ export class TroveApiClient {
   createCollection(body) {
     return this.request('POST', '/api/collections', { body });
   }
-  updateCollection(id, body) {
-    return this.request('POST', `/api/collections/${encodeURIComponent(id)}`, { body });
-  }
-  setCollectionGrant(id, grant) {
-    return this.request('POST', `/api/collections/${encodeURIComponent(id)}/grants`, { body: grant });
-  }
 
   // --- conversations, tags, sidecar ------------------------------------------
   sidecar(id) {
@@ -176,12 +167,6 @@ export class TroveApiClient {
   }
   removeTag(id, name) {
     return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/tags/${encodeURIComponent(name)}`);
-  }
-  subscribeThread(id, muted) {
-    return this.request('POST', `/api/files/${encodeURIComponent(id)}/subscribe`, { body: { muted } });
-  }
-  unsubscribeThread(id) {
-    return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/subscribe`, { body: {} });
   }
 
   // --- notifications & push --------------------------------------------------

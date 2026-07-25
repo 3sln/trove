@@ -6,7 +6,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PROTOCOL_VERSION, isCompatible, majorOf, METHODS } from '../src/protocol.js';
+import { PROTOCOL_VERSION, isCompatible, majorOf, METHODS, EVENTS } from '../src/protocol.js';
 
 const browserSrc = readFileSync(fileURLToPath(new URL('../src/browser.js', import.meta.url)), 'utf8');
 
@@ -34,6 +34,22 @@ test('every host method the SDK calls is declared in METHODS', () => {
   expect(used.length).toBeGreaterThan(0);
   const undeclared = [...new Set(used)].filter((m) => !declared.has(m));
   expect(undeclared).toEqual([]);
+});
+
+test('every event the SDK emits is declared in EVENTS', () => {
+  const declared = new Set(collect(EVENTS));
+  // Event names the SDK sends over the wire, e.g. emit('ui:toast', …).
+  const used = [...browserSrc.matchAll(/emit\('([a-z]+:[a-zA-Z]+|manifest)'/g)].map((m) => m[1]);
+  expect(used.length).toBeGreaterThan(0);
+  expect([...new Set(used)].filter((m) => !declared.has(m))).toEqual([]);
+});
+
+test('contributions are manifest-only — the SDK has no way to register one at runtime', () => {
+  // The whole point of declaring contributions in the manifest is that what the user
+  // approved at install IS what gets registered. A `contribute:*` call would reopen
+  // that gap, so neither side may speak one.
+  expect(collect(METHODS).filter((m) => m.startsWith('contribute:'))).toEqual([]);
+  expect(browserSrc).not.toContain('contribute:');
 });
 
 function collect(obj) {

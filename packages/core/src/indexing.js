@@ -133,9 +133,14 @@ export class IndexingCoordinator {
 
   /**
    * Remove one contributor's contributions from every node (e.g. on uninstall).
-   * Scans in pages; returns how many nodes were cleared.
+   *
+   * The search index is dropped in ONE bulk call — the stores can delete by indexer
+   * directly, so paging every node just to clear it per-node would be the same work
+   * done N times. Metadata still has to be walked, since a contribution lives on the
+   * node record.
    */
   async purgeIndexer(contributorId, { pageSize = 500 } = {}) {
+    if (this.search) await this.search.removeIndexer(contributorId).catch(() => {});
     let cleared = 0;
     let afterId = null;
     for (;;) {
@@ -144,7 +149,7 @@ export class IndexingCoordinator {
       for (const node of files) {
         afterId = node.id;
         if (node.contributions && node.contributions[contributorId]) {
-          await this.removeContributions(node.id, contributorId);
+          await this.metadata.clearContribution(node.id, contributorId);
           cleared++;
         }
       }

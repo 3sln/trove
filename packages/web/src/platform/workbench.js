@@ -44,7 +44,6 @@ export class WorkbenchService {
   openPalette(mode, query) { this.overlay.openPalette(mode, query); }
   setPaletteQuery(query) { this.overlay.setPaletteQuery(query); }
   movePalette(delta, count) { this.overlay.movePalette(delta, count); }
-  setPaletteIndex(index) { this.overlay.setPaletteIndex(index); }
   closePalette() { this.overlay.closePalette(); }
   showDialog(dialog) { this.overlay.showDialog(dialog); }
   updateDialog(patch) { this.overlay.updateDialog(patch); }
@@ -71,11 +70,6 @@ export class WorkbenchService {
     this.#set({ activity: 'home', searchModal: false });
     this.nav.reset();
     this.context.set('view.active', 'home');
-  }
-  toggleSidebar(force) {
-    const v = force ?? !this.state.sidebarVisible;
-    this.#set({ sidebarVisible: v });
-    this.context.set('sidebar.visible', v);
   }
 
   // --- launcher --------------------------------------------------------------
@@ -109,11 +103,6 @@ export class WorkbenchService {
     this.#set({ activity: 'home', searchModal: false });
     this.nav.openFile(node, openerId, opts);
   }
-  // Back-compat alias (OpenFileAction historically called openTab).
-  openTab(node, openerId) {
-    this.openFile(node, openerId);
-  }
-
   toggleInfoPanel(force) {
     this.#set({ infoPanel: force ?? !this.state.infoPanel });
     this.context.set('infoPanel.open', this.state.infoPanel);

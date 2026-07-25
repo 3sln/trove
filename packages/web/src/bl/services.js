@@ -27,13 +27,6 @@ export class ExplorerService {
     const next = additive ? Array.from(new Set([...this.state.selection, ...ids])) : ids;
     this.set({ selection: next });
   }
-  toggleSelect(id) {
-    const has = this.state.selection.includes(id);
-    this.set({ selection: has ? this.state.selection.filter((x) => x !== id) : [...this.state.selection, id] });
-  }
-  clearSelection() {
-    if (this.state.selection.length) this.set({ selection: [] });
-  }
   selectedNodes() {
     return this.state.items.filter((i) => this.state.selection.includes(i.id));
   }
@@ -91,8 +84,5 @@ export class TransfersService {
   clearDone() {
     this.state = { items: this.state.items.filter((t) => t.status === 'active') };
     this.#emit();
-  }
-  activeCount() {
-    return this.state.items.filter((t) => t.status === 'active').length;
   }
 }

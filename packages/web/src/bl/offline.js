@@ -13,6 +13,10 @@
 
 import { ObservableSubject } from '../runtime.js';
 import { LocalHashEmbedding } from '@trove/core/search/embeddings.js';
+// Chunking and tokenizing must MATCH the server's — offline results are compared
+// against embeddings the server produced, so a local variant would quietly skew them.
+import { chunkText } from '@trove/core/indexers/registry.js';
+import { tokenize } from '@trove/core/search/keywordStore.js';
 import { isTexty } from './fileType.js';
 
 const DB = 'trove-offline';
@@ -227,10 +231,6 @@ function idbAllWithKeys(db, store) {
 
 // --- search math (mirrors the server's LocalHash hybrid) --------------------
 
-const STOP = new Set('a an the of to in on for and or is are be as at by with from this that it'.split(' '));
-function tokenize(t) {
-  return String(t).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((x) => x.length > 1 && !STOP.has(x));
-}
 function lexicalScore(q, docTokens) {
   if (!q.length || !docTokens.size) return 0;
   let hit = 0;
@@ -242,15 +242,6 @@ function cosine(a, b) {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s; // both L2-normalised
-}
-function chunkText(text, size, overlap) {
-  const out = [];
-  let i = 0;
-  while (i < text.length) {
-    out.push(text.slice(i, i + size));
-    i += size - overlap;
-  }
-  return out.filter((s) => s.trim());
 }
 function snippet(text, qTokens) {
   if (!text) return null;

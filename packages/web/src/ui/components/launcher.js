@@ -73,7 +73,10 @@ export default function launcher(state, ui, opts = {}) {
       ...groups.map((group) => div({ className: 'launch-group' },
         div({ className: 'launch-h' }, span(group.title), group.action || null),
         group.items.length
-          ? div({ className: 'launch-list' }, ...group.items.map((it) => itemRow(it, (++gi) === idx)))
+          ? div({ className: 'launch-list' }, ...group.items.map((it) => {
+            const at = ++gi;
+            return itemRow(it, at === idx, () => ui.platform.workbench.setLaunchIndex(at));
+          }))
           : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
       )),
     ),
@@ -92,13 +95,13 @@ function resolvedBar(r) {
   );
 }
 
-function itemRow(it, active) {
+function itemRow(it, active, hover) {
   return div({ className: `launch-item ${active ? 'active' : ''}` },
     icon(it.icon, { size: 15 }),
     span({ className: 'name' }, it.title),
     it.detail ? span({ className: 'launch-detail' }, it.detail) : null,
     it.badge ? span({ className: 'launch-kind' }, it.badge) : null,
-  ).on({ click: it.run, mouseenter: it.hover });
+  ).on({ click: it.run, mouseenter: hover });
 }
 
 function buildContent(state, ui, q, mode, modal) {

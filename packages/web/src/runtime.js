@@ -20,7 +20,3 @@ export function fromQuery(handle) {
   });
 }
 
-/** Convenience: dispatch helper bound to an engine. */
-export function dispatcher(engine) {
-  return (action) => engine.dispatch(action);
-}

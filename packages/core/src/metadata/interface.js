@@ -139,10 +139,5 @@ export class MetadataStore {
     throw TroveError.unsupported('findByTags not implemented');
   }
 
-  // Deprecated aliases (old "facet" vocabulary) — a facet was arbitrary metadata.
-  async setFacet(id, indexerId, data) { return this.setContribution(id, indexerId, { metadata: data }); }
-  async clearFacet(id, indexerId) { return this.clearContribution(id, indexerId); }
-  async findByFacets(filters, opts) { return this.findByTags(filters, opts); }
-
   async close() {}
 }

@@ -3,7 +3,7 @@
 // a presigned URL when the backend supports it, otherwise stream through here.
 
 import { Router, json, parseRange } from './router.js';
-import { TroveError, assertSafePluginSql } from '@trove/core';
+import { TroveError, assertSafePluginSql, concatBytes } from '@trove/core';
 
 const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
 // Cap JSON request bodies so a giant payload can't exhaust server memory. Uploads
@@ -42,13 +42,7 @@ async function readCapped(req, max) {
     if (total > max) { await reader.cancel().catch(() => {}); throw TroveError.invalid('Request body too large'); }
     chunks.push(value);
   }
-  return new TextDecoder().decode(concatBytes(chunks, total));
-}
-function concatBytes(chunks, total) {
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
-  return out;
+  return new TextDecoder().decode(concatBytes(chunks));
 }
 // Read a raw binary body (e.g. an uploaded plugin package), capped like readCapped.
 async function readBytesCapped(req, max) {

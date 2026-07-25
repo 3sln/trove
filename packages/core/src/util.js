@@ -88,14 +88,6 @@ export function selectorMatches(selector, node) {
   return mimes.some((m) => (m.endsWith('/*') ? ct.startsWith(m.slice(0, -1)) : ct === m));
 }
 
-/** True when `child` is `ancestor` or lives beneath it. */
-export function isDescendant(ancestor, child) {
-  const a = normalizePath(ancestor);
-  const c = normalizePath(child);
-  if (a === '/') return true;
-  return c === a || c.startsWith(a + '/');
-}
-
 // ---- byte helpers -----------------------------------------------------------
 
 /** Concatenate Uint8Array chunks into one. */
@@ -120,24 +112,3 @@ export async function readAll(stream) {
   return concatBytes(chunks);
 }
 
-export function humanBytes(n) {
-  if (n == null || Number.isNaN(n)) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
-}
-
-/** Deferred: a promise plus its resolve/reject, for coordinating async flows. */
-export function deferred() {
-  let resolve, reject;
-  const promise = new Promise((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}

@@ -125,25 +125,6 @@ export class RenameAction extends AppAction {
   }
 }
 
-export class MoveAction extends AppAction {
-  constructor(ids, destParentId) {
-    super();
-    this.ids = ids;
-    this.destParentId = destParentId;
-  }
-  async execute({ app }) {
-    try {
-      for (const id of this.ids) {
-        if (id === this.destParentId) continue;
-        await app.platform.api.move(id, this.destParentId);
-      }
-      app.platform.notifications.info(`Moved ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
-    } catch (err) {
-      app.platform.notifications.error(`Couldn’t move: ${err.message}`);
-    }
-    app.engine.dispatch(new RefreshAction());
-  }
-}
 
 export class OpenFileAction extends AppAction {
   /** @param {object} node @param {{reset?:boolean}} [opts] reset → start a fresh stack (modal search) */

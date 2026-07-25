@@ -114,3 +114,24 @@ test('adding a tag exposes it in the node\'s merged tags (filterable)', async ()
   const after = await jsonReq(handle, 'GET', `/api/fs/list?id=${folder.id}`);
   expect(after.json.items.find((n) => n.id === file.id).tags.fav).toBeFalsy(); // removed reads as absent
 });
+
+test('move + rename relocate a node and update its path', async () => {
+  const { handle, vfs } = await createServer();
+  const from = await jsonReq(handle, 'POST', '/api/fs/folder', { parentId: 'root', name: 'from' });
+  const to = await jsonReq(handle, 'POST', '/api/fs/folder', { parentId: 'root', name: 'to' });
+  const node = await vfs.writeFile(from.json.node.id, 'notes.txt', 'hello', { contentType: 'text/plain' });
+  expect(node.path).toBe('/from/notes.txt');
+
+  const moved = await jsonReq(handle, 'POST', '/api/fs/move', { id: node.id, destParentId: to.json.node.id });
+  expect(moved.status).toBe(200);
+  expect(moved.json.node.path).toBe('/to/notes.txt');
+
+  const renamed = await jsonReq(handle, 'POST', '/api/fs/rename', { id: node.id, newName: 'renamed.txt' });
+  expect(renamed.json.node.path).toBe('/to/renamed.txt');
+
+  // The old location no longer lists it; the new one does.
+  const listFrom = await jsonReq(handle, 'GET', `/api/fs/list?id=${from.json.node.id}`);
+  expect(listFrom.json.items.length).toBe(0);
+  const listTo = await jsonReq(handle, 'GET', `/api/fs/list?id=${to.json.node.id}`);
+  expect(listTo.json.items.map((n) => n.name)).toEqual(['renamed.txt']);
+});

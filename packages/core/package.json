@@ -12,6 +12,7 @@
     "./storage/*": "./src/storage/*",
     "./metadata/*": "./src/metadata/*",
     "./search/*": "./src/search/*",
+    "./indexers/*": "./src/indexers/*",
     "./plugins/*": "./src/plugins/*"
   },
   "files": [

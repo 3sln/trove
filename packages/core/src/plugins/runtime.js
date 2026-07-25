@@ -15,6 +15,7 @@
 // index or the metadata store.
 
 import { TroveError } from '../errors.js';
+import { withTimeout } from '../retry.js';
 
 /** Output caps applied to every indexer contribution regardless of runtime. */
 export const DEFAULT_CAPS = {
@@ -78,7 +79,11 @@ export class InProcessIndexerRuntime extends IndexerRuntime {
 
   async run(spec, node, ctx) {
     const fn = await this.#load(spec);
-    const result = await withTimeout(Promise.resolve().then(() => fn(node, ctx)), this.timeoutMs, spec.id);
+    const result = await withTimeout(
+      Promise.resolve().then(() => fn(node, ctx)),
+      this.timeoutMs,
+      `Indexer "${spec.id}" timed out after ${this.timeoutMs}ms`,
+    );
     return clampContribution(result, this.caps);
   }
 }
@@ -92,14 +97,6 @@ function bytesToBase64(bytes) {
   return btoa(bin);
 }
 
-function withTimeout(promise, ms, id) {
-  if (!ms || ms <= 0) return promise;
-  let timer;
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(TroveError.invalid(`Indexer "${id}" timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
-}
 
 /**
  * Bound an indexer's output to the caps. Never throws — a runaway or malformed

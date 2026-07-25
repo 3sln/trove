@@ -42,12 +42,6 @@ export class CommandService {
     };
   }
 
-  /** Register just a handler for an already-declared command (plugin path). */
-  registerHandler(id, handler) {
-    this.handlers.set(id, handler);
-    return () => this.handlers.delete(id);
-  }
-
   has(id) {
     return this.handlers.has(id);
   }

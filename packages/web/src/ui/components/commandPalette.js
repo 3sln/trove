@@ -39,14 +39,17 @@ export default function commandPalette(state, ui) {
       ),
       div({ className: 'results' },
         items.length
-          ? items.map((item, i) => (pal.mode === 'files' ? fileOpt(item, i === index, run) : cmdOpt(item, i === index, ui, run)))
+          ? items.map((item, i) => {
+            const hover = () => wb.setPaletteIndex(i);
+            return pal.mode === 'files' ? fileOpt(item, i === index, run, hover) : cmdOpt(item, i === index, ui, run, hover);
+          })
           : div({ className: 'none' }, pal.mode === 'files' ? 'No files found' : 'No matching commands'),
       ),
     ),
   );
 }
 
-function cmdOpt(cmd, active, ui, run) {
+function cmdOpt(cmd, active, ui, run, hover) {
   const key = ui.platform.keybindings.labelFor(cmd.id);
   const available = ui.platform.commands.isAvailable(cmd);
   return div({ className: `opt ${active ? 'active' : ''} ${available ? '' : 'unavailable'}` },
@@ -55,7 +58,7 @@ function cmdOpt(cmd, active, ui, run) {
     span({ className: 'title' }, cmd.title),
     !available ? span({ className: 'offline-tag' }, 'offline') : null,
     key ? span({ className: 'kbd' }, dd.h('kbd', prettyKey(keyRaw(ui, cmd.id)))) : null,
-  ).on({ click: () => run(cmd) });
+  ).on({ click: () => run(cmd), mouseenter: hover });
 }
 
 function keyRaw(ui, id) {
@@ -63,12 +66,12 @@ function keyRaw(ui, id) {
   return b ? b.key : '';
 }
 
-function fileOpt(item, active, run) {
+function fileOpt(item, active, run, hover) {
   return div({ className: `opt ${active ? 'active' : ''}` },
     span({ className: 'ico' }, icon(iconForNode(item.node), { size: 16 })),
     span({ className: 'title' }, item.node.name),
     span({ className: 'sub' }, item.node.path),
-  ).on({ click: () => run(item) });
+  ).on({ click: () => run(item), mouseenter: hover });
 }
 
 function filterCommands(state, ui, query) {

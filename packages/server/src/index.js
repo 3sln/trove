@@ -193,6 +193,21 @@ export async function createServer(config = {}) {
 
   if (config.startFlusher !== false) notifications.start();
 
+  // Periodic maintenance. Both of these caches are otherwise unbounded: abandoned
+  // upload sessions (a client that starts an upload and never finishes) accumulate in
+  // the session store forever, and sidecar documents stay resident after their last
+  // access. Each has a sweep that had nothing calling it — this is that caller.
+  let maintenance = null;
+  if (config.startFlusher !== false && config.maintenanceIntervalMs !== 0) {
+    const everyMs = config.maintenanceIntervalMs ?? 5 * 60 * 1000;
+    maintenance = setInterval(() => {
+      Promise.resolve(vfs.uploads.sessions.sweep?.(Date.now()))
+        .then(() => sidecar.sweep?.())
+        .catch((e) => console.error('maintenance sweep failed', e));
+    }, everyMs);
+    maintenance.unref?.();
+  }
+
   const router = createRouter();
 
   async function handle(req) {
@@ -218,6 +233,7 @@ export async function createServer(config = {}) {
 
   async function close() {
     notifications.stop();
+    if (maintenance) clearInterval(maintenance);
     await sidecar.dispose?.();
     await sqliteProvider?.close();
   }
