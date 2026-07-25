@@ -313,9 +313,31 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
    ones want a one-time **re-upload migration** (on `restore`, push any local
    account plugin the server is missing) first. Server-side **signature/trust**
    re-verification is also still TODO (structure + capabilities are validated today).
-2. **IndexerRuntime interface + Node (`isolated-vm`) impl + auto-trigger in `#indexNode`
-   + backfill pass + output caps.**
-3. **`ctx.file.presignRead()`** (S3 native + self-signed URL).
+2. **IndexerRuntime interface + auto-trigger in `#indexNode` + backfill pass + output
+   caps.** ✅ **Implemented** (`packages/core/src/plugins/runtime.js`,
+   `packages/core/src/plugins/indexers.js`, `Vfs` pipeline):
+   - `IndexerRuntime` base + `InProcessIndexerRuntime` (the **trusted** reference
+     runner — imports the entry module from a base64 `data:` URL and calls it under a
+     wall-clock timeout). Real isolation (`isolated-vm` / Cloudflare loader) is a
+     drop-in subclass; the server picks one via `config.indexerRuntime`, or
+     `config.serverIndexers = false` to disable server indexers entirely.
+   - `clampContribution()` enforces the **output caps** (max chunks/chars, max tags,
+     max metadata bytes; non-scalar tag values dropped) on every runtime's output.
+   - `PluginIndexers` coordinator resolves each indexer's bundle from the
+     `PackageStore`, registers it into the `Vfs` `IndexerRegistry` (so `#indexNode`
+     auto-runs it on upload, matched by ext/mime via `matchFromSelector`), **backfills**
+     existing files on install, and **purges** its contributions on uninstall.
+   - `PluginService` calls `activate()` on install / `deactivate()` on remove, and
+     `init()` re-registers all installed indexers at startup (live hook restored, no
+     re-backfill). `#indexNode` refactored into `#indexCtx` + `#runOneIndexer`, with
+     `backfillIndexer()` / `purgeIndexer()` paging the metadata store via `listFiles()`.
+
+   *Still a follow-up:* the isolate runtimes (Node `isolated-vm`, Bun worker, CF
+   loader) — the in-process runner has **no** isolation and is only safe for
+   admin-vetted / first-party code (which the admin install-gate already requires).
+3. **`ctx.presignRead()`** — ✅ **S3/R2 native** (`storage.presignGet` when the backend
+   advertises `presignDownload`); the self-managed, token-scoped server URL for
+   non-presigning backends is still TODO (throws `unsupported` there today).
 4. **Cloudflare dynamic-loader/sandbox `IndexerRuntime` impl** (verify GA/limits first).
 5. **Install-scope UX**: device vs. account, the admin-approval flow, cross-device sync
    list + download.

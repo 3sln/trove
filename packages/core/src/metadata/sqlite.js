@@ -226,6 +226,15 @@ export class SqliteStore extends MetadataStore {
     return rows.map(row);
   }
 
+  async listFiles({ afterId = null, limit = 200 } = {}) {
+    const where = ["kind = 'file'"];
+    const params = [];
+    if (afterId) { where.push('id > ?'); params.push(afterId); }
+    params.push(limit);
+    const rows = await this.db.all(`SELECT * FROM nodes WHERE ${where.join(' AND ')} ORDER BY id ASC LIMIT ?`, ...params);
+    return rows.map(row);
+  }
+
   async findByTags(filters = [], opts = {}) {
     const where = ['parentId IS NOT NULL'];
     const params = [];

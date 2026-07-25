@@ -16,6 +16,8 @@ export class PluginInstallStore {
   async get(account, pluginId) { throw TroveError.unsupported('PluginInstallStore.get'); }
   /** @returns {Promise<object[]>} an account's installs. */
   async list(account) { throw TroveError.unsupported('PluginInstallStore.list'); }
+  /** @returns {Promise<object[]>} every install across all accounts (startup sweep). */
+  async all() { throw TroveError.unsupported('PluginInstallStore.all'); }
   async delete(account, pluginId) { throw TroveError.unsupported('PluginInstallStore.delete'); }
   /** How many installs reference a blob digest (for dedupe on blob delete). */
   async countByDigest(digest) { throw TroveError.unsupported('PluginInstallStore.countByDigest'); }
@@ -76,6 +78,10 @@ export class SqlitePluginInstallStore extends PluginInstallStore {
     const rows = await this.db.all('SELECT * FROM plugin_installs WHERE account=? ORDER BY updatedAt DESC', account);
     return rows.map(hydrate);
   }
+  async all() {
+    const rows = await this.db.all('SELECT * FROM plugin_installs ORDER BY account ASC, pluginId ASC');
+    return rows.map(hydrate);
+  }
   async delete(account, pluginId) {
     await this.db.run('DELETE FROM plugin_installs WHERE account=? AND pluginId=?', account, pluginId);
   }
@@ -93,6 +99,7 @@ export class MemoryPluginInstallStore extends PluginInstallStore {
   async put(record) { const r = normalize(record); this.map.set(this.#key(r.account, r.pluginId), r); return r; }
   async get(account, pluginId) { const r = this.map.get(this.#key(account, pluginId)); return r ? { ...r } : null; }
   async list(account) { return [...this.map.values()].filter((r) => r.account === account).sort((a, b) => b.updatedAt - a.updatedAt).map((r) => ({ ...r })); }
+  async all() { return [...this.map.values()].map((r) => ({ ...r })); }
   async delete(account, pluginId) { this.map.delete(this.#key(account, pluginId)); }
   async countByDigest(digest) { return [...this.map.values()].filter((r) => r.digest === digest).length; }
 }

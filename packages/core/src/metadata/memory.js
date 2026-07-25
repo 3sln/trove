@@ -181,6 +181,15 @@ export class MemoryStore extends MetadataStore {
     return items.map(clone);
   }
 
+  async listFiles({ afterId = null, limit = 200 } = {}) {
+    const files = [...this.nodes.values()]
+      .filter((n) => n.kind === 'file')
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const start = afterId ? files.findIndex((n) => n.id > afterId) : 0;
+    const from = start === -1 ? files.length : start;
+    return files.slice(from, from + limit).map(clone);
+  }
+
   async findByTags(filters = [], opts = {}) {
     const q = opts.q ? opts.q.toLowerCase() : null;
     const out = [];

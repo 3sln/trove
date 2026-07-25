@@ -305,25 +305,87 @@ export class Vfs {
     if (node.kind !== 'file') return;
     if (this.search) await this.search.indexName(node);
     const matching = this.indexers.matching(node);
+    if (!matching.length) return;
     const storage = await this.storageFor(node.collectionId);
-    for (const indexer of matching) {
-      try {
-        const ctx = {
-          maxBytes: this.maxIndexBytes,
-          readBytes: async () => {
-            const { stream } = await storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
-            return readAll(stream);
-          },
-          readText: async () => {
-            const { stream } = await storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
-            return new TextDecoder().decode(await readAll(stream));
-          },
-        };
-        await this.#applyContribution(node.id, indexer.id, await indexer.index(node, ctx));
-      } catch (err) {
-        console.error(`indexer ${indexer.id} failed on ${node.path}:`, err.message);
-      }
+    const ctx = this.#indexCtx(node, storage);
+    for (const indexer of matching) await this.#runOneIndexer(indexer, node, ctx);
+  }
+
+  /** Build the context an indexer gets: capped reads + a time-limited read URL. */
+  #indexCtx(node, storage) {
+    const readRange = () => storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
+    return {
+      node: { id: node.id, name: node.name, path: node.path, size: node.size, contentType: node.contentType },
+      maxBytes: this.maxIndexBytes,
+      readBytes: async () => readAll((await readRange()).stream),
+      readText: async () => new TextDecoder().decode(await readAll((await readRange()).stream)),
+      // A time-limited URL a remote/isolated indexer can fetch the bytes from. S3-class
+      // backends presign directly; otherwise it's unsupported here (a self-managed,
+      // token-scoped server URL is a follow-up — see the design doc).
+      presignRead: async ({ expiresIn = 300 } = {}) => {
+        if (!storage.capabilities?.presignDownload) {
+          throw TroveError.unsupported('This collection cannot presign reads for indexers');
+        }
+        return storage.presignGet(node.storageKey, { expiresIn, responseContentType: node.contentType });
+      },
+    };
+  }
+
+  /** Run a single indexer against a node and apply (or clear) its contribution. */
+  async #runOneIndexer(indexer, node, ctx) {
+    try {
+      const contribution = await indexer.index(node, ctx ?? this.#indexCtx(node, await this.storageFor(node.collectionId)));
+      await this.#applyContribution(node.id, indexer.id, contribution);
+    } catch (err) {
+      console.error(`indexer ${indexer.id} failed on ${node.path}:`, err.message);
     }
+  }
+
+  /**
+   * Re-run one indexer over every file it matches (e.g. right after an indexer is
+   * installed/enabled). Walks the metadata store in pages so a large drive doesn't
+   * load at once. Returns how many nodes it contributed to.
+   */
+  async backfillIndexer(indexer, { limit = Infinity, pageSize = 200 } = {}) {
+    let done = 0;
+    let afterId = null;
+    while (done < limit) {
+      const files = await this.metadata.listFiles({ afterId, limit: Math.min(pageSize, limit - done) });
+      if (!files.length) break;
+      for (const node of files) {
+        afterId = node.id;
+        let matches = false;
+        try { matches = indexer.match(node); } catch { matches = false; }
+        if (!matches) continue;
+        await this.#runOneIndexer(indexer, node);
+        done++;
+        if (done >= limit) break;
+      }
+      if (files.length < pageSize) break;
+    }
+    return { indexed: done };
+  }
+
+  /**
+   * Remove one contributor's contributions from every node (e.g. on uninstall).
+   * Scans in pages; returns how many nodes were cleared.
+   */
+  async purgeIndexer(contributorId, { pageSize = 500 } = {}) {
+    let cleared = 0;
+    let afterId = null;
+    for (;;) {
+      const files = await this.metadata.listFiles({ afterId, limit: pageSize });
+      if (!files.length) break;
+      for (const node of files) {
+        afterId = node.id;
+        if (node.contributions && node.contributions[contributorId]) {
+          await this.removeContributions(node.id, contributorId);
+          cleared++;
+        }
+      }
+      if (files.length < pageSize) break;
+    }
+    return { cleared };
   }
 }
 

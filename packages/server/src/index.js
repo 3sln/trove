@@ -19,6 +19,7 @@ import {
   SidecarService, NotificationCenter, WebPushService,
   CollectionService,
   PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
+  InProcessIndexerRuntime, PluginIndexers,
   TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
@@ -182,9 +183,19 @@ export async function createServer(config = {}) {
   const packageStore = config.packages instanceof PackageStore
     ? config.packages
     : new StoragePackageStore(config.packageStore ? buildStorage(config.packageStore) : storage);
+  // Server indexer sub-packages run through a pluggable IndexerRuntime. The default is
+  // the in-process (trusted) runner; a deployment swaps in an isolate runtime by
+  // passing config.indexerRuntime. Set config.serverIndexers = false to disable them.
+  const indexerRuntime = config.serverIndexers === false
+    ? null
+    : (config.indexerRuntime || new InProcessIndexerRuntime());
+  const pluginIndexers = indexerRuntime
+    ? new PluginIndexers({ vfs, runtime: indexerRuntime, packages: packageStore })
+    : null;
   const plugins = new PluginService({
     packages: packageStore,
     installs: new SqlitePluginInstallStore({ provider: sqliteProvider }),
+    indexers: pluginIndexers,
     isAdmin: (principal) => (collections ? collections.isAdmin(principal) : !!principal),
     maxPackageBytes: config.maxUploadBytes ?? undefined,
     strict: config.enforcePluginCaps === true,
@@ -365,6 +376,10 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // can name any pluginId" gap). Off by default for back-compat with pre-existing
   // local-only installs; flip on once clients have re-uploaded their account plugins.
   if (env.TROVE_ENFORCE_PLUGIN_CAPS === 'true') config.enforcePluginCaps = true;
+
+  // Server indexer sub-packages run in-process (trusted; admin-gated at install).
+  // TROVE_SERVER_INDEXERS=0/false refuses server-indexer plugins on this deployment.
+  if (env.TROVE_SERVER_INDEXERS === '0' || env.TROVE_SERVER_INDEXERS === 'false') config.serverIndexers = false;
 
   // Plugin package blob store: defaults to the primary storage backend (prefixed).
   // Point it at a separate bucket/root with TROVE_PACKAGE_STORE (+ its own settings).

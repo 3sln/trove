@@ -1,0 +1,64 @@
+// Server indexer pipeline (HTTP wiring): an admin installs a plugin that ships a
+// server indexer; installing backfills existing files, and uninstalling purges. This
+// exercises the createServer wiring (IndexerRuntime + PluginIndexers ↔ PluginService ↔
+// Vfs); the fine-grained pipeline behaviour is covered by the core test.
+
+import { test, expect } from 'bun:test';
+import { zipSync, strToU8 } from 'fflate';
+import { createServer } from '../src/index.js';
+
+const INDEXER_SRC = `export default async (node, ctx) => {
+  const text = await ctx.readText();
+  const words = text.trim() ? text.trim().split(/\\s+/).length : 0;
+  return { tags: { indexed: true, words } };
+};`;
+
+function indexerPackage(id = 'com.acme.demo') {
+  return zipSync({
+    'manifest.json': strToU8(JSON.stringify({ id, name: 'Demo', version: '1.0.0', capabilities: { ui: true } })),
+    'plugin.js': strToU8('//'),
+    'indexers/demo/manifest.json': strToU8(JSON.stringify({ id: id + '.idx', match: { ext: ['.demo'] } })),
+    'indexers/demo/index.js': strToU8(INDEXER_SRC),
+  });
+}
+
+async function json(handle, method, path, body) {
+  const res = await handle(new Request(`http://t${path}`, {
+    method, headers: body ? { 'content-type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  }));
+  const text = await res.text();
+  return { status: res.status, json: text ? JSON.parse(text) : null };
+}
+
+// Full proxied upload of a small text body; returns the created node.
+async function upload(handle, name, content) {
+  const create = await json(handle, 'POST', '/api/uploads', { parentId: 'root', name, size: content.length, contentType: 'application/octet-stream' });
+  const d = create.json;
+  await handle(new Request(`http://t${d.transfer.partUrl.replace('{partNumber}', '1')}`, { method: 'PUT', body: content }));
+  const done = await json(handle, 'POST', d.endpoints.complete, {});
+  return done.json.node;
+}
+
+test('installing a server indexer backfills existing files; uninstall purges', async () => {
+  const { handle } = await createServer({ admins: ['anonymous'] });
+
+  // A file exists before the indexer is installed (its .demo ext matches nothing yet).
+  const node = await upload(handle, 'report.demo', 'alpha beta gamma');
+  let stat = await json(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  expect(stat.json.node.contributions?.['com.acme.demo.idx']).toBeUndefined();
+
+  // Admin installs it → activate() backfills synchronously within the request.
+  const inst = await handle(new Request('http://t/api/plugins/install', { method: 'POST', body: indexerPackage() }));
+  expect(inst.status).toBe(200);
+
+  stat = await json(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  expect(stat.json.node.contributions['com.acme.demo.idx'].tags).toEqual({ indexed: true, words: 3 });
+  expect(stat.json.node.tags.words).toBe(3); // merged view
+
+  // Uninstall → purge() clears the contribution.
+  const rm = await json(handle, 'DELETE', '/api/plugins/com.acme.demo/install');
+  expect(rm.json.removed).toBe('com.acme.demo');
+  stat = await json(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  expect(stat.json.node.contributions?.['com.acme.demo.idx']).toBeUndefined();
+});
