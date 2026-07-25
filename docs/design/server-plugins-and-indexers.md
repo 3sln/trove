@@ -90,18 +90,19 @@ storage. It gets **nothing else** — no filesystem, no ambient network, no host
 
 ---
 
-## 4. Server package store & install record
+## 4. Package storage — two separated concerns
 
-Account install flow:
+Bulk package **blobs** and install **bookkeeping** have different shapes, sizes, and
+ideal backends, so they are separate:
 
-1. **Upload** the full package (reuse the upload machinery + `maxUploadBytes` quota).
-2. **Re-validate server-side** — re-parse, re-check signature/trust and the capability
-   manifest. Never trust the client's validation; the server now *executes* part of it.
-3. **Store** the package blob under a system prefix in the storage backend, e.g.
-   `_plugins/<account>/<pluginId>/<version>.zip`, plus an install record:
+### 4a. Install records → SQLite (the shared provider)
+
+Small, structured, queryable ("list this account's plugins", "which installs register
+indexer X", "is `storage` granted for `(account, plugin)`"). Reuse the existing shared
+SQLite provider — a dedicated `plugin_installs` table (preferred over KV for the
+list/filter queries). One row per `(account, pluginId)`:
 
 ```jsonc
-// install record (KV / metadata; one per (account, pluginId))
 {
   "account": "acct_…",
   "pluginId": "com.acme.docs",
@@ -113,20 +114,63 @@ Account install flow:
   "secrets": { /* encrypted at rest; API tokens */ },
   "installedBy": "user_…",
   "adminApprovedBy": "user_…|null",
-  "packageKey": "_plugins/acct_…/com.acme.docs/1.4.0.zip",
+  "packageRef": "acct_…/com.acme.docs/1.4.0.zip",  // key into the PackageStore (§4b)
+  "digest": "sha256:…",              // content hash: integrity + cache key + dedupe
   "createdAt": 0, "updatedAt": 0
 }
 ```
 
+### 4b. Package blobs → a pluggable `PackageStore`
+
+The zips are bulk data — users will usually want S3/R2 or a filesystem/NAS for them,
+and may want that **independent** of where their file collections live (a dedicated
+bucket, or filesystem packages while files are on S3, etc.). So it's a pluggable
+provider, mirroring the `StorageBackend` DI already in place:
+
+```js
+// core/plugins/packageStore.js
+export class PackageStore {
+  async put(ref, bytes) {}            // store a package (idempotent by digest)
+  async get(ref) {}                   // -> { stream, size } (for download/extract)
+  async has(ref) {}                   // -> boolean (cache/dedupe check)
+  async delete(ref) {}
+  async presignGet(ref, { ttl }) {}   // optional: device downloads straight from storage
+}
+```
+
+`PackageStore` is essentially a narrow, namespaced `StorageBackend`, so the default
+impl just wraps one — `PrefixedStorage(storageBackend, '_plugins/')` — and the same
+drivers (`memory` / `filesystem` / `s3`) apply. Config resolves it exactly like the
+other backends:
+
+- Default: reuse the **primary storage backend**, prefixed under `_plugins/`.
+- Override via `TROVE_PACKAGE_STORE` (+ its own `TROVE_PACKAGE_S3_*` / `TROVE_PACKAGE_FS_ROOT`)
+  to point packages at a separate bucket/root — same `{ driver, … }` config shape as
+  `TROVE_STORAGE`, resolved through the same `resolve(value, StorageBackend, build)` seam.
+
+It doubles as a **cache**: content-addressed by `digest`, so re-installs/updates dedupe,
+devices can be served (or presigned) straight from it, and the isolate runtime extracts
+modules from it (with an in-memory/local extract cache in front for hot indexers — an
+implementation detail of the runtime, not of the store).
+
+### 4c. Account install flow
+
+1. **Upload** the full package (reuse the upload machinery + `maxUploadBytes` quota).
+2. **Re-validate server-side** — re-parse, re-check signature/trust and the capability
+   manifest, compute the `digest`. Never trust the client's validation; the server now
+   *executes* part of it.
+3. **Persist** — `PackageStore.put(ref, bytes)` for the blob (skip if `has(digest)`),
+   and the install-record row in SQLite.
 4. **Register server components** (§5) and kick off the **backfill** pass.
 
-**Sync:** `GET /api/plugins` returns the account-installed list; a device downloads any
-package it lacks and enables the client parts locally. Devices are caches; the server
-is canonical. Updates = re-upload a new version → re-register → devices re-sync.
+**Sync:** `GET /api/plugins` returns the account-installed list from SQLite; a device
+downloads any package it lacks via the server (or a `PackageStore.presignGet` when the
+backend supports it) and enables the client parts locally. Devices are caches; the
+server is canonical. Updates = re-upload a new version → re-register → devices re-sync.
 
 **Server-side capability enforcement (the fix):** every `storage` / `indexer` /
-`network` call now checks the install record — "this account installed this plugin, at
-this version, with this cap granted" — instead of trusting the client.
+`network` call now checks the SQLite install record — "this account installed this
+plugin, at this version, with this cap granted" — instead of trusting the client.
 
 ---
 
@@ -218,7 +262,9 @@ relevant to the Cloudflare limits above.
 
 Because the server holds everything, uninstall is a server-owned, ordered sequence:
 
-1. Delete the package blob + install record + config/secrets.
+1. Delete the install-record row (config/secrets) from SQLite and the blob via
+   `PackageStore.delete(ref)` — skip the blob delete if another install still
+   references the same `digest` (content-addressed dedupe).
 2. Drop the scoped server SQLite (`DELETE /api/plugins/:id/data`). Domain-shared scope
    is left intact (shared across the vendor's plugins).
 3. For each server indexer: unregister from the `IndexerRegistry`, and **purge its
@@ -245,8 +291,10 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 
 ## 9. Suggested phasing
 
-1. **Server package store + install records + server-side capability enforcement.**
-   (Closes the current authz gap; enables cross-device sync of account plugins.)
+1. **Package storage + install records + server-side capability enforcement.**
+   Pluggable `PackageStore` (default = primary `StorageBackend` prefixed under
+   `_plugins/`; separately configurable) for blobs, a `plugin_installs` SQLite table
+   for records. Closes the current authz gap; enables cross-device sync.
 2. **IndexerRuntime interface + Node (`isolated-vm`) impl + auto-trigger in `#indexNode`
    + backfill pass + output caps.**
 3. **`ctx.file.presignRead()`** (S3 native + self-signed URL).
