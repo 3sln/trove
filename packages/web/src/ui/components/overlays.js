@@ -3,9 +3,10 @@
 // panel (which hosts a plugin's own iframe, Chrome-extension style).
 
 import { dd } from '../../runtime.js';
-import { icon } from '../icon.js';
+import { icon, iconForNode } from '../icon.js';
 import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
+import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -15,6 +16,7 @@ export function dialog(state, ui) {
   if (!d) return null;
   if (d.kind === 'collection') return collectionDialog(d, ui);
   if (d.kind === 'plugin-review') return pluginReview(d, ui);
+  if (d.kind === 'opener-chooser') return openerChooserDialog(d, ui);
   const wb = ui.platform.workbench;
   let value = d.value ?? '';
   const submit = () => (d.kind === 'confirm' ? d.onConfirm?.() : d.onSubmit?.(value));
@@ -37,6 +39,48 @@ export function dialog(state, ui) {
       div({ className: 'row-actions' },
         button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
         button({ className: `btn ${d.danger ? 'danger' : 'primary'}` }, d.confirmLabel || 'OK').on({ click: submit }),
+      ),
+    ),
+  );
+}
+
+// Choose which viewer opens a file when several openers match. Reactive via the
+// workbench dialog state (updateDialog), so radio/checkbox selection survives
+// re-renders. "Remember" persists a per-file-type association in settings.
+function openerChooserDialog(d, ui) {
+  const wb = ui.platform.workbench;
+  const platform = ui.platform;
+  const selected = d.openerId || d.current || d.openers[0]?.id;
+  const remember = !!d.remember;
+  const confirm = () => {
+    if (remember && selected) rememberOpener(platform, typeKeyFor(d.node), selected);
+    wb.closeDialog();
+    wb.openFile(d.node, selected, { reset: !!d.reset });
+  };
+  return div({},
+    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'dialog opener-chooser' },
+      h3(`Open “${d.node.name}” with…`),
+      div({ className: 'opener-list' },
+        ...d.openers.map((o) =>
+          label({ className: `opener-opt ${o.id === selected ? 'sel' : ''}` },
+            input({ type: 'radio', name: 'opener-choice', checked: o.id === selected })
+              .on({ change: () => wb.updateDialog({ openerId: o.id }) }),
+            icon(o.icon || iconForNode(d.node), { size: 18 }),
+            div({ className: 'oo-main' },
+              span({ className: 'oo-title' }, o.title || o.id),
+              span({ className: 'oo-src' }, openerSource(platform, o)),
+            ),
+          ).on({ click: () => wb.updateDialog({ openerId: o.id }) }),
+        ),
+      ),
+      label({ className: 'opener-remember' },
+        input({ type: 'checkbox', checked: remember }).on({ change: (e) => wb.updateDialog({ remember: e.target.checked }) }),
+        span(`Always use this for ${typeLabelFor(d.node)}`),
+      ),
+      div({ className: 'row-actions' },
+        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn primary' }, 'Open').on({ click: confirm }),
       ),
     ),
   );

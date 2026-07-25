@@ -1,7 +1,9 @@
 import { dd } from '../../runtime.js';
 import { prettyKey } from '../../platform/keybindings.js';
+import { icon } from '../icon.js';
+import { listAssociations, rememberOpener } from '../../bl/openers.js';
 
-const { div, h2, h3, p, span, select, option, input, label } = dd;
+const { div, h2, h3, p, span, select, option, input, label, button } = dd;
 
 export default function settingsView(state, ui) {
   const groups = ui.platform.settings.grouped();
@@ -11,6 +13,7 @@ export default function settingsView(state, ui) {
         h2('Settings'),
         p({ className: 'sub' }, 'Preferences are stored in this browser. Plugins contribute their own settings here too.'),
         ...groups.map((g) => group(g, ui)),
+        openersSection(ui),
         keybindingsSection(ui),
       ),
     ),
@@ -66,6 +69,32 @@ function control(s, ui) {
     }).on({ change: commit });
   }
   return input({ className: 'input', value: s.value ?? '' }).on({ change: (e) => set(e.target.value) });
+}
+
+// Default openers per file type — the "always use this" choices from the opener
+// chooser. Each row shows the type → viewer; the × forgets it (so the next open of
+// that type asks again). Empty when the user hasn't set any defaults.
+function openersSection(ui) {
+  const rows = listAssociations(ui.platform);
+  return div({ className: 'group' },
+    h3('Default Openers'),
+    rows.length
+      ? div({},
+          ...rows.map((r) =>
+            div({ className: 'setting' },
+              div({ className: 'info' },
+                div({ className: 't' }, r.typeKey),
+                div({ className: 'd' }, r.missing ? `${r.openerTitle} (no longer installed)` : `Opens with ${r.openerTitle}`),
+              ),
+              div({ className: 'control' },
+                button({ className: 'iconbtn', title: 'Forget this default' }, icon('close', { size: 14 }))
+                  .on({ click: () => rememberOpener(ui.platform, r.typeKey, null) }),
+              ),
+            ),
+          ),
+        )
+      : p({ className: 'sub', $styling: { margin: 0 } }, 'No default openers set yet. When a file type has more than one viewer, you can pick one and check “Always use this”.'),
+  );
 }
 
 function keybindingsSection(ui) {

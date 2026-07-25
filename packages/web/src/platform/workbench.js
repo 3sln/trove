@@ -128,7 +128,14 @@ export class WorkbenchService {
       stack = [{ kind: 'search' }, panel];
     } else {
       const at = this.state.stack.findIndex((p) => p.kind === 'file' && p.id === node.id);
-      stack = at >= 0 ? this.state.stack.slice(0, at + 1) : [...this.state.stack, panel];
+      if (at >= 0) {
+        // Already open — jump back to it, but adopt the (possibly new) opener so
+        // reopening with a different one actually switches the viewer.
+        stack = this.state.stack.slice(0, at + 1);
+        stack[at] = panel;
+      } else {
+        stack = [...this.state.stack, panel];
+      }
     }
     this.#set({ activity: 'home' });
     this.#pushRecent(node);
@@ -203,6 +210,10 @@ export class WorkbenchService {
   }
   showDialog(dialog) {
     this.#set({ dialog });
+  }
+  /** Merge a patch into the open dialog's state (reactive dialogs, e.g. the chooser). */
+  updateDialog(patch) {
+    if (this.state.dialog) this.#set({ dialog: { ...this.state.dialog, ...patch } });
   }
   closeDialog() {
     this.#set({ dialog: null });

@@ -8,6 +8,7 @@
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { renderOpener } from './openers/index.js';
+import { availableOpeners } from '../../bl/openers.js';
 
 const { div, span, button } = dd;
 
@@ -39,12 +40,23 @@ function navBar(files, active, ui) {
           .on({ click: () => w.openFile(p.node, p.openerId) })),
     ),
     div({ className: 'vn-actions' },
+      openerSwitch(active, ui),
       button({ className: 'iconbtn', title: 'Details & comments' }, icon('info', { size: 15 }))
         .on({ click: () => w.toggleInfoPanel() }),
       button({ className: 'iconbtn', title: 'Close (Esc)' }, icon('close', { size: 15 }))
         .on({ click: () => w.showHome() }),
     ),
   );
+}
+
+// "Open with…" — shown only when more than one opener can handle this file. Opens
+// the chooser (pre-selected to the current opener) so the user can switch viewers,
+// and optionally make the choice their default for this file type.
+function openerSwitch(active, ui) {
+  const openers = availableOpeners(ui.platform, active.node);
+  if (openers.length <= 1) return null;
+  return button({ className: 'iconbtn', title: 'Open with…' }, icon('dots', { size: 15 }))
+    .on({ click: () => ui.platform.workbench.showDialog({ kind: 'opener-chooser', node: active.node, openers, current: active.openerId }) });
 }
 
 function openerHost(panel, ui) {

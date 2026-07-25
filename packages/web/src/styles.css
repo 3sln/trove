@@ -354,6 +354,18 @@ kbd {
 .dialog .body { color: var(--text-dim); line-height: 1.5; margin-bottom: 16px; }
 .dialog .row-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
+/* Opener chooser */
+.opener-chooser .opener-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+.opener-opt { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
+.opener-opt:hover { background: var(--bg-hover); }
+.opener-opt.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.opener-opt input { accent-color: var(--accent); }
+.opener-opt .oo-main { display: flex; flex-direction: column; gap: 1px; }
+.opener-opt .oo-title { font-size: 13px; font-weight: 500; }
+.opener-opt .oo-src { font-size: 11px; color: var(--text-dim); }
+.opener-remember { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+.opener-remember input { accent-color: var(--accent); }
+
 .menu {
   position: fixed; z-index: 60; min-width: 200px; background: var(--bg-elevated);
   border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow); padding: 5px;

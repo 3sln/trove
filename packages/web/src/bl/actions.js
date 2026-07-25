@@ -7,6 +7,7 @@
 import { Action } from '@3sln/ngin';
 import { newId } from '@trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
+import { availableOpeners, rememberedOpenerId } from './openers.js';
 
 class AppAction extends Action {
   static deps = ['app'];
@@ -155,15 +156,26 @@ export class OpenFileAction extends AppAction {
     // selection) — dereferencing a null node would throw an unhandled rejection.
     if (!this.node) return;
     if (this.node.kind === 'folder') return app.engine.dispatch(new NavigateAction(this.node.id));
-    // Skip openers that aren't available right now (e.g. a plugin previewer that
-    // needs the network while we're offline) so we fall back to a built-in one.
-    const opener = app.platform.contributions.openerFor(
-      this.node,
-      (w) => app.platform.context.evaluate(w),
-      (o) => app.platform.plugins.isAvailable(o),
-    );
-    const openerId = opener?.id || 'core.fallback';
-    app.platform.workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
+    const { platform } = app;
+    const open = (openerId) => platform.workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
+
+    // An explicit opener (e.g. the switch-opener control) wins outright.
+    if (this.opts.openerId) return open(this.opts.openerId);
+
+    // Only openers available right now (a plugin previewer needing the network while
+    // offline is skipped, so we fall back to a built-in one).
+    const avail = availableOpeners(platform, this.node);
+
+    // A remembered choice for this file type, if that opener is still available.
+    const remembered = rememberedOpenerId(platform, this.node);
+    if (remembered && avail.some((o) => o.id === remembered)) return open(remembered);
+
+    // Several openers and no saved preference → let the user choose (with an option to
+    // remember). One or none → just open the best (or the download fallback).
+    if (avail.length > 1) {
+      return platform.workbench.showDialog({ kind: 'opener-chooser', node: this.node, openers: avail, reset: !!this.opts.reset });
+    }
+    open(avail[0]?.id || 'core.fallback');
   }
 }
 
