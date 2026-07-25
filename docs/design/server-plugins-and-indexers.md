@@ -17,7 +17,7 @@ filtering, removable per contributor).
   `{ semanticTexts, tags, metadata }`. Built-in indexers (`textIndexer`) run
   server-side on upload via `Vfs.#indexNode`. `Vfs.removeContributions(node, id)`
   reverses one contributor cleanly.
-- **Plugin indexers — ✅ built:** declared in the manifest (`contributes.indexers`,
+- **Plugin indexers — ✅ built:** declared in the manifest (a `type: "indexer"` contribution,
   each naming an entry module) and run **server-side** by `PluginIndexers` +
   `IndexerRuntime` on every upload, with backfill on install and purge on uninstall.
   The old client-side `ctx.contributes.indexer` + `indexer:run` path was dead code —
@@ -56,7 +56,32 @@ the server can sync it, enforce its caps, and clean it up.
 
 ---
 
-## 3. Package format
+## 3. Identity — every package has one, every contribution is addressed under it
+
+A package declares the **domain** it belongs to and its **name** within that domain.
+`<domain>/<name>` is the plugin id. There is no anonymous install: a self-chosen opaque
+id can be squatted, can't be verified, and can't distinguish "version 2 of this plugin"
+from "a different plugin by the same vendor". The domain is proven — the package is
+signed, and the domain publishes the signing key at
+`https://<domain>/.well-known/trove-assetlinks.json`.
+
+Every contribution is addressed by a URI under its plugin:
+
+```
+trove+contrib:<domain>/<plugin>/<contribution>
+trove+contrib:acme.com/docs/pdfViewer
+```
+
+The host's own contributions use the reserved `core` domain
+(`trove+contrib:core/workbench/explorer.delete`), so the address space has exactly one
+shape and built-ins are not a special case. The workbench still says
+`exec('explorer.delete')`; that's shorthand for the core URI, resolved in one place.
+
+This is what removes cross-kind collisions. A plugin's opener, status slot, register and
+command may all be called `status` — they're `.../docs/status` exactly once, because
+names are unique *within a plugin*, not within a kind.
+
+## 4. Package format
 
 A plugin is **one module tree**. Indexers and openers are not nested sub-packages —
 they're **contributions declared in the manifest**, each naming an entry module inside
@@ -64,30 +89,52 @@ that same tree, so everything in a plugin shares modules and code.
 
 ```
 plugin.zip
-  manifest.json                      # capabilities, network endpoints, settings, contributes…
+  manifest.json                      # identity, capabilities, network endpoints, settings, contributes…
   src/index.js                       # the plugin's own entry (background frame)
   src/shared.js                      # shared by everything below
   src/indexers/pdf.js                # an indexer entry:  export default async (node, ctx) => Contribution
   src/openers/player.js              # an opener entry:   activate(ctx => ctx.onOpen(file => …))
+  keymaps/default.json               # a keymap: [{ key, command, when? }, …]
 ```
 
+`contributes` is **one map of `name -> contribution`**, where each contribution states
+its own `type` and that type's options — not a collection per kind. The kinds never
+needed separate namespaces; they needed a shared one.
+
 ```jsonc
+"domain": "acme.com",
+"name": "docs",
+"displayName": "Acme Docs",
 "contributes": {
-  "indexers": [{
-    "id": "com.acme.pdf",
-    "title": "PDF text & metadata",
-    "match": { "mime": ["application/pdf"], "ext": [".pdf"] },
-    "entry": "src/indexers/pdf.js"
-  }],
-  "openers": [{
-    "id": "com.acme.pdfview",
-    "title": "PDF Viewer",
-    "match": { "ext": [".pdf"] },
-    "entry": "src/openers/pdf.js"
-  }],
-  "commands": [...], "statusItems": [...], "keybindings": [...]
+  "pdfIndex":  { "type": "indexer",    "title": "PDF text & metadata",
+                 "match": { "mime": ["application/pdf"], "ext": [".pdf"] },
+                 "entry": "src/indexers/pdf.js" },
+  "pdfViewer": { "type": "opener",     "title": "PDF Viewer",
+                 "match": { "ext": [".pdf"] }, "entry": "src/openers/pdf.js" },
+  "export":    { "type": "command",    "title": "Export as…", "offline": true },
+  "status":    { "type": "statusItem", "slot": "right", "render": "html" },
+  "busy":      { "type": "register",   "default": false },
+  "keys":      { "type": "keymap",     "path": "keymaps/default.json" }
 }
 ```
+
+| type | what it is | driven at runtime by |
+| --- | --- | --- |
+| `command` | a palette command | its handler in the plugin's primary frame |
+| `opener` | a viewer for matching files | its `entry` module, in its own frame |
+| `indexer` | indexes matching files (server-side) | its `entry` module, in the isolate |
+| `statusItem` | a slot in the status bar | `ctx.ui.status(name).set(html)` — sanitized |
+| `register` | a context value slot | `ctx.registers.set(name, value)` |
+| `keymap` | key bindings from a JSON file | nothing — pure data |
+
+**Registers** are the equivalent of a VS Code context key, but contributed rather than
+invented: a when-clause can only gate on a value somebody declared and owns, and it
+names it by URI (`"when": "trove+contrib:acme.com/docs/busy"`).
+
+**Keymaps** are read and validated at install. A binding naming one of the plugin's own
+commands resolves to that contribution's URI; a binding to anything else must appear in
+the manifest's `commands` allowlist, so a shortcut can't be a way around the per-command
+grant the user approved.
 
 **Indexers always run on the server.** There is no client-side indexer: indexing is a
 property of the drive, not of whoever happens to have a tab open — it must happen once
@@ -106,7 +153,7 @@ storage. It gets **nothing else** — no filesystem, no ambient network, no host
 
 ---
 
-## 4. Package storage — two separated concerns
+## 5. Package storage — two separated concerns
 
 Bulk package **blobs** and install **bookkeeping** have different shapes, sizes, and
 ideal backends, so they are separate:
@@ -190,7 +237,7 @@ plugin, at this version, with this cap granted" — instead of trusting the clie
 
 ---
 
-## 5. IndexerRuntime — running untrusted indexer code with limits
+## 6. IndexerRuntime — running untrusted indexer code with limits
 
 Execution is a **pluggable provider** (same DI pattern as storage / vectorStore /
 embeddings / searchTransformer), because no single isolate primitive spans our targets.
@@ -253,7 +300,7 @@ and rate-limited, resumable, and it `log()`s anything it skips.
 
 ---
 
-## 6. `ctx.file.presignRead()` — a time-limited remote read URL
+## 7. `ctx.file.presignRead()` — a time-limited remote read URL
 
 So an indexer can hand the file to an external service instead of streaming bytes
 through itself:
@@ -274,7 +321,7 @@ relevant to the Cloudflare limits above.
 
 ---
 
-## 7. Uninstall teardown
+## 8. Uninstall teardown
 
 Because the server holds everything, uninstall is a server-owned, ordered sequence:
 
@@ -291,7 +338,7 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 
 ---
 
-## 8. Security summary
+## 9. Security summary
 
 - **Authoritative capability enforcement** via the install record (fixes today's
   client-trusted `storage`/index gap).
@@ -305,7 +352,7 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 
 ---
 
-## 9. Suggested phasing
+## 10. Suggested phasing
 
 1. **Package storage + install records + server-side capability enforcement.**
    ✅ **Implemented** (`packages/core/src/plugins/*`, server routes + wiring):
@@ -358,7 +405,7 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 5. **Install-scope UX**: device vs. account, the admin-approval flow, cross-device sync
    list + download.
 
-## 10. Open questions
+## 11. Open questions
 
 - Exact GA status + limits of the Cloudflare dynamic Worker Loader / Sandbox (memory,
   CPU, module size, outbound fetch shape) — gates step 4.

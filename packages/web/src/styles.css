@@ -343,7 +343,9 @@ kbd {
 .pf-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .pf-dot.on { background: var(--success); }
 .pf-dot.no { background: var(--text-faint); }
-.palette .none { padding: 22px; text-align: center; color: var(--text-faint); }
+.palette .none { padding: 22px; text-align: center; color: var(--text-faint); display: flex; align-items: center; justify-content: center; gap: 8px; }
+.palette .none.error { color: var(--danger, #e5534b); }
+.palette .none .spinner { width: 13px; height: 13px; }
 
 .dialog {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);

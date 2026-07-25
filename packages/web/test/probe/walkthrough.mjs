@@ -121,8 +121,17 @@ await page.waitForSelector('.palette input', { timeout: 3000 });
 await page.locator('.palette input').fill('cooking');
 // Debounced + a server round-trip — wait for the result, don't race a fixed timeout.
 await page.waitForFunction(() => (window.__trove.app.search.state.paletteFiles || []).length > 0, { timeout: 10000 }).catch(() => {});
-const qo = await page.evaluate(() => (window.__trove.app.search.state.paletteFiles || []).map((r) => r.node.name));
-check('quick-open finds files by name', qo.includes('cooking.txt'), qo.join(', '));
+// Report the whole palette state, not just the names: "empty" can mean the request
+// failed, is still in flight, or never fired — and those need different fixes.
+const qo = await page.evaluate(() => {
+  const se = window.__trove.app.search.state;
+  return {
+    names: (se.paletteFiles || []).map((r) => r.node.name),
+    q: se.paletteQuery, loading: se.paletteLoading, error: se.paletteError,
+    dom: document.querySelector('.palette input')?.value,
+  };
+});
+check('quick-open finds files by name', qo.names.includes('cooking.txt'), JSON.stringify(qo));
 await shot('quick-open');
 await page.keyboard.press('Escape');
 

@@ -13,7 +13,11 @@ export default function commandPalette(state, ui) {
   const pal = state.overlay.palette;
   if (!pal) return null;
   const wb = ui.platform.workbench;
-  const items = pal.mode === 'files' ? (state.se.paletteFiles || []) : filterCommands(state, ui, pal.query);
+  // With no query there is nothing to show — and showing the PREVIOUS session's hits
+  // would be worse than nothing, since they don't match what the field now says.
+  const items = pal.mode === 'files'
+    ? (pal.query.trim() ? state.se.paletteFiles || [] : [])
+    : filterCommands(state, ui, pal.query);
   const index = Math.min(pal.index, Math.max(0, items.length - 1));
 
   const run = (item) => {
@@ -32,9 +36,19 @@ export default function commandPalette(state, ui) {
           type: 'text', value: pal.query, autofocus: true,
           placeholder: pal.mode === 'files' ? 'Search files by name…' : 'Type a command…',
         }).on({
-          input: (e) => onQuery(ui, pal.mode, e.target.value),
+          // NOTE: the mode is read from live state inside onQuery, NOT captured here.
+          // A listener belongs to the render that created it, and rendering is async —
+          // a keystroke landing between `openPalette('files')` and the re-render would
+          // otherwise be handled as a COMMANDS keystroke and silently do nothing.
+          input: (e) => onQuery(ui, e.target.value),
           keydown: (e) => onKey(e, ui, items, index, run),
-          $attach: (el) => queueMicrotask(() => el.focus()),
+          $attach: (el) => {
+            queueMicrotask(() => el.focus());
+            // Same reason in reverse: dodo only patches `value` when the vnode prop
+            // changed, so a reopened palette whose query is '' both times would keep
+            // whatever text the previous session left in the live DOM node.
+            if (el.value !== pal.query) el.value = pal.query;
+          },
         }),
       ),
       div({ className: 'results' },
@@ -43,10 +57,19 @@ export default function commandPalette(state, ui) {
             const hover = () => wb.setPaletteIndex(i);
             return pal.mode === 'files' ? fileOpt(item, i === index, run, hover) : cmdOpt(item, i === index, ui, run, hover);
           })
-          : div({ className: 'none' }, pal.mode === 'files' ? 'No files found' : 'No matching commands'),
+          : emptyResults(pal, state),
       ),
     ),
   );
+}
+
+// Nothing to show is three different situations, and saying "No files found" for all
+// three tells the user something false in two of them.
+function emptyResults(pal, state) {
+  if (pal.mode !== 'files') return div({ className: 'none' }, 'No matching commands');
+  if (state.se.paletteError) return div({ className: 'none error' }, icon('warn', { size: 14 }), ` ${state.se.paletteError}`);
+  if (state.se.paletteLoading) return div({ className: 'none' }, div({ className: 'spinner' }), ' Searching…');
+  return div({ className: 'none' }, pal.query.trim() ? 'No files found' : 'Type to search files by name');
 }
 
 function cmdOpt(cmd, active, ui, run, hover) {
@@ -118,11 +141,14 @@ function onKey(e, ui, items, index, run) {
 }
 
 let fileTimer = null;
-function onQuery(ui, mode, value) {
-  ui.platform.workbench.setPaletteQuery(value);
-  if (mode !== 'files') return;
+function onQuery(ui, value) {
+  const wb = ui.platform.workbench;
+  wb.setPaletteQuery(value);
+  // The palette's CURRENT mode, not whichever one was on screen when this listener
+  // was created — see the note at the input.
+  clearTimeout(fileTimer);
+  if (wb.overlay.state.palette?.mode !== 'files') return;
   // Route the file search through an action; results land in the reactive search
   // service (state.se.paletteFiles), so the palette re-renders without ad-hoc state.
-  clearTimeout(fileTimer);
   fileTimer = setTimeout(() => ui.go(new QuickOpenAction(value)), 200);
 }

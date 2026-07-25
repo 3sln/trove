@@ -16,7 +16,9 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default {
   rootDir,
-  files: ['test/plugins.test.js', 'test/mp4.test.js'],
+  // sanitize.browser.js is browser-ONLY (it parses into a real inert <template>),
+  // which is why it isn't named *.test.js — `bun test` must not pick it up.
+  files: ['test/plugins.test.js', 'test/mp4.test.js', 'test/contributions.test.js', 'test/sanitize.browser.js'],
   nodeResolve: true,
   middleware: [sqlWasmMiddleware()],
   plugins: [textModulePlugin({ rootDir })],

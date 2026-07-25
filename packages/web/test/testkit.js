@@ -42,6 +42,13 @@ function makeExpect(received) {
     toBeFalsy: () => check(!received, `expected ${fmt(received)} to be falsy`),
     toBeDefined: () => check(received !== undefined, `expected value to be defined`),
     toBeGreaterThan: (n) => check(received > n, `expected ${fmt(received)} > ${fmt(n)}`),
+    toBeLessThan: (n) => check(received < n, `expected ${fmt(received)} < ${fmt(n)}`),
+    toBeLessThanOrEqual: (n) => check(received <= n, `expected ${fmt(received)} <= ${fmt(n)}`),
+    // Subset match: every key in `exp` must deep-equal the same key on `received`.
+    toMatchObject: (exp) => check(
+      received != null && Object.entries(exp).every(([k, v]) => deepEqual(received[k], v)),
+      `expected ${fmt(received)} to match ${fmt(exp)}`,
+    ),
     toContain: (sub) => check(received != null && received.includes(sub), `expected ${fmt(received)} to contain ${fmt(sub)}`),
     toThrow: (matcher) => {
       let threw = false;
@@ -56,12 +63,17 @@ function makeExpect(received) {
     toBe: (exp) => check(!Object.is(received, exp), `expected ${fmt(received)} not to be ${fmt(exp)}`),
     toEqual: (exp) => check(!deepEqual(received, exp), `expected values not to be equal`),
     toContain: (sub) => check(!(received != null && received.includes(sub)), `expected ${fmt(received)} not to contain ${fmt(sub)}`),
+    toThrow: () => {
+      let threw = false;
+      try { received(); } catch { threw = true; }
+      check(!threw, 'expected function not to throw');
+    },
   };
   return matchers;
 }
 
 function fmt(v) {
-  try { return typeof v === 'string' ? JSON.stringify(v) : String(v); } catch { return String(v); }
+  try { return typeof v === 'string' ? JSON.stringify(v) : JSON.stringify(v) ?? String(v); } catch { return String(v); }
 }
 
 export { test, expect };

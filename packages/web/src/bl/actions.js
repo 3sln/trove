@@ -244,11 +244,21 @@ export class QuickOpenAction extends AppAction {
   async execute({ app }) {
     const { search, platform } = app;
     const q = (this.query || '').trim();
-    if (!q) { search.set({ paletteFiles: [] }); return; }
+    if (!q) { search.set({ paletteFiles: [], paletteQuery: '', paletteError: null, paletteLoading: false }); return; }
+    // Keystrokes outrun the network: a slower request for an earlier query must not
+    // land on top of a newer one's results. The query itself is the sequence token —
+    // whatever the palette input holds now is the only answer worth showing.
+    search.set({ paletteQuery: q, paletteLoading: true, paletteError: null });
     try {
       const res = await platform.api.search(q, { mode: 'keyword', limit: 30 });
-      search.set({ paletteFiles: (res.results || []).filter((r) => r.node.kind === 'file') });
-    } catch { search.set({ paletteFiles: [] }); }
+      if (search.state.paletteQuery !== q) return; // superseded
+      search.set({ paletteFiles: (res.results || []).filter((r) => r.node.kind === 'file'), paletteLoading: false });
+    } catch (err) {
+      if (search.state.paletteQuery !== q) return;
+      // A failed search must not look like "no files matched" — that reads as a fact
+      // about the drive when it's actually a fact about the request.
+      search.set({ paletteFiles: [], paletteLoading: false, paletteError: err?.message || 'Search failed' });
+    }
   }
 }
 

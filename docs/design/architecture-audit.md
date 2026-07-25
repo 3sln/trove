@@ -153,10 +153,45 @@ consults both on destroy. No call site outside the module changed.
    `FrameDock` + `MediaController` (969 → 495 + 4 focused modules).
 
 **All structural findings are resolved.** What remains is deliberately deferred, and
-both are cosmetic rather than structural:
-- the legacy `facet`/`documents` compat shims (inert back-compat; normalize at the route
-  boundary and delete the interior shims when convenient);
+is cosmetic rather than structural:
 - folding the `cap()` closure into an explicit `CapabilityBroker.require()` (it's already
   confined to one focused module);
 - having the injected SDK reuse `RpcChannel` instead of its own RPC engine — blocked by
   the text-injection constraint, would need a build step.
+
+---
+
+## 7. Follow-on pass: one address space, and a dead-code sweep
+
+Two findings above were symptoms of the same thing, and got a fix bigger than either:
+
+- *"Opener associations are a bare settings key… model them as a contribution point"*
+- *"Selector matcher implemented twice"*, *"legacy `facet`/`documents` shims"*
+
+The contribution registry — called out at the top as "genuinely clean" — was in fact a
+**collection per kind** (commands, openers, statusItems, keybindings, menus, views,
+indexers). That meant a name resolved differently depending on which collection you
+asked, three of those collections had zero consumers, and nothing tied a contribution
+back to a verifiable owner. It is now **one map of `uri -> contribution`**, each entry
+declaring its own `type`; identity is mandatory (`<domain>/<name>`), so every
+contribution is addressed as `trove+contrib:<domain>/<plugin>/<name>` and kinds can't
+shadow each other. See `server-plugins-and-indexers.md` §3–4.
+
+That also closed the manifest half: `contributes` is one `name -> contribution` map, and
+three declarative types that used to be ad-hoc are now first-class — `keymap` (a JSON
+file in the package), `statusItem` (a declared slot the plugin fills over RPC, through an
+allowlist sanitizer) and `register` (a context value slot a when-clause reads by URI).
+
+A repo-wide dead-code audit ran alongside it. Most findings were ordinary cruft, but
+three were bugs wearing cruft's clothes:
+
+| Found as | Actually |
+|---|---|
+| `MemorySessionStore.sweep` / `SidecarManager.sweep` have no callers | the **only** bound on those caches — abandoned upload sessions and idle sidecar docs grew for the process's life. Now on a maintenance interval. |
+| `setLaunchIndex` / `setPaletteIndex` have no callers | the launcher rendered `mouseenter: it.hover` with nothing supplying `hover` — hovering never moved the highlight, so **Enter ran a different row than the one under the cursor**. |
+| `offline.chunkText` duplicates `indexers/registry.chunkText` | a *divergent* copy (fixed-width slice vs. boundary-aware), and offline chunks are scored against embeddings the **server** produced — the copy quietly skewed offline results. |
+
+The legacy `facet`/`documents` shims are now gone rather than deferred, along with
+`serverIndexers`-as-a-top-level-array and the `contribute:*` runtime registration path
+(both dead, and the latter was a hole in "what the user approved is what gets
+registered" — a protocol test now asserts neither side can speak it).
