@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.js",
     "./rpc.js": "./src/rpc.js",
+    "./protocol.js": "./src/protocol.js",
     "./browser.js": "./src/browser.js"
   },
   "files": ["src/"],

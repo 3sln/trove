@@ -10,6 +10,10 @@
 // Plugins use it as:  trove.activate(async (ctx) => { ... })
 (function () {
   'use strict';
+  // Wire-protocol version this SDK speaks. MUST equal PROTOCOL_VERSION in
+  // protocol.js — this file is injected as text and cannot import it, so
+  // protocol.test.js asserts the two stay in step.
+  const SDK_PROTOCOL_VERSION = '1.0';
   let port = null, manifest = null, capabilities = [], storageScopes = {}, online = true, seq = 0, role = 'primary';
   const pending = new Map();
   const commandHandlers = new Map();
@@ -239,7 +243,7 @@
         resolve();
       }
       window.addEventListener('message', onInit);
-      parent.postMessage({ __trove: 'ready' }, '*');
+      parent.postMessage({ __trove: 'ready', protocolVersion: SDK_PROTOCOL_VERSION }, '*');
     });
     const ctx = makeContext();
     try {

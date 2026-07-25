@@ -82,6 +82,15 @@ export class PluginRpcRouter {
         if (!primary) return { ok: true };
         record.disposers.push(this.platform.contributions.statusItems.register({ ...params, pluginId: pid }));
         return { ok: true };
+
+      // Run a host command by id (the SDK's ctx.commands.execute). Gated: this can
+      // reach any registered command — including destructive ones — so it needs the
+      // `commands` capability, which the review UI shows at install time.
+      case 'command:execute': {
+        cap('commands');
+        const result = await this.platform.commands.execute(params.id, ...(params.args || []));
+        return { ok: true, result: result ?? null };
+      }
       case 'contribute:keybinding':
         if (!primary) return { ok: true };
         record.disposers.push(this.platform.contributions.keybindings.register(params));

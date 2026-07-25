@@ -101,6 +101,15 @@ async function main() {
   // Online: both plugin commands are available.
   check('online: both plugin commands available', (await availOf(page, 'demo.tap')) && (await availOf(page, 'demo.sync')));
 
+  // A plugin can ask the HOST to run a command (ctx.commands.execute → 'command:execute',
+  // gated by the `commands` capability). demo.runHostCommand invokes demo.tap, whose
+  // handler toasts — so a new toast proves the round-trip reached the host and back.
+  await page.evaluate(() => window.__trove.platform.notifications.items.splice(0));
+  await page.evaluate(() => window.__trove.platform.commands.execute('demo.runHostCommand'));
+  await page.waitForTimeout(400);
+  const toasted = await page.evaluate(() => window.__trove.platform.notifications.items.some((n) => /tap/.test(n.message)));
+  check('plugin can execute a host command (ctx.commands.execute)', toasted === true, String(toasted));
+
   // Brokered network: the declared endpoint succeeds; an undeclared host is blocked.
   const net = await page.evaluate(() => window.__trove.platform.commands.execute('demo.net'));
   check('brokered fetch to a declared endpoint succeeds', net?.ok === true && net?.status === 200, JSON.stringify(net));

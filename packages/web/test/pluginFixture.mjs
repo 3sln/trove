@@ -43,6 +43,12 @@ window.trove.activate(async (ctx) => {
   ctx.commands.register('demo.tap', () => ctx.ui.toast('tap'), { title: 'Demo: Tap', offline: true });
   ctx.commands.register('demo.sync', () => ctx.ui.toast(ctx.online ? 'synced' : 'offline'), { title: 'Demo: Sync to cloud', offline: false });
   ctx.commands.register('demo.hang', () => { for (;;) {} }, { title: 'Demo: (simulate hang)', offline: true });
+  // Ask the HOST to run a command (ctx.commands.execute → 'command:execute' over RPC,
+  // gated by the 'commands' capability). Records the outcome for the e2e to assert.
+  ctx.commands.register('demo.runHostCommand', async () => {
+    try { await ctx.commands.execute('demo.tap'); window.__hostCmd = 'ok'; }
+    catch (e) { window.__hostCmd = 'error: ' + (e && e.message); }
+  }, { title: 'Demo: Run a host command', offline: true });
   ctx.contributes.statusItem({ id: 'demo.status', align: 'right', text: 'demo', offline: true });
   // read a packaged resource via an opaque handle
   ctx.resources.text('data.txt').then((t) => { window.__resourceText = t; });

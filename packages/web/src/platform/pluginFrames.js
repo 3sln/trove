@@ -12,6 +12,7 @@
 
 import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
 import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
+import { PROTOCOL_VERSION, isCompatible } from '@trove/plugin-sdk/protocol.js';
 import { buildModuleGraph, isModuleEntry } from './pluginModules.js';
 
 const HANDSHAKE_TIMEOUT_MS = 15000;
@@ -69,6 +70,11 @@ export class FrameManager {
         if (e.source !== iframe.contentWindow) return;
         if (e.data?.__trove === 'boot-error') return fail(e.data.error || 'Plugin failed to load its modules');
         if (e.data?.__trove !== 'ready') return;
+        // A plugin built against an incompatible protocol MAJOR can't be talked to —
+        // fail loudly here rather than letting calls misbehave in obscure ways.
+        if (!isCompatible(e.data.protocolVersion)) {
+          return fail(`Plugin speaks protocol ${e.data.protocolVersion}, this host speaks ${PROTOCOL_VERSION}`);
+        }
         // Ready received — the transferred port takes over; stop listening globally.
         window.removeEventListener('message', onReady);
         const channel = new MessageChannel();
@@ -81,7 +87,7 @@ export class FrameManager {
         frame.rejectActivated = (err) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); reject(err); };
         // Opaque origin → target '*'; the transferred port is the real capability.
         iframe.contentWindow.postMessage(
-          { __trove: 'init', manifest, capabilities: record.grants, storage: record.storage, online, role: frame.role },
+          { __trove: 'init', manifest, capabilities: record.grants, storage: record.storage, online, role: frame.role, protocolVersion: PROTOCOL_VERSION },
           '*',
           [channel.port2],
         );
