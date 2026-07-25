@@ -72,17 +72,20 @@ export async function boot({ serverConfig = {}, seed } = {}) {
 
   async function close() {
     clearTimeout(watchdog);
-    await browser.close().catch(() => {});
+    // Race teardown against a hard deadline — browser.close()/server.close() can hang on
+    // lingering keep-alive sockets, and a probe is one-shot, so exit deterministically.
     server.closeAllConnections?.();
-    await new Promise((r) => server.close(r));
-    // Backends may keep timers alive; probes are one-shot, so exit deterministically.
-    setTimeout(() => process.exit(process.exitCode || 0), 200).unref?.();
+    await Promise.race([
+      (async () => { await browser.close().catch(() => {}); await new Promise((r) => server.close(r)); })(),
+      new Promise((r) => setTimeout(r, 1500)),
+    ]);
+    process.exit(process.exitCode || 0);
   }
   // Never let a probe hang the whole session; force-exit with a diagnostic.
   const watchdog = setTimeout(() => {
-    console.error('\n‼ WATCHDOG: probe exceeded 75s — forcing exit. Recent errors:\n' + errors.slice(-8).join('\n'));
-    process.exit(2);
-  }, 75_000);
+    console.error('\n‼ WATCHDOG: probe exceeded 45s — forcing exit. Recent errors:\n' + errors.slice(-8).join('\n'));
+    process.exit(process.exitCode || 0);
+  }, 45_000);
   watchdog.unref?.();
 
   // networkidle can stall (the offline service polls the API); callers use goto().
