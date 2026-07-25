@@ -75,8 +75,8 @@ function inboxItem(note, ui) {
 // ---- info panel (tags + conversation) --------------------------------------
 
 export function infoPanel(state, ui) {
-  const wb = state.wb;
-  const active = wb.activeFile ? { id: wb.activeTabId, node: wb.activeFile } : null;
+  const nav = state.nav;
+  const active = nav.activeFile ? { id: nav.activeTabId, node: nav.activeFile } : null;
   const sc = state.so.sidecar;
   return div({ className: 'infopanel' },
     div({ className: 'ip-head' },

@@ -16,7 +16,7 @@ const openerFns = new Map(); // `${panelId}:${openerId}` -> stable render fn
 
 export default function editorArea(state, ui) {
   const wb = state.wb;
-  const files = wb.stack.filter((p) => p.kind === 'file');
+  const files = state.nav.stack.filter((p) => p.kind === 'file');
   pruneOpeners(files);
   const active = files[files.length - 1];
   if (!active) return div({ className: 'editor' });

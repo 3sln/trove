@@ -44,14 +44,15 @@ export function createApp(platform) {
     });
   });
 
-  // Load a file's conversation/tags whenever the active viewer panel changes.
+  // Load a file's conversation/tags whenever the active viewer panel changes (the
+  // panel stack lives in the navigation sub-service now).
   let lastTab = null;
-  platform.workbench.observe().subscribe((wb) => {
-    if (wb.activeTabId !== lastTab) {
-      lastTab = wb.activeTabId;
+  platform.workbench.observeNav().subscribe((nav) => {
+    if (nav.activeTabId !== lastTab) {
+      lastTab = nav.activeTabId;
       // Clear the sidecar when no file is active (last tab closed) so a stale
       // conversation from the previous file doesn't linger.
-      social.loadSidecar(wb.activeFile ? wb.activeFile.id : null);
+      social.loadSidecar(nav.activeFile ? nav.activeFile.id : null);
     }
   });
 

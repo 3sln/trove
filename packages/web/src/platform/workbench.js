@@ -7,25 +7,20 @@
 
 import { ObservableSubject } from '../runtime.js';
 import { OverlayService, wrapIndex } from './overlay.js';
-
-const RECENTS_KEY = 'trove.recents';
-const RECENTS_MAX = 12;
+import { NavigationService } from './navigation.js';
 
 export class WorkbenchService {
   constructor(context) {
     this.context = context;
-    // Transient overlays (palette/dialog/contextMenu/pluginPanel) own their own state;
-    // the workbench delegates to this and coordinates the Esc close-order below.
+    // Two focused sub-services own their own state + subject; the workbench delegates
+    // and coordinates the couplings across them (Esc close-order, opening a file).
     this.overlay = new OverlayService(context);
+    this.nav = new NavigationService(context);
     this.state = {
       activity: 'home', // home (stack) | plugins | settings
       sidebarVisible: true,
       launch: { query: '', index: 0 }, // the launcher's query
       searchModal: false, // the double-shift modal search overlay
-      stack: [{ kind: 'search' }], // [{kind:'search'}, {kind:'file', id, node, openerId}, …]
-      activeTabId: null, // top file panel id (or null)
-      activeFile: null, // top file panel node (or null)
-      recents: loadRecents(),
       infoPanel: false,
     };
     this.subject = new ObservableSubject(this.state);
@@ -36,6 +31,9 @@ export class WorkbenchService {
   }
   observeOverlay() {
     return this.overlay.observe();
+  }
+  observeNav() {
+    return this.nav.observe();
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
@@ -56,14 +54,22 @@ export class WorkbenchService {
   openPluginPanel(pluginId) { this.overlay.openPluginPanel(pluginId); }
   closePluginPanel() { this.overlay.closePluginPanel(); }
 
+  // --- navigation delegations (state lives in NavigationService) -------------
+  activeTab() { return this.nav.activeTab(); }
+  back() { this.nav.back(); }
+  pop() { this.nav.pop(); }
+  closeTab(id) { this.nav.closeTab(id); }
+  updateTabNode(node) { this.nav.updateTabNode(node); }
+  onPopState(e) { this.nav.onPopState(e); }
+
   setActivity(activity) {
     this.#set({ activity, sidebarVisible: true });
     this.context.set('view.active', activity);
   }
   /** Return to the launcher home (reset the panel stack to the base search). */
   showHome() {
-    this.#set({ activity: 'home' });
-    this.#applyStack([{ kind: 'search' }]);
+    this.#set({ activity: 'home', searchModal: false });
+    this.nav.reset();
     this.context.set('view.active', 'home');
   }
   toggleSidebar(force) {
@@ -94,97 +100,18 @@ export class WorkbenchService {
     this.context.set('searchModal.open', false);
   }
 
-  // --- panel stack -----------------------------------------------------------
-  #top() {
-    return this.state.stack[this.state.stack.length - 1];
-  }
-  /** The active file panel (top of the stack, if it's a file). */
-  activeTab() {
-    const t = this.#top();
-    return t && t.kind === 'file' ? t : null;
-  }
-
-  #applyStack(stack, { history = true } = {}) {
-    const top = stack[stack.length - 1];
-    const file = top && top.kind === 'file' ? top : null;
-    this.#set({ stack, activeTabId: file ? file.id : null, activeFile: file ? file.node : null, searchModal: false });
-    this.context.setMany({ 'editor.open': !!file, 'editor.openerId': file?.openerId || '', 'editor.contentType': file?.node.contentType || '' });
-    if (history) this.#pushHistory();
-  }
-
   /**
-   * Open a file into the viewer stack. `reset` (used by the modal search) starts a
-   * fresh stack (base search + this file). Opening a file already in the stack
-   * jumps back to it; otherwise it's pushed on top.
+   * Open a file into the viewer stack (delegates to NavigationService). Coordinates the
+   * shell state the nav service can't own: switch to the home activity and close the
+   * modal search overlay.
    */
-  openFile(node, openerId, { reset = false } = {}) {
-    const panel = { kind: 'file', id: node.id, node, openerId };
-    let stack;
-    if (reset) {
-      stack = [{ kind: 'search' }, panel];
-    } else {
-      const at = this.state.stack.findIndex((p) => p.kind === 'file' && p.id === node.id);
-      if (at >= 0) {
-        // Already open — jump back to it, but adopt the (possibly new) opener so
-        // reopening with a different one actually switches the viewer.
-        stack = this.state.stack.slice(0, at + 1);
-        stack[at] = panel;
-      } else {
-        stack = [...this.state.stack, panel];
-      }
-    }
-    this.#set({ activity: 'home' });
-    this.#pushRecent(node);
-    this.#applyStack(stack);
+  openFile(node, openerId, opts = {}) {
+    this.#set({ activity: 'home', searchModal: false });
+    this.nav.openFile(node, openerId, opts);
   }
   // Back-compat alias (OpenFileAction historically called openTab).
   openTab(node, openerId) {
     this.openFile(node, openerId);
-  }
-  back() {
-    if (this.state.stack.length <= 1) return;
-    try { history.back(); } catch { this.pop(); }
-  }
-  pop() {
-    if (this.state.stack.length > 1) this.#applyStack(this.state.stack.slice(0, -1), { history: false });
-  }
-  closeTab(id) {
-    const stack = this.state.stack.filter((p) => !(p.kind === 'file' && p.id === id));
-    this.#applyStack(stack.length ? stack : [{ kind: 'search' }], { history: false });
-  }
-  updateTabNode(node) {
-    const stack = this.state.stack.map((p) => (p.kind === 'file' && p.id === node.id ? { ...p, node } : p));
-    this.#applyStack(stack, { history: false });
-  }
-
-  // --- history sync ----------------------------------------------------------
-  #pushHistory(replace = false) {
-    const top = this.#top();
-    const n = top?.node;
-    const entry = {
-      troveDepth: this.state.stack.length,
-      node: n ? { id: n.id, name: n.name, contentType: n.contentType, path: n.path, kind: 'file' } : null,
-      openerId: top?.openerId || null,
-    };
-    try { (replace ? history.replaceState : history.pushState).call(history, entry, ''); } catch { /* no history API */ }
-  }
-  /** Handle a browser back/forward: sync the stack depth (re-open on forward). */
-  onPopState(e) {
-    const s = e?.state || {};
-    const depth = s.troveDepth || 1;
-    if (depth <= this.state.stack.length) {
-      this.#applyStack(this.state.stack.slice(0, depth), { history: false });
-    } else if (s.node) {
-      this.#applyStack([...this.state.stack, { kind: 'file', id: s.node.id, node: s.node, openerId: s.openerId }], { history: false });
-    }
-  }
-
-  #pushRecent(node) {
-    if (!node || node.kind === 'folder') return;
-    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', path: node.path, kind: 'file' };
-    const recents = [entry, ...this.state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
-    this.#set({ recents });
-    saveRecents(recents);
   }
 
   toggleInfoPanel(force) {
@@ -201,14 +128,7 @@ export class WorkbenchService {
     if (this.state.searchModal) return this.closeSearchModal(), true;
     if (o.palette) return this.overlay.closePalette(), true;
     if (o.pluginPanel) return this.overlay.closePluginPanel(), true;
-    if (this.state.stack.length > 1) return this.back(), true; // pop the top viewer panel
+    if (this.nav.state.stack.length > 1) return this.nav.back(), true; // pop the top viewer panel
     return false;
   }
-}
-
-function loadRecents() {
-  try { return JSON.parse(localStorage.getItem(RECENTS_KEY)) || []; } catch { return []; }
-}
-function saveRecents(recents) {
-  try { localStorage.setItem(RECENTS_KEY, JSON.stringify(recents)); } catch { /* private mode / no storage */ }
 }

@@ -30,10 +30,11 @@ export default function workbench({ engine, app, platform, plugins }) {
 
   const { watch, zip } = platform.reactive;
   const combined$ = zip(
-    (wb, overlay, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, _bump) =>
-      ({ wb, overlay, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off }),
+    (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, _bump) =>
+      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off }),
     platform.workbench.observe(),
     platform.workbench.observeOverlay(),
+    platform.workbench.observeNav(),
     app.explorer.observe(),
     app.search.observe(),
     app.transfers.observe(),
@@ -75,7 +76,7 @@ function mainArea(state, ui) {
     default: {
       // Home: the top of the panel stack — the launcher (base search) or, once a
       // file is open, its opener full-width (optionally split with the info panel).
-      if (!state.wb.activeTabId) return launcher(state, ui);
+      if (!state.nav.activeTabId) return launcher(state, ui);
       return state.wb.infoPanel
         ? div({ className: 'editor-split' }, editorArea(state, ui), infoPanel(state, ui))
         : editorArea(state, ui);

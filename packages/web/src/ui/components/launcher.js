@@ -145,7 +145,7 @@ function buildContent(state, ui, q, mode, modal) {
 
   // Home: recents + browse the current folder.
   const groups = [];
-  const recents = (state.wb.recents || []).map((r) => fileItem(r, ui, modal));
+  const recents = (state.nav.recents || []).map((r) => fileItem(r, ui, modal));
   if (recents.length) groups.push({ title: 'Recent', items: recents });
 
   const ex = state.ex;
