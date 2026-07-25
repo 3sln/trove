@@ -147,12 +147,15 @@ export class OfflineService {
 
   async flushQueue() {
     if (!this.state.online || this.state.syncing) return;
-    const q = await idbAllWithKeys(this.db, 'queue');
-    if (!q.length) return;
+    // Claim the sync BEFORE any await — two 'online' events (or init + an event) can
+    // fire concurrently, and a check-then-act guard after an await let both pass and
+    // replay the queue twice (double-posting). Setting syncing synchronously here makes
+    // the second caller bail at the guard above.
     this.#set({ syncing: true });
     let synced = 0;
     let dropped = 0;
     try {
+      const q = await idbAllWithKeys(this.db, 'queue');
       for (const { key, value } of q) {
         try {
           await this.api.request(value.method, value.path, { body: value.body });
