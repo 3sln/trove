@@ -70,9 +70,15 @@ export class PluginIndexers {
 
   #key(account, id) { return `${account}\0${id}`; }
 
+  /**
+   * An indexer is an ENTRY MODULE inside the plugin's one package — not a nested
+   * sub-package — so it shares code with the rest of the plugin. The bundle handed to
+   * the runtime is therefore the whole package, and `spec.entry` names which module to
+   * run (e.g. "src/indexers/pdf.js").
+   */
   async #buildIndexer(record, spec) {
-    const files = await this.#bundleFiles(record, spec);
-    const entry = spec.entry || 'index.js';
+    const files = await this.#loadPackage(record.packageRef);
+    const entry = spec.entry;
     const match = matchFromSelector(spec.match);
     const runtime = this.runtime;
     const runSpec = { id: spec.id, entry, files, cacheKey: `${record.digest || record.packageRef}\0${spec.id}` };
@@ -82,18 +88,6 @@ export class PluginIndexers {
       match,
       index: (node, ctx) => runtime.run(runSpec, node, { ...ctx, config: record.config || {}, secrets: record.secrets || {} }),
     };
-  }
-
-  /** The bundle files for one indexer, dir-prefix stripped for embedded sub-packages. */
-  async #bundleFiles(record, spec) {
-    const all = await this.#loadPackage(record.packageRef);
-    if (!spec.dir) return all; // inline serverIndexer: entry lives at package root
-    const prefix = spec.dir; // e.g. "indexers/pdf/"
-    const out = {};
-    for (const [path, bytes] of Object.entries(all)) {
-      if (path.startsWith(prefix)) out[path.slice(prefix.length)] = bytes;
-    }
-    return out;
   }
 
   #loadPackage(ref) {

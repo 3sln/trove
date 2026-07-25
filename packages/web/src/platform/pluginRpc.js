@@ -51,37 +51,16 @@ export class PluginRpcRouter {
         return { ok: true };
       }
 
-      case 'contribute:command': {
-        if (!primary) return { ok: true };
-        const dispose = this.platform.commands.register({
-          id: params.id, title: params.title || `${record.manifest.name}: ${params.id}`,
-          category: params.category || record.manifest.name, icon: params.icon,
-          offline: !!params.offline, pluginId: pid,
-          handler: (...args) => record.channel.call('command:execute', { id: params.id, args }),
-        });
-        record.disposers.push(dispose);
-        return { ok: true };
-      }
-      case 'contribute:opener': {
-        cap('opener');
-        if (!primary) return { ok: true };
-        const dispose = this.platform.contributions.openers.register({
-          ...params, pluginId: pid,
-          open: (file, context) => record.channel.call('opener:open', { openerId: params.id, file, context }),
-        });
-        record.disposers.push(dispose);
-        return { ok: true };
-      }
-      case 'contribute:indexer': {
-        cap('indexer');
-        if (!primary) return { ok: true };
-        record.disposers.push(this.platform.contributions.indexers.register({ ...params, pluginId: pid }));
-        return { ok: true };
-      }
+      // Contributions are declared in the manifest and registered by PluginHost before
+      // the plugin boots, so runtime registration no longer exists. Older SDKs may
+      // still send these; accept and ignore rather than erroring, since whatever they
+      // wanted to add is either already declared or was never approved.
+      case 'contribute:command':
+      case 'contribute:opener':
+      case 'contribute:indexer':
       case 'contribute:statusItem':
-        if (!primary) return { ok: true };
-        record.disposers.push(this.platform.contributions.statusItems.register({ ...params, pluginId: pid }));
-        return { ok: true };
+      case 'contribute:keybinding':
+        return { ok: true, ignored: 'declare contributions in the manifest' };
 
       // Run a host command by id (the SDK's ctx.commands.execute). Gated per COMMAND,
       // not per capability: the plugin's manifest lists exactly which command ids it
@@ -95,11 +74,6 @@ export class PluginRpcRouter {
         const result = await this.platform.commands.execute(params.id, ...(params.args || []));
         return { ok: true, result: result ?? null };
       }
-      case 'contribute:keybinding':
-        if (!primary) return { ok: true };
-        record.disposers.push(this.platform.contributions.keybindings.register(params));
-        return { ok: true };
-
       // Package resources — opaque byte handles (transferred, no host URLs). Code
       // under src/ and the manifest are not resources (src/ is loaded as modules).
       case 'resources:list':

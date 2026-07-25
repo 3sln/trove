@@ -5,87 +5,91 @@
 import { zipSync, strToU8 } from 'fflate';
 import { signManifest, generateSigningKey, fingerprintOf } from '../src/platform/pluginSigning.js';
 
-// The demo entry: an offline-capable command, a network-only one, a status item,
-// and a "hang" command that genuinely blocks the frame (for heartbeat tests).
+// The demo plugin as ONE module tree: a main entry and an opener entry that share
+// code (src/shared.js). Contributions are declared in the manifest — these modules
+// only supply behaviour, addressed by id.
+
+const SHARED = `
+// Shared by the plugin's main entry AND its opener entry — the whole point of using
+// one module tree instead of nested sub-packages.
+export const label = (file) => 'Playing ' + ((file && file.name) || '');
+export const BRAND = 'Trove';
+`;
+
+// The opener's entry module. The manifest says WHAT it opens; this says HOW.
+export const OPENER_ENTRY = `
+import { activate } from 'trove';
+import { label, BRAND } from '../shared.js';
+activate(async (ctx) => {
+  ctx.onOpen(async (file) => {
+    document.body.innerHTML = '';
+    const el = document.createElement('div');
+    el.id = 'demo-player';
+    el.textContent = label(file);
+    el.style.cssText = 'color:#fff;font:13px sans-serif;padding:10px;background:rgba(0,0,0,.6);border-radius:8px;';
+    document.body.appendChild(el);
+    window.__openedDemo = file && file.name;
+    if (ctx.capabilities.includes('media')) {
+      await ctx.media.setMetadata({ title: (file && file.name) || 'Demo', artist: BRAND });
+      await ctx.media.setPlaybackState('playing');
+      await ctx.media.setActionHandler('pause', async () => {
+        await ctx.media.setPlaybackState('paused');
+        if (ctx.capabilities.includes('dock')) await ctx.dock.disable();
+      });
+    }
+    if (ctx.capabilities.includes('dock')) await ctx.dock.enable({ minSize: { width: 320, height: 80 } });
+  });
+});
+`;
+
+// The plugin's main (background) entry: implements its declared commands and does
+// one-time storage/network setup. It never registers contributions.
 export const PLUGIN_ENTRY = `
-window.trove.activate(async (ctx) => {
-  // A sandboxed viewer for .demo files. Runs in this frame's OWN iframe (ctx.role
-  // is 'viewer' here); on open it renders a tiny player, drives the OS media
-  // session, and registers for dock mode. A 'pause' transport action disables the
-  // dock (so navigating away just closes it). This is the media/dock path, and it
-  // runs in EVERY instance (primary + each viewer) since a viewer frame needs it.
-  if (ctx.capabilities.includes('opener')) {
-    ctx.contributes.opener({ id: 'demo.player', title: 'Demo Player', selector: { ext: ['.demo'] }, offline: true }, async (file) => {
-      document.body.innerHTML = '';
-      const el = document.createElement('div');
-      el.id = 'demo-player';
-      el.textContent = 'Playing ' + (file && file.name || '');
-      el.style.cssText = 'color:#fff;font:13px sans-serif;padding:10px;background:rgba(0,0,0,.6);border-radius:8px;';
-      document.body.appendChild(el);
-      window.__openedDemo = file && file.name;
-      if (ctx.capabilities.includes('media')) {
-        await ctx.media.setMetadata({ title: (file && file.name) || 'Demo', artist: 'Trove' });
-        await ctx.media.setPlaybackState('playing');
-        await ctx.media.setActionHandler('pause', async () => {
-          await ctx.media.setPlaybackState('paused');
-          if (ctx.capabilities.includes('dock')) await ctx.dock.disable();
-        });
-      }
-      if (ctx.capabilities.includes('dock')) await ctx.dock.enable({ minSize: { width: 320, height: 80 } });
-    });
-  }
-
-  // Everything below is background work owned by the plugin's single primary
-  // instance — a viewer frame skips it (its contributions would be host no-ops
-  // anyway, and re-running storage/network setup per open is wasteful).
-  if (ctx.role !== 'primary') return;
-
-  ctx.commands.register('demo.tap', () => ctx.ui.toast('tap'), { title: 'Demo: Tap', offline: true });
-  ctx.commands.register('demo.sync', () => ctx.ui.toast(ctx.online ? 'synced' : 'offline'), { title: 'Demo: Sync to cloud', offline: false });
-  ctx.commands.register('demo.hang', () => { for (;;) {} }, { title: 'Demo: (simulate hang)', offline: true });
-  // Ask the HOST to run a command (ctx.commands.execute → 'command:execute' over RPC,
-  // gated by the 'commands' capability). Records the outcome for the e2e to assert.
-  ctx.commands.register('demo.runHostCommand', async () => {
+import { activate } from 'trove';
+import { BRAND } from './shared.js';
+activate(async (ctx) => {
+  ctx.commands.handle('demo.tap', () => ctx.ui.toast('tap'));
+  ctx.commands.handle('demo.sync', () => ctx.ui.toast(ctx.online ? 'synced' : 'offline'));
+  ctx.commands.handle('demo.hang', () => { for (;;) {} });
+  // Ask the HOST to run a command (gated per-command by the manifest allowlist).
+  ctx.commands.handle('demo.runHostCommand', async () => {
     try { await ctx.commands.execute('demo.tap'); window.__hostCmd = 'ok'; }
     catch (e) { window.__hostCmd = 'error: ' + (e && e.message); }
-  }, { title: 'Demo: Run a host command', offline: true });
-  // Executing a command the manifest does NOT list must be refused by the host.
-  ctx.commands.register('demo.runUndeclared', async () => {
+  });
+  ctx.commands.handle('demo.runUndeclared', async () => {
     try { await ctx.commands.execute('explorer.delete'); return 'ALLOWED'; }
     catch (e) { return 'REFUSED: ' + (e && e.message); }
-  }, { title: 'Demo: Run an undeclared command', offline: true });
-  ctx.contributes.statusItem({ id: 'demo.status', align: 'right', text: 'demo', offline: true });
-  // read a packaged resource via an opaque handle
+  });
+  ctx.commands.handle('demo.brand', () => BRAND);
+
   ctx.resources.text('data.txt').then((t) => { window.__resourceText = t; });
+
   if (ctx.storage && ctx.storage.plugin) {
     const db = ctx.storage.plugin.server;
     await db.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
     await db.run('INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)', 'installs', '1');
-    ctx.commands.register('demo.store', async () => {
+    ctx.commands.handle('demo.store', async () => {
       const row = await db.get('SELECT v FROM kv WHERE k = ?', 'installs');
       return row && row.v;
-    }, { title: 'Demo: Store round-trip', offline: false });
-
-    // On-device (wasm SQLite) store — works offline.
+    });
     const cdb = ctx.storage.plugin.client;
-    await cdb.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
-    await cdb.run('INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)', 'ping', 'pong');
-    ctx.commands.register('demo.storeClient', async () => {
-      const row = await cdb.get('SELECT v FROM kv WHERE k = ?', 'ping');
+    await cdb.exec('CREATE TABLE IF NOT EXISTS t (k TEXT PRIMARY KEY, v TEXT)');
+    await cdb.run('INSERT OR REPLACE INTO t (k,v) VALUES (?,?)', 'ping', 'pong');
+    ctx.commands.handle('demo.storeClient', async () => {
+      const row = await cdb.get('SELECT v FROM t WHERE k = ?', 'ping');
       return row && row.v;
-    }, { title: 'Demo: Client store round-trip', offline: true });
+    });
   }
-  // Brokered network: fetch a declared endpoint (allowed) and an undeclared one
-  // (blocked). Returns the outcome so the host/e2e can assert enforcement.
+
   if (ctx.capabilities.includes('network')) {
-    ctx.commands.register('demo.net', async () => {
+    ctx.commands.handle('demo.net', async () => {
       const netcap = (ctx.manifest.capabilities || {}).network;
-      const base = ((netcap && netcap.endpoints) || ctx.manifest.network || [])[0];
+      const base = (netcap && netcap.endpoints && netcap.endpoints[0]) || '';
       const r = await ctx.net.fetch(base + 'api/capabilities');
-      let blocked = 'ALLOWED';
-      try { await ctx.net.fetch('https://blocked.example.com/steal'); } catch { blocked = 'BLOCKED'; }
+      let blocked = 'NOT-BLOCKED';
+      try { await ctx.net.fetch('https://evil.example.com/x'); } catch (e) { blocked = 'BLOCKED'; }
       return { status: r.status, ok: r.ok, blocked };
-    }, { title: 'Demo: Net', offline: false });
+    });
   }
 });
 `;
@@ -97,13 +101,26 @@ export function baseManifest(overrides = {}) {
     version: '1.2.3',
     description: 'A demo plugin used in tests — a couple of commands, a status item, and a packaged resource.',
     author: 'Trove Tests',
-    entry: 'plugin.js',
+    entry: 'src/index.js',
     capabilities: { storage: true, ui: true, commands: true },
+    // Contributions are declared here and registered by the host before the plugin
+    // boots. Each opener/indexer names the entry MODULE that implements it.
     contributes: {
       commands: [
         { id: 'demo.tap', title: 'Demo: Tap', offline: true },
         { id: 'demo.sync', title: 'Demo: Sync to cloud', offline: false },
+        { id: 'demo.hang', title: 'Demo: (simulate hang)', offline: true },
+        { id: 'demo.runHostCommand', title: 'Demo: Run a host command', offline: true },
+        { id: 'demo.runUndeclared', title: 'Demo: Run an undeclared command', offline: true },
+        { id: 'demo.brand', title: 'Demo: Brand', offline: true },
+        { id: 'demo.store', title: 'Demo: Read store', offline: true },
+        { id: 'demo.storeClient', title: 'Demo: Read client store', offline: true },
+        { id: 'demo.net', title: 'Demo: Net', offline: false },
       ],
+      openers: [
+        { id: 'demo.player', title: 'Demo Player', match: { ext: ['.demo'] }, entry: 'src/openers/player.js', offline: true },
+      ],
+      statusItems: [{ id: 'demo.status', align: 'right', text: 'demo', offline: true }],
     },
     settings: [
       { key: 'greeting', type: 'string', title: 'Greeting', default: 'hi' },
@@ -124,7 +141,9 @@ export async function buildPackage(opts = {}) {
   let manifest = baseManifest(opts.manifest);
   if (opts.domain) manifest.domain = opts.domain;
   const files = new Map([
-    ['plugin.js', strToU8(PLUGIN_ENTRY)],
+    ['src/index.js', strToU8(PLUGIN_ENTRY)],
+    ['src/shared.js', strToU8(SHARED)],
+    ['src/openers/player.js', strToU8(OPENER_ENTRY)],
     ['data.txt', strToU8('hello from a packaged resource')],
   ]);
   let fingerprint;
@@ -144,7 +163,7 @@ const MOD_INDEX = `
 import { greeting } from './lib/util.js';
 import { activate } from 'trove';
 activate(async (ctx) => {
-  ctx.commands.register('mod.hello', () => greeting(), { title: 'Mod: Hello', offline: true });
+  ctx.commands.handle('mod.hello', () => greeting());
 });
 `;
 const MOD_UTIL = `export const greeting = () => 'hello-from-module';`;
@@ -153,6 +172,7 @@ export function buildModulePackage() {
   const manifest = {
     id: 'com.trove.mod', name: 'Modular Demo', version: '1.0.0',
     entry: 'src/index.js', capabilities: { ui: true, commands: true },
+    contributes: { commands: [{ id: 'mod.hello', title: 'Mod: Hello', offline: true }] },
   };
   const entries = {
     'manifest.json': strToU8(JSON.stringify(manifest)),

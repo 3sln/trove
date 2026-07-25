@@ -66,7 +66,13 @@
 
   function dispatch(method, params) {
     if (method === 'command:execute') return commandHandlers.get(params.id) && commandHandlers.get(params.id)(...(params.args || []));
-    if (method === 'opener:open') { const f = openerHandlers.get(params.openerId); if (!f) throw new Error('no opener ' + params.openerId); return f(params.file, params.context); }
+    if (method === 'opener:open') {
+      // An opener frame boots at that opener's entry module and runs exactly one
+      // opener, so an unkeyed onOpen(fn) handler is the normal case.
+      const f = openerHandlers.get(params.openerId) || openerHandlers.get('*');
+      if (!f) throw new Error('no opener ' + params.openerId);
+      return f(params.file, params.context);
+    }
     if (method === 'indexer:run') { const f = indexerHandlers.get(params.indexerId); if (!f) throw new Error('no indexer ' + params.indexerId); return f(params.file); }
     if (method === 'manifest') return buildManifest();
     throw new Error('Unknown host call ' + method);
@@ -127,21 +133,42 @@
       // per-open frame hosting an opener for one file (drive media/dock from here).
       role,
       get online() { return online; },
+      // Contributions are DECLARED IN THE MANIFEST (openers, indexers, commands,
+      // statusItems, keybindings). The host registers them before this code runs, so
+      // a plugin never registers anything at runtime — it only supplies the behaviour
+      // for what it declared, addressed by id.
       commands: {
-        register(id, handler, opts) {
-          opts = opts || {};
-          commandHandlers.set(id, handler);
-          const spec = { id, title: opts.title, category: opts.category, icon: opts.icon, offline: !!opts.offline };
-          contributions.commands.set(id, spec);
-          return call('contribute:command', spec);
-        },
+        /** Implement a command this plugin's manifest declares. */
+        handle(id, handler) { commandHandlers.set(id, handler); return this; },
         execute(id) { const a = [].slice.call(arguments, 1); return call('command:execute', { id, args: a }); },
+        /** @deprecated declare the command in `contributes.commands`; this only binds
+         *  the handler now (the host no longer accepts runtime registration). */
+        register(id, handler, opts) {
+          commandHandlers.set(id, handler);
+          contributions.commands.set(id, Object.assign({ id }, opts || {}));
+          return Promise.resolve({ ok: true });
+        },
       },
+      /** Implement the opener this frame was booted for (its entry module). The id is
+       *  optional — an opener frame runs exactly one opener. */
+      onOpen(idOrHandler, maybeHandler) {
+        const [id, handler] = typeof idOrHandler === 'function' ? ['*', idOrHandler] : [idOrHandler, maybeHandler];
+        openerHandlers.set(id, handler);
+        return this;
+      },
+      /** Implement a declared indexer. */
+      onIndex(idOrHandler, maybeHandler) {
+        const [id, handler] = typeof idOrHandler === 'function' ? ['*', idOrHandler] : [idOrHandler, maybeHandler];
+        indexerHandlers.set(id, handler);
+        return this;
+      },
+      /** @deprecated bind handlers with onOpen/onIndex/commands.handle and declare the
+       *  contribution in the manifest. These no longer register anything. */
       contributes: {
-        opener(spec, handler) { openerHandlers.set(spec.id, handler); const e = Object.assign({}, spec, { offline: !!spec.offline }); contributions.openers.set(spec.id, e); return call('contribute:opener', e); },
-        indexer(spec, handler) { indexerHandlers.set(spec.id, handler); const e = Object.assign({}, spec, { offline: !!spec.offline }); contributions.indexers.set(spec.id, e); return call('contribute:indexer', e); },
-        statusItem(spec) { contributions.statusItems.set(spec.id, Object.assign({}, spec, { offline: !!spec.offline })); return call('contribute:statusItem', spec); },
-        keybinding(spec) { return call('contribute:keybinding', spec); },
+        opener(spec, handler) { openerHandlers.set(spec.id, handler); contributions.openers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
+        indexer(spec, handler) { indexerHandlers.set(spec.id, handler); contributions.indexers.set(spec.id, spec); return Promise.resolve({ ok: true }); },
+        statusItem(spec) { contributions.statusItems.set(spec.id, spec); return Promise.resolve({ ok: true }); },
+        keybinding() { return Promise.resolve({ ok: true }); },
       },
       // Package resources — opaque handles. read() copies bytes into the iframe;
       // url() wraps them in an iframe-local blob: URL.

@@ -122,6 +122,19 @@ async function main() {
   const undeclared = await page.evaluate(() => window.__trove.platform.commands.execute('demo.runUndeclared'));
   check('a command outside the declared allowlist is refused', /^REFUSED/.test(String(undeclared)), String(undeclared));
 
+  // Contributions come from the MANIFEST, so the host knows them without the plugin
+  // registering anything at runtime — and the opener shares the plugin's module tree.
+  const declared = await page.evaluate(() => {
+    const o = window.__trove.platform.contributions.openers.all().find((x) => x.id === 'demo.player');
+    return o ? { id: o.id, entry: o.entry, pluginId: o.pluginId } : null;
+  });
+  check('opener is registered from the manifest with its entry module',
+    declared?.entry === 'src/openers/player.js' && declared?.pluginId === 'com.trove.demo', JSON.stringify(declared));
+
+  // src/shared.js is imported by BOTH the plugin entry and the opener entry.
+  const brand = await page.evaluate(() => window.__trove.platform.commands.execute('demo.brand'));
+  check('plugin and opener share modules from one tree', brand === 'Trove', String(brand));
+
   // Brokered network: the declared endpoint succeeds; an undeclared host is blocked.
   const net = await page.evaluate(() => window.__trove.platform.commands.execute('demo.net'));
   check('brokered fetch to a declared endpoint succeeds', net?.ok === true && net?.status === 200, JSON.stringify(net));

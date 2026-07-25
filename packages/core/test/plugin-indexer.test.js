@@ -22,12 +22,18 @@ const INDEXER_SRC = `export default async (node, ctx) => {
   };
 };`;
 
+// An indexer is an entry MODULE in the plugin's own tree, declared in the manifest —
+// not a nested sub-package — so it shares code with the rest of the plugin.
 function demoPackage(id = 'com.acme.demo') {
   return zipSync({
-    'manifest.json': strToU8(JSON.stringify({ id, name: 'Demo', version: '1.0.0', capabilities: { ui: true } })),
-    'plugin.js': strToU8('//'),
-    'indexers/demo/manifest.json': strToU8(JSON.stringify({ id: id + '.idx', match: { ext: ['.demo'] } })),
-    'indexers/demo/index.js': strToU8(INDEXER_SRC),
+    'manifest.json': strToU8(JSON.stringify({
+      id, name: 'Demo', version: '1.0.0', entry: 'src/index.js', capabilities: { ui: true },
+      contributes: {
+        indexers: [{ id: id + '.idx', match: { ext: ['.demo'] }, entry: 'src/indexers/demo.js', server: true }],
+      },
+    })),
+    'src/index.js': strToU8('//'),
+    'src/indexers/demo.js': strToU8(INDEXER_SRC),
   });
 }
 

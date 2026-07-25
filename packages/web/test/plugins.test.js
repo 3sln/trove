@@ -12,7 +12,10 @@ test('parsePackage reads + validates the manifest', async () => {
   const { zip } = await buildPackage();
   const pkg = parsePackage(zip);
   expect(pkg.manifest.id).toBe('com.trove.demo');
-  expect(pkg.files.has('plugin.js')).toBe(true);
+  // One module tree: the plugin entry, shared code, and the opener's entry module.
+  expect(pkg.files.has('src/index.js')).toBe(true);
+  expect(pkg.files.has('src/shared.js')).toBe(true);
+  expect(pkg.files.has('src/openers/player.js')).toBe(true);
   expect(pkg.files.has('data.txt')).toBe(true);
 });
 

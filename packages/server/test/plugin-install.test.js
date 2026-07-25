@@ -71,10 +71,10 @@ test('server-component / shared-resource packages need an admin', async () => {
   expect(shared.status).toBe(403);
 
   // A server indexer (embedded sub-package) also requires admin.
-  const withIndexer = pkg({ ...base, id: 'com.acme.idx' }, {
-    'indexers/pdf/manifest.json': strToU8(JSON.stringify({ id: 'com.acme.idx.pdf', match: { ext: ['.pdf'] } })),
-    'indexers/pdf/index.js': strToU8('export default async () => ({})'),
-  });
+  const withIndexer = pkg({
+    ...base, id: 'com.acme.idx', entry: 'src/index.js',
+    contributes: { indexers: [{ id: 'com.acme.idx.pdf', match: { ext: ['.pdf'] }, entry: 'src/indexers/pdf.js', server: true }] },
+  }, { 'src/indexers/pdf.js': strToU8('export default async () => ({})') });
   const idx = await req(handle, 'POST', '/api/plugins/install', { body: withIndexer });
   expect(idx.status).toBe(403);
 });

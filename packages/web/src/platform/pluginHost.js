@@ -22,6 +22,7 @@ import { PluginRegistry } from './pluginStore.js';
 import { ClientSqlProvider } from './pluginClientDb.js';
 import { assessTrust } from './pluginSigning.js';
 import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage } from './pluginPackage.js';
+import { declaredOpeners, declaredIndexers } from '@trove/core/plugins/package.js';
 import { endpointSummary } from './pluginNet.js';
 import { MediaController } from './pluginMedia.js';
 import { FrameDock } from './pluginDock.js';
@@ -65,13 +66,58 @@ export class PluginHost {
     this.subject?.next(this.list());
   }
 
-  /** Spawn one sandboxed frame for `record`, wired to this host's RPC router. */
-  #spawnFrame(record, role) {
+  /**
+   * Spawn one sandboxed frame for `record`, wired to this host's RPC router.
+   * `entry` boots a different module of the plugin's tree (that's what an opener is).
+   */
+  #spawnFrame(record, role, entry) {
     return this.frames.spawn(record, role, {
       onCall: (rec, m, p, f) => this.rpc.hostCall(rec, m, p, f),
       onEvent: (rec, m, p, f) => this.rpc.hostEvent(rec, m, p, f),
       online: this.online,
+      entry,
     });
+  }
+
+  /**
+   * Register everything the MANIFEST declares. The manifest is authoritative — this
+   * runs before the plugin boots, so: the user's install-time review matches exactly
+   * what gets registered, openers/indexers exist without activating the plugin, and
+   * they survive a plugin whose primary frame is broken or unresponsive.
+   */
+  #registerContributions(runtime) {
+    const pid = runtime.manifest.id;
+    const c = runtime.manifest.contributes || {};
+    const keep = (dispose) => runtime.disposers.push(dispose);
+
+    // Openers: each names the entry module that renders it, in its own frame.
+    for (const o of declaredOpeners(runtime.manifest)) {
+      if (!runtime.grants.includes('opener')) break; // user declined "provides viewers"
+      keep(this.platform.contributions.openers.register({
+        id: o.id, title: o.title, selector: o.selector, priority: o.priority,
+        offline: o.offline, dock: o.dock, entry: o.entry, pluginId: pid,
+      }));
+    }
+    // Client-side indexers (server ones run in the server's isolate runtime).
+    for (const i of declaredIndexers(runtime.manifest)) {
+      if (i.server || !runtime.grants.includes('indexer')) continue;
+      keep(this.platform.contributions.indexers.register({
+        id: i.id, title: i.title, selector: i.selector, offline: i.offline, entry: i.entry, pluginId: pid,
+      }));
+    }
+    // Commands: declared here, implemented by the plugin's primary frame (by id).
+    for (const cmd of c.commands || []) {
+      if (!cmd?.id) continue;
+      keep(this.platform.commands.register({
+        id: cmd.id, title: cmd.title || `${runtime.manifest.name}: ${cmd.id}`,
+        category: cmd.category || runtime.manifest.name, icon: cmd.icon,
+        when: cmd.when, offline: !!cmd.offline, pluginId: pid,
+        handler: (...args) => runtime.channel?.call('command:execute', { id: cmd.id, args }),
+      }));
+    }
+    // Pure data — no plugin code involved at all.
+    for (const s of c.statusItems || []) if (s?.id) keep(this.platform.contributions.statusItems.register({ ...s, pluginId: pid }));
+    for (const k of c.keybindings || []) if (k?.key) keep(this.platform.contributions.keybindings.register(k));
   }
 
   list() {
@@ -84,15 +130,19 @@ export class PluginHost {
     }));
   }
 
+  /**
+   * What this plugin contributes — read from the MANIFEST, so the list is known
+   * without the plugin running (and stays accurate if it stops responding). `live`
+   * is only used for liveness/availability, not for what exists.
+   */
   #featureList(record) {
-    const live = record.live;
-    if (!live) return [];
+    const c = record.manifest?.contributes || {};
     const rows = [];
-    const push = (kind, items) => { for (const it of items || []) rows.push({ kind, id: it.id, title: it.title || it.id, offline: !!it.offline, available: this.#availableSpec(record, it) }); };
-    push('command', live.contributions?.commands);
-    push('opener', live.contributions?.openers);
-    push('indexer', live.contributions?.indexers);
-    push('statusItem', live.contributions?.statusItems);
+    const push = (kind, items) => { for (const it of items || []) if (it?.id) rows.push({ kind, id: it.id, title: it.title || it.id, offline: !!it.offline, available: this.#availableSpec(record, it) }); };
+    push('command', c.commands);
+    push('opener', c.openers);
+    push('indexer', c.indexers);
+    push('statusItem', c.statusItems);
     return rows;
   }
   #availableSpec(record, spec) {
@@ -241,6 +291,9 @@ export class PluginHost {
       files: mapFromFiles(record.files),
     };
     this.plugins.set(record.id, runtime);
+    // Register declared contributions BEFORE booting — they don't depend on the
+    // plugin running, and this keeps them alive if its frame never comes up.
+    try { this.#registerContributions(runtime); } catch (e) { console.error('registering contributions failed', record.id, e); }
     this.#emit();
 
     try {
@@ -374,8 +427,11 @@ export class PluginHost {
       return () => this.#detachViewer(docked);
     }
 
+    // Boot the frame at the OPENER's entry module — not the plugin's main entry, so a
+    // viewer loads only the code it needs and never re-runs the plugin's background setup.
+    const opener = this.platform.contributions.openers.get(openerId);
     const mount = { cancelled: false, frame: null };
-    this.#spawnFrame(record, 'viewer').then(async (frame) => {
+    this.#spawnFrame(record, 'viewer', opener?.entry).then(async (frame) => {
       if (mount.cancelled) { this.frames.destroy(frame); return; }
       mount.frame = frame;
       frame.node = node;

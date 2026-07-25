@@ -41,8 +41,17 @@ export class FrameManager {
     // Opaque-origin sandbox: scripts only, no same-origin, no top navigation.
     iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
-    record._srcdoc ||= await buildSrcdoc(record.manifest, record.files);
-    iframe.srcdoc = record._srcdoc;
+    // A frame can boot at a different ENTRY MODULE of the plugin's one module tree —
+    // that's all an opener is. Same package, same shared code, different entry.
+    const entry = wiring?.entry;
+    if (entry) {
+      record._entrySrcdoc ||= {};
+      record._entrySrcdoc[entry] ||= await buildSrcdoc({ ...record.manifest, entry }, record.files);
+      iframe.srcdoc = record._entrySrcdoc[entry];
+    } else {
+      record._srcdoc ||= await buildSrcdoc(record.manifest, record.files);
+      iframe.srcdoc = record._srcdoc;
+    }
     const frame = { role, iframe, channel: null, record, place: null, dock: null, docked: false, mediaActions: null };
     document.body.appendChild(iframe);
     try {
