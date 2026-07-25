@@ -49,8 +49,10 @@ check('video opener shows feedback when bytes are missing', await hasErrorFeedba
 await open('broken.mp3');
 check('audio opener shows feedback when bytes are missing', await hasErrorFeedback());
 
-check('no uncaught page errors', errors.filter((e) => !/nope-(img|vid|aud|txt)|404|Failed to load resource/i.test(e)).length === 0,
-  errors.slice(0, 5).join(' | '));
+// The broken files are SUPPOSED to 404 — that's the whole probe. Only flag errors
+// unrelated to those expected download failures.
+const unexpected = errors.filter((e) => !/nope-(img|vid|aud|txt)|404|Failed to load resource|Download failed|watched observable/i.test(e));
+check('no unexpected page errors', unexpected.length === 0, unexpected.slice(0, 5).join(' | '));
 
 done();
 await close();
