@@ -32,7 +32,8 @@ export class NavigateAction extends AppAction {
         folder: res.node, breadcrumb: res.breadcrumb, items: res.items,
         loading: false, selection: [], sort, order, collectionId: res.collectionId || collectionId,
       });
-      platform.context.setMany({ 'explorer.folderId': res.node.id, 'explorer.collectionId': collectionId, 'explorer.hasSelection': false });
+      // Explorer→context projection (folderId/collectionId/hasSelection) lives in
+      // bl/index.js so it stays in sync with selection too — nothing to mirror here.
     } catch (err) {
       explorer.set({ loading: false, error: err.message });
       platform.notifications.error(`Couldn't open folder: ${err.message}`);

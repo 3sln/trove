@@ -94,6 +94,27 @@ test('collections isolate data and enforce read/write/delete', async () => {
   expect(cantDelete.status).toBe(403);
 });
 
+test('upload lifecycle routes re-check write on the session collection', async () => {
+  const { handle } = await adminServer();
+  const boss = await mint({ sub: 'boss' });
+  const reader = await mint({ sub: 'reader' });
+  const created = await api(handle, 'POST', '/api/collections', { token: boss, body: { name: 'Vault', store: { driver: 'memory' } } });
+  const cid = created.json.collection.id;
+  const root = await api(handle, 'GET', `/api/fs/list?collection=${cid}&path=/`, { token: boss });
+  await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
+
+  // Boss starts an upload into the vault.
+  const start = await api(handle, 'POST', '/api/uploads', { token: boss, body: { parentId: root.json.node.id, name: 'f.bin', size: 4, contentType: 'application/octet-stream' } });
+  const uploadId = start.json.uploadId;
+
+  // A read-only principal can't inspect, drive, complete, or abort someone's upload.
+  expect((await api(handle, 'GET', `/api/uploads/${uploadId}/status`, { token: reader })).status).toBe(403);
+  expect((await api(handle, 'POST', `/api/uploads/${uploadId}/complete`, { token: reader, body: {} })).status).toBe(403);
+  expect((await api(handle, 'DELETE', `/api/uploads/${uploadId}`, { token: reader })).status).toBe(403);
+  // The owner still can.
+  expect((await api(handle, 'GET', `/api/uploads/${uploadId}/status`, { token: boss })).status).toBe(200);
+});
+
 test('a read-only user cannot add OR remove tags (tag DELETE is write-gated)', async () => {
   const { handle } = await adminServer();
   const boss = await mint({ sub: 'boss' });

@@ -174,6 +174,7 @@ export class UploadManager {
     const received = Object.keys(s.parts).map(Number).sort((a, b) => a - b);
     return {
       uploadId,
+      collectionId: s.collectionId,
       strategy: s.strategy,
       partCount: s.partCount ?? 1,
       partSize: s.partSize,

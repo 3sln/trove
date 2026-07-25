@@ -246,6 +246,30 @@ export class Vfs {
     }
   }
 
+  // --- user tags (sidecar CRDT + queryable mirror) ---------------------------
+  // A user tag lives in the sidecar (a CRDT, so concurrent edits merge) AND is
+  // mirrored into the queryable `user` contribution so `#tag` filters find it. Both
+  // sides are the façade's job — keeping the invariant here means no caller (route or
+  // otherwise) can set one without the other, and a mirror failure is no longer
+  // silently swallowed (the tag would be set but unfilterable).
+
+  async setTag(nodeId, name, value, principal) {
+    if (!this.sidecar) throw TroveError.unsupported('Conversations are not enabled');
+    const res = await this.sidecar.setTag(nodeId, name, value, principal);
+    await this.metadata.setContribution(nodeId, 'user', { tags: { [name]: value ?? true } });
+    return res;
+  }
+  async removeTag(nodeId, name, principal) {
+    if (!this.sidecar) throw TroveError.unsupported('Conversations are not enabled');
+    const res = await this.sidecar.removeTag(nodeId, name, principal);
+    await this.metadata.setContribution(nodeId, 'user', { tags: { [name]: null } });
+    return res;
+  }
+  /** Drive-wide tag/property query (delegates to the metadata store). */
+  findByTags(filters, opts) {
+    return this.metadata.findByTags(filters, opts);
+  }
+
   // --- search & indexing -----------------------------------------------------
 
   /**

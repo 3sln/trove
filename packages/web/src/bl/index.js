@@ -10,7 +10,6 @@ import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { registerCommands } from './commands.js';
 import { NavigateAction, LoadCollectionsAction } from './actions.js';
-import { registerBuiltinOpeners } from '../ui/components/openers/index.js';
 
 export function createApp(platform) {
   const explorer = new ExplorerService(platform.settings);
@@ -28,10 +27,22 @@ export function createApp(platform) {
   app.engine = engine;
 
   registerCommands(app);
-  registerBuiltinOpeners(platform);
 
   // Wire the plugin panel opener hook to the workbench.
   platform.openPluginPanel = (pluginId) => platform.workbench.openPluginPanel(pluginId);
+
+  // Project explorer state → context keys in ONE place. These drive when-clauses
+  // (e.g. the Delete keybinding needs `explorer.hasSelection`), and previously only
+  // NavigateAction set them — so selecting a file never flipped hasSelection true and
+  // Delete silently did nothing. Deriving them from the observable keeps them honest.
+  platform.context.setMany({ 'explorer.folderId': '', 'explorer.collectionId': 'default', 'explorer.hasSelection': false });
+  explorer.observe().subscribe((ex) => {
+    platform.context.setMany({
+      'explorer.folderId': ex.folder?.id || '',
+      'explorer.collectionId': ex.collectionId || 'default',
+      'explorer.hasSelection': (ex.selection?.length || 0) > 0,
+    });
+  });
 
   // Load a file's conversation/tags whenever the active viewer panel changes.
   let lastTab = null;

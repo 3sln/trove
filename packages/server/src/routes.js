@@ -235,8 +235,7 @@ export function createRouter() {
     const { vfs, query, req } = ctx;
     const id = query.id;
     if (!id) throw TroveError.invalid('id is required');
-    await assertCap(ctx, (await vfs.stat(id)).collectionId, 'read');
-    const node = await vfs.stat(id);
+    const node = await nodeWithCap(ctx, id, 'read');
     const ct = node.contentType || 'application/octet-stream';
     // Force a download for anything not safe to render inline in our own origin
     // (HTML/SVG/etc. would otherwise be same-origin XSS when opened directly).
@@ -280,30 +279,38 @@ export function createRouter() {
     return uploadDescriptor(plan);
   });
 
-  r.get('/api/uploads/:id/status', ({ vfs, params }) => vfs.uploadStatus(params.id));
+  r.get('/api/uploads/:id/status', async (ctx) => {
+    await assertUploadCap(ctx, ctx.params.id, 'write');
+    return ctx.vfs.uploadStatus(ctx.params.id);
+  });
 
-  r.post('/api/uploads/:id/parts/:n/sign', async ({ vfs, params }) => ({
-    url: await vfs.signUploadPart(params.id, Number(params.n)),
-  }));
+  r.post('/api/uploads/:id/parts/:n/sign', async (ctx) => {
+    await assertUploadCap(ctx, ctx.params.id, 'write');
+    return { url: await ctx.vfs.signUploadPart(ctx.params.id, Number(ctx.params.n)) };
+  });
 
-  r.post('/api/uploads/:id/parts/:n/report', async ({ vfs, params, req }) => {
-    const b = await body(req);
-    return vfs.reportUploadPart(params.id, Number(params.n), b.etag);
+  r.post('/api/uploads/:id/parts/:n/report', async (ctx) => {
+    await assertUploadCap(ctx, ctx.params.id, 'write');
+    const b = await body(ctx.req);
+    return ctx.vfs.reportUploadPart(ctx.params.id, Number(ctx.params.n), b.etag);
   });
 
   // Direct part upload — raw body streamed to storage.
-  r.put('/api/uploads/:id/parts/:n', async ({ vfs, params, req }) => {
-    const res = await vfs.uploadPart(params.id, Number(params.n), req.body ?? new Uint8Array(0));
+  r.put('/api/uploads/:id/parts/:n', async (ctx) => {
+    await assertUploadCap(ctx, ctx.params.id, 'write');
+    const res = await ctx.vfs.uploadPart(ctx.params.id, Number(ctx.params.n), ctx.req.body ?? new Uint8Array(0));
     return json(res);
   });
 
-  r.post('/api/uploads/:id/complete', async ({ vfs, params, req }) => {
-    const b = await body(req);
-    return { node: await vfs.completeUpload(params.id, b.parts) };
+  r.post('/api/uploads/:id/complete', async (ctx) => {
+    await assertUploadCap(ctx, ctx.params.id, 'write');
+    const b = await body(ctx.req);
+    return { node: await ctx.vfs.completeUpload(ctx.params.id, b.parts) };
   });
 
-  r.delete('/api/uploads/:id', async ({ vfs, params }) => {
-    await vfs.abortUpload(params.id);
+  r.delete('/api/uploads/:id', async (ctx) => {
+    await assertUploadCap(ctx, ctx.params.id, 'write');
+    await ctx.vfs.abortUpload(ctx.params.id);
     return { ok: true };
   });
 
@@ -352,7 +359,7 @@ export function createRouter() {
       const readable = (await collections.list(principal)).map((c) => c.id);
       collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
     }
-    const items = await vfs.metadata.findByTags(filters, {
+    const items = await vfs.findByTags(filters, {
       q: b.q, collectionIds, limit: clampLimit(b.limit, 100),
     });
     return { items };
@@ -429,27 +436,19 @@ export function createRouter() {
 
   r.post('/api/files/:id/tags', async (ctx) => {
     requireSidecar(ctx.sidecar);
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'write');
+    await nodeWithCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    const res = await ctx.sidecar.setTag(ctx.params.id, b.name, b.value, ctx.principal);
-    // Mirror the tag into the queryable 'user' contribution scope so it's filterable
-    // (#tag / #tag:=value) alongside indexer-contributed tags.
-    await ctx.vfs.metadata.setContribution(ctx.params.id, 'user', { tags: { [b.name]: b.value ?? true } }).catch(() => {});
-    return res;
+    // The façade sets the CRDT tag AND its queryable mirror together (no swallow).
+    return ctx.vfs.setTag(ctx.params.id, b.name, b.value, ctx.principal);
   });
 
   r.delete('/api/files/:id/tags/:name', async (ctx) => {
     requireSidecar(ctx.sidecar);
     // Removing a tag is a write — enforce the same per-collection ACL as adding one,
     // or a read-only user could strip tags off files they can't modify.
-    const node = await ctx.vfs.stat(ctx.params.id);
-    await assertCap(ctx, node.collectionId, 'write');
-    const res = await ctx.sidecar.removeTag(ctx.params.id, ctx.params.name, ctx.principal);
-    // Null clears the merged tag (the matcher reads null as "absent").
-    await ctx.vfs.metadata.setContribution(ctx.params.id, 'user', { tags: { [ctx.params.name]: null } }).catch(() => {});
-    return res;
+    await nodeWithCap(ctx, ctx.params.id, 'write');
+    return ctx.vfs.removeTag(ctx.params.id, ctx.params.name, ctx.principal);
   });
 
   r.post('/api/files/:id/subscribe', async (ctx) => {
@@ -661,6 +660,20 @@ function uploadDescriptor(plan) {
 async function assertCap(ctx, collectionId, capability) {
   if (!ctx.collections) return; // collections disabled → no per-collection ACL
   await ctx.collections.assert(ctx.principal, collectionId, capability);
+}
+// Stat a node and enforce a capability on its collection in one step — the single
+// most repeated shape across the mutating routes.
+async function nodeWithCap(ctx, id, capability) {
+  const node = await ctx.vfs.stat(id);
+  await assertCap(ctx, node.collectionId, capability);
+  return node;
+}
+// Re-check the caller still holds the capability on an in-flight upload's collection.
+// The upload lifecycle spans several requests keyed only by an unguessable uploadId;
+// without this a revoked grant could still drive/commit the upload.
+async function assertUploadCap(ctx, uploadId, capability) {
+  const { collectionId } = await ctx.vfs.uploadStatus(uploadId);
+  await assertCap(ctx, collectionId, capability);
 }
 function requirePrincipal(principal) {
   if (!principal) throw TroveError.unauthorized('Authentication required');

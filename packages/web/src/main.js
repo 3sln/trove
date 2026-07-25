@@ -10,11 +10,15 @@ import { createApp } from './bl/index.js';
 import { NavigateAction, UploadFilesAction } from './bl/actions.js';
 import { parsePackage } from './platform/pluginPackage.js';
 import workbenchComposition from './ui/compositions/workbench.js';
+import { registerBuiltinOpeners } from './ui/components/openers/index.js';
 
 const root = document.querySelector('.workbench');
 
 const platform = createPlatform({ baseUrl: '' });
 const { engine, app } = createApp(platform);
+// Built-in openers are UI, so register them from the composition layer (which is
+// allowed to know both platform and ui) rather than from bl/ (keeps bl → ui out).
+registerBuiltinOpeners(platform);
 
 // Plugins are installed by the user (from a .zip or a URL) and persisted locally;
 // restore any that were installed on this device, then run.
