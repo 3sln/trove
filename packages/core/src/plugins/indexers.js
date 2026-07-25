@@ -10,7 +10,7 @@
 // tests/first-party use the in-process runtime; a deployment can swap an isolate one.
 
 import { unzipSync } from 'fflate';
-import { extname, readAll } from '../util.js';
+import { readAll, selectorMatches } from '../util.js';
 
 export class PluginIndexers {
   /**
@@ -106,20 +106,8 @@ export class PluginIndexers {
   }
 }
 
-/** Turn an indexer `match` selector into a node predicate. */
+/** Turn an indexer `match` selector into a node predicate (shared matcher). */
 export function matchFromSelector(sel = {}) {
-  const exts = (sel.ext || []).map((e) => (e.startsWith('.') ? e : '.' + e).toLowerCase());
-  const mimes = sel.mime || sel.contentType || [];
-  const mimePrefixes = mimes.filter((m) => m.endsWith('/*')).map((m) => m.slice(0, -1));
-  const mimeExact = new Set(mimes.filter((m) => !m.endsWith('/*')));
-  const extSet = new Set(exts);
-  return (node) => {
-    if (node.kind !== 'file') return false;
-    if (extSet.size && extSet.has(extname(node.name))) return true;
-    const ct = node.contentType || '';
-    if (mimeExact.has(ct)) return true;
-    if (mimePrefixes.some((p) => ct.startsWith(p))) return true;
-    return false; // no declared selector matched (an indexer must opt into what it handles)
-  };
+  return (node) => selectorMatches(sel, node);
 }
 

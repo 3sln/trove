@@ -47,19 +47,8 @@ const PATHS = {
   x: [{ d: 'M6 6l12 12M18 6L6 18' }],
 };
 
-// Map file extensions / content-types to an icon name.
-export function iconForNode(node) {
-  if (node.kind === 'folder') return 'folder';
-  const name = (node.name || '').toLowerCase();
-  const ct = node.contentType || '';
-  const ext = name.slice(name.lastIndexOf('.'));
-  if (['.m4b', '.m4a'].includes(ext) || /audiobook/.test(name)) return 'book';
-  if (ct.startsWith('audio/') || ['.mp3', '.flac', '.wav', '.opus', '.ogg'].includes(ext)) return 'file-audio';
-  if (ct.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) return 'file-image';
-  if (ct.startsWith('video/') || ['.mp4', '.webm', '.mkv', '.mov'].includes(ext)) return 'file-video';
-  if (ct.startsWith('text/') || ['.txt', '.md', '.json', '.js', '.ts', '.css', '.html', '.py', '.log', '.yaml', '.yml'].includes(ext)) return 'file-text';
-  return 'file';
-}
+// Map a node to an icon name via the shared file-type classifier.
+export { iconForKind as iconForNode } from '../bl/fileType.js';
 
 export function icon(name, { size = 18, strokeWidth = 1.6, className } = {}) {
   const specs = PATHS[name] || PATHS.file;

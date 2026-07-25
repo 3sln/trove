@@ -15,6 +15,7 @@
 //   statusItems  { id, align?, priority?, text, tooltip?, command?, when? }
 
 import { ObservableSubject } from '../runtime.js';
+import { selectorMatches } from '@trove/core/util.js';
 
 class Collection {
   constructor(name) {
@@ -82,19 +83,8 @@ export class ContributionRegistry {
   }
 }
 
-function matchesSelector(selector, node) {
-  if (!selector || node?.kind !== 'file') return false;
-  if (selector.match) {
-    try {
-      if (selector.match(node)) return true;
-    } catch { /* ignore */ }
-  }
-  const name = (node.name || '').toLowerCase();
-  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
-  if (selector.ext?.some((e) => e.toLowerCase() === ext)) return true;
-  const mime = node.contentType || '';
-  if (selector.mime?.some((m) => (m.endsWith('/*') ? mime.startsWith(m.slice(0, -1)) : mime === m))) return true;
-  return false;
-}
+// The selector matcher is shared with the server (core/util.js) so a client opener and
+// a server indexer match files by the same rules.
+const matchesSelector = selectorMatches;
 
 export { matchesSelector };

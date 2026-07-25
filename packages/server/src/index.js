@@ -12,7 +12,7 @@ import {
   SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,
   SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer,
   VectorStore, MemoryVectorStore, QdrantVectorStore, VectorizeVectorStore,
-  IndexerRegistry, textIndexer,
+  IndexerRegistry,
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
   KeyValueStore, MemoryKV, SqliteKV,
   SqliteProvider, LocalSqliteProvider,
@@ -119,7 +119,6 @@ export async function createServer(config = {}) {
       : new SearchService({ embeddings, vectorStore, keywordStore: config.keywordStore });
 
   const indexers = config.indexers instanceof IndexerRegistry ? config.indexers : new IndexerRegistry();
-  if (!indexers.indexers.size) indexers.register(textIndexer);
 
   // Search transformer: raw query → { semanticText, tagFilters }. Default parses the
   // `#tag` grammar; inject one (e.g. Workers AI) for LLM-assisted query understanding.

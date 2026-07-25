@@ -70,6 +70,24 @@ export function extname(name) {
   return i > 0 ? b.slice(i).toLowerCase() : '';
 }
 
+/**
+ * Does a contribution/opener/indexer `selector` match a file node? One matcher shared
+ * by the client contribution registry and the server indexers so they can't drift.
+ * A selector has any of: `match(node)` (a predicate, built-ins only), `ext` (with or
+ * without leading dot), `mime`/`contentType` (exact or a `type/*` prefix).
+ */
+export function selectorMatches(selector, node) {
+  if (!selector || node?.kind !== 'file') return false;
+  if (typeof selector.match === 'function') {
+    try { if (selector.match(node)) return true; } catch { /* ignore a bad matcher */ }
+  }
+  const ext = extname(node.name || '');
+  if (ext && (selector.ext || []).some((e) => (e.startsWith('.') ? e : '.' + e).toLowerCase() === ext)) return true;
+  const ct = node.contentType || '';
+  const mimes = selector.mime || selector.contentType || [];
+  return mimes.some((m) => (m.endsWith('/*') ? ct.startsWith(m.slice(0, -1)) : ct === m));
+}
+
 /** True when `child` is `ancestor` or lives beneath it. */
 export function isDescendant(ancestor, child) {
   const a = normalizePath(ancestor);

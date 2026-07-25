@@ -8,7 +8,7 @@
 
 import { TroveError } from './errors.js';
 import { UploadManager } from './uploads.js';
-import { IndexerRegistry, textIndexer } from './indexers/registry.js';
+import { IndexerRegistry } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
 import { basename, parentPath, extname, readAll } from './util.js';
 import { ROOT_ID, rootId } from './metadata/memory.js';
@@ -34,7 +34,6 @@ export class Vfs {
     this.sidecar = sidecar ?? null;
     this.collections = collections ?? null;
     this.indexers = indexers ?? new IndexerRegistry();
-    if (!this.indexers.indexers.size) this.indexers.register(textIndexer);
     // One UploadManager; it resolves the right backend per session's collection.
     this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes });
     this.maxIndexBytes = maxIndexBytes;

@@ -38,8 +38,10 @@ import { extname } from '../util.js';
  */
 
 export class IndexerRegistry {
-  constructor() {
+  /** @param {{builtins?: boolean}} [opts] register the reference text indexer (default on) */
+  constructor({ builtins = true } = {}) {
     this.indexers = new Map();
+    if (builtins) this.register(textIndexer);
   }
   register(indexer) {
     if (!indexer?.id || typeof indexer.index !== 'function') {

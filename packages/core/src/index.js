@@ -55,7 +55,7 @@ import { MemoryStorage } from './storage/memory.js';
 import { MemoryStore } from './metadata/memory.js';
 import { SearchService } from './search/index.js';
 import { LocalHashEmbedding } from './search/embeddings.js';
-import { IndexerRegistry, textIndexer } from './indexers/registry.js';
+import { IndexerRegistry } from './indexers/registry.js';
 
 /**
  * Wire a Vfs from parts, defaulting to in-memory everything (great for tests and
@@ -78,7 +78,6 @@ export async function createVfs(opts = {}) {
     opts.search ??
     new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
-  if (!indexers.indexers.size) indexers.register(textIndexer);
   const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, searchTransformer: opts.searchTransformer, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes });
   await vfs.init();
   return vfs;

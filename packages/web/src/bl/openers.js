@@ -7,13 +7,11 @@
 // Preferences live in settings under `openers.associations`: a map from a *type key*
 // (an extension like ".pdf", an exact mime, or a "type/*" wildcard) to an opener id.
 
+import { extOf } from './fileType.js';
+
 const ASSOC_KEY = 'openers.associations';
 
-/** The extension (".pdf") for a node, lowercased, or '' if none. */
-export function extOf(node) {
-  const name = (node?.name || '').toLowerCase();
-  return name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
-}
+export { extOf };
 
 /** The canonical type key we remember a choice under: prefer extension, else mime. */
 export function typeKeyFor(node) {

@@ -13,6 +13,7 @@
 
 import { ObservableSubject } from '../runtime.js';
 import { LocalHashEmbedding } from '@trove/core/search/embeddings.js';
+import { isTexty } from './fileType.js';
 
 const DB = 'trove-offline';
 const FILES_CACHE = 'trove-files-v1';
@@ -259,10 +260,4 @@ function snippet(text, qTokens) {
   if (at < 0) return text.slice(0, 160).trim();
   const start = Math.max(0, at - 60);
   return (start > 0 ? '…' : '') + text.slice(start, start + 200).trim() + '…';
-}
-function isTexty(node) {
-  const ct = node.contentType || '';
-  if (ct.startsWith('text/') || ct === 'application/json') return true;
-  const ext = (node.name || '').slice((node.name || '').lastIndexOf('.')).toLowerCase();
-  return ['.txt', '.md', '.json', '.js', '.ts', '.css', '.html', '.csv', '.log', '.yaml', '.yml', '.py'].includes(ext);
 }
