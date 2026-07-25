@@ -44,23 +44,24 @@ components read `state.overlay.*` / `state.nav.*`. WorkbenchService went 243 →
 lines. The duplicated list-cursor logic is one `wrapIndex` helper. Verified across
 e2e + offline + mutation/opener probes.
 
-### 2c. `PluginHost` (web/src/platform/pluginHost.js, 969 lines) — HIGH ▶ recommended
-One class owns iframe lifecycle, the host↔plugin RPC router + capability brokering,
-viewer/panel/dock placement (building DOM), `navigator.mediaSession`, the heartbeat,
-AND install/restore/reconcile/uninstall. Nothing can be tested without a DOM + a
-MediaSession + IndexedDB.
-**Refactor (proposed seams, each owns disjoint state):** `FrameManager`
-(spawn/handshake/destroy, srcdoc/CSP/SDK injection), `CapabilityBroker` + `HostRpcRouter`
-(the security-critical `#hostCall`, depending only on a small injected `HostSurface`
-interface — `showPanel`/`openFile`/`notify` — so allow/deny is testable with fakes),
-`PlacementController`/`DockManager` (`_dockedFrame`, overlays), `MediaController`
-(`_mediaOwner`), `InstallManager`, `AvailabilityMonitor`. `PluginHost` shrinks to a thin
-orchestrator holding the `plugins` map. **Deferred deliberately** — highest value but
-also the app's most fragile subsystem (iframe reparenting, RPC handshake timing, dock
-placement, media session): a 969-line split with 100+ call sites, security-critical RPC
-in the middle, and no user-facing payoff. This is staged work to do behind the plugin
-e2e (32 checks) + probe5 with review, not an autonomous sweep. Should be preceded by the
-shared `pluginProtocol.js` + `CapabilityBroker` (§5) so the seams are clean first.
+### 2c. `PluginHost` (web/src/platform/pluginHost.js) — HIGH ✅ fixed
+Was 969 lines owning iframe lifecycle, the host↔plugin RPC router + capability
+brokering, viewer/panel/dock placement (building DOM), `navigator.mediaSession`, the
+heartbeat, AND install/restore/reconcile/uninstall. Now an orchestrator (495 lines)
+composing four focused collaborators, each owning disjoint state:
+
+| Module | Lines | Owns |
+|---|---|---|
+| `pluginFrames.js` `FrameManager` | 172 | the sandbox seam: spawn/handshake/destroy, srcdoc + CSP, SDK injection |
+| `pluginRpc.js` `PluginRpcRouter` | 259 | the trusted boundary: capability-gated `hostCall`/`hostEvent`, brokered fetch, scoped SQL |
+| `pluginDock.js` `FrameDock` | 144 | where a frame is shown (fixed-overlay placement) + the floating dock/PiP (`_dockedFrame`, `_dockEl_`) |
+| `pluginMedia.js` `MediaController` | 62 | `navigator.mediaSession` bridging + per-frame handler release (`_mediaOwner`) |
+
+`PluginHost` keeps the lifecycle proper: install/restore/reconcile/uninstall, the
+availability heartbeat/probe, `list`/`observe`, and panel/viewer mounting. The teardown
+interdependency (frame destroy → placement + media + dock) is resolved by injection: the
+dock destroys through the frame manager via a lazy callback, and the frame manager
+consults both on destroy. No call site outside the module changed.
 
 ---
 
@@ -110,21 +111,25 @@ shared `pluginProtocol.js` + `CapabilityBroker` (§5) so the seams are clean fir
 - **`/api/capabilities` reports only the primary backend** (server, MED ✅ fixed):
   now collection-scoped (`?collection=`, gated on read) with `SearchService.describe()`
   replacing route-side `constructor.name` introspection.
-- **Plugin wire protocol is implicit + the RPC engine is implemented twice** (plugin,
-  HIGH ▶): method names are bare strings matched by a `switch`, the sandbox re-hand-rolls
-  its own RPC (no per-call timeout), and the init handshake carries **no
-  `protocolVersion`**. A `pluginProtocol.js` (`METHODS` enum + `PROTOCOL_VERSION`) is the
-  right fix, but the SDK is injected into the sandbox **as a text blob** (`import … with
-  { type: 'text' }`), so it can't `import` a shared module — sharing needs a build step
-  that inlines it, or the host-side constants + a hardcoded version the SDK echoes. Best
-  bundled with the `PluginHost` split (§2c).
-- **Capability model spread across modules** (plugin, MED ▶): the client `cap()` closure
-  is re-created per `#hostCall`; a single `CapabilityBroker.require(record, cap)` would
-  centralize it (part of the §2c split). Note: `accountScoped` (client: "has a server
-  footprint → upload it") and `requiresAdmin` (server: "needs admin approval") are
-  **not** a divergence — they answer different questions and are correct as-is;
-  `ALL_CAPABILITIES` is already shared. The client `capabilityList` (rich per-cap entries
-  for the review UI) is intentionally distinct from the server's (a plain list).
+- **Plugin wire protocol was implicit + unversioned** (plugin, HIGH ✅ fixed):
+  `plugin-sdk/protocol.js` now defines the envelope, a `METHODS`/`EVENTS` registry, and
+  `PROTOCOL_VERSION`. The host sends its version in `init` and checks the SDK's reported
+  version on `ready`, failing the handshake on a MAJOR mismatch. Because the SDK is
+  injected into the sandbox **as a text blob** (`import … with { type: 'text' }`) it
+  can't import the module, so it declares `SDK_PROTOCOL_VERSION` and `protocol.test.js`
+  asserts the two stay equal — a drift guard standing in for the import. That test also
+  caught a real bug: the SDK's `ctx.commands.execute()` sent a `command:execute` the host
+  never handled (always threw); now implemented and gated behind `commands`.
+  *Still open:* the SDK hand-rolls its own RPC engine rather than reusing `RpcChannel`
+  (same text-injection constraint) — it has no per-call timeout on the plugin side.
+- **Capability model spread across modules** (plugin, MED ▶): the `cap()` closure is
+  re-created per `hostCall` — now confined to `PluginRpcRouter`, so it's one focused
+  unit; folding it into an explicit `CapabilityBroker.require()` is cosmetic from here.
+  Note: `accountScoped` (client: "has a server footprint → upload it") and
+  `requiresAdmin` (server: "needs admin approval") are **not** a divergence — they answer
+  different questions and are correct as-is; `ALL_CAPABILITIES` is already shared. The
+  client `capabilityList` (rich per-cap entries for the review UI) is intentionally
+  distinct from the server's (a plain list).
 - **Legacy `facet`/`documents` vocabulary** threaded through layers as compat shims
   (server, MED ▶): normalize legacy→canonical once at the route boundary and delete the
   interior shims. Low urgency (the shims are inert back-compat).
@@ -142,14 +147,16 @@ shared `pluginProtocol.js` + `CapabilityBroker` (§5) so the seams are clean fir
 4. ✅ **UI→service layering** violations closed (launcher/palette route through actions).
 5. ✅ **Split `WorkbenchService`** → `WorkbenchService` + `OverlayService` +
    `NavigationService` (243 → 134 lines).
-6. ▶ **Split `PluginHost`** (§2c) — the one remaining structural item. It's genuinely
-   staged/reviewed work: 969 lines where iframe lifecycle, the security-critical RPC
-   router, frame placement, the dock/PiP overlay, and the OS media session are
-   *intertwined* (frame teardown calls into placement + media + dock together), for zero
-   user-facing payoff. Should be done seam-by-seam behind the plugin e2e (32) + probe5,
-   preceded by the shared `pluginProtocol.js`/`CapabilityBroker` (§5). Deliberately not
-   swept autonomously.
+6. ✅ **Plugin protocol module + versioning** (`plugin-sdk/protocol.js`), with a drift
+   guard for the text-injected SDK.
+7. ✅ **Split `PluginHost`** → orchestrator + `FrameManager` + `PluginRpcRouter` +
+   `FrameDock` + `MediaController` (969 → 495 + 4 focused modules).
 
-Everything marked ✅ is committed on this branch. The only remaining ▶ is the
-`PluginHost` split (plus the low-urgency `facet`/`documents` shim cleanup) — the most
-fragile, highest-touch, lowest-immediate-value refactor, left for deliberate work.
+**All structural findings are resolved.** What remains is deliberately deferred, and
+both are cosmetic rather than structural:
+- the legacy `facet`/`documents` compat shims (inert back-compat; normalize at the route
+  boundary and delete the interior shims when convenient);
+- folding the `cap()` closure into an explicit `CapabilityBroker.require()` (it's already
+  confined to one focused module);
+- having the injected SDK reuse `RpcChannel` instead of its own RPC engine — blocked by
+  the text-injection constraint, would need a build step.

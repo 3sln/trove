@@ -18,8 +18,9 @@ await goto();
 await page.waitForSelector('.launcher .launch-item', { timeout: 5000 });
 
 const assoc = () => page.evaluate(() => window.__trove.platform.settings.get('openers.associations') || {});
+// The panel stack lives in the workbench's NavigationService sub-service.
 const topOpener = () => page.evaluate(() => {
-  const s = window.__trove.platform.workbench.state.stack;
+  const s = window.__trove.platform.workbench.nav.state.stack;
   const t = s[s.length - 1];
   return t && t.kind === 'file' ? t.openerId : null;
 });

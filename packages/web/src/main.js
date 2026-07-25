@@ -106,5 +106,6 @@ window.__trove = {
     parsePackage,
     assessTrust: (pkg) => platform.plugins.assessTrust(pkg),
     install: (pkg, opts) => platform.plugins.install(pkg, opts),
+    NavigateAction,
   },
 };

@@ -51,7 +51,9 @@ check('audio opener shows feedback when bytes are missing', await hasErrorFeedba
 
 // The broken files are SUPPOSED to 404 — that's the whole probe. Only flag errors
 // unrelated to those expected download failures.
-const unexpected = errors.filter((e) => !/nope-(img|vid|aud|txt)|404|Failed to load resource|Download failed|watched observable/i.test(e));
+// ERR_ABORTED too: swapping the broken media element out for the fallback cancels its
+// in-flight request — that's the fix working, not a fault.
+const unexpected = errors.filter((e) => !/nope-(img|vid|aud|txt)|404|Failed to load resource|Download failed|watched observable|ERR_ABORTED/i.test(e));
 check('no unexpected page errors', unexpected.length === 0, unexpected.slice(0, 5).join(' | '));
 
 done();

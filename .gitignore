@@ -17,3 +17,4 @@ coverage/
 
 # test artifacts
 packages/web/test/*.png
+packages/web/test/screens/

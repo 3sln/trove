@@ -45,7 +45,7 @@ async function toWeb(nodeReq) {
   return new Request(`http://localhost${nodeReq.url}`, { method: nodeReq.method, headers, body: hasBody ? Readable.toWeb(nodeReq) : undefined, duplex: 'half' });
 }
 
-export async function boot({ serverConfig = {}, seed } = {}) {
+export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000 } = {}) {
   const { handle, vfs, ...rest } = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), ...serverConfig, assets: staticAssets });
   if (seed) await seed(vfs);
 
@@ -90,13 +90,16 @@ export async function boot({ serverConfig = {}, seed } = {}) {
       (async () => { await browser.close().catch(() => {}); await new Promise((r) => server.close(r)); })(),
       new Promise((r) => setTimeout(r, 1500)),
     ]);
+    // Flush stdout before exiting — process.exit() truncates buffered output when the
+    // probe's stdout is a pipe (as it is under run-all.mjs).
+    await new Promise((r) => process.stdout.write('', r));
     process.exit(process.exitCode || 0);
   }
   // Never let a probe hang the whole session; force-exit with a diagnostic.
   const watchdog = setTimeout(() => {
-    console.error('\n‼ WATCHDOG: probe exceeded 45s — forcing exit. Recent errors:\n' + errors.slice(-8).join('\n'));
+    console.error(`\n‼ WATCHDOG: probe exceeded ${Math.round(watchdogMs / 1000)}s — forcing exit. Recent errors:\n` + errors.slice(-8).join('\n'));
     process.exit(process.exitCode || 0);
-  }, 45_000);
+  }, watchdogMs);
   watchdog.unref?.();
 
   // networkidle can stall (the offline service polls the API); callers use goto().
@@ -104,7 +107,11 @@ export async function boot({ serverConfig = {}, seed } = {}) {
     await page.goto(base + pathOrEmpty, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.shell', { timeout: 8000 });
   }
-  return { base, page, browser, server, vfs, handle, errors, close, goto, setFault, ...rest };
+  // NOTE: `...rest` FIRST — createServer() also returns a `close` (it disposes the db
+  // and sidecar). Spreading it last would shadow the harness teardown below, leaving
+  // the browser + http server alive so every probe hung until the watchdog killed it
+  // (truncating buffered stdout, which looked like "no result").
+  return { ...rest, base, page, browser, server, vfs, handle, errors, close, goto, setFault };
 }
 
 // A tiny check harness with a nonzero exit on failure.
