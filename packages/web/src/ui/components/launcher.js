@@ -115,11 +115,15 @@ function buildContent(state, ui, q, mode, modal) {
   const nodes = (state.se.results || []).map((r) => r.node);
   const err = state.se.error;
 
+  // A one-click retry so a transient search/filter failure isn't a dead end.
+  const retryBtn = (action) => button({ className: 'launch-up', title: 'Retry' }, icon('refresh', { size: 13 }), 'Retry').on({ click: () => ui.go(action) });
+
   // Drive-wide tag/property filter (server-side), optionally narrowed by free text.
   if (filters.length) {
     const label = filters.map(filterLabel).join(' ') + (text.trim() ? ` · "${text.trim()}"` : '');
     return [{
       title: state.se.loading ? 'Filtering…' : err ? 'Filter failed' : `Filtered · ${label}`,
+      action: err ? retryBtn(new FilterAction(filters, text)) : null,
       items: nodes.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui, modal))),
       empty: state.se.loading ? 'Filtering…' : err ? `Couldn’t filter: ${err}` : 'No files match those filters.',
     }];
@@ -129,6 +133,7 @@ function buildContent(state, ui, q, mode, modal) {
   if (text.trim()) {
     return [{
       title: state.se.loading ? 'Searching…' : err ? 'Search failed' : 'Results',
+      action: err ? retryBtn(new SearchAction(q)) : null,
       items: nodes.map((n) => fileItem(n, ui, modal)),
       empty: state.se.loading ? 'Searching…' : err ? `Couldn’t search: ${err}` : 'No files match.',
     }];
