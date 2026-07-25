@@ -24,28 +24,28 @@ registry are genuinely clean and were left alone.
 
 ## 2. God objects — the highest-value structural debt
 
-### 2a. `Vfs` (core/src/vfs.js) — HIGH ▶ recommended
-The "façade" has absorbed a whole indexing subsystem (`indexContributions`,
-`removeContributions`, `#applyContribution`, `#indexNode`, `#indexCtx`,
-`#runOneIndexer`, `backfillIndexer`, `purgeIndexer` — ~130 lines) plus six trivial
-upload pass-throughs.
-**Refactor:** extract an `IndexingCoordinator` (owns `indexers`, `search`,
-`maxIndexBytes`, the ctx builder, run/backfill/purge) that `Vfs` delegates to; expose
-`vfs.uploads` and drop the five forwarders. Small caller surface (`PluginIndexers`, two
-routes), well covered by `plugin-indexer.test.js` — the cleanest of the three splits.
+### 2a. `Vfs` (core/src/vfs.js) — HIGH ✅ fixed
+Extracted an `IndexingCoordinator` (core/indexing.js) owning the whole indexing
+subsystem (indexNode, indexContributions, removeContributions, backfillIndexer,
+purgeIndexer, the index-context builder, normalizeContribution — ~130 lines). Vfs
+constructs one, injecting only `storageFor`, and keeps four thin delegations for its
+historical surface, so routes and PluginIndexers are unchanged. Vfs is a genuine
+tree/blob/query façade again. (The five trivial upload forwarders were left as-is —
+low value.)
 
-### 2b. `WorkbenchService` (web/src/platform/workbench.js) — HIGH ▶ recommended
+### 2b. `WorkbenchService` (web/src/platform/workbench.js) — HIGH ▶ recommended (partly ✅)
 One service + one subject owns ~10 shell concerns: activity, sidebar, palette,
 launcher, modal search, the **panel stack + browser-history sync + recents**, plugin
-panel, dialog, context menu, info panel. The modular list-cursor logic is written
-twice.
-**Refactor:** split into `NavigationService` (stack + history + recents),
+panel, dialog, context menu, info panel. ✅ The duplicated list-cursor logic is now one
+`wrapIndex(index, delta, count)` helper.
+**Remaining refactor:** split into `NavigationService` (stack + history + recents),
 `OverlayService` (palette/dialog/contextMenu/pluginPanel/searchModal/`closeOverlays`),
-leaving `WorkbenchService` with activity/sidebar/infoPanel. Extract one
-`listCursor(index, delta, count)`. **Risk:** the history-sync/stack code is subtle — do
-it deliberately with the e2e suite watching.
+leaving `WorkbenchService` with activity/sidebar/infoPanel. **Deferred deliberately:**
+~50 call sites (13 `state.wb.*` reads + ~40 method calls across 10 UI files) for a
+split that fixes no bug and adds no feature; the history-sync/overlay-stacking/esc code
+is subtle and only ~70% covered by e2e. Best done staged, with review — not swept.
 
-### 2c. `PluginHost` (web/src/platform/pluginHost.js, 940 lines) — HIGH ▶ recommended
+### 2c. `PluginHost` (web/src/platform/pluginHost.js, 969 lines) — HIGH ▶ recommended
 One class owns iframe lifecycle, the host↔plugin RPC router + capability brokering,
 viewer/panel/dock placement (building DOM), `navigator.mediaSession`, the heartbeat,
 AND install/restore/reconcile/uninstall. Nothing can be tested without a DOM + a
@@ -56,9 +56,12 @@ MediaSession + IndexedDB.
 interface — `showPanel`/`openFile`/`notify` — so allow/deny is testable with fakes),
 `PlacementController`/`DockManager` (`_dockedFrame`, overlays), `MediaController`
 (`_mediaOwner`), `InstallManager`, `AvailabilityMonitor`. `PluginHost` shrinks to a thin
-orchestrator holding the `plugins` map. **Highest value, highest touch** — the most
-fragile subsystem; best done in stages behind the existing plugin e2e (32 checks) +
-probe5.
+orchestrator holding the `plugins` map. **Deferred deliberately** — highest value but
+also the app's most fragile subsystem (iframe reparenting, RPC handshake timing, dock
+placement, media session): a 969-line split with 100+ call sites, security-critical RPC
+in the middle, and no user-facing payoff. This is staged work to do behind the plugin
+e2e (32 checks) + probe5 with review, not an autonomous sweep. Should be preceded by the
+shared `pluginProtocol.js` + `CapabilityBroker` (§5) so the seams are clean first.
 
 ---
 
@@ -125,16 +128,21 @@ probe5.
 
 ---
 
-## 6. Suggested sequencing for the ▶ items
+## 6. Sequencing — status
 
-1. **Shared utilities first** (low risk, unblocks the rest): `selectorMatch` +
-   `fileType.js` table; `ReactiveStore` base; `textIndexer`-in-registry.
-2. **`IndexingCoordinator`** out of `Vfs` (clean boundary, well-tested) — proves the
-   god-object remediation pattern.
-3. **`resolve`-everything DI** + collection-scoped `/api/capabilities`.
-4. **Plugin `pluginProtocol.js` + `CapabilityBroker`** (shared model + versioning)
-   before splitting `PluginHost`.
-5. **Split `WorkbenchService`**, then **`PluginHost`** — the two highest-touch splits,
-   staged behind the e2e + probe suites, last.
+1. ✅ **Shared utilities**: `selectorMatches` (shared), `fileType.js` table,
+   `textIndexer`-in-registry. (The `ReactiveStore` base was deferred — marginal DRY
+   across divergent services; the concrete layering violations it targeted were fixed
+   directly instead.)
+2. ✅ **`IndexingCoordinator`** out of `Vfs` — the god-object remediation pattern proven.
+3. ✅ **`resolve`-everything DI** + collection-scoped `/api/capabilities`.
+4. ✅ **UI→service layering** violations closed (launcher/palette route through actions).
+5. ▶ **Plugin `pluginProtocol.js` + `CapabilityBroker`** (shared model + versioning) —
+   next; a clean prerequisite for splitting `PluginHost`.
+6. ▶ **Split `WorkbenchService`**, then **`PluginHost`** — the two highest-touch splits,
+   deferred deliberately (see §2b/§2c): pure internal reorganization, 50–100+ call
+   sites, the most fragile code, ~70% e2e coverage. Do staged, with review.
 
-Everything in §1 and the ✅ rows of §3–§5 is already committed on this branch.
+Everything marked ✅ across this document is committed on this branch. The remaining ▶
+items are the three highest-touch, lowest-immediate-value refactors, intentionally left
+for deliberate/staged work rather than an autonomous sweep.

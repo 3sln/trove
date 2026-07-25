@@ -64,8 +64,7 @@ export class WorkbenchService {
   }
   movePalette(delta, count) {
     if (!this.state.palette || !count) return;
-    const index = (this.state.palette.index + delta + count) % count;
-    this.#set({ palette: { ...this.state.palette, index } });
+    this.#set({ palette: { ...this.state.palette, index: wrapIndex(this.state.palette.index, delta, count) } });
   }
   setPaletteIndex(index) {
     if (this.state.palette) this.#set({ palette: { ...this.state.palette, index } });
@@ -81,8 +80,7 @@ export class WorkbenchService {
   }
   moveLaunch(delta, count) {
     if (!count) return;
-    const index = (this.state.launch.index + delta + count) % count;
-    this.#set({ launch: { ...this.state.launch, index } });
+    this.#set({ launch: { ...this.state.launch, index: wrapIndex(this.state.launch.index, delta, count) } });
   }
   setLaunchIndex(index) {
     this.#set({ launch: { ...this.state.launch, index } });
@@ -229,6 +227,11 @@ export class WorkbenchService {
     if (this.state.stack.length > 1) return this.back(), true; // pop the top viewer panel
     return false;
   }
+}
+
+/** Wrap a list cursor by `delta` within `[0, count)` (shared by the palette + launcher). */
+function wrapIndex(index, delta, count) {
+  return (index + delta + count) % count;
 }
 
 function loadRecents() {
