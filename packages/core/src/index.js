@@ -24,6 +24,7 @@ export { KeywordStore, MemoryKeywordStore } from './search/keywordStore.js';
 export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/embeddings.js';
 
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
+export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList } from './plugins/index.js';
 export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 

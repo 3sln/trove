@@ -18,6 +18,7 @@ import {
   SqliteProvider, LocalSqliteProvider,
   SidecarService, NotificationCenter, WebPushService,
   CollectionService,
+  PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
   TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
@@ -175,6 +176,20 @@ export async function createServer(config = {}) {
   const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxUploadBytes: config.maxUploadBytes ?? null });
   await vfs.init();
 
+  // Server plugin installs: bulk package blobs go in a pluggable PackageStore
+  // (default = the primary storage backend under a prefix; TROVE_PACKAGE_STORE points
+  // it elsewhere), while install records live in the shared SQLite provider.
+  const packageStore = config.packages instanceof PackageStore
+    ? config.packages
+    : new StoragePackageStore(config.packageStore ? buildStorage(config.packageStore) : storage);
+  const plugins = new PluginService({
+    packages: packageStore,
+    installs: new SqlitePluginInstallStore({ provider: sqliteProvider }),
+    isAdmin: (principal) => (collections ? collections.isAdmin(principal) : !!principal),
+    maxPackageBytes: config.maxUploadBytes ?? undefined,
+  });
+  await plugins.init();
+
   if (config.startFlusher !== false) notifications.start();
 
   const router = createRouter();
@@ -191,7 +206,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -206,7 +221,7 @@ export async function createServer(config = {}) {
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, sqlite: sqliteProvider, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, close };
 }
 
 // A CSP starting point for deployments that DON'T rely on sandboxed plugins (opt in
@@ -344,6 +359,22 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
 
   // Per-file upload quota (bytes). Unbounded unless set.
   if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);
+
+  // Plugin package blob store: defaults to the primary storage backend (prefixed).
+  // Point it at a separate bucket/root with TROVE_PACKAGE_STORE (+ its own settings).
+  if (env.TROVE_PACKAGE_STORE) {
+    config.packageStore = { driver: env.TROVE_PACKAGE_STORE };
+    if (env.TROVE_PACKAGE_STORE === 'filesystem') config.packageStore.root = env.TROVE_PACKAGE_FS_ROOT || './data/packages';
+    if (env.TROVE_PACKAGE_STORE === 's3') {
+      config.packageStore.s3 = {
+        bucket: env.TROVE_PACKAGE_S3_BUCKET, region: env.TROVE_PACKAGE_S3_REGION || 'us-east-1',
+        endpoint: env.TROVE_PACKAGE_S3_ENDPOINT,
+        accessKeyId: env.TROVE_PACKAGE_S3_ACCESS_KEY_ID || env.TROVE_S3_ACCESS_KEY_ID || env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: env.TROVE_PACKAGE_S3_SECRET_ACCESS_KEY || env.TROVE_S3_SECRET_ACCESS_KEY || env.AWS_SECRET_ACCESS_KEY,
+        forcePathStyle: env.TROVE_PACKAGE_S3_PATH_STYLE === 'true',
+      };
+    }
+  }
 
   // Search transformer: 'parse' (default) or 'workers-ai' (Cloudflare Workers AI —
   // the binding is injected by the worker adapter; TROVE_SEARCH_MODEL picks the model).

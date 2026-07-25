@@ -77,7 +77,7 @@ export class SqliteProvider {
 // Kept in this module but with all node-specific bits (fs) imported lazily inside
 // obtain(), so importing the interfaces stays safe in a Worker that never uses it.
 
-const CORE_KEYS = new Set(['metadata', 'kv']); // these share one main db file
+const CORE_KEYS = new Set(['metadata', 'kv', 'plugins']); // these share one main db file
 
 class LocalSqliteDatabase extends SqliteDatabase {
   constructor(raw) {

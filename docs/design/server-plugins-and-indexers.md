@@ -292,9 +292,18 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 ## 9. Suggested phasing
 
 1. **Package storage + install records + server-side capability enforcement.**
-   Pluggable `PackageStore` (default = primary `StorageBackend` prefixed under
-   `_plugins/`; separately configurable) for blobs, a `plugin_installs` SQLite table
-   for records. Closes the current authz gap; enables cross-device sync.
+   ✅ **Implemented** (`packages/core/src/plugins/*`, server routes + wiring):
+   pluggable `PackageStore` (default = primary `StorageBackend` prefixed `_plugins/`;
+   `TROVE_PACKAGE_STORE` for a separate backend), a `plugin_installs` SQLite table,
+   `PluginService` (install / list / download / remove + scope-and-admin gating), and
+   `POST /api/plugins/install`, `GET /api/plugins/installed`,
+   `GET /api/plugins/:id/package`, `DELETE /api/plugins/:id/install`.
+   `assertCapability` enforces grants on `/api/plugins/:id/sql`.
+   *Transitional:* enforcement allows a call when no server install record exists
+   (device plugins predate this) — it flips to deny-by-default once the client
+   account-install flow (uploads packages to the server) lands. Server-side
+   **signature/trust** re-verification is still TODO (structure + capabilities are
+   validated today).
 2. **IndexerRuntime interface + Node (`isolated-vm`) impl + auto-trigger in `#indexNode`
    + backfill pass + output caps.**
 3. **`ctx.file.presignRead()`** (S3 native + self-signed URL).

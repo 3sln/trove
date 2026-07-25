@@ -50,6 +50,14 @@ function concatBytes(chunks, total) {
   for (const c of chunks) { out.set(c, at); at += c.byteLength; }
   return out;
 }
+// Read a raw binary body (e.g. an uploaded plugin package), capped like readCapped.
+async function readBytesCapped(req, max) {
+  const declared = Number(req.headers.get('content-length') || 0);
+  if (declared && declared > max) throw TroveError.invalid('Request body too large');
+  const buf = new Uint8Array(await req.arrayBuffer());
+  if (buf.byteLength > max) throw TroveError.invalid('Request body too large');
+  return buf;
+}
 function clampLimit(value, dflt) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return dflt;
@@ -505,6 +513,51 @@ export function createRouter() {
     }
   });
 
+  // --- server-installed plugins: package store + install records --------------
+  // Account-scoped plugins upload their full package to the server (blob → pluggable
+  // PackageStore, record → SQLite) so they sync across the user's devices, the server
+  // can enforce their capabilities, and removal cleans up. Device-only plugins never
+  // touch these routes.
+
+  // Install: upload the raw package zip; grants via ?grants=files,storage. The server
+  // re-parses + validates and gates on scope (admin for server indexers / shared
+  // resources), then stores the blob (deduped by digest) + the install record.
+  r.post('/api/plugins/install', async ({ plugins, principal, req, query }) => {
+    requirePlugins(plugins);
+    requirePrincipal(principal);
+    const bytes = await readBytesCapped(req, plugins.maxPackageBytes || 32 * 1024 * 1024);
+    const grants = query.grants ? String(query.grants).split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+    return { install: await plugins.install({ principal, bytes, grants }) };
+  });
+
+  // List this account's server-installed plugins (for cross-device sync).
+  r.get('/api/plugins/installed', async ({ plugins, principal }) => {
+    requirePlugins(plugins);
+    requirePrincipal(principal);
+    return { plugins: await plugins.list(principal) };
+  });
+
+  // Download a plugin's package blob so another device can enable it locally.
+  r.get('/api/plugins/:pluginId/package', async ({ plugins, principal, params }) => {
+    requirePlugins(plugins);
+    requirePrincipal(principal);
+    const { stream, size } = await plugins.getPackage(principal, params.pluginId);
+    return new Response(stream, { status: 200, headers: {
+      'content-type': 'application/zip', 'content-length': String(size),
+      'content-disposition': `attachment; filename="${encodeURIComponent(params.pluginId)}.zip"`,
+      'x-content-type-options': 'nosniff',
+    } });
+  });
+
+  // Account uninstall: drop the record + blob, then wipe the plugin-private store.
+  r.delete('/api/plugins/:pluginId/install', async ({ plugins, sqlite, principal, params }) => {
+    requirePlugins(plugins);
+    requirePrincipal(principal);
+    const res = await plugins.remove(principal, params.pluginId);
+    if (sqlite) await sqlite.drop({ key: `pstore:${principal.id}:plg:${params.pluginId}` }).catch(() => {});
+    return res;
+  });
+
   // Server-backed plugin storage: an isolated SQLite database per scope, keyed by
   // (user, plugin) for the private scope or (user, verified domain) for the shared
   // scope, so ownership is tracked and it can be wiped on uninstall. The sandboxed
@@ -517,8 +570,11 @@ export function createRouter() {
       ? `pstore:${principal.id}:dom:${domain}`
       : `pstore:${principal.id}:plg:${pluginId}`;
 
-  r.post('/api/plugins/:pluginId/sql', async ({ sqlite, principal, params, req }) => {
+  r.post('/api/plugins/:pluginId/sql', async ({ sqlite, plugins, principal, params, req }) => {
     requirePluginStore(sqlite, principal);
+    // Authoritative capability check when the plugin is server-installed (transitional:
+    // allowed if there's no install record — device plugins predate this).
+    if (plugins) await plugins.assertCapability(principal, params.pluginId, 'storage');
     const { scope = 'plugin', op, sql, params: args = [], statements, domain } = await body(req);
     if (!PLUGIN_SQL_OPS.has(op)) throw TroveError.invalid(`Unknown storage op "${op}"`);
     if (scope !== 'plugin' && scope !== 'domain') throw TroveError.invalid(`Unknown storage scope "${scope}"`);
@@ -560,6 +616,9 @@ async function runPluginSql(db, op, { sql, args, statements }) {
 function requirePluginStore(sqlite, principal) {
   if (!sqlite) throw TroveError.unsupported('Server plugin storage is not enabled');
   if (!principal) throw TroveError.unauthorized('Authentication required');
+}
+function requirePlugins(plugins) {
+  if (!plugins) throw TroveError.unsupported('Server plugin installs are not enabled');
 }
 
 // Turn the core upload plan into a fully self-describing descriptor: how to send
