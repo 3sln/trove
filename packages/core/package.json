@@ -8,6 +8,7 @@
     ".": "./src/index.js",
     "./errors.js": "./src/errors.js",
     "./retry.js": "./src/retry.js",
+    "./links.js": "./src/links.js",
     "./util.js": "./src/util.js",
     "./storage/*": "./src/storage/*",
     "./metadata/*": "./src/metadata/*",

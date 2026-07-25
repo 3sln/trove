@@ -9,8 +9,8 @@ const { check, done } = checker();
 
 const { page, close, goto } = await boot({
   seed: async (vfs) => {
-    await vfs.writeFile('root', 'song.m4a', 'fake', { contentType: 'audio/mp4' });
-    await vfs.writeFile('root', 'song2.m4a', 'fake', { contentType: 'audio/mp4' });
+    await vfs.writeFile('song.m4a', 'fake', { contentType: 'audio/mp4' });
+    await vfs.writeFile('song2.m4a', 'fake', { contentType: 'audio/mp4' });
   },
 });
 

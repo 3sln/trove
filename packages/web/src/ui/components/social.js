@@ -6,6 +6,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
 import { OpenFileAction } from '../../bl/actions.js';
+import { troveUri } from '@trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
 
@@ -88,6 +89,7 @@ export function infoPanel(state, ui) {
       ? div({ className: 'ip-empty' }, span('Open a file to see its tags and conversation.'))
       : div({ className: 'ip-body' },
           fileHeader(active.node, state, ui),
+          linkSection(active.node, state, ui),
           tagSection(sc, ui),
           conversationSection(state, sc, ui),
         ),
@@ -95,17 +97,54 @@ export function infoPanel(state, ui) {
 }
 
 function fileHeader(node, state, ui) {
-  const pinned = node.kind === 'file' && ui.app.offline.isPinned(node.id);
+  const pinned = ui.app.offline.isPinned(node.id);
   return div({ className: 'ip-file' },
     div({ className: 'ip-name' }, node.name),
-    div({ className: 'ip-path' }, node.path),
-    node.kind === 'file'
-      ? button({ className: `btn ${pinned ? '' : 'primary'}`, $styling: { marginTop: '10px', padding: '6px 11px' } },
-          icon(pinned ? 'check' : 'download', { size: 14 }),
-          pinned ? 'Available offline' : 'Make available offline',
-        ).on({ click: () => (pinned ? ui.exec('offline.unpin', node) : ui.exec('offline.pin', node)) })
-      : null,
+    div({ className: 'ip-path' }, node.contentType || ''),
+    button({ className: `btn ${pinned ? '' : 'primary'}`, $styling: { marginTop: '10px', padding: '6px 11px' } },
+      icon(pinned ? 'check' : 'download', { size: 14 }),
+      pinned ? 'Available offline' : 'Make available offline',
+    ).on({ click: () => (pinned ? ui.exec('offline.unpin', node) : ui.exec('offline.pin', node)) }),
   );
+}
+
+/**
+ * The item's own `trove:` link, and what links to it.
+ *
+ * With no folders, backlinks are the answer to "where does this live?" — the documents
+ * that gather it up. A load failure says so rather than rendering as an empty list,
+ * which would read as a fact about the drive instead of about the request.
+ */
+function linkSection(node, state, ui) {
+  const bl = state.so.backlinks;
+  const uri = node.collectionId ? troveUri(node) : null;
+  const mine = bl && bl.nodeId === node.id ? bl : null;
+  return div({ className: 'ip-section' },
+    div({ className: 'ip-label' }, 'Links'),
+    uri
+      ? button({ className: 'ip-uri', title: 'Copy this item’s link' }, icon('link', { size: 12 }), span(uri))
+        .on({ click: () => copyLink(ui, uri) })
+      : null,
+    div({ className: 'ip-label', $styling: { marginTop: '10px' } }, 'Linked from'),
+    mine?.loading
+      ? div({ className: 'ip-muted' }, 'Loading…')
+      : mine?.error
+        ? div({ className: 'ip-muted error' }, `Couldn’t load links: ${mine.error}`)
+        : mine?.items?.length
+          ? div({ className: 'ip-backlinks' }, ...mine.items.map((n) =>
+            button({ className: 'ip-backlink', title: n.name }, icon('file-text', { size: 12 }), span(n.name))
+              .on({ click: () => ui.go(new OpenFileAction(n)) })))
+          : div({ className: 'ip-muted' }, 'Nothing links here yet.'),
+  );
+}
+
+async function copyLink(ui, uri) {
+  try {
+    await navigator.clipboard.writeText(uri);
+    ui.platform.notifications.success(`Copied ${uri}`);
+  } catch {
+    ui.platform.notifications.info(uri, { sticky: true });
+  }
 }
 
 function tagSection(sc, ui) {

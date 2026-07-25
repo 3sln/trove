@@ -32,7 +32,6 @@ function matchesCategory(cat, ext, ct) {
 
 /** Classify a node → 'folder'|'audiobook'|'audio'|'image'|'video'|'text'|'file'. */
 export function kindOf(node) {
-  if (node?.kind === 'folder') return 'folder';
   const ext = extOf(node);
   const ct = node?.contentType || '';
   if (/audiobook/.test((node?.name || '').toLowerCase())) return 'audiobook';
@@ -40,7 +39,7 @@ export function kindOf(node) {
   return 'file';
 }
 
-const ICONS = { folder: 'folder', ...Object.fromEntries(CATEGORIES.map((c) => [c.kind, c.icon])), file: 'file' };
+const ICONS = { ...Object.fromEntries(CATEGORIES.map((c) => [c.kind, c.icon])), file: 'file' };
 
 /** The icon name for a node, derived from its kind. */
 export function iconForKind(node) {

@@ -6,7 +6,7 @@ import { boot, checker } from './harness.mjs';
 const { check, done } = checker();
 
 const { page, close, goto, setFault } = await boot({
-  seed: async (vfs) => { await vfs.writeFile('root', 'sailing.txt', 'tacking upwind across the bay', { contentType: 'text/plain' }); },
+  seed: async (vfs) => { await vfs.writeFile('sailing.txt', 'tacking upwind across the bay', { contentType: 'text/plain' }); },
 });
 
 await goto();

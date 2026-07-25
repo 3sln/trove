@@ -6,6 +6,7 @@ import { dd, Observable, ObservableSubject, watch } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { bytes } from '../../format.js';
 import { audiobookOpener } from './audiobook.js';
+import { markdownOpener } from './markdown.js';
 
 const { div, pre, img, span, button, video, audio } = dd;
 
@@ -33,6 +34,13 @@ const BUILT_IN = {
     title: 'Image Viewer', priority: 20,
     match: { mime: ['image/*'], ext: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif'] },
     component: imageOpener,
+  },
+  // Markdown outranks the plain text viewer: a document that links its sources is how
+  // things are grouped now, so those links have to be clickable by default.
+  'core.markdown': {
+    title: 'Markdown', priority: 30,
+    match: { ext: ['.md', '.markdown'], mime: ['text/markdown'] },
+    component: markdownOpener,
   },
   'core.text': {
     title: 'Text Viewer', priority: 10,

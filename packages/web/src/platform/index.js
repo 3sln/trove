@@ -51,6 +51,15 @@ function registerDefaults(p) {
     { key: 'explorer.confirmDelete', type: 'boolean', default: true, title: 'Confirm before deleting', category: 'Explorer', order: 3 },
     { key: 'search.mode', type: 'enum', enum: ['hybrid', 'semantic', 'keyword'], default: 'hybrid', title: 'Search mode', description: 'Hybrid blends semantic meaning with keyword matches.', category: 'Search', order: 1 },
     { key: 'uploads.concurrency', type: 'number', minimum: 1, maximum: 8, default: 4, title: 'Parallel upload parts', category: 'Transfers', order: 1 },
+    // Which viewer opens which file type. When several openers match a file and there
+    // is no entry here, the user is asked (and can save their answer) — see bl/openers.
+    // Markdown ships with an answer already: it matches both the markdown renderer and
+    // the plain-text viewer, and since documents are how things are grouped now,
+    // prompting on every first .md would be friction over a decision that's obvious.
+    // It stays changeable in Settings, and the text viewer is still reachable through
+    // the opener switcher.
+    { key: 'openers.associations', type: 'object', hidden: true, title: 'Default viewers',
+      default: { '.md': 'core.markdown', '.markdown': 'core.markdown' } },
   ]);
 
   // --- the built-in keymap (commands themselves are registered in ../bl) -----
@@ -64,7 +73,7 @@ function registerDefaults(p) {
       { key: 'mod+shift+f', command: 'workbench.view.home' },
       { key: 'mod+shift+e', command: 'workbench.view.home' },
       { key: 'mod+,', command: 'workbench.openSettings' },
-      { key: 'mod+shift+n', command: 'explorer.newFolder' },
+      { key: 'mod+shift+l', command: 'explorer.copyLink' },
       { key: 'mod+u', command: 'explorer.upload' },
       { key: 'delete', command: 'explorer.delete', when: "view.active == 'home' && explorer.hasSelection" },
       { key: 'escape', command: 'workbench.closeOverlays' },

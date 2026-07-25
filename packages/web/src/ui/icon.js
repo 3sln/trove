@@ -7,6 +7,7 @@ const { svg, h } = dd;
 
 // Each entry is an array of <path>/<primitive> specs (attrs use SVG names).
 const PATHS = {
+  link: [{ d: 'M10 13a5 5 0 0 0 7.07 0l3-3A5 5 0 0 0 13 3l-1.5 1.5' }, { d: 'M14 11a5 5 0 0 0-7.07 0l-3 3A5 5 0 0 0 11 21l1.5-1.5' }],
   folder: [{ d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }],
   'folder-open': [{ d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2M3 9h16.5a1 1 0 0 1 .97 1.24l-1.5 6A1 1 0 0 1 18 17H5a2 2 0 0 1-2-2z' }],
   file: [{ d: 'M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z' }, { d: 'M14 3v5h5' }],

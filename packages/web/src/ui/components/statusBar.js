@@ -27,9 +27,7 @@ function statusSlot(item, ui) {
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
-  const folders = items.filter((i) => i.kind === 'folder').length;
-  const files = items.length - folders;
-  const totalBytes = items.reduce((n, i) => n + (i.kind === 'file' ? i.size || 0 : 0), 0);
+  const totalBytes = items.reduce((n, i) => n + (i.size || 0), 0);
   const active = state.tr.items.filter((t) => t.status === 'active');
   const caps = ui.platform.capabilities;
 
@@ -48,7 +46,7 @@ export default function statusBar(state, ui) {
         : null,
     off.queued ? span({ className: 'seg', title: 'Changes waiting to sync' }, `${off.queued} queued`) : null,
     off.pins.length ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` }, icon('download', { size: 12 }), span(`${off.pins.length} offline`)).on({ click: () => ui.exec('workbench.view.home') }) : null,
-    button({ className: 'seg', title: 'Explorer' }, icon('files', { size: 13 }), span(ex.folder ? ex.folder.path : '/'))
+    button({ className: 'seg', title: 'Collection' }, icon('files', { size: 13 }), span(ex.collectionId || 'default'))
       .on({ click: () => ui.exec('workbench.view.home') }),
     active.length
       ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
@@ -56,11 +54,11 @@ export default function statusBar(state, ui) {
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
           run: () => ui.app.transfers.cancel(t.id),
         }))) })
-      : span({ className: 'seg' }, `${files} files · ${folders} folders`),
+      : span({ className: 'seg' }, `${items.length} item${items.length === 1 ? '' : 's'}`),
     ...left,
     div({ className: 'spacer' }),
     ...right,
-    span({ className: 'seg', title: 'Total size of this folder' }, bytes(totalBytes)),
+    span({ className: 'seg', title: 'Total size of this collection' }, bytes(totalBytes)),
     caps ? span({ className: 'seg', title: 'Storage backend capabilities' },
       icon(caps.storage?.presignDownload ? 'download' : 'files', { size: 12 }),
       span(caps.storage?.presignDownload ? 'S3 direct' : 'proxied'),

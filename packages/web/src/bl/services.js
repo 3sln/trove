@@ -1,5 +1,5 @@
 // Reactive data services the workbench renders from. These hold *data* state
-// (the current folder's contents, search results, in-flight transfers) as
+// (the current collection's items, search results, in-flight transfers) as
 // opposed to the shell's UI state (WorkbenchService). ngin Actions mutate them;
 // the UI `watch`es them. Each is a plain ObservableSubject wrapper so the render
 // layer stays declarative.
@@ -10,7 +10,7 @@ export class ExplorerService {
   constructor(settings) {
     this.settings = settings;
     this.state = {
-      folder: null, breadcrumb: [], items: [], loading: false, error: null,
+      items: [], loading: false, error: null,
       selection: [], sort: settings.get('explorer.sort'), order: settings.get('explorer.sortOrder'),
       collectionId: 'default', collections: [], canCreateCollection: false,
     };

@@ -1,5 +1,5 @@
 // The viewer — the top of the panel stack (a file's opener), full-width, with a
-// nav bar: a Back button, a breadcrumb trail of the stacked panels (Search › A › B),
+// nav bar: a Back button, a trail of the stacked panels (Search › A › B),
 // and details/close actions. The opener host returns a *stable* keyed alias per
 // panel so dodo reuses its DOM across unrelated workbench re-renders — critical for
 // the audiobook player, whose <audio> must keep playing while state churns; the
@@ -35,7 +35,7 @@ function navBar(files, active, ui) {
       button({ className: 'vn-crumb' }, icon('search', { size: 13 }), span('Search'))
         .on({ click: () => w.showHome() }),
       ...files.map((p) =>
-        button({ className: `vn-crumb ${p.id === active.id ? 'active' : ''}`, title: p.node.path },
+        button({ className: `vn-crumb ${p.id === active.id ? 'active' : ''}`, title: p.node.name },
           icon(iconForNode(p.node), { size: 13 }), span({ className: 'label' }, p.node.name))
           .on({ click: () => w.openFile(p.node, p.openerId) })),
     ),

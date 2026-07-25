@@ -4,10 +4,11 @@
 // touches data, and poke the reactive shell services for pure-UI toggles.
 
 import {
-  NavigateAction, RefreshAction, CreateFolderAction, DeleteAction, RenameAction,
+  NavigateAction, RefreshAction, DeleteAction, RenameAction,
   UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
+import { troveUri } from '@trove/core/links.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;
@@ -26,26 +27,23 @@ export function registerCommands(app) {
 
   // --- explorer --------------------------------------------------------------
   cmd('explorer.refresh', 'Refresh', () => go(new RefreshAction()), { category: 'Explorer', icon: 'refresh' });
-  cmd('explorer.up', 'Go Up', () => {
-    const trail = explorer.state.breadcrumb;
-    const parent = trail[trail.length - 2];
-    if (parent) go(new NavigateAction(parent.id));
-  }, { category: 'Explorer' });
-
-  cmd('explorer.newFolder', 'New Folder', () => {
-    workbench.showDialog({
-      kind: 'prompt', title: 'New folder', label: 'Folder name', value: '', placeholder: 'Untitled folder',
-      confirmLabel: 'Create',
-      onSubmit: (name) => {
-        workbench.closeDialog();
-        if (name?.trim()) go(new CreateFolderAction(name.trim()));
-      },
-    });
-  }, { category: 'Explorer', icon: 'new-folder' });
-
   cmd('explorer.upload', 'Upload Files…', () => {
-    pickFiles((files) => files.length && go(new UploadFilesAction(files, explorer.state.folder?.id)));
+    pickFiles((files) => files.length && go(new UploadFilesAction(files, explorer.state.collectionId)));
   }, { category: 'Explorer', icon: 'upload' });
+
+  // Copy the item's trove: link, which is how one item references another in markdown.
+  cmd('explorer.copyLink', 'Copy Link to Item', async () => {
+    const node = explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    if (!node) return;
+    const uri = troveUri(node);
+    try {
+      await navigator.clipboard.writeText(uri);
+      platform.notifications.success(`Copied ${uri}`);
+    } catch {
+      // Clipboard access can be denied; showing the link is still useful.
+      platform.notifications.info(uri, { sticky: true });
+    }
+  }, { category: 'Explorer', icon: 'link' });
 
   cmd('explorer.rename', 'Rename', () => {
     const node = explorer.selectedNodes()[0] || workbench.activeTab()?.node;
@@ -79,7 +77,7 @@ export function registerCommands(app) {
   cmd('explorer.open', 'Open', (node) => go(new OpenFileAction(node || explorer.selectedNodes()[0])), { palette: false });
   cmd('explorer.download', 'Download', (node) => {
     const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
-    if (target?.kind === 'file') triggerDownload(platform.api.downloadUrl(target.id, { attachment: true }), target.name);
+    if (target?.id) triggerDownload(platform.api.downloadUrl(target.id, { attachment: true }), target.name);
   }, { category: 'Explorer', icon: 'download' });
 
   // --- search ----------------------------------------------------------------
@@ -88,7 +86,7 @@ export function registerCommands(app) {
   // --- offline ---------------------------------------------------------------
   cmd('offline.pin', 'Make Available Offline', (node) => {
     const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
-    if (target?.kind === 'file') app.offline.pin(target);
+    if (target?.id) app.offline.pin(target);
   }, { category: 'Offline', icon: 'download' });
   cmd('offline.unpin', 'Remove from Offline', (node) => {
     const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;

@@ -1,12 +1,12 @@
 // The main-panel launcher — search-first "home" that replaces the explorer
-// sidebar. Empty query shows recents + a browse list of the current folder; typing
+// sidebar. Empty query shows recents + everything in the collection; typing
 // searches files; a leading `!` switches to command execution; a leading `#`
 // filters by tag/property (parsed in the search layer). One keyboard-navigable
 // list across whichever mode is active.
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { NavigateAction, OpenFileAction, SearchAction, FilterAction } from '../../bl/actions.js';
+import { OpenFileAction, SearchAction, FilterAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 
 const { div, span, input, button } = dd;
@@ -131,7 +131,7 @@ function buildContent(state, ui, q, mode, modal) {
     return [{
       title: state.se.loading ? 'Filtering…' : err ? 'Filter failed' : `Filtered · ${label}`,
       action: err ? retryBtn(new FilterAction(filters, text)) : null,
-      items: nodes.map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui, modal))),
+      items: nodes.map((n) => fileItem(n, ui, modal)),
       empty: state.se.loading ? 'Filtering…' : err ? `Couldn’t filter: ${err}` : 'No files match those filters.',
     }];
   }
@@ -146,27 +146,20 @@ function buildContent(state, ui, q, mode, modal) {
     }];
   }
 
-  // Home: recents + browse the current folder.
+  // Home: recents, then everything in the collection. There is nothing to descend
+  // into — this is the "show me everything" fallback for when search isn't the answer.
   const groups = [];
   const recents = (state.nav.recents || []).map((r) => fileItem(r, ui, modal));
   if (recents.length) groups.push({ title: 'Recent', items: recents });
 
   const ex = state.ex;
-  const crumbs = ex.breadcrumb || [];
-  const here = crumbs.length ? crumbs[crumbs.length - 1] : null;
-  const upAction = here && crumbs.length > 1
-    ? button({ className: 'launch-up' }, icon('chevron-left', { size: 13 }), 'Up')
-      .on({ click: () => ui.go(new NavigateAction(crumbs[crumbs.length - 2].id)) })
-    : null;
-  const browse = (ex.items || []).map((n) => (n.kind === 'folder' ? folderItem(n, ui) : fileItem(n, ui, modal)));
   groups.push({
-    title: here ? `In ${here.name || '/'}` : 'Files',
-    action: upAction,
-    items: browse,
+    title: 'All items',
+    items: (ex.items || []).map((n) => fileItem(n, ui, modal)),
     // Don't show a false "empty" when the load actually FAILED (e.g. server
     // unreachable) — say so, so the user knows to retry rather than believing the
-    // folder is empty. (A toast also fires, but the persistent state must be honest.)
-    empty: ex.loading ? 'Loading…' : ex.error ? `Couldn’t load this folder: ${ex.error}` : 'This folder is empty.',
+    // collection is empty. (A toast also fires, but the persistent state must be honest.)
+    empty: ex.loading ? 'Loading…' : ex.error ? `Couldn’t load this collection: ${ex.error}` : 'Nothing here yet — upload a file to get started.',
   });
   return groups;
 }
@@ -175,16 +168,13 @@ function fileItem(node, ui, modal) {
   return {
     icon: fileIcon(node),
     title: node.name,
-    detail: node.path && node.path !== '/' + node.name ? dirOf(node.path) : (node.contentType || ''),
+    detail: node.contentType || '',
     // From the modal search, `reset` starts a fresh viewer stack; then close it.
     run: () => {
-      ui.go(new OpenFileAction({ ...node, kind: 'file' }, { reset: !!modal }));
+      ui.go(new OpenFileAction(node, { reset: !!modal }));
       if (modal) ui.platform.workbench.closeSearchModal();
     },
   };
-}
-function folderItem(node, ui) {
-  return { icon: 'folder', title: node.name, badge: 'folder', run: () => ui.go(new NavigateAction(node.id)) };
 }
 
 function fileIcon(node) {
@@ -193,10 +183,6 @@ function fileIcon(node) {
   if (t.startsWith('audio/')) return 'file-audio';
   if (t.startsWith('video/')) return 'file-video';
   return 'file-text';
-}
-function dirOf(path) {
-  const i = path.lastIndexOf('/');
-  return i <= 0 ? '/' : path.slice(0, i);
 }
 
 // Substring-first, then subsequence fuzzy score (0 = no match).

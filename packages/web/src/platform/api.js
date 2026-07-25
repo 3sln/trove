@@ -72,22 +72,27 @@ export class TroveApiClient {
       return res.ok;
     } catch { return false; }
   }
-  list(pathOrId, opts = {}) {
-    const key = pathOrId?.startsWith?.('/') ? 'path' : 'id';
-    return this.request('GET', '/api/fs/list', { query: { [key]: pathOrId, ...opts } });
+  /** Every item in a collection. */
+  list(opts = {}) {
+    return this.request('GET', '/api/fs/list', { query: opts });
   }
-  stat(pathOrId) {
-    const key = pathOrId?.startsWith?.('/') ? 'path' : 'id';
-    return this.request('GET', '/api/fs/stat', { query: { [key]: pathOrId } });
+  /** Resolve an item by id, by `trove:` URI, or by name within a collection. */
+  stat(ref, opts = {}) {
+    const key = String(ref).startsWith('trove:') ? 'uri' : 'id';
+    return this.request('GET', '/api/fs/stat', { query: { [key]: ref, ...opts } });
   }
-  mkdir(parentId, name) {
-    return this.request('POST', '/api/fs/folder', { body: { parentId, name } });
+  byName(name, collection) {
+    return this.request('GET', '/api/fs/stat', { query: { name, collection } });
+  }
+  /** What links to this item. */
+  backlinks(id, opts = {}) {
+    return this.request('GET', '/api/fs/backlinks', { query: { id, ...opts } });
   }
   rename(id, newName) {
     return this.request('POST', '/api/fs/rename', { body: { id, newName } });
   }
-  remove(id, recursive = true) {
-    return this.request('POST', '/api/fs/delete', { body: { id, recursive } });
+  remove(id) {
+    return this.request('POST', '/api/fs/delete', { body: { id } });
   }
   search(q, opts = {}) {
     return this.request('GET', '/api/search', { query: { q, ...opts } });
@@ -213,7 +218,7 @@ export class TroveApiClient {
     const name = opts.name || file.name || 'untitled';
     const size = file.size;
     const plan = await this.request('POST', '/api/uploads', {
-      body: { parentId: opts.parentId, name, size, contentType: file.type || undefined },
+      body: { collection: opts.collection, name, size, contentType: file.type || undefined },
       signal: opts.signal,
     });
     // Hand the caller the server upload id so a cancel/failure can abort the session

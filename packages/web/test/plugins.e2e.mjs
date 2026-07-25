@@ -47,7 +47,7 @@ const exec = (page, uri, ...args) => page.evaluate(
 async function main() {
   const srv = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), assets, startFlusher: false });
   // A file the demo plugin's sandboxed opener handles (exercises the viewer + dock).
-  const demoFile = await srv.vfs.writeFile('root', 'track.demo', 'demo media', { contentType: 'application/x-demo' });
+  const demoFile = await srv.vfs.writeFile('track.demo', 'demo media', { contentType: 'application/x-demo' });
   const server = http.createServer(async (req, res) => { const wr = await srv.handle(await toWeb(req)); res.statusCode = wr.status; wr.headers.forEach((v, k) => res.setHeader(k, v)); if (wr.body) Readable.fromWeb(wr.body).pipe(res); else res.end(); });
   await new Promise((r) => server.listen(0, r));
   const base = `http://localhost:${server.address().port}`;

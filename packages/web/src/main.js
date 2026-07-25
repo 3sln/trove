@@ -84,7 +84,7 @@ window.addEventListener('drop', (e) => {
   e.preventDefault();
   dragDepth = 0;
   document.body.classList.remove('dragging-file');
-  engine.dispatch(new UploadFilesAction(e.dataTransfer.files, app.explorer.state.folder?.id));
+  engine.dispatch(new UploadFilesAction(e.dataTransfer.files, app.explorer.state.collectionId));
 });
 
 // --- initial load -----------------------------------------------------------
@@ -95,7 +95,7 @@ window.addEventListener('drop', (e) => {
   } catch (err) {
     platform.notifications.error(`Cannot reach the Trove server: ${err.message}`);
   }
-  engine.dispatch(new NavigateAction('/'));
+  engine.dispatch(new NavigateAction());
 })();
 
 // Expose for debugging / e2e.

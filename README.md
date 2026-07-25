@@ -40,14 +40,22 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
 - **Pluggable indexers** — attach searchable content to files, namespaced under
   the indexer that owns it. A built-in text/code extractor runs server-side;
   plugins push their own documents through the API under their namespace.
+- **No folders** — a collection is a **flat set of uniquely-named items**. You find
+  things by searching, and you group them by **linking**: any item is addressable as
+  `trove:<collection>?name=…` (or `?id=…`), so a markdown document that links its
+  sources does what a folder did — except it can say *why* those things belong
+  together, an item can appear in as many documents as you like, and the grouping is
+  searchable content rather than an invisible box. A links indexer records those
+  references, so every item shows **what links to it**.
 - **Search-first workbench** — the main panel is a launcher (Spotlight/Raycast
   style): type to search files, `!` to run a command, `#tag` / `#key:>=value` to
-  filter by tag or property; recents and the current folder sit underneath. Opening
+  filter by tag or property; recents and the collection sit underneath. Opening
   a file shows the opener **beside** the launcher (split) or **over** it (modal) —
   your last choice is the default, and you can swap. Underneath is a real
   contribution system: commands, a command palette + quick-open, keybindings
   (chords, user overrides), when-clauses, schema-driven settings, and media openers.
-- **Media openers** — text, image, audio, video, and a full **audiobook player**
+- **Media openers** — markdown (with live `trove:` links), text, image, audio,
+  video, and a full **audiobook player**
   for `.m4b`: chapter list, cover art, rich metadata, variable speed, ±30s skip,
   and **resumable progress** — chapters/metadata parsed straight from the MP4
   boxes via HTTP Range reads (opening a 600 MB book is instant).

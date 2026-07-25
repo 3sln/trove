@@ -36,7 +36,7 @@ export class NavigationService {
   /** The active file panel (top of the stack, if it's a file). */
   activeTab() {
     const t = this.#top();
-    return t && t.kind === 'file' ? t : null;
+    return t?.kind === 'file' ? t : null; // panel kind, not node kind
   }
 
   #applyStack(stack, { history = true } = {}) {
@@ -98,7 +98,7 @@ export class NavigationService {
     const n = top?.node;
     const entry = {
       troveDepth: this.state.stack.length,
-      node: n ? { id: n.id, name: n.name, contentType: n.contentType, path: n.path, kind: 'file' } : null,
+      node: n ? { id: n.id, name: n.name, contentType: n.contentType, collectionId: n.collectionId } : null,
       openerId: top?.openerId || null,
     };
     try { (replace ? history.replaceState : history.pushState).call(history, entry, ''); } catch { /* no history API */ }
@@ -115,8 +115,8 @@ export class NavigationService {
   }
 
   #pushRecent(node) {
-    if (!node || node.kind === 'folder') return;
-    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', path: node.path, kind: 'file' };
+    if (!node) return;
+    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', collectionId: node.collectionId };
     const recents = [entry, ...this.state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
     this.#set({ recents });
     saveRecents(recents);

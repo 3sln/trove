@@ -16,9 +16,8 @@ const { check, done } = checker();
 
 const { page, close, goto, setFault } = await boot({
   seed: async (vfs) => {
-    const docs = await vfs.mkdir('root', 'documents');
-    await vfs.writeFile(docs.id, 'cooking.txt', 'braising short ribs low and slow', { contentType: 'text/plain' });
-    await vfs.writeFile('root', 'notes.txt', 'unrelated notes', { contentType: 'text/plain' });
+    await vfs.writeFile('cooking.txt', 'braising short ribs low and slow', { contentType: 'text/plain' });
+    await vfs.writeFile('notes.txt', 'unrelated notes', { contentType: 'text/plain' });
   },
 });
 await goto();

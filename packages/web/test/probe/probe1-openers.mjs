@@ -8,12 +8,12 @@ const { check, done } = checker();
 
 const { page, vfs, errors, close, goto } = await boot({
   seed: async (vfs) => {
-    await vfs.writeFile('root', 'readme.txt', 'hello world', { contentType: 'text/plain' });
+    await vfs.writeFile('readme.txt', 'hello world', { contentType: 'text/plain' });
     // Files whose bytes are absent (bogus storageKey) — metadata exists, content 404s.
-    await vfs.metadata.create({ parentId: 'root', name: 'broken.png', kind: 'file', storageKey: 'nope-img', size: 100, contentType: 'image/png' });
-    await vfs.metadata.create({ parentId: 'root', name: 'broken.mp4', kind: 'file', storageKey: 'nope-vid', size: 100, contentType: 'video/mp4' });
-    await vfs.metadata.create({ parentId: 'root', name: 'broken.mp3', kind: 'file', storageKey: 'nope-aud', size: 100, contentType: 'audio/mpeg' });
-    await vfs.metadata.create({ parentId: 'root', name: 'broken-text.txt', kind: 'file', storageKey: 'nope-txt', size: 100, contentType: 'text/plain' });
+    await vfs.metadata.create({ name: 'broken.png', storageKey: 'nope-img', size: 100, contentType: 'image/png' });
+    await vfs.metadata.create({ name: 'broken.mp4', storageKey: 'nope-vid', size: 100, contentType: 'video/mp4' });
+    await vfs.metadata.create({ name: 'broken.mp3', storageKey: 'nope-aud', size: 100, contentType: 'audio/mpeg' });
+    await vfs.metadata.create({ name: 'broken-text.txt', storageKey: 'nope-txt', size: 100, contentType: 'text/plain' });
   },
 });
 

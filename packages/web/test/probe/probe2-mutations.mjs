@@ -1,5 +1,5 @@
 // Probe: mutation error paths surface feedback (toasts), and destructive edge cases
-// don't corrupt UI state. Duplicate folder, rename onto an existing name, delete a file
+// don't corrupt UI state. Name collision on upload, rename onto an existing name, delete a file
 // that's currently open, and an upload-name collision (disambiguation notice).
 
 import { boot, checker } from './harness.mjs';
@@ -8,9 +8,9 @@ const { check, done } = checker();
 
 const { page, vfs, errors, close, goto } = await boot({
   seed: async (vfs) => {
-    await vfs.writeFile('root', 'alpha.txt', 'first', { contentType: 'text/plain' });
-    await vfs.writeFile('root', 'beta.txt', 'second', { contentType: 'text/plain' });
-    await vfs.mkdir('root', 'existing');
+    await vfs.writeFile('alpha.txt', 'first', { contentType: 'text/plain' });
+    await vfs.writeFile('beta.txt', 'second', { contentType: 'text/plain' });
+    await vfs.writeFile('existing.txt', 'third', { contentType: 'text/plain' });
   },
 });
 
@@ -29,14 +29,15 @@ async function lastToast() {
   return (await t.count()) ? (await t.textContent()) : '';
 }
 
-// 1. Create a folder with a name that already exists → error toast (not silent).
-await run(async () => {
+// 1. An upload onto a taken name must NOT clobber it — the server negotiates a free
+// name, and the client says so rather than letting a file vanish silently.
+const dropped = await run(async () => {
   const app = window.__trove.app;
-  try { await app.platform.api.mkdir(app.explorer.state.folder?.id || 'root', 'existing'); }
-  catch (e) { app.platform.notifications.error(`Couldn’t create folder: ${e.message}`); }
+  const blob = new File(['replacement'], 'existing.txt', { type: 'text/plain' });
+  const node = await app.platform.api.upload(blob, { collection: 'default' });
+  return node?.name;
 });
-await page.waitForTimeout(200);
-check('duplicate folder creation shows an error toast', (await toastCount()) >= 1, await lastToast());
+check('an upload onto a taken name is renamed, not overwritten', dropped === 'existing (1).txt', String(dropped));
 
 // 2. Rename a file onto an existing name → error surfaced.
 const renameErr = await run(async () => {
@@ -71,7 +72,7 @@ check('deleting an open file does not throw an uncaught error',
 const dupInfo = await run(async () => {
   const app = window.__trove.app;
   const blob = new File([new Uint8Array([1, 2, 3])], 'beta.txt', { type: 'text/plain' });
-  const node = await app.platform.api.upload(blob, { parentId: 'root' });
+  const node = await app.platform.api.upload(blob, { collection: 'default' });
   return node?.name;
 });
 check('upload onto existing name is disambiguated (non-destructive)', dupInfo === 'beta (1).txt', String(dupInfo));

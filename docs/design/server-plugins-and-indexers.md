@@ -56,7 +56,22 @@ the server can sync it, enforce its caps, and clean it up.
 
 ---
 
-## 3. Identity — every package has one, every contribution is addressed under it
+## 3. Two URI schemes, one idea
+
+Trove addresses things it doesn't own the naming of with URIs, and there are exactly
+two:
+
+| scheme | addresses | example |
+| --- | --- | --- |
+| `trove:` | an **item** in the drive | `trove:default?name=sailing.txt` |
+| `trove+contrib:` | a **contribution** from a package | `trove+contrib:acme.com/docs/pdfViewer` |
+
+Both exist for the same reason: something outside the code — a markdown document, a
+manifest, a when-clause — needs to name a thing unambiguously and durably. Content
+links use `trove:` (see the main README and `../../packages/core/src/links.js`);
+everything below is about `trove+contrib:`.
+
+## 4. Identity — every package has one, every contribution is addressed under it
 
 A package declares the **domain** it belongs to and its **name** within that domain.
 `<domain>/<name>` is the plugin id. There is no anonymous install: a self-chosen opaque
@@ -81,7 +96,7 @@ This is what removes cross-kind collisions. A plugin's opener, status slot, regi
 command may all be called `status` — they're `.../docs/status` exactly once, because
 names are unique *within a plugin*, not within a kind.
 
-## 4. Package format
+## 5. Package format
 
 A plugin is **one module tree**. Indexers and openers are not nested sub-packages —
 they're **contributions declared in the manifest**, each naming an entry module inside
@@ -153,7 +168,7 @@ storage. It gets **nothing else** — no filesystem, no ambient network, no host
 
 ---
 
-## 5. Package storage — two separated concerns
+## 6. Package storage — two separated concerns
 
 Bulk package **blobs** and install **bookkeeping** have different shapes, sizes, and
 ideal backends, so they are separate:
@@ -237,7 +252,7 @@ plugin, at this version, with this cap granted" — instead of trusting the clie
 
 ---
 
-## 6. IndexerRuntime — running untrusted indexer code with limits
+## 7. IndexerRuntime — running untrusted indexer code with limits
 
 Execution is a **pluggable provider** (same DI pattern as storage / vectorStore /
 embeddings / searchTransformer), because no single isolate primitive spans our targets.
@@ -300,7 +315,7 @@ and rate-limited, resumable, and it `log()`s anything it skips.
 
 ---
 
-## 7. `ctx.file.presignRead()` — a time-limited remote read URL
+## 8. `ctx.file.presignRead()` — a time-limited remote read URL
 
 So an indexer can hand the file to an external service instead of streaming bytes
 through itself:
@@ -321,7 +336,7 @@ relevant to the Cloudflare limits above.
 
 ---
 
-## 8. Uninstall teardown
+## 9. Uninstall teardown
 
 Because the server holds everything, uninstall is a server-owned, ordered sequence:
 
@@ -338,7 +353,7 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 
 ---
 
-## 9. Security summary
+## 10. Security summary
 
 - **Authoritative capability enforcement** via the install record (fixes today's
   client-trusted `storage`/index gap).
@@ -352,7 +367,7 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 
 ---
 
-## 10. Suggested phasing
+## 11. Suggested phasing
 
 1. **Package storage + install records + server-side capability enforcement.**
    ✅ **Implemented** (`packages/core/src/plugins/*`, server routes + wiring):
@@ -405,7 +420,7 @@ Because the server holds everything, uninstall is a server-owned, ordered sequen
 5. **Install-scope UX**: device vs. account, the admin-approval flow, cross-device sync
    list + download.
 
-## 11. Open questions
+## 12. Open questions
 
 - Exact GA status + limits of the Cloudflare dynamic Worker Loader / Sandbox (memory,
   CPU, module size, outbound fetch shape) — gates step 4.

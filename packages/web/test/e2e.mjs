@@ -1,6 +1,6 @@
 // End-to-end smoke test: boot the real Trove server (in-memory backends) serving
 // the built web app, drive it in headless Chromium, and assert the workbench
-// renders and core flows work — folder creation, upload via the API surface, file
+// renders and core flows work — listing, upload via the API surface, file
 // opening, semantic search, and loading the sandboxed demo plugin. Also captures
 // a screenshot for a visual sanity check.
 
@@ -52,12 +52,14 @@ async function toWeb(nodeReq) {
 async function main() {
   const { handle, vfs } = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), assets: staticAssets });
   // Seed some content so search/open have something to work with.
-  const welcome = await vfs.writeFile('root', 'welcome.md', '# Welcome to Trove\nThis drive supports semantic search over your documents about sailing, cooking, and astronomy.', { contentType: 'text/markdown' });
-  await vfs.writeFile('root', 'notes.txt', 'plain notes with no tags', { contentType: 'text/plain' });
-  const docs = await vfs.mkdir('root', 'documents');
-  const sailing = await vfs.writeFile(docs.id, 'sailing.txt', 'Trimming the mainsail and tacking upwind across the bay at dawn.', { contentType: 'text/plain' });
-  // Tag files (welcome.md at root, sailing.txt in a subfolder) so the launcher's
-  // #tag/#property filters have something to match — and to prove drive-wide search.
+  const welcome = await vfs.writeFile('welcome.md',
+    '# Welcome to Trove\n\nThis drive supports semantic search over your documents about sailing, cooking, and astronomy.\n\n'
+    + 'There are no folders — documents like this one group things by linking them:\n\n'
+    + '- [Sailing notes](trove:default/sailing.txt)\n',
+    { contentType: 'text/markdown' });
+  await vfs.writeFile('notes.txt', 'plain notes with no tags', { contentType: 'text/plain' });
+  const sailing = await vfs.writeFile('sailing.txt', 'Trimming the mainsail and tacking upwind across the bay at dawn.', { contentType: 'text/plain' });
+  // Tag two of them so the launcher's #tag/#property filters have something to match.
   await vfs.metadata.setContribution(welcome.id, 'user', { tags: { fav: 'yes', rating: '5' } });
   await vfs.metadata.setContribution(sailing.id, 'user', { tags: { fav: 'yes', deep: 'yes' } });
 
@@ -86,7 +88,7 @@ async function main() {
   // The launcher (main-panel home) browses the seeded content.
   await page.waitForSelector('.launcher .launch-item', { timeout: 5000 });
   const names = await page.locator('.launch-item .name').allTextContents();
-  check('launcher browses seeded files', names.includes('welcome.md') && names.includes('documents'), names.join(', '));
+  check('launcher lists the collection\'s items', names.includes('welcome.md') && names.includes('sailing.txt'), names.join(', '));
 
   // `!` in the launcher switches to command execution.
   await page.locator('.launch-input').fill('!settings');
@@ -107,9 +109,29 @@ async function main() {
   // stacked panel over the base search), and the launcher is no longer shown.
   await page.locator('.launch-item', { hasText: 'welcome.md' }).first().click();
   await page.waitForSelector('.viewer-nav', { timeout: 3000 });
-  await page.waitForSelector('.viewer.text pre', { timeout: 3000 });
-  const text = await page.locator('.viewer.text pre').textContent();
-  check('opener takes the full viewer panel', /Welcome to Trove/.test(text) && (await page.locator('.launcher').count()) === 0);
+  await page.waitForSelector('.viewer.markdown .md', { timeout: 3000 });
+  const text = await page.locator('.viewer.markdown .md').textContent();
+  check('markdown renders as a document, not raw text', /Welcome to Trove/.test(text) && (await page.locator('.md-h1').count()) === 1);
+  check('opener takes the full viewer panel', (await page.locator('.launcher').count()) === 0);
+
+  // A trove: link navigates in-app — this is what replaced folders, so it has to work
+  // from the rendered document, not just from the API.
+  check('a trove: link renders as a link', (await page.locator('.md-trove').count()) >= 1);
+  await page.locator('.md-trove').first().click();
+  await page.waitForFunction(() => window.__trove.platform.workbench.nav.state.stack.some((p) => p.node?.name === 'sailing.txt'), { timeout: 4000 });
+  check('following a trove: link opens the target item', true);
+
+  // Backlinks: the info panel says what gathers this item up.
+  await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(true));
+  // Wait on the DOM, not the store: the state lands a tick before the re-render.
+  await page.waitForSelector('.ip-backlink', { timeout: 4000 }).catch(() => {});
+  const back = await page.locator('.ip-backlink').allTextContents();
+  check('backlinks show which document links here', back.some((t) => /welcome\.md/.test(t)), back.join(', '));
+  await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(false));
+  // Pop back to welcome.md so the Back check below starts from one panel deep. Done
+  // through the API: clicking Back here races the info-panel close re-render.
+  await page.evaluate(() => window.__trove.platform.workbench.nav.back());
+  await page.waitForFunction(() => window.__trove.platform.workbench.nav.state.activeFile?.name === 'welcome.md', { timeout: 3000 });
 
   // Back pops the stack → the launcher again.
   await page.locator('.viewer-nav .vn-back').click();
@@ -124,7 +146,7 @@ async function main() {
   await page.locator('.search-modal .launch-input').fill('welcome');
   await page.waitForTimeout(600);
   await page.locator('.search-modal .launch-item', { hasText: 'welcome.md' }).first().click();
-  await page.waitForSelector('.viewer.text pre', { timeout: 3000 });
+  await page.waitForSelector('.viewer.markdown .md', { timeout: 3000 });
   check('modal search opens an item and closes', (await page.locator('.search-modal').count()) === 0 && (await page.locator('.viewer-nav').count()) === 1);
 
   await page.evaluate(() => window.__trove.platform.workbench.showHome());
@@ -137,8 +159,7 @@ async function main() {
   check('semantic search returns results', resultNames.length > 0, resultNames.join(', '));
   await page.locator('.launch-clear').click();
 
-  // Tag/property filters (drive-wide): `#fav` finds both tagged files across
-  // folders (welcome.md at root + sailing.txt in a subfolder), drops untagged.
+  // Tag/property filters (drive-wide): `#fav` finds both tagged items, drops untagged.
   await page.locator('.launch-input').fill('#fav');
   await page.waitForTimeout(500);
   let filtered = await page.locator('.launch-item .name').allTextContents();
@@ -146,7 +167,7 @@ async function main() {
   await page.locator('.launch-input').fill('#deep');
   await page.waitForTimeout(500);
   filtered = await page.locator('.launch-item .name').allTextContents();
-  check('#tag finds a file in a subfolder from root', filtered.includes('sailing.txt') && !filtered.includes('welcome.md'), filtered.join(', '));
+  check('#tag narrows to a single item', filtered.includes('sailing.txt') && !filtered.includes('welcome.md'), filtered.join(', '));
   await page.locator('.launch-input').fill('#rating:>=4');
   await page.waitForTimeout(500);
   filtered = await page.locator('.launch-item .name').allTextContents();

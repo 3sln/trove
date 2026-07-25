@@ -36,7 +36,7 @@ async function toWeb(r) { const h = new Headers(); for (const [k, v] of Object.e
 
 async function main() {
   const srv = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), assets, startFlusher: false });
-  await srv.vfs.writeFile('root', 'expedition.md', '# Antarctic Expedition\nNotes on the crossing: pack ice, penguins, and the long polar night.', { contentType: 'text/markdown' });
+  await srv.vfs.writeFile('expedition.md', '# Antarctic Expedition\nNotes on the crossing: pack ice, penguins, and the long polar night.', { contentType: 'text/markdown' });
 
   const server = http.createServer(async (req, res) => { const wr = await srv.handle(await toWeb(req)); res.statusCode = wr.status; wr.headers.forEach((v, k) => res.setHeader(k, v)); if (wr.body) Readable.fromWeb(wr.body).pipe(res); else res.end(); });
   await new Promise((r) => server.listen(0, r));

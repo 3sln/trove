@@ -3,7 +3,7 @@
 //     cache (so every opener reads them with no network), and — for text — the
 //     content is chunked, embedded with the same LocalHash model the server can
 //     use, and stored in IndexedDB for offline search.
-//   • Offline search: lexical (names/paths/tags/content) blended with local
+//   • Offline search: lexical (names/tags/content) blended with local
 //     semantic (cosine over the cached chunk vectors) — the same hybrid shape as
 //     the server, just over what you took offline.
 //   • Sidecar op queue: while offline, comment/tag mutations are queued and
@@ -76,7 +76,7 @@ export class OfflineService {
   // --- pinning ---------------------------------------------------------------
 
   async pin(node) {
-    if (node.kind !== 'file') return;
+    if (!node?.id) return;
     try {
       const url = this.api.downloadUrl(node.id);
       // Cache the bytes for offline opening (SW serves them cache-first).
@@ -95,7 +95,7 @@ export class OfflineService {
           chunks = (parts.length ? parts : [node.name]).map((t, i) => ({ text: t, vector: vectors[i] }));
         } catch { /* keep name-only */ }
       }
-      const nameVec = (await embed.embed([node.name + ' ' + node.path]))[0];
+      const nameVec = (await embed.embed([node.name]))[0];
       await idbPut(this.db, 'pins', node.id, { node, text, chunks, nameVec, pinnedAt: Date.now() });
       await this.#refreshPins();
       this.platform.notifications.success(`“${node.name}” is available offline`);
@@ -116,7 +116,7 @@ export class OfflineService {
 
   async #refreshPins() {
     const all = await idbAll(this.db, 'pins');
-    this.#set({ pins: all.map((r) => ({ id: r.node.id, name: r.node.name, path: r.node.path, contentType: r.node.contentType, collectionId: r.node.collectionId, pinnedAt: r.pinnedAt })) });
+    this.#set({ pins: all.map((r) => ({ id: r.node.id, name: r.node.name, contentType: r.node.contentType, collectionId: r.node.collectionId, pinnedAt: r.pinnedAt })) });
   }
 
   // --- offline search --------------------------------------------------------
@@ -128,7 +128,7 @@ export class OfflineService {
     const qv = (await embed.embed([query]))[0];
     const results = [];
     for (const r of rows) {
-      const hay = tokenize(`${r.node.name} ${r.node.path} ${r.text || ''}`);
+      const hay = tokenize(`${r.node.name} ${r.text || ''}`);
       const lex = lexicalScore(qTokens, new Set(hay));
       let dense = cosine(qv, r.nameVec);
       for (const c of r.chunks || []) dense = Math.max(dense, cosine(qv, c.vector));

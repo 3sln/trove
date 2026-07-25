@@ -35,10 +35,9 @@ export function createApp(platform) {
   // (e.g. the Delete keybinding needs `explorer.hasSelection`), and previously only
   // NavigateAction set them — so selecting a file never flipped hasSelection true and
   // Delete silently did nothing. Deriving them from the observable keeps them honest.
-  platform.context.setMany({ 'explorer.folderId': '', 'explorer.collectionId': 'default', 'explorer.hasSelection': false });
+  platform.context.setMany({ 'explorer.collectionId': 'default', 'explorer.hasSelection': false });
   explorer.observe().subscribe((ex) => {
     platform.context.setMany({
-      'explorer.folderId': ex.folder?.id || '',
       'explorer.collectionId': ex.collectionId || 'default',
       'explorer.hasSelection': (ex.selection?.length || 0) > 0,
     });

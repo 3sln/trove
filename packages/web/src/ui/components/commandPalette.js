@@ -93,7 +93,7 @@ function fileOpt(item, active, run, hover) {
   return div({ className: `opt ${active ? 'active' : ''}` },
     span({ className: 'ico' }, icon(iconForNode(item.node), { size: 16 })),
     span({ className: 'title' }, item.node.name),
-    span({ className: 'sub' }, item.node.path),
+    span({ className: 'sub' }, item.node.contentType || ''),
   ).on({ click: () => run(item), mouseenter: hover });
 }
 

@@ -21,21 +21,27 @@ let step = 0;
 const { page, errors, close, goto, vfs } = await boot({
   watchdogMs: 180_000, // a 16-step journey with a plugin install needs room
   seed: async (vfs) => {
-    const docs = await vfs.mkdir('root', 'documents');
-    const welcome = await vfs.writeFile('root', 'welcome.md',
-      '# Welcome to Trove\n\nA self-hostable drive with semantic search, sandboxed plugins,\nand pluggable storage. This file is indexed for search.',
+    // welcome.md is an INDEX: with no folders, a document that links its sources is
+    // what grouping looks like, so the walkthrough exercises exactly that.
+    const welcome = await vfs.writeFile('welcome.md',
+      '# Welcome to Trove\n\nA self-hostable drive with semantic search, sandboxed plugins,\n'
+      + 'and pluggable storage. There are no folders — documents group things by linking them.\n\n'
+      + '## Reading list\n\n'
+      + '- [Sailing notes](trove:default/sailing.txt)\n'
+      + '- [Braising](trove:default/cooking.txt)\n'
+      + '- [A link that goes nowhere](trove:default/missing.txt)\n',
       { contentType: 'text/markdown' });
-    const sailing = await vfs.writeFile(docs.id, 'sailing.txt',
+    const sailing = await vfs.writeFile('sailing.txt',
       'Trimming the mainsail and tacking upwind across the bay at dawn. The keel bites and the boat heels over.',
       { contentType: 'text/plain' });
-    await vfs.writeFile(docs.id, 'cooking.txt',
+    await vfs.writeFile('cooking.txt',
       'Braising short ribs low and slow with red wine, thyme and a mirepoix base.',
       { contentType: 'text/plain' });
-    await vfs.writeFile('root', 'notes.txt', 'Plain notes with no tags.', { contentType: 'text/plain' });
+    await vfs.writeFile('notes.txt', 'Plain notes with no tags.', { contentType: 'text/plain' });
     // Handled by the demo plugin's sandboxed opener (installed later in the journey).
-    await vfs.writeFile('root', 'clip.demo', 'demo clip payload', { contentType: 'application/octet-stream' });
+    await vfs.writeFile('clip.demo', 'demo clip payload', { contentType: 'application/octet-stream' });
     // An .m4a matches BOTH the audiobook and audio openers → exercises the chooser.
-    await vfs.metadata.create({ parentId: 'root', name: 'audiobook.m4a', kind: 'file', storageKey: 'k-ab', size: 1024, contentType: 'audio/mp4' });
+    await vfs.metadata.create({ name: 'audiobook.m4a', storageKey: 'k-ab', size: 1024, contentType: 'audio/mp4' });
     await vfs.metadata.setContribution(welcome.id, 'user', { tags: { fav: 'yes', rating: '5' } });
     await vfs.metadata.setContribution(sailing.id, 'user', { tags: { fav: 'yes', deep: 'yes' } });
   },
@@ -53,18 +59,42 @@ check('app boots to the launcher with seeded content',
   (await page.locator('.launch-item .name').allTextContents()).includes('welcome.md'));
 await shot('launcher-home');
 
-// ---- 2. Browse into a folder -------------------------------------------------
-await page.locator('.launch-item', { hasText: 'documents' }).first().click();
-await page.waitForTimeout(500);
-const inFolder = await page.locator('.launch-item .name').allTextContents();
-check('browsing into a folder lists its children', inFolder.includes('sailing.txt') && inFolder.includes('cooking.txt'), inFolder.join(', '));
-await shot('browse-folder');
+// ---- 2. A document is the grouping: open the index and follow a link ----------
+await page.locator('.launch-item', { hasText: 'welcome.md' }).first().click();
+await page.waitForSelector('.viewer.markdown .md', { timeout: 5000 });
+check('markdown renders as a document', (await page.locator('.md-h1').count()) === 1);
+check('trove: links render as links', (await page.locator('.md-trove').count()) === 3,
+  `${await page.locator('.md-trove').count()} links`);
+await shot('markdown-index');
 
-// ---- 3. Open a file (text viewer) --------------------------------------------
-await page.locator('.launch-item', { hasText: 'sailing.txt' }).first().click();
+await page.locator('.md-trove').first().click();
 await page.waitForSelector('.viewer.text pre', { timeout: 5000 });
-check('text opener renders file content', /mainsail/.test(await page.locator('.viewer.text pre').textContent()));
+check('following a link opens the linked item', /mainsail/.test(await page.locator('.viewer.text pre').textContent()));
 await shot('viewer-text');
+
+// ---- 3. Backlinks answer "where does this live?" ------------------------------
+await page.locator('.viewer-nav .iconbtn[title="Details & comments"]').first().click();
+await page.waitForSelector('.infopanel', { timeout: 3000 });
+await page.waitForSelector('.ip-backlink', { timeout: 5000 }).catch(() => {});
+const backlinks = await page.locator('.ip-backlink').allTextContents();
+check('backlinks show which document gathers this item up', backlinks.some((t) => /welcome\.md/.test(t)), backlinks.join(', '));
+check('the item shows its own trove: link', /trove:default\?name=sailing\.txt/.test(await page.locator('.ip-uri').textContent()));
+await shot('backlinks');
+await page.locator('.viewer-nav .iconbtn[title="Details & comments"]').first().click();
+
+// A link whose target was renamed or never existed must SAY so, not do nothing.
+await page.evaluate(() => window.__trove.platform.workbench.nav.back());
+await page.waitForSelector('.viewer.markdown .md', { timeout: 4000 });
+await page.evaluate(() => window.__trove.platform.notifications.items.splice(0));
+await page.locator('.md-trove').nth(2).click();
+await page.waitForTimeout(500);
+const brokenMsg = await page.evaluate(() => window.__trove.platform.notifications.items.map((n) => n.message).join(' | '));
+check('a broken link explains itself instead of doing nothing', /missing\.txt/.test(brokenMsg) && /renamed or deleted/.test(brokenMsg), brokenMsg);
+await shot('broken-link');
+
+// ---- 3b. Back to a plain item for the panel/comment steps ---------------------
+await page.locator('.md-trove').first().click();
+await page.waitForSelector('.viewer.text pre', { timeout: 5000 });
 
 // ---- 4. Info panel (tags + conversation) -------------------------------------
 await page.locator('.viewer-nav .iconbtn[title="Details & comments"]').first().click();
@@ -83,9 +113,14 @@ await shot('comment-posted');
 await page.locator('.viewer-nav .iconbtn[title="Details & comments"]').first().click();
 
 // ---- 5. Back to launcher -----------------------------------------------------
-await page.locator('.viewer-nav .vn-back').first().click();
+// The stack is two deep (the index document, then the item it links to), so Back has
+// to be pressed until it bottoms out — that IS the behaviour under test.
+for (let i = 0; i < 4 && (await page.locator('.viewer-nav').count()); i++) {
+  await page.locator('.viewer-nav .vn-back').first().click();
+  await page.waitForTimeout(250);
+}
 await page.waitForSelector('.launcher .launch-input', { timeout: 3000 });
-check('back returns to the launcher', (await page.locator('.viewer-nav').count()) === 0);
+check('back pops the stack to the launcher', (await page.locator('.viewer-nav').count()) === 0);
 
 // ---- 6. Semantic search ------------------------------------------------------
 await page.evaluate(() => window.__trove.platform.workbench.showHome());
@@ -138,14 +173,13 @@ await page.keyboard.press('Escape');
 // ---- 10. Upload through the real API path ------------------------------------
 await page.evaluate(async () => {
   const f = new File([new TextEncoder().encode('Uploaded during the walkthrough.')], 'uploaded.txt', { type: 'text/plain' });
-  await window.__trove.app.platform.api.upload(f, { parentId: 'root' });
+  await window.__trove.app.platform.api.upload(f, { collection: 'default' });
 });
-// Navigate the explorer back to the drive root (we browsed into documents earlier),
-// so the browse list shows where the upload landed.
+// Reload the collection so the list shows the item that just landed.
 await page.evaluate(() => window.__trove.platform.workbench.showHome());
 await page.evaluate(async () => {
   const { NavigateAction } = window.__trove.test;
-  if (NavigateAction) await window.__trove.app.engine.dispatch(new NavigateAction('/'));
+  if (NavigateAction) await window.__trove.app.engine.dispatch(new NavigateAction());
 });
 await page.waitForTimeout(1000);
 const afterUpload = await page.locator('.launch-item .name').allTextContents();

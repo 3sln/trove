@@ -13,30 +13,33 @@ class AppAction extends Action {
   static deps = ['app'];
 }
 
+/**
+ * Load a collection's items. There is nothing to navigate INTO any more — a drive is
+ * browsed by search and by following links — so this only ever switches which
+ * collection is on screen, or refreshes the current one.
+ */
 export class NavigateAction extends AppAction {
-  constructor(target, collectionId) {
+  constructor(collectionId) {
     super();
-    this.target = target; // folder id or '/path'
-    this.collectionId = collectionId; // set to switch collections (navigates to its root)
+    this.collectionId = collectionId;
   }
   async execute({ app }) {
     const { explorer, platform } = app;
     const collectionId = this.collectionId || explorer.state.collectionId || 'default';
-    const target = this.collectionId ? '/' : this.target ?? '/';
     explorer.set({ loading: true, error: null, collectionId });
     try {
       const sort = platform.settings.get('explorer.sort');
       const order = platform.settings.get('explorer.sortOrder');
-      const res = await platform.api.list(target, { sort, order, collection: collectionId });
+      const res = await platform.api.list({ sort, order, collection: collectionId });
       explorer.set({
-        folder: res.node, breadcrumb: res.breadcrumb, items: res.items,
-        loading: false, selection: [], sort, order, collectionId: res.collectionId || collectionId,
+        items: res.items, loading: false, selection: [], sort, order,
+        collectionId: res.collectionId || collectionId,
       });
-      // Explorer→context projection (folderId/collectionId/hasSelection) lives in
-      // bl/index.js so it stays in sync with selection too — nothing to mirror here.
+      // Explorer→context projection (collectionId/hasSelection) lives in bl/index.js
+      // so it stays in sync with selection too — nothing to mirror here.
     } catch (err) {
       explorer.set({ loading: false, error: err.message });
-      platform.notifications.error(`Couldn't open folder: ${err.message}`);
+      platform.notifications.error(`Couldn't load this collection: ${err.message}`);
     }
   }
 }
@@ -60,7 +63,7 @@ export class CreateCollectionAction extends AppAction {
       const res = await app.platform.api.createCollection(this.record);
       app.platform.notifications.success(`Created collection “${res.collection.name}”`);
       await app.engine.dispatch(new LoadCollectionsAction());
-      app.engine.dispatch(new NavigateAction('/', res.collection.id));
+      app.engine.dispatch(new NavigateAction(res.collection.id));
     } catch (err) {
       app.platform.notifications.error(`Couldn’t create collection: ${err.message}`);
     }
@@ -69,25 +72,7 @@ export class CreateCollectionAction extends AppAction {
 
 export class RefreshAction extends AppAction {
   async execute({ app }) {
-    const id = app.explorer.state.folder?.id ?? '/';
-    return app.engine.dispatch(new NavigateAction(id));
-  }
-}
-
-export class CreateFolderAction extends AppAction {
-  constructor(name) {
-    super();
-    this.name = name;
-  }
-  async execute({ app }) {
-    const parentId = app.explorer.state.folder?.id ?? 'root';
-    try {
-      await app.platform.api.mkdir(parentId, this.name);
-      app.platform.notifications.success(`Created folder "${this.name}"`);
-      app.engine.dispatch(new NavigateAction(parentId));
-    } catch (err) {
-      app.platform.notifications.error(`Couldn’t create folder: ${err.message}`);
-    }
+    return app.engine.dispatch(new NavigateAction(app.explorer.state.collectionId));
   }
 }
 
@@ -98,7 +83,7 @@ export class DeleteAction extends AppAction {
   }
   async execute({ app }) {
     try {
-      for (const id of this.ids) await app.platform.api.remove(id, true);
+      for (const id of this.ids) await app.platform.api.remove(id);
       app.platform.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
       for (const id of this.ids) app.platform.workbench.closeTab(id);
     } catch (err) {
@@ -137,7 +122,6 @@ export class OpenFileAction extends AppAction {
     // Guard against being invoked with no target (e.g. a command fired with an empty
     // selection) — dereferencing a null node would throw an unhandled rejection.
     if (!this.node) return;
-    if (this.node.kind === 'folder') return app.engine.dispatch(new NavigateAction(this.node.id));
     const { platform } = app;
     const open = (openerId) => platform.workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
 
@@ -162,19 +146,19 @@ export class OpenFileAction extends AppAction {
 }
 
 export class UploadFilesAction extends AppAction {
-  constructor(files, parentId) {
+  constructor(files, collectionId) {
     super();
     this.files = files;
-    this.parentId = parentId;
+    this.collectionId = collectionId;
   }
   async execute({ app }) {
-    const parentId = this.parentId || app.explorer.state.folder?.id || 'root';
+    const collection = this.collectionId || app.explorer.state.collectionId || 'default';
     const concurrency = app.platform.settings.get('uploads.concurrency');
-    const uploads = [...this.files].map((file) => this.#one(app, file, parentId, concurrency));
+    const uploads = [...this.files].map((file) => this.#one(app, file, collection, concurrency));
     await Promise.allSettled(uploads);
-    app.engine.dispatch(new NavigateAction(parentId));
+    app.engine.dispatch(new NavigateAction(collection));
   }
-  async #one(app, file, parentId, concurrency) {
+  async #one(app, file, collection, concurrency) {
     const { transfers, platform } = app;
     const tid = newId('xfer');
     const controller = new AbortController();
@@ -182,7 +166,7 @@ export class UploadFilesAction extends AppAction {
     let uploadId = null;
     try {
       const node = await platform.api.upload(file, {
-        parentId, concurrency, signal: controller.signal,
+        collection, concurrency, signal: controller.signal,
         onStart: (id) => { uploadId = id; },
         onProgress: (p) => transfers.progress(tid, p),
       });
@@ -221,7 +205,7 @@ export class FilterAction extends AppAction {
     }
     search.set({ query: this.text, loading: true, error: null, filtered: true });
     if (app.offline && !app.offline.state.online) {
-      const items = (app.explorer.state.items || []).filter((n) => n.kind === 'folder' || matchesTagFilters(n, this.filters));
+      const items = (app.explorer.state.items || []).filter((n) => matchesTagFilters(n, this.filters));
       search.set({ results: items.map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: true });
       return;
     }
@@ -252,7 +236,7 @@ export class QuickOpenAction extends AppAction {
     try {
       const res = await platform.api.search(q, { mode: 'keyword', limit: 30 });
       if (search.state.paletteQuery !== q) return; // superseded
-      search.set({ paletteFiles: (res.results || []).filter((r) => r.node.kind === 'file'), paletteLoading: false });
+      search.set({ paletteFiles: res.results || [], paletteLoading: false });
     } catch (err) {
       if (search.state.paletteQuery !== q) return;
       // A failed search must not look like "no files matched" — that reads as a fact

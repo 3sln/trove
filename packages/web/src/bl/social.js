@@ -18,6 +18,7 @@ export class SocialService {
       pushSupported: 'serviceWorker' in navigator && 'PushManager' in window,
       pushEnabled: false,
       sidecar: null, // { nodeId, tags, comments, subscribers, loading, error }
+      backlinks: null, // { nodeId, items, loading, error } — what links to the open item
       posting: false,
       replyTo: null, // { id, author } when composing a reply
     };
@@ -71,13 +72,33 @@ export class SocialService {
   // --- sidecar (per active file) ---------------------------------------------
 
   async loadSidecar(nodeId) {
-    if (!nodeId) return this.#set({ sidecar: null });
+    if (!nodeId) return this.#set({ sidecar: null, backlinks: null });
     this.#set({ sidecar: { nodeId, loading: true, tags: [], comments: [], subscribers: [] } });
+    this.loadBacklinks(nodeId);
     try {
       const view = await this.api.sidecar(nodeId);
       this.#set({ sidecar: { ...view, loading: false } });
     } catch (err) {
       this.#set({ sidecar: { nodeId, loading: false, error: err.message, tags: [], comments: [] } });
+    }
+  }
+
+  /**
+   * What links to this item. With no folders, this is how you find out where an item
+   * "lives" — which documents gather it up — so a failure has to be visible rather
+   * than rendering as "nothing links here", which would be a claim about the drive.
+   */
+  async loadBacklinks(nodeId) {
+    if (!nodeId) return this.#set({ backlinks: null });
+    this.#set({ backlinks: { nodeId, items: [], loading: true, error: null } });
+    try {
+      const res = await this.api.backlinks(nodeId);
+      // A slower request for a previously-open item must not land on this one.
+      if (this.state.backlinks?.nodeId !== nodeId) return;
+      this.#set({ backlinks: { nodeId, items: res.items || [], loading: false, error: null } });
+    } catch (err) {
+      if (this.state.backlinks?.nodeId !== nodeId) return;
+      this.#set({ backlinks: { nodeId, items: [], loading: false, error: err.message } });
     }
   }
   async #reload() {
