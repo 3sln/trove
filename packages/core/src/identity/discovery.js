@@ -124,21 +124,72 @@ export function headerSafe(text) {
 }
 
 /**
+ * Can this string be published as an authorization server?
+ *
+ * A client will fetch `<value>/.well-known/oauth-authorization-server` and then send a
+ * user — and eventually a bearer token — wherever that leads. So it has to be an
+ * absolute http(s) URL. Plaintext is allowed only on the loopback host, where it is
+ * someone developing rather than a token crossing a network.
+ */
+export function usableAuthServer(value) {
+  let u;
+  try { u = new URL(String(value)); } catch { return false; }
+  if (u.protocol === 'https:') return true;
+  return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]');
+}
+
+/**
  * Resolve the drive's auth-discovery settings from server config.
  *
  * The fallback to the JWT issuer is the useful part: a deployment that already told
  * Trove which issuer to trust has already told it where the authorization server is,
  * and asking for the same URL under a second name is a way to get two different answers.
+ *
+ * But it is only sound when the issuer is a URL. A JWT `iss` is StringOrURI — `iss` may
+ * legitimately be `my-gateway` or a URN, and a deployment minting its own tokens often
+ * makes it exactly that. Publishing one of those as an authorization server is WORSE
+ * than publishing nothing: an absent field makes a client report "no authorization
+ * server configured", while a garbage one makes it fail somewhere inside a fetch. So the
+ * inference is filtered, and the reason is reported rather than swallowed.
+ *
+ * @returns {{authorizationServers: string[], source: string, warnings: string[]}}
  */
 export function resolveAuthDiscovery(config = {}) {
   const explicit = normalizeServers(config.auth?.authorizationServers ?? config.authServer);
   const issuer = normalizeServers(config.identity?.jwt?.issuer);
+  const warnings = [];
+
+  // Explicitly configured wins, and is honoured as given — the operator said what they
+  // meant. Plaintext is still called out: the OAuth flow, and the token at the end of
+  // it, travel over whatever this names.
+  const badExplicit = explicit.filter((s) => !usableAuthServer(s));
+  for (const s of badExplicit) {
+    warnings.push(`TROVE_AUTH_SERVER is "${s}", which is not an https URL. Clients will be sent there `
+      + 'to sign in, and a bearer token will travel over it.');
+  }
+  if (explicit.length) {
+    return { authorizationServers: explicit, source: 'configured', warnings, ...passthrough(config) };
+  }
+
+  const inferable = issuer.filter(usableAuthServer);
+  if (issuer.length && !inferable.length) {
+    warnings.push(`TROVE_JWT_ISSUER is "${issuer[0]}", which is not a URL, so it cannot double as an `
+      + 'authorization server. Clients will be told there is nowhere to sign in until you set '
+      + 'TROVE_AUTH_SERVER.');
+  }
   return {
-    authorizationServers: explicit.length ? explicit : issuer,
+    authorizationServers: inferable,
     // Recorded so a UI can explain where the value came from — "we inferred this from
     // your JWT issuer" is a different fact from "you set this", and an operator
     // debugging a mismatch needs to know which.
-    source: explicit.length ? 'configured' : issuer.length ? 'jwt-issuer' : 'none',
+    source: inferable.length ? 'jwt-issuer' : 'none',
+    warnings,
+    ...passthrough(config),
+  };
+}
+
+function passthrough(config) {
+  return {
     scopes: config.auth?.scopes,
     resourceName: config.auth?.resourceName,
     documentation: config.auth?.documentation,

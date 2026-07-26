@@ -223,6 +223,19 @@ TROVE_AUTH=jwt TROVE_JWT_JWKS_FILE=/run/secrets/trove-jwks.json \
 TROVE_JWT_ISSUER=https://you.example TROVE_JWT_AUDIENCE=trove
 ```
 
+**What is trusting what.** The signature is verified against the key material, and
+nothing else: `TROVE_JWT_JWKS` is a key set you hold (nothing is fetched, so there is
+nothing to spoof), `TROVE_JWKS_URL` is one Trove fetches over HTTPS (so the authenticity
+of those keys rests on that host's TLS certificate), and `TROVE_JWT_SECRET` is a shared
+HS256 secret. The key is chosen by the token's `kid`.
+
+`TROVE_JWT_ISSUER` and `TROVE_JWT_AUDIENCE` are **claim checks**, not trust anchors — a
+string comparison against `iss` and `aud` after the signature has already passed. They
+cost nothing and are worth setting: they stop a token that is validly signed by a key you
+trust but was minted for a different issuer or a different application, which is a real
+case when a JWKS serves several or the IdP is multi-tenant. On their own they secure
+nothing, since anyone forging a token also sets those claims.
+
 Always add `TROVE_AUTH_REQUIRED=true` so an unauthenticated request is rejected
 rather than treated as anonymous. `TROVE_JWT_ALGS` narrows the accepted algorithms
 (the default is inferred from the key material: `HS256` for a secret, `RS256`/`ES256`
@@ -414,10 +427,17 @@ and that document ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html)) name
 authorization server. It is the same mechanism the MCP authorization spec is built on,
 which is why implementing it once serves both a browser and an agent.
 
-**You usually don't have to set it.** For essentially every OIDC provider the issuer URL
-*is* the authorization server, so if `TROVE_JWT_ISSUER` is set Trove uses that. Set
-`TROVE_AUTH_SERVER` only when they genuinely differ. Asking for the same URL under two
-names is a good way to end up with two different answers.
+**You often don't have to set it.** For an OIDC provider the issuer identifier *is* the
+authorization server — that is what RFC 8414 locates its metadata relative to — so when
+`TROVE_JWT_ISSUER` is a URL, Trove uses it. Set `TROVE_AUTH_SERVER` when they genuinely
+differ. Asking for the same URL under two names is a good way to end up with two
+different answers.
+
+The inference only fires when the issuer is an `https` URL (or `http` on loopback). A
+JWT `iss` is `StringOrURI`, so a deployment minting its own tokens may well have set it
+to `my-gateway` or a URN — publishing one of those as an authorization server would send
+clients off to fetch `.well-known` from a string, which fails less usefully than
+publishing nothing. In that case Trove publishes nothing and says why, at boot.
 
 Not setting either is the failure that looks like success: auth is required, and there is
 nowhere to send anyone. Trove says so in the challenge itself and in Settings, rather

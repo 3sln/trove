@@ -367,6 +367,10 @@ export async function createServer(config = {}) {
   // the JSON API's 401s and by MCP's discovery alike. Falls back to the JWT issuer,
   // which for essentially every OIDC provider IS the authorization server.
   const auth = resolveAuthDiscovery(config);
+  // Said at boot, because that is when someone is looking and can still fix it. The
+  // alternative is discovering it from a client that can't sign in and a 401 that
+  // doesn't say why.
+  for (const w of auth.warnings || []) console.warn(`[trove] ${w}`);
 
   // MCP: the same drive, the same identity, spoken to by an agent instead of a browser.
   // Null when switched off, and then nothing below routes to it.

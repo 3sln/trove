@@ -55,7 +55,7 @@ export { verifyJwt, decodeJwt, JwksClient, StaticJwks } from './identity/jwt.js'
 // Where an unauthenticated client is told to go — one answer for the whole drive.
 export {
   protectedResourceMetadata, challengeHeaders, metadataUrl, publicOrigin,
-  normalizeServers, resolveAuthDiscovery, headerSafe,
+  normalizeServers, resolveAuthDiscovery, usableAuthServer, headerSafe,
 } from './identity/discovery.js';
 
 // Sidecar documents: conversations, tags, indexer facets (CRDT, cold-in-S3).
