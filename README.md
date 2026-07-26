@@ -271,16 +271,31 @@ Dockerfile (`/data`):
   if it is missing on startup and the drive is not, Trove rebuilds it in the
   background and says so in the log.
 
-To back up the SQLite database safely while running, use SQLite's online backup
-rather than copying the file mid-write:
+To back up the database safely while Trove is running:
 
 ```sh
-sqlite3 ./data/trove.db ".backup './backups/trove-$(date +%F).db'"
+bun scripts/backup.mjs ./data/trove.db ./backups/trove-$(date +%F).db
 ```
 
-Back up the object store with your storage's native tooling (`rsync` the
-filesystem root, or bucket replication/versioning for S3/R2). `/api/health` is a
-liveness check; `/api/ready` probes the store for readiness gating.
+**Do not just copy the file.** In WAL mode the database is three files (`.db`,
+`-wal`, `-shm`) and your most recent writes live in the `-wal`; copying the `.db`
+alone produces a backup that opens cleanly and is silently missing them — the
+worst kind, because it looks like a backup. The script uses SQLite's `VACUUM
+INTO`, which is an online backup that takes a read lock rather than blocking
+writers, and it refuses to overwrite an existing file.
+
+(The usual advice, `sqlite3 db ".backup out.db"`, works too — but the `sqlite3`
+CLI is not in the image Trove ships, so inside the container it just fails.)
+
+Back up the object store separately with your storage's native tooling (`rsync`
+the filesystem root, or bucket replication/versioning for S3/R2) — the database
+holds metadata and the search index, not your bytes.
+
+Restoring is putting both back and starting up: verified end to end on a
+3,005-item drive — same item count, same byte total, search intact, files
+downloadable. And if the search index is ever lost on its own, Trove notices at
+startup and rebuilds it. `/api/health` is a liveness check; `/api/ready` probes
+the store for readiness gating.
 
 ## Background work and standing problems
 
