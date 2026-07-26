@@ -169,16 +169,97 @@ TROVE_EMBEDDINGS_DIM=1536
 
 ## Deploy
 
-**Node / Docker** — `node packages/server/src/adapters/node.js` serves both the
-API and the built web app (`packages/web/dist`), with SPA fallback. See
-[`Dockerfile`](./Dockerfile). The Bun adapter (`adapters/bun.js`) is the
-recommended production runtime. Both trap `SIGTERM`/`SIGINT` and shut down
-gracefully (flush notifications, close SQLite) so redeploys don't lose in-flight
-work.
+The server is one function — `handle(Request) -> Promise<Response>` — so an adapter is
+thin and there is no runtime-specific code below it. Pick a row:
 
-**Cloudflare Workers** — use `packages/server/src/adapters/worker.js` with R2 (via
-the S3 API) for storage and a D1-backed `MetadataStore`. The SigV4 signer and
-presigned URLs work unchanged on the Workers runtime.
+| runtime | storage | metadata + search | notes |
+| --- | --- | --- | --- |
+| **Bun** | filesystem / S3 | SQLite file | recommended for self-hosting |
+| **Node** | filesystem / S3 | SQLite file | identical behaviour, a little slower |
+| **Workers** | R2 (S3 API) | D1 + Vectorize | no local disk, so both must be bound |
+
+### Bun (recommended)
+
+```sh
+bun install
+bun run build:web                       # builds packages/web/dist
+TROVE_STORAGE=filesystem TROVE_ROOT=./data/objects \
+TROVE_METADATA=sqlite TROVE_DB=./data/trove.db \
+bun packages/server/src/adapters/bun.js  # :8787, API + web app
+```
+
+That is the whole thing: files under `./data/objects`, everything else in one SQLite
+file. Back it up with `npm run backup` (a `VACUUM INTO` snapshot, safe on a live
+database) and copy the objects directory.
+
+### Node
+
+Identical, with `node`:
+
+```sh
+TROVE_STORAGE=filesystem TROVE_ROOT=./data/objects \
+TROVE_METADATA=sqlite TROVE_DB=./data/trove.db \
+node packages/server/src/adapters/node.js
+```
+
+Node 20+ for `node:sqlite`. Both adapters serve the built web app with SPA fallback and
+trap `SIGTERM`/`SIGINT` to shut down cleanly — flush notifications, stop an in-flight
+reindex, close SQLite — so a redeploy doesn't lose work. See [`Dockerfile`](./Dockerfile).
+
+### Cloudflare Workers
+
+There is no disk, so the two things a self-hosted run keeps in a file need bindings:
+
+```toml
+# wrangler.toml
+main = "packages/server/src/adapters/worker.js"
+compatibility_date = "2024-09-23"
+
+[[d1_databases]]                 # metadata, KV, plugin installs, keyword search
+binding = "DB"
+database_name = "trove"
+database_id = "..."
+
+[[vectorize]]                    # semantic search (sqlite-vec cannot run here)
+binding = "VECTORIZE"
+index_name = "trove"
+
+[ai]                             # optional: LLM query understanding
+binding = "AI"
+
+[assets]                         # the built web app
+directory = "packages/web/dist"
+binding = "ASSETS"
+
+[vars]
+TROVE_STORAGE = "s3"             # R2 through the S3 API
+TROVE_S3_BUCKET = "trove"
+TROVE_S3_REGION = "auto"
+TROVE_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
+TROVE_AUTH = "cloudflare-access"
+TROVE_CF_ACCESS_TEAM = "acme"
+TROVE_CF_ACCESS_AUD = "<aud-tag>"
+```
+
+```sh
+wrangler secret put TROVE_S3_ACCESS_KEY_ID
+wrangler secret put TROVE_S3_SECRET_ACCESS_KEY
+wrangler d1 execute trove --command "SELECT 1"   # create it first
+wrangler deploy
+```
+
+The adapter wires `DB` through `D1SqliteProvider` and `VECTORIZE` through
+`VectorizeVectorStore` on its own. **Bind `DB` or the drive runs entirely in memory** —
+which works right up until the isolate is recycled and everything is gone. R2 works
+through the S3 API rather than the R2 binding because that is what makes presigned
+uploads go straight to the bucket instead of through your Worker's CPU time.
+
+Two Workers-specific limits worth knowing before you commit: `sqlite-vec` is a native
+artifact and cannot load, so semantic search *needs* Vectorize; and plugin scopes each
+want their own D1 database, since D1 cannot create one on demand and co-locating them
+would put a plugin's tables next to the drive's metadata. Bind `PLUGIN_DB` if you use
+server-side plugin storage — without it, that one feature reports a clear error and the
+rest of the drive is unaffected.
 
 ### Before you expose it
 
@@ -582,10 +663,61 @@ const { handle } = await createServer({
 });
 ```
 
-Bring your own vector DB by implementing the async `VectorStore` interface
-(`add` / `remove{,ByNode,ByIndexer,ByNodeIndexer}` / `query`) and passing the
-instance in — same for `MetadataStore`, `StorageBackend`, `EmbeddingProvider`,
-and `KeywordStore`. Or drive it all from env:
+### Writing a custom driver
+
+Every seam is a small async class. Subclass it, pass the instance in, and the server
+uses it — there is no registration step and no factory to teach about it, because
+`resolve()` takes either an instance or a `{ driver }` config and an instance always
+wins.
+
+| you want to change | implement | the methods that matter |
+| --- | --- | --- |
+| where bytes live | `StorageBackend` | `put` `get` `delete` `list` `head` (+ `presign*`, `usage` if you can) |
+| where records live | `MetadataStore` | `create` `getById` `listItems` `rename` `remove` `findByTags` … |
+| the vector index | `VectorStore` | `add` `query` `remove{,ByNode,ByIndexer,ByNodeIndexer}` |
+| the keyword index | `KeywordStore` | `add` `search` `remove*` `count` |
+| how text becomes vectors | `EmbeddingProvider` | `embed(texts) -> number[][]` |
+| SQL (D1, Turso, Postgres…) | `SqliteProvider` + `SqliteDatabase` | `obtain` / `exec` `run` `get` `all` `batch` |
+| who the caller is | `IdentityProvider` | `authenticate(request) -> Principal \| null` |
+| what a search query means | `SearchTransformer` | `transform(raw)` and `describe()` |
+| shared small state | `KeyValueStore` | `get` `set` `delete` `list` |
+
+```js
+import { createServer } from '@trove/server';
+import { VectorStore } from '@trove/core';
+
+class PgVectorStore extends VectorStore {
+  constructor(pool, { dimensions }) { super(); this.pool = pool; this.dimensions = dimensions; }
+  async add(docs) { /* upsert (id, nodeId, indexerId, vector) */ }
+  async query(vector, { limit = 20, collectionIds } = {}) {
+    // return [{ id, nodeId, indexerId, score }] — score higher-is-better
+  }
+  async removeByNode(nodeId) { /* … */ }
+  // removeByIndexer / removeByNodeIndexer / remove likewise
+}
+
+const { handle } = await createServer({
+  vectorStore: new PgVectorStore(pool, { dimensions: 1536 }),
+});
+```
+
+Two conventions the interfaces rely on, both of which will bite quietly if ignored:
+
+- **Say what you can't do rather than pretending.** `StorageBackend.capabilities`
+  advertises `presignDownload`, `list`, `usage` and friends, and callers branch on it —
+  an S3 deployment uploads straight to the bucket while a filesystem one proxies,
+  from the same client code. A backend that can't report free space returns `null` from
+  `usage()` and the UI shows no gauge, rather than a meter built from a guess.
+- **`durable` is a claim, not an inference.** A `SqliteProvider` that says `false` gets
+  the in-memory search stores, because an index in an ephemeral database is worse than
+  one in memory: it looks persistent right until the restart that proves it isn't.
+
+`D1SqliteProvider` is worth reading as a worked example — it is the whole
+`SqliteProvider` + `SqliteDatabase` pair against a database with a slightly different
+dialect, in about a hundred lines, and its tests run the real `SqliteStore` and
+`SqliteKV` against a D1-shaped shim.
+
+Or drive the built-in drivers from env:
 
 ```sh
 TROVE_VECTOR=qdrant TROVE_QDRANT_URL=http://localhost:6333 \
