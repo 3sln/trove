@@ -24,7 +24,7 @@ export class MemoryStorage extends StorageBackend {
   }
 
   get capabilities() {
-    return { presignDownload: false, presignUpload: false, multipart: true, range: true, list: true };
+    return { presignDownload: false, presignUpload: false, multipart: true, range: true, list: true, usage: false };
   }
 
   async list({ prefix = '', cursor = null, limit = 1000 } = {}) {

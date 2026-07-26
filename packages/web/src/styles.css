@@ -779,3 +779,12 @@ kbd {
 
 .sb-attention { color: var(--warn); }
 .sb-attention:hover { color: var(--warn); }
+
+/* --- Storage usage: shown only when the backend can actually answer ---------- */
+.sb-usage { gap: 6px; }
+.usage-bar { width: 42px; height: 4px; background: var(--bg-input); border-radius: 2px; overflow: hidden; }
+.usage-fill { height: 100%; background: var(--text-dim); border-radius: 2px; transition: width .3s var(--ease); }
+.sb-usage.low .usage-fill { background: var(--warn); }
+.sb-usage.low { color: var(--warn); }
+.sb-usage.critical .usage-fill { background: var(--danger); }
+.sb-usage.critical { color: var(--danger); }

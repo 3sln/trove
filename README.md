@@ -236,6 +236,19 @@ fetched and handed to the browser as a blob rather than streamed — an `<a href
 can't carry an Authorization header, and putting the token in the URL would leak it
 into logs and history.
 
+### Running out of room
+
+A filesystem or NAS collection reports how much space is left — a gauge in the status
+bar, amber under 10% free and red under 5%. An S3 collection shows nothing at all,
+because an object store has no such number and a made-up meter is worse than none.
+
+When the disk does fill, the failure is specific rather than generic: **507
+Insufficient Storage**, not retryable, with a message that says what happened. (429
+would tell the client to back off and try again — which against a full disk is an
+infinite loop, since only a human can clear it.) The condition is also recorded as a
+standing issue, so the person who needs to fix it hears about it even if they weren't
+the one whose upload failed. Reads, search and downloads keep working throughout.
+
 ### Deleting
 
 Deleting moves an item to the **trash**: it leaves the drive — gone from listings,

@@ -37,6 +37,7 @@ export class NavigateAction extends AppAction {
         // What the COLLECTION holds, as against the page we were handed. Reporting the
         // page length would tell someone with 3,000 files that they have 500.
         stats: res.stats || null,
+        usage: res.usage || null,
         nextCursor: res.nextCursor || null,
       });
       // Remember where they were, so the next visit opens there rather than guessing.

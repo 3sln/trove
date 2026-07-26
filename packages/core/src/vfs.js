@@ -10,7 +10,7 @@
 // Grouping comes from items linking to each other with `trove:` URIs (see links.js)
 // and from search. An item is addressed by id, or by `?name=` within its collection.
 
-import { TroveError } from './errors.js';
+import { TroveError, isOutOfSpace } from './errors.js';
 import { UploadManager } from './uploads.js';
 import { IndexerRegistry } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
@@ -62,6 +62,50 @@ export class Vfs {
   async storageFor(collectionId = 'default') {
     if (this.collections) return this.collections.storageFor(collectionId);
     return this.storage;
+  }
+
+  /**
+   * How much room a collection's store has left, or null when it can't say.
+   *
+   * Also the place a full disk becomes a STANDING problem rather than one failed
+   * upload: running out of space is not a transient blip, it is a condition that will
+   * break every write until someone acts, and the person who needs to know may not be
+   * the one whose upload failed.
+   */
+  async storageUsage(collectionId = 'default') {
+    const storage = await this.storageFor(collectionId);
+    if (!storage.capabilities?.usage) return null;
+    const usage = await storage.usage().catch(() => null);
+    if (usage) await this.#reportSpace(collectionId, usage);
+    return usage;
+  }
+
+  /** Raise or clear the "running out of room" issue for a collection. */
+  async #reportSpace(collectionId, usage) {
+    if (!this.issues || !usage?.total) return;
+    const freeRatio = usage.available / usage.total;
+    const kind = 'storage-space';
+    try {
+      // Two thresholds, because "nearly full" and "full" need different words. Warning
+      // early is the whole point — by the time writes fail it is too late to be useful.
+      if (usage.available <= 0) {
+        await this.issues.raise({
+          kind, subject: collectionId, collectionId,
+          title: `“${collectionId}” has run out of storage — uploads will fail`,
+          detail: `${fmtBytes(usage.used)} used of ${fmtBytes(usage.total)}. Free some space or add capacity.`,
+        });
+      } else if (freeRatio < 0.05) {
+        await this.issues.raise({
+          kind, subject: collectionId, collectionId, severity: 'warning',
+          title: `“${collectionId}” is nearly out of storage — ${fmtBytes(usage.available)} left`,
+          detail: `${fmtBytes(usage.used)} used of ${fmtBytes(usage.total)} (${Math.round(freeRatio * 100)}% free).`,
+        });
+      } else {
+        await this.issues.clear(kind, collectionId);
+      }
+    } catch (err) {
+      console.error('could not record a storage-space issue:', err.message);
+    }
   }
 
   guessContentType(name) {
@@ -124,7 +168,16 @@ export class Vfs {
     const storageKey = `obj_${cryptoId()}`;
     const ct = contentType || this.guessContentType(name);
     const storage = await this.storageFor(collectionId);
-    const info = await storage.put(storageKey, body, { contentType: ct, signal });
+    let info;
+    try {
+      info = await storage.put(storageKey, body, { contentType: ct, signal });
+    } catch (err) {
+      // A write that failed for lack of room is a standing condition, not one bad
+      // request: the next upload will fail the same way. Record it so it is visible
+      // before someone else hits it, then let the original error surface unchanged.
+      if (isOutOfSpace(err)) await this.storageUsage(collectionId).catch(() => {});
+      throw err;
+    }
     const node = await this.#upsertItem({ collectionId, name, storageKey, size: info.size, contentType: ct, etag: info.etag });
     // Small server-side writes index synchronously (search is ready on return);
     // large client uploads (completeUpload) index in the background instead.
@@ -445,3 +498,12 @@ function cryptoId() {
 }
 
 export { CONTENT_TYPES };
+
+/** Bytes in the units a person reads, for messages that name a real quantity. */
+function fmtBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = Number(n) || 0;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}

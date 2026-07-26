@@ -194,7 +194,11 @@ export function createRouter() {
     // client can only report the page it happens to be holding, which on a drive with
     // more items than fit in a page is simply a wrong number on screen.
     const stats = await vfs.metadata.collectionStats?.(collectionId).catch(() => null) ?? null;
-    return { items, nextCursor, collectionId, stats };
+    // Space left on the backing store, when it can say. Null for object stores, which
+    // have no such number — and a UI that showed a made-up gauge for S3 would be worse
+    // than one that shows nothing.
+    const usage = await vfs.storageUsage(collectionId).catch(() => null);
+    return { items, nextCursor, collectionId, stats, usage };
   });
 
   // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.

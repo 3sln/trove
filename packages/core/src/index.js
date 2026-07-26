@@ -1,7 +1,7 @@
 // @trove/core — runtime-agnostic building blocks for a self-hostable drive.
 // Import the pieces directly, or use `createVfs` to wire a sensible default.
 
-export { TroveError, ErrorCode, wrapError, isRetryable } from './errors.js';
+export { TroveError, ErrorCode, wrapError, isRetryable, isOutOfSpace } from './errors.js';
 export { withRetry, withTimeout } from './retry.js';
 export * from './util.js';
 export * from './links.js';

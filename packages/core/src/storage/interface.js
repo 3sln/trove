@@ -28,6 +28,7 @@ export { concatBytes as concat };
  * @property {boolean} multipart       parallel multipart uploads
  * @property {boolean} range           byte-range GET
  * @property {boolean} list            can enumerate what the store actually holds
+ * @property {boolean} usage           can report how much space is left
  */
 
 /**
@@ -40,7 +41,7 @@ export { concatBytes as concat };
 export class StorageBackend {
   /** @type {StorageCapabilities} */
   get capabilities() {
-    return { presignDownload: false, presignUpload: false, multipart: false, range: false, list: false };
+    return { presignDownload: false, presignUpload: false, multipart: false, range: false, list: false, usage: false };
   }
 
   /**
@@ -92,6 +93,23 @@ export class StorageBackend {
    */
   async list(opts) {
     throw TroveError.unsupported('list not implemented');
+  }
+
+  /**
+   * How much room is left.
+   *
+   * Only some backends can answer. A filesystem or a NAS mount knows exactly, and that
+   * is the case where it matters most: a disk fills up and every upload starts failing
+   * with no warning that anything was coming. An object store has no such number — S3
+   * is effectively unbounded and a bucket quota, if any, lives outside the API — so it
+   * returns null rather than inventing one. `capabilities.usage` says which you're
+   * dealing with, so a UI can show a real gauge or say nothing at all instead of
+   * displaying a meter that means nothing.
+   *
+   * @returns {Promise<{used: number, available: number, total: number}|null>}
+   */
+  async usage() {
+    return null;
   }
 
   // --- Optional: presigned direct access (S3) --------------------------------

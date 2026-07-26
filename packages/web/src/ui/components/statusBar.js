@@ -62,6 +62,29 @@ function activityChips(state, ui) {
   return chips;
 }
 
+/**
+ * How full the disk is — but only when the backend actually knows.
+ *
+ * A filesystem or NAS can answer exactly, and that is where it matters: a disk fills
+ * up and every upload starts failing with no warning that anything was coming. An
+ * object store has no equivalent number, so this renders nothing at all rather than a
+ * meter that means nothing. The bar turns amber under 10% free and red under 5%, which
+ * is early enough to act on.
+ */
+function usageChip(ex) {
+  const u = ex.usage;
+  if (!u?.total) return null;
+  const freeRatio = u.available / u.total;
+  const pct = Math.min(100, Math.round((u.used / u.total) * 100));
+  const level = freeRatio < 0.05 ? 'critical' : freeRatio < 0.1 ? 'low' : '';
+  return span({
+    className: `seg sb-usage ${level}`,
+    title: `${bytes(u.used)} used of ${bytes(u.total)} — ${bytes(u.available)} free on this volume`,
+  },
+  div({ className: 'usage-bar' }, div({ className: 'usage-fill', $styling: { width: `${pct}%` } })),
+  span(`${bytes(u.available)} free`));
+}
+
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
@@ -103,6 +126,7 @@ export default function statusBar(state, ui) {
     ...activityChips(state, ui),
     ...right,
     span({ className: 'seg', title: 'Total size of this collection' }, bytes(totalBytes)),
+    usageChip(ex),
     caps ? span({ className: 'seg', title: 'Storage backend capabilities' },
       icon(caps.storage?.presignDownload ? 'download' : 'files', { size: 12 }),
       span(caps.storage?.presignDownload ? 'S3 direct' : 'proxied'),

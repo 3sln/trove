@@ -54,6 +54,11 @@ export class TroveError extends Error {
     this.retryable = opts.retryable ?? RETRYABLE.has(this.code);
     this.details = opts.details ?? null;
     this.status = HTTP_STATUS[this.code] ?? 500;
+    // QUOTA covers two different failures and they deserve different statuses. A rate
+    // limit is 429 — back off and try again. Being out of DISK is 507: retrying changes
+    // nothing, and telling a client to retry sends it into a loop against a condition
+    // only a human can clear. `retryable` is what tells them apart.
+    if (this.code === ErrorCode.QUOTA && !this.retryable) this.status = 507;
   }
 
   /** Shape sent over the wire and logged. Never leaks the raw cause. */
@@ -134,11 +139,30 @@ export function wrapError(err, fallbackMessage = 'Unexpected error') {
     case 'EACCES':
     case 'EPERM':
       return new TroveError(ErrorCode.FORBIDDEN, 'Permission denied', { cause: err });
+    // Out of room. NOT retryable, unlike the rate-limit sense of QUOTA that shares this
+    // code — retrying a full disk just burns the user's time to reach the same answer.
+    // The message is what someone can act on, rather than the kernel's phrasing.
     case 'ENOSPC':
-      return new TroveError(ErrorCode.QUOTA, 'No space left on device', { cause: err, retryable: false });
+      return new TroveError(ErrorCode.QUOTA, 'The storage volume is full — free some space and try again', { cause: err, retryable: false });
+    case 'EDQUOT':
+      return new TroveError(ErrorCode.QUOTA, 'The storage quota for this volume has been reached', { cause: err, retryable: false });
+    case 'EFBIG':
+      return new TroveError(ErrorCode.QUOTA, 'That file is larger than this filesystem can store', { cause: err, retryable: false });
   }
 
   return TroveError.internal(err?.message || fallbackMessage, { cause: err });
+}
+
+/**
+ * Did this fail because the store is out of room?
+ *
+ * QUOTA covers two different things — "no space left" and "you are being rate limited"
+ * — and only the first is a standing condition someone has to go and fix. Callers that
+ * want to raise a persistent, actionable problem need to tell them apart, and the
+ * distinguishing fact is that a full disk is not retryable.
+ */
+export function isOutOfSpace(err) {
+  return err instanceof TroveError && err.code === ErrorCode.QUOTA && err.retryable === false;
 }
 
 /** True if the thrown value should be retried. */

@@ -46,7 +46,7 @@ export class S3Storage extends StorageBackend {
   }
 
   get capabilities() {
-    return { presignDownload: true, presignUpload: true, multipart: true, range: true, list: true };
+    return { presignDownload: true, presignUpload: true, multipart: true, range: true, list: true, usage: false };
   }
 
   /**

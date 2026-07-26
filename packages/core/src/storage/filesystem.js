@@ -48,11 +48,42 @@ export class FilesystemStorage extends StorageBackend {
   }
 
   get capabilities() {
-    return { presignDownload: false, presignUpload: false, multipart: true, range: true, list: true };
+    return { presignDownload: false, presignUpload: false, multipart: true, range: true, list: true, usage: true };
   }
 
   async #ensureDir(dir) {
     await fs.mkdir(dir, { recursive: true });
+  }
+
+  /**
+   * Space on the filesystem holding this root.
+   *
+   * Reports the FILESYSTEM's numbers, not the drive's — if Trove shares a disk with
+   * everything else on the machine, "12 GB free" is the fact that actually governs
+   * whether the next upload succeeds, and reporting only Trove's own footprint would
+   * leave someone confident with a full disk. `bavail` (free to a non-root user), not
+   * `bfree`, for the same reason: the reserved blocks are not available to us.
+   */
+  async usage() {
+    // statfs needs a path that EXISTS, and the root is created lazily on first write —
+    // so asking before anything has been uploaded would report "unknown" on exactly the
+    // empty drive where someone is most likely to be checking. Walk up to the nearest
+    // existing ancestor; it is on the same filesystem, which is what we are measuring.
+    let dir = this.root;
+    for (let i = 0; i < 8; i++) {
+      try {
+        const st = await fs.statfs(dir);
+        const total = st.blocks * st.bsize;
+        const available = st.bavail * st.bsize;
+        return { total, available, used: total - available };
+      } catch (err) {
+        if (err?.code !== 'ENOENT') return null; // old runtime, exotic mount: don't guess
+        const parent = path.dirname(dir);
+        if (parent === dir) return null;
+        dir = parent;
+      }
+    }
+    return null;
   }
 
   /**
