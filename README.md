@@ -98,7 +98,11 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
   there too, scoped to the indexer that wrote them.
 - **Bring-your-own identity** — Trove ships no login. It verifies an identity JWT
   (Cloudflare Access / Zero Trust, oauth2-proxy, any IdP) via JWKS/RS256/ES256 —
-  or a proxy-set header — on Web Crypto, and builds a profile from the claims.
+  or a proxy-set header — on Web Crypto, and builds a profile from the claims. You
+  can also name the keys you trust directly (`TROVE_JWT_JWKS`), so a deployment that
+  mints its own tokens needs no JWKS endpoint. With no identity configured at all
+  there is one shared anonymous user and **no profile is shown** — an avatar for
+  somebody who doesn't exist implies an account there is no way to sign in to.
 - **Mention notifications over Web Push** — as conversations change, @mentions
   batch per user and flush on an interval as **bodyless VAPID web pushes**; the
   service worker wakes and pulls the inbox. No mention text ever touches a
@@ -198,6 +202,40 @@ warning). Before putting it on a network:
   default because sandboxed plugin iframes can't satisfy a strict one. The API
   still forces attachment downloads + `nosniff` to neutralize uploaded HTML/SVG.
 
+### Naming the keys you trust
+
+Three ways to say who a request is from, in the order most deployments reach for
+them:
+
+```sh
+# 1. A proxy already authenticated the user and set a header (Cloudflare Access,
+#    oauth2-proxy). The browser sends nothing; Trove trusts the header.
+TROVE_AUTH=header TROVE_AUTH_ID_HEADER=cf-access-authenticated-user-email
+
+# 2. An IdP publishes a JWKS you fetch.
+TROVE_AUTH=jwt TROVE_JWKS_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/certs \
+TROVE_JWT_ISSUER=... TROVE_JWT_AUDIENCE=...
+
+# 3. You mint your own tokens, so there is no JWKS endpoint to point at — name the
+#    keys directly. Inline JSON, or a file (which keeps a multi-line document out of
+#    the environment and out of `docker inspect`).
+TROVE_AUTH=jwt TROVE_JWT_JWKS_FILE=/run/secrets/trove-jwks.json \
+TROVE_JWT_ISSUER=https://you.example TROVE_JWT_AUDIENCE=trove
+```
+
+Always add `TROVE_AUTH_REQUIRED=true` so an unauthenticated request is rejected
+rather than treated as anonymous. `TROVE_JWT_ALGS` narrows the accepted algorithms
+(the default is inferred from the key material: `HS256` for a secret, `RS256`/`ES256`
+for a key set). A key set with more than one key requires a `kid` on the token —
+trying each key until one verifies would turn key rotation into key confusion.
+
+The **web client** presents a bearer token from `localStorage['trove.token']` when
+one is present. It isn't needed for the proxy-authenticated case (the browser's
+existing session covers it), and note that with a bearer token, downloads are
+fetched and handed to the browser as a blob rather than streamed — an `<a href>`
+can't carry an Authorization header, and putting the token in the URL would leak it
+into logs and history.
+
 ### Data & backups
 
 State lives in two places, both configurable and mounted as a volume in the
@@ -250,6 +288,37 @@ Transport is adaptive polling — 1 s while something is running, a minute when 
 There's no streaming transport in the server yet, and SSE through three runtime
 adapters isn't worth it to move a progress bar; only the poll would change if one
 ever exists.
+
+### Picking up changes made outside Trove
+
+Trove is not the only thing that can write to your bucket. Another tool, a teammate
+with the S3 console, a sync client, a lifecycle rule — any of them leaves the drive
+describing a world that no longer exists, and with no folders, "it isn't in the list"
+is indistinguishable from "it was never there".
+
+A **collection scan** reconciles the two, naming the four things an object can be:
+
+| | |
+|---|---|
+| known & unchanged | nothing to do |
+| in the store only | **adopted** — an item is created, named from its key |
+| changed in place | **refreshed** — re-read and re-indexed |
+| in metadata only | **orphaned** — reported, *never* deleted automatically |
+
+That last asymmetry is deliberate. Adopting a file is additive and reversible;
+removing an item because a LIST call didn't mention it is neither — and listing is
+exactly the operation that fails in interesting ways (a wrong prefix, a stale
+replica, a credential scoped elsewhere). Trove will invent an item from bytes it can
+see. It will not destroy a record because it briefly couldn't see any.
+
+```sh
+curl -X POST http://localhost:8787/api/collections/default/scan
+# or "Scan Collection for Outside Changes" in the palette
+```
+
+Set `TROVE_SCAN_INTERVAL_MS` to scan on a timer. Off by default: a scan lists every
+object in the bucket, which costs API calls on S3 and load on a NAS. Turn it on when
+something other than Trove writes to the same bucket.
 
 ### Reindexing
 
@@ -428,6 +497,7 @@ npm run test:browser --prefix packages/web      # web units in real Chromium (@w
 node packages/web/test/e2e.mjs                  # full workbench in headless Chromium
 node packages/web/test/plugins.e2e.mjs          # sandboxed plugin install, brokered network, offline availability
 node packages/web/test/offline.e2e.mjs          # service worker, pinning, offline queue + sync
+node packages/web/test/multiuser.e2e.mjs       # access boundaries across 4 users & 2 collections, API + UI
 node packages/web/test/probe/run-all.mjs        # error-path probes: broken openers, server faults, retry, uninstall failure, opener choice, activity/issues
 node packages/web/test/probe/walkthrough.mjs    # full in-browser user journey + screenshots (test/screens/)
 ```

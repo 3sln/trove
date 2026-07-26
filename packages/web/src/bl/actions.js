@@ -35,6 +35,8 @@ export class NavigateAction extends AppAction {
         items: res.items, loading: false, selection: [], sort, order,
         collectionId: res.collectionId || collectionId,
       });
+      // Remember where they were, so the next visit opens there rather than guessing.
+      platform.settings.set?.('explorer.lastCollection', collectionId);
       // Explorer→context projection (collectionId/hasSelection) lives in bl/index.js
       // so it stays in sync with selection too — nothing to mirror here.
     } catch (err) {
@@ -48,8 +50,50 @@ export class LoadCollectionsAction extends AppAction {
   async execute({ app }) {
     try {
       const res = await app.platform.api.collections();
-      app.explorer.set({ collections: res.collections || [], canCreateCollection: !!res.canCreate });
-    } catch { /* collections disabled */ }
+      const collections = res.collections || [];
+      app.explorer.set({ collections, canCreateCollection: !!res.canCreate });
+      return collections;
+    } catch { /* collections disabled */ return []; }
+  }
+}
+
+/**
+ * Open the drive the user should land on.
+ *
+ * NOT simply 'default'. On a multi-user deployment plenty of people have no access to
+ * the default collection at all, and starting there shows them a permission error
+ * instead of their own files — the drive appears broken to the exact users for whom it
+ * is working correctly. So: keep the last collection if it is still readable, otherwise
+ * take the first one they can actually see.
+ */
+export class OpenInitialCollectionAction extends AppAction {
+  async execute({ app }) {
+    // Calls the API directly rather than dispatching LoadCollectionsAction: ngin's
+    // dispatch() returns an event feed, not the action's value, so awaiting it would
+    // hand back an EventTarget and this would fail in a way nothing reports.
+    let collections = [];
+    try {
+      const res = await app.platform.api.collections();
+      collections = res.collections || [];
+      app.explorer.set({ collections, canCreateCollection: !!res.canCreate });
+    } catch (err) {
+      app.explorer.set({ loading: false, error: `Couldn't load your collections: ${err.message}` });
+      return;
+    }
+    const ids = collections.map((c) => c.id);
+    const remembered = app.platform.settings.get('explorer.lastCollection');
+    if (!ids.length) {
+      // A signed-in user with no grants at all. Say so; an empty file list with no
+      // explanation reads as "your drive is empty", which is a different and much worse
+      // thing to believe.
+      app.explorer.set({
+        loading: false, items: [], collections: [],
+        error: 'You do not have access to any collections yet. Ask an administrator to grant you one.',
+      });
+      return;
+    }
+    const target = ids.includes(remembered) ? remembered : (ids.includes('default') ? 'default' : ids[0]);
+    return app.engine.dispatch(new NavigateAction(target));
   }
 }
 

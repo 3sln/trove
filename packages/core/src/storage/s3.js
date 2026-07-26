@@ -46,7 +46,7 @@ export class S3Storage extends StorageBackend {
   }
 
   get capabilities() {
-    return { presignDownload: true, presignUpload: true, multipart: true, range: true };
+    return { presignDownload: true, presignUpload: true, multipart: true, range: true, list: true };
   }
 
   /**
@@ -143,6 +143,39 @@ export class S3Storage extends StorageBackend {
     if (!res.ok && res.status !== 404) throw await s3Error(res, 'delete');
   }
 
+  /**
+   * ListObjectsV2 — how a scan sees objects that reached the bucket without us.
+   *
+   * The bucket is shared infrastructure: another tool, another person, or a lifecycle
+   * rule can add and remove objects, and this is the only way to find out. Paged on S3's
+   * own continuation token rather than a key offset, because that is what the service
+   * guarantees is stable across a page boundary.
+   */
+  async list({ prefix = '', cursor = null, limit = 1000, signal } = {}) {
+    const query = { 'list-type': '2', 'max-keys': String(Math.min(limit, 1000)) };
+    if (prefix) query.prefix = prefix;
+    if (cursor) query['continuation-token'] = cursor;
+    // Bucket-level operation: the key is empty, the bucket is in the base URL.
+    const res = await this.#send('GET', '', { query, signal });
+    if (!res.ok) throw await s3Error(res, 'list');
+    const xml = await res.text();
+    const objects = [];
+    for (const entry of tagAll(xml, 'Contents')) {
+      const key = tag(entry, 'Key');
+      if (key == null) continue;
+      const modified = Date.parse(tag(entry, 'LastModified') || '');
+      objects.push({
+        key: decodeXml(key),
+        size: Number(tag(entry, 'Size') || 0),
+        etag: tag(entry, 'ETag') || undefined,
+        modifiedAt: Number.isNaN(modified) ? null : modified,
+      });
+    }
+    // Truncated is authoritative: an empty page can still have more behind it.
+    const truncated = tag(xml, 'IsTruncated') === 'true';
+    return { objects, nextCursor: truncated ? tag(xml, 'NextContinuationToken') : null };
+  }
+
   // --- presigning ------------------------------------------------------------
 
   async presignGet(key, opts = {}) {
@@ -232,6 +265,23 @@ function insertBucket(host, bucket) {
 function tag(xml, name) {
   const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(xml);
   return m ? m[1] : null;
+}
+
+/** Every occurrence of a repeated element (ListObjectsV2 returns one <Contents> per object). */
+function tagAll(xml, name) {
+  const out = [];
+  const re = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'g');
+  let m;
+  while ((m = re.exec(xml))) out.push(m[1]);
+  return out;
+}
+
+/** S3 XML-escapes keys; a key with & or < in it comes back encoded. */
+function decodeXml(s) {
+  return String(s)
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
 }
 
 function sanitizeFilename(name) {

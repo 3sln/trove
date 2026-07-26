@@ -251,6 +251,24 @@ export class ActivityService {
     }
   }
 
+  /**
+   * Reconcile a collection with its object store — the way a drive notices files added,
+   * replaced, or removed by anything that isn't Trove. Reports as a task, like a rebuild.
+   */
+  async scanCollection(collectionId) {
+    try {
+      const res = await this.api.scanCollection(collectionId);
+      await this.refreshTasks();
+      this.togglePanel(true);
+      if (res.alreadyRunning) this.platform.notifications?.info?.('A scan of this collection is already running');
+      this.#followUp();
+      return res;
+    } catch (err) {
+      this.platform.notifications?.error?.(`Couldn't scan “${collectionId}”: ${err.message}`);
+      throw err;
+    }
+  }
+
   togglePanel(open) {
     this.#set({ open: open ?? !this.state.open });
     if (this.state.open) this.refresh();

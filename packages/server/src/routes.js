@@ -127,7 +127,7 @@ export function createRouter() {
         conversations: !!sidecar,
         notifications: !!notifications,
         webPush: !!notifications?.vapidPublicKey(),
-        auth: !!principal,
+        auth: !!principal && !principal.anonymous,
       },
       principal: principal || null,
       search: vfs.search ? vfs.search.describe() : null,
@@ -462,11 +462,26 @@ export function createRouter() {
     return { task: ctx.tasks.list().find((t) => t.kind === 'index' && t.status === 'running') || null };
   });
 
+  // Reconcile a collection against the bytes actually in its store — how files added,
+  // replaced, or removed by anything other than Trove get noticed. Needs `write` on the
+  // collection, because a scan can create items in it.
+  r.post('/api/collections/:id/scan', async (ctx) => {
+    await assertCap(ctx, ctx.params.id, 'write');
+    if (!ctx.startScan) throw TroveError.unsupported('Scanning is not available on this deployment');
+    const running = ctx.tasks.list().find((t) => t.kind === 'scan' && t.collectionId === ctx.params.id && t.status === 'running');
+    if (running) return { task: running, alreadyRunning: true };
+    ctx.startScan(ctx.params.id, { reason: 'Started manually' }).catch(() => {});
+    return { task: ctx.tasks.list().find((t) => t.kind === 'scan' && t.collectionId === ctx.params.id && t.status === 'running') || null };
+  });
+
   // --- identity --------------------------------------------------------------
 
   r.get('/api/me', ({ principal, collections }) => ({
     principal: principal || null,
-    authenticated: !!principal,
+    // Authenticated means SOMEONE signed in — not merely that a principal object
+    // exists. The shared anonymous user is a stand-in for "no identity configured", and
+    // reporting it as authenticated would have the client show a profile for nobody.
+    authenticated: !!principal && !principal.anonymous,
     admin: collections ? collections.isAdmin(principal) : !!principal,
   }));
 

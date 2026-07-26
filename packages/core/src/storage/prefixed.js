@@ -15,8 +15,18 @@ export class PrefixedStorage extends StorageBackend {
   #k(key) {
     return this.prefix + key;
   }
+  #strip(key) {
+    return this.prefix && key.startsWith(this.prefix) ? key.slice(this.prefix.length) : key;
+  }
   get capabilities() {
     return this.inner.capabilities;
+  }
+  async list(opts = {}) {
+    // The prefix is this wrapper's whole job, so listing has to add it on the way in
+    // and strip it on the way out — a caller must never see the wrapper's own prefix
+    // and try to store it as a key.
+    const res = await this.inner.list({ ...opts, prefix: this.#k(opts.prefix || '') });
+    return { ...res, objects: res.objects.map((o) => ({ ...o, key: this.#strip(o.key) })) };
   }
   put(key, body, opts) {
     return this.inner.put(this.#k(key), body, opts);

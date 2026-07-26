@@ -24,13 +24,28 @@ export class MemoryStorage extends StorageBackend {
   }
 
   get capabilities() {
-    return { presignDownload: false, presignUpload: false, multipart: true, range: true };
+    return { presignDownload: false, presignUpload: false, multipart: true, range: true, list: true };
+  }
+
+  async list({ prefix = '', cursor = null, limit = 1000 } = {}) {
+    // Sorted so the cursor (the last key returned) is a stable resume point.
+    const keys = [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+    const start = cursor ? keys.findIndex((k) => k > cursor) : 0;
+    const from = start === -1 ? keys.length : start;
+    const page = keys.slice(from, from + limit);
+    return {
+      objects: page.map((key) => {
+        const o = this.objects.get(key);
+        return { key, size: o.bytes.length, etag: o.etag, modifiedAt: o.modifiedAt ?? null };
+      }),
+      nextCursor: from + limit < keys.length ? page[page.length - 1] : null,
+    };
   }
 
   async put(key, body, opts = {}) {
     const bytes = await toBytes(body);
     if (opts.signal?.aborted) throw TroveError.aborted();
-    const rec = { bytes, contentType: opts.contentType, etag: etagOf(bytes) };
+    const rec = { bytes, contentType: opts.contentType, etag: etagOf(bytes), modifiedAt: Date.now() };
     this.objects.set(key, rec);
     opts.onProgress?.(bytes.length);
     return { size: bytes.length, contentType: rec.contentType, etag: rec.etag };
@@ -92,7 +107,7 @@ export class MemoryStorage extends StorageBackend {
       return b;
     });
     const bytes = concat(chunks);
-    const rec = { bytes, contentType: up.contentType, etag: etagOf(bytes) };
+    const rec = { bytes, contentType: up.contentType, etag: etagOf(bytes), modifiedAt: Date.now() };
     this.objects.set(key, rec);
     this.uploads.delete(uploadId);
     return { size: bytes.length, etag: rec.etag };

@@ -258,6 +258,29 @@ export async function createServer(config = {}) {
   // way. The issue is not cleared here — it is cleared by the indexing that succeeds,
   // so a retry can't report success over a problem that is still there.
   issues.handle('reindex-all', () => startReindex({ reason: 'Retrying after a failed scan' }));
+  // Reconcile a collection against what its store actually holds. Same three callers as
+  // the reindex — scheduled, manual, and issue retry — through one verb.
+  const startScan = (collectionId = 'default', { reason } = {}) => tasks.run(
+    {
+      kind: 'scan',
+      title: `Scanning “${collectionId}” for outside changes`,
+      detail: reason || null,
+      unit: 'objects',
+      collectionId,
+      cancellable: true,
+    },
+    async (task) => vfs.scanCollection(collectionId, {
+      shouldStop: () => closing || task.cancelled,
+      // The store can't say how many objects it holds without listing them, so this is
+      // honestly indeterminate: a count that rises, with no total to divide it by.
+      onProgress: ({ scanned, adopted, refreshed }) => task.progress({
+        done: scanned,
+        detail: adopted || refreshed ? `${adopted} new, ${refreshed} changed` : null,
+      }),
+    }),
+  );
+  issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
+
   issues.handle('reindex-node', (issue) => tasks.run(
     // Carries the issue's collection, so the person who can see the file can also see
     // the task fixing it — a task nobody is allowed to watch is not a task worth having.
@@ -310,6 +333,26 @@ export async function createServer(config = {}) {
     maintenance.unref?.();
   }
 
+  // Periodic reconciliation with the store. OFF by default (TROVE_SCAN_INTERVAL_MS):
+  // a scan lists every object in the bucket, which on a large drive is real money on a
+  // metered API and real load on a NAS. A deployment that shares its bucket with other
+  // tools wants this on; one where Trove is the only writer doesn't need it at all, and
+  // can scan on demand instead.
+  let scanTimer = null;
+  if (config.startFlusher !== false && config.scanIntervalMs) {
+    scanTimer = setInterval(() => {
+      if (tasks.list().some((t) => t.kind === 'scan' && t.status === 'running')) return; // still going
+      Promise.resolve(collections ? collections.list(null).catch(() => []) : [{ id: 'default' }])
+        .then(async (list) => {
+          for (const c of list.length ? list : [{ id: 'default' }]) {
+            await startScan(c.id, { reason: 'Scheduled' }).catch(() => {});
+          }
+        })
+        .catch((e) => console.error('scheduled scan failed', e));
+    }, config.scanIntervalMs);
+    scanTimer.unref?.();
+  }
+
   const router = createRouter();
 
   async function handle(req) {
@@ -324,7 +367,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -342,11 +385,12 @@ export async function createServer(config = {}) {
     await indexRebuild?.catch(() => {});
     notifications.stop();
     if (maintenance) clearInterval(maintenance);
+    if (scanTimer) clearInterval(scanTimer);
     await sidecar.dispose?.();
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, close };
 }
 
 /**
@@ -421,6 +465,30 @@ function hardenAsset(res, config = {}) {
   res.headers.set('referrer-policy', 'no-referrer');
   if (typeof config.csp === 'string') res.headers.set('content-security-policy', config.csp);
   return res;
+}
+
+/**
+ * Parse a JWKS supplied inline as JSON.
+ *
+ * Inline only, because this module has to load unchanged on Cloudflare Workers, where
+ * there is no filesystem to read a path from. Reading a KEY FILE is a Node/Bun concern
+ * and lives in those adapters (TROVE_JWT_JWKS_FILE), which set this var before calling.
+ *
+ * A bad value throws at STARTUP rather than on the first request: a server that boots
+ * with unreadable key material would authenticate nobody while looking perfectly
+ * healthy, and would only admit it when someone tried to sign in.
+ */
+function parseJwks(value) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || (!Array.isArray(parsed) && !Array.isArray(parsed.keys))) {
+      throw new Error('expected a JWKS document ({ keys: [...] }) or a bare array of JWKs');
+    }
+    return parsed;
+  } catch (err) {
+    throw TroveError.invalid(`TROVE_JWT_JWKS is not a usable key set: ${err.message}`);
+  }
 }
 
 /** Map process.env → createServer config. */
@@ -498,9 +566,19 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   if (config.identity.driver === 'jwt') {
     config.identity.jwt = {
       jwksUrl: env.TROVE_JWKS_URL, // e.g. https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
+      // The keychain: the keys this deployment trusts, named directly. A JWKS URL
+      // assumes someone is running an endpoint to serve one, which a deployment that
+      // mints its own tokens has no reason to do. Accepts inline JSON or a path to a
+      // file — the file form keeps a multi-line document out of the environment, and
+      // out of `docker inspect`.
+      jwks: parseJwks(env.TROVE_JWT_JWKS),
       issuer: env.TROVE_JWT_ISSUER,
       audience: env.TROVE_JWT_AUDIENCE, // the Access application AUD
       secret: env.TROVE_JWT_SECRET, // HS256 dev only
+      // Explicit allowlist. Without one, verifyJwt infers it from the key material
+      // (HS256 for a secret, RS256/ES256 for a key set), which is the safe default —
+      // set this only to narrow it further.
+      algorithms: env.TROVE_JWT_ALGS ? env.TROVE_JWT_ALGS.split(',').map((a) => a.trim()).filter(Boolean) : undefined,
       required: env.TROVE_AUTH_REQUIRED === 'true',
     };
   } else if (config.identity.driver === 'header') {
@@ -530,6 +608,11 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   config.creatorRoles = (env.TROVE_COLLECTION_CREATOR_ROLES || '').split(',').map((s) => s.trim()).filter(Boolean);
   // 'default' collection grants everyone all caps unless locked down.
   config.defaultOpen = env.TROVE_DEFAULT_OPEN !== 'false';
+
+  // Reconcile with the object store on a timer. Off unless set: a scan lists the whole
+  // bucket, which costs API calls and load. Turn it on when something other than Trove
+  // writes to the same bucket.
+  if (env.TROVE_SCAN_INTERVAL_MS) config.scanIntervalMs = Number(env.TROVE_SCAN_INTERVAL_MS);
 
   // Per-file upload quota (bytes). Unbounded unless set.
   if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);

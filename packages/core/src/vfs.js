@@ -17,6 +17,7 @@ import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.
 import { extname } from './util.js';
 import { IndexingCoordinator } from './indexing.js';
 import { parseTroveUri, troveUrisFor } from './links.js';
+import { CollectionScanner } from './scan.js';
 
 const CONTENT_TYPES = {
   '.txt': 'text/plain', '.md': 'text/markdown', '.html': 'text/html', '.css': 'text/css',
@@ -334,6 +335,15 @@ export class Vfs {
   purgeIndexer(contributorId, opts) { return this.indexing.purgeIndexer(contributorId, opts); }
   reindexAll(opts) { return this.indexing.reindexAll(opts); }
   reindexNode(nodeId) { return this.indexing.reindexNode(nodeId); }
+
+  /**
+   * Reconcile a collection against the bytes actually in its store — what picks up
+   * files added, replaced, or removed by anything that isn't Trove. See scan.js.
+   */
+  scanCollection(collectionId, opts) {
+    this._scanner ||= new CollectionScanner({ vfs: this, issues: this.issues });
+    return this._scanner.scan(collectionId, opts);
+  }
 }
 
 function cryptoId() {

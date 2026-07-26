@@ -7,7 +7,7 @@
 import { dd } from './runtime.js';
 import { createPlatform } from './platform/index.js';
 import { createApp } from './bl/index.js';
-import { NavigateAction, UploadFilesAction } from './bl/actions.js';
+import { NavigateAction, UploadFilesAction, OpenInitialCollectionAction } from './bl/actions.js';
 import { parsePackage } from './platform/pluginPackage.js';
 import workbenchComposition from './ui/compositions/workbench.js';
 import { registerBuiltinOpeners } from './ui/components/openers/index.js';
@@ -95,7 +95,8 @@ window.addEventListener('drop', (e) => {
   } catch (err) {
     platform.notifications.error(`Cannot reach the Trove server: ${err.message}`);
   }
-  engine.dispatch(new NavigateAction());
+  // Land on a collection the user can actually read — see OpenInitialCollectionAction.
+  engine.dispatch(new OpenInitialCollectionAction());
 })();
 
 // Expose for debugging / e2e.

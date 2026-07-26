@@ -207,3 +207,38 @@ test.if(available)('a download name becomes a Content-Disposition on the presign
   expect(decodeURIComponent(new URL(url).search)).toContain('attachment; filename="Q3 report.pdf"');
   await s3.delete(key);
 });
+
+test.if(available)('listing shows objects that arrived without us', async () => {
+  // The one operation that asks the store what it HAS rather than addressing a key we
+  // already know. Everything the external-change scan does rests on this.
+  const prefix = `list_${Math.random().toString(36).slice(2, 8)}/`;
+  for (const n of ['a.txt', 'b.txt', 'nested/c.txt']) {
+    await s3.put(prefix + n, 'x', { contentType: 'text/plain' });
+  }
+  const { objects, nextCursor } = await s3.list({ prefix });
+  expect(objects.map((o) => o.key).sort()).toEqual([`${prefix}a.txt`, `${prefix}b.txt`, `${prefix}nested/c.txt`]);
+  expect(objects[0].size).toBe(1);
+  expect(objects[0].etag).toBeTruthy();
+  expect(nextCursor).toBe(null); // not truncated
+  for (const o of objects) await s3.delete(o.key);
+});
+
+// Truncated listing needs a continuation token, and s3rver mints those with a legacy
+// cipher OpenSSL 3 refuses (ERR_OSSL_EVP_UNSUPPORTED) — it 500s before it can answer.
+// That is the mock's limitation, not ours: the request is correct and s3rver logs that
+// it parsed max-keys and found the objects. Real servers page fine, so the assertion
+// runs there. Left in rather than dropped, because "a real bucket does not fit in one
+// page" is the property that matters most in this file.
+test.if(available && EXTERNAL)('listing pages rather than returning a whole bucket', async () => {
+  const prefix = `page_${Math.random().toString(36).slice(2, 8)}/`;
+  for (let i = 0; i < 5; i++) await s3.put(`${prefix}f${i}.txt`, 'x', { contentType: 'text/plain' });
+  const first = await s3.list({ prefix, limit: 2 });
+  expect(first.objects).toHaveLength(2);
+  expect(first.nextCursor).toBeTruthy();
+  const second = await s3.list({ prefix, limit: 2, cursor: first.nextCursor });
+  expect(second.objects).toHaveLength(2);
+  // Pages must not overlap, or a scan would process the same object twice.
+  const keys = new Set([...first.objects, ...second.objects].map((o) => o.key));
+  expect(keys.size).toBe(4);
+  for (let i = 0; i < 5; i++) await s3.delete(`${prefix}f${i}.txt`);
+});

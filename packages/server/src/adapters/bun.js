@@ -10,8 +10,17 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
+
+// A JWKS held in a file rather than inlined in the environment: multi-line JSON is
+// awkward in env vars and shows up in `docker inspect`, while a mounted secret file
+// does not. Read here rather than in configFromEnv, which has to stay loadable on
+// Workers where there is no filesystem.
+if (process.env.TROVE_JWT_JWKS_FILE && !process.env.TROVE_JWT_JWKS) {
+  process.env.TROVE_JWT_JWKS = readFileSync(process.env.TROVE_JWT_JWKS_FILE, 'utf8');
+}
+
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';

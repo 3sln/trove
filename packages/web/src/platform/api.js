@@ -17,9 +17,28 @@ import { withRetry } from '@trove/core/retry.js';
 import { TroveError } from '@trove/core/errors.js';
 
 export class TroveApiClient {
-  constructor({ baseUrl = '', fetch: f = globalThis.fetch.bind(globalThis) } = {}) {
+  /**
+   * @param {{baseUrl?: string, fetch?: Function, token?: string|(() => string|null)}} [opts]
+   *   `token` is a bearer JWT, or a function returning one. Optional because the common
+   *   deployment puts an authenticating proxy in front (Cloudflare Access sets its own
+   *   header and the browser sends nothing) — but a deployment where the user HOLDS a
+   *   token has no way to present it otherwise, which is why this exists.
+   */
+  constructor({ baseUrl = '', fetch: f = globalThis.fetch.bind(globalThis), token = null } = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this._fetch = f;
+    this._token = token;
+  }
+
+  /** The bearer token to present, if any. Read per request so a refresh takes effect. */
+  token() {
+    const t = typeof this._token === 'function' ? this._token() : this._token;
+    return t || null;
+  }
+  /** Auth headers for a request, or nothing at all when there is no token to send. */
+  authHeaders() {
+    const t = this.token();
+    return t ? { authorization: `Bearer ${t}` } : {};
   }
 
   async request(method, path, { body, query, signal, raw } = {}) {
@@ -28,7 +47,7 @@ export class TroveApiClient {
       async () => {
         const res = await this._fetch(url, {
           method,
-          headers: body ? { 'content-type': 'application/json' } : undefined,
+          headers: { ...this.authHeaders(), ...(body ? { 'content-type': 'application/json' } : {}) },
           body: body ? JSON.stringify(body) : undefined,
           signal,
         });
@@ -68,7 +87,7 @@ export class TroveApiClient {
   async reachable(timeoutMs = 4000) {
     try {
       const signal = AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined;
-      const res = await this._fetch(this.baseUrl + '/api/capabilities', { method: 'GET', signal });
+      const res = await this._fetch(this.baseUrl + '/api/capabilities', { method: 'GET', signal, headers: this.authHeaders() });
       return res.ok;
     } catch { return false; }
   }
@@ -132,12 +151,16 @@ export class TroveApiClient {
   reindex() {
     return this.request('POST', '/api/reindex');
   }
+  /** Reconcile a collection against its object store (changes made outside Trove). */
+  scanCollection(id) {
+    return this.request('POST', `/api/collections/${encodeURIComponent(id)}/scan`);
+  }
 
   // --- server plugin installs (account-scoped, synced across devices) ---------
   /** Upload a package zip for account install; returns the server install record. */
   async installPlugin(bytes, grants) {
     const q = grants && grants.length ? '?grants=' + encodeURIComponent(grants.join(',')) : '';
-    const res = await this._fetch(this.baseUrl + '/api/plugins/install' + q, { method: 'POST', body: bytes });
+    const res = await this._fetch(this.baseUrl + '/api/plugins/install' + q, { method: 'POST', body: bytes, headers: this.authHeaders() });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
       const e = json?.error || { code: 'internal', message: `Install failed (${res.status})` };
@@ -149,7 +172,7 @@ export class TroveApiClient {
     return this.request('GET', '/api/plugins/installed');
   }
   async pluginPackage(id) {
-    const res = await this._fetch(`${this.baseUrl}/api/plugins/${encodeURIComponent(id)}/package`);
+    const res = await this._fetch(`${this.baseUrl}/api/plugins/${encodeURIComponent(id)}/package`, { headers: this.authHeaders() });
     if (!res.ok) throw new TroveError('not_found', `Package for "${id}" not found`);
     return new Uint8Array(await res.arrayBuffer());
   }
@@ -216,9 +239,31 @@ export class TroveApiClient {
     return `${this.baseUrl}/api/items/download?id=${encodeURIComponent(id)}${attachment ? '&disposition=attachment' : ''}`;
   }
 
+  /**
+   * Start a download in the browser.
+   *
+   * With no bearer token this is a plain navigation to the download URL — the browser
+   * streams it, handles Range, and never buffers a 4 GB file in a tab. When a token IS
+   * in play that isn't possible: an `<a href>` cannot carry an Authorization header, so
+   * the navigation would arrive unauthenticated and 401. Rather than move the token into
+   * the query string (where it lands in logs, history, and referrers), fetch the bytes
+   * with the header and hand the browser a blob.
+   *
+   * The cost is honest and worth stating: the blob path holds the file in memory. It is
+   * the price of bearer auth without a token-bearing URL, and it does not apply to the
+   * common proxy-authenticated deployment, which takes the streaming path.
+   */
+  async download(id, name, { attachment = true } = {}) {
+    const url = this.downloadUrl(id, { attachment });
+    if (!this.token()) return { url, streamed: true };
+    const res = await this._fetch(url, { headers: this.authHeaders() });
+    if (!res.ok) throw new TroveError('internal', `Download failed (${res.status})`);
+    return { url: URL.createObjectURL(await res.blob()), streamed: false, revoke: true };
+  }
+
   /** Read a whole file as text/bytes (small files, indexers). */
   async readBytes(id, { signal } = {}) {
-    const res = await this._fetch(this.downloadUrl(id), { signal });
+    const res = await this._fetch(this.downloadUrl(id), { signal, headers: this.authHeaders() });
     if (!res.ok) throw new TroveError('internal', `Download failed (${res.status})`);
     return new Uint8Array(await res.arrayBuffer());
   }
@@ -260,7 +305,10 @@ export class TroveApiClient {
     }
     if (plan.strategy === 'direct-single') {
       await xhrPut(this.baseUrl + this.#partUrl(plan, 1), file, {
-        headers: t.authHeaders, signal: opts.signal, onProgress: (l) => progress.set(1, l),
+        // Our own server, so it needs our bearer token; `t.authHeaders` lets the plan
+        // add its own and wins on a clash.
+        headers: { ...this.authHeaders(), ...t.authHeaders },
+        signal: opts.signal, onProgress: (l) => progress.set(1, l),
       });
       const done = await this.request('POST', completeUrl, { body: {}, signal: opts.signal });
       return done.node;
@@ -354,7 +402,8 @@ export class TroveApiClient {
     }
     // proxied: server records the etag; response body has it.
     const res = await xhrPut(this.baseUrl + this.#partUrl(plan, n), blob, {
-      headers: t.authHeaders, signal, onProgress, wantJson: true,
+      headers: { ...this.authHeaders(), ...t.authHeaders },
+      signal, onProgress, wantJson: true,
     });
     return res.json?.etag;
   }

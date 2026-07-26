@@ -12,7 +12,7 @@
 // A Principal: { id, email?, name?, picture?, roles?, claims }.
 
 import { TroveError } from '../errors.js';
-import { verifyJwt, JwksClient } from './jwt.js';
+import { verifyJwt, JwksClient, StaticJwks } from './jwt.js';
 
 export class IdentityProvider {
   /** @returns {Promise<Principal|null>} */
@@ -47,6 +47,9 @@ export class JwtIdentityProvider extends IdentityProvider {
   /**
    * @param {object} cfg
    * @param {string} [cfg.jwksUrl]  e.g. https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
+   * @param {object|object[]} [cfg.jwks]  a JWKS document (or bare JWK array) to trust
+   *   directly — the keychain for a deployment that mints its own tokens and has no
+   *   JWKS endpoint to point at. Takes precedence over `jwksUrl`.
    * @param {string|Uint8Array} [cfg.secret]  for HS256 (dev)
    * @param {string} [cfg.issuer]
    * @param {string|string[]} [cfg.audience]  the Access application AUD
@@ -56,7 +59,11 @@ export class JwtIdentityProvider extends IdentityProvider {
   constructor(cfg = {}) {
     super();
     this.cfg = cfg;
-    this.jwks = cfg.jwksUrl ? new JwksClient(cfg.jwksUrl, { fetch: cfg.fetch }) : null;
+    // A held key set beats a fetched one: if you named the keys explicitly, that is the
+    // stronger statement of intent, and it can't fail because a network hop did.
+    this.jwks = cfg.jwks ? new StaticJwks(cfg.jwks)
+      : cfg.jwksUrl ? new JwksClient(cfg.jwksUrl, { fetch: cfg.fetch })
+        : null;
     this.getToken = cfg.getToken || bearer;
   }
   async authenticate(request) {
@@ -65,11 +72,22 @@ export class JwtIdentityProvider extends IdentityProvider {
       if (this.cfg.required) throw TroveError.unauthorized('Authentication required');
       return null;
     }
-    const claims = await verifyJwt(token, {
-      jwks: this.jwks, secret: this.cfg.secret,
-      issuer: this.cfg.issuer, audience: this.cfg.audience,
-      algorithms: this.cfg.algorithms, now: this.cfg.now,
-    });
+    let claims;
+    try {
+      claims = await verifyJwt(token, {
+        jwks: this.jwks, secret: this.cfg.secret,
+        issuer: this.cfg.issuer, audience: this.cfg.audience,
+        algorithms: this.cfg.algorithms, now: this.cfg.now,
+      });
+    } catch (err) {
+      // A credential we can't parse is an AUTHENTICATION failure, not a malformed
+      // request: `decodeJwt` reports a garbled token as `invalid` (400), which tells a
+      // client "you sent a bad request" when the truth is "sign in again". A transient
+      // failure (the JWKS endpoint being down) is left alone — that is not the user's
+      // token being wrong, and retrying is the right response to it.
+      if (err?.code === 'transient') throw err;
+      throw TroveError.unauthorized(err?.message || 'Authentication failed', { cause: err });
+    }
     const principal = principalFromClaims(claims);
     if (!principal) throw TroveError.unauthorized('JWT has no subject');
     return principal;
@@ -98,7 +116,11 @@ export class HeaderIdentityProvider extends IdentityProvider {
 export class AnonymousIdentityProvider extends IdentityProvider {
   constructor({ id = 'anonymous', name = 'Anonymous' } = {}) {
     super();
-    this.principal = { id, email: null, name, picture: null, roles: [], claims: {} };
+    // `anonymous: true` is what lets everything downstream tell "one shared unnamed
+    // user" apart from "a person who signed in". Without it the shape is identical to a
+    // real principal, and the UI ends up showing a profile for somebody who doesn't
+    // exist — an avatar, a name, a menu, all describing nobody.
+    this.principal = { id, email: null, name, picture: null, roles: [], anonymous: true, claims: {} };
   }
   async authenticate() {
     return this.principal;

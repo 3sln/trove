@@ -16,6 +16,26 @@ import { TroveApiClient } from './api.js';
 import { PluginHost } from './pluginHost.js';
 import { WorkbenchService } from './workbench.js';
 
+/**
+ * The bearer token for this browser, if any.
+ *
+ * `localStorage` rather than a cookie because the token is presented as an
+ * Authorization header, not sent ambiently — which is what makes CSRF a non-issue here.
+ * Wrapped in try/catch because storage access throws outright in some privacy modes,
+ * and a drive that white-screens because it couldn't read a key that is usually absent
+ * would be a poor trade.
+ */
+export function readToken() {
+  try { return localStorage.getItem('trove.token') || null; } catch { return null; }
+}
+/** Store (or clear, with null) the bearer token this browser presents. */
+export function writeToken(token) {
+  try {
+    if (token) localStorage.setItem('trove.token', token);
+    else localStorage.removeItem('trove.token');
+  } catch { /* storage unavailable; the session is simply not persisted */ }
+}
+
 export function createPlatform({ baseUrl = '' } = {}) {
   const contributions = new ContributionRegistry();
   const context = new ContextKeyService({ 'view.active': 'explorer', 'sidebar.visible': true });
@@ -23,7 +43,11 @@ export function createPlatform({ baseUrl = '' } = {}) {
   const commands = new CommandService(contributions, context, notifications);
   const settings = new SettingsService();
   const keybindings = new KeybindingService(contributions, commands, context, settings);
-  const api = new TroveApiClient({ baseUrl });
+  // A bearer token, when this deployment uses one. Most don't: an authenticating proxy
+  // (Cloudflare Access, oauth2-proxy) sets its own header and the browser sends nothing.
+  // But a deployment where the user HOLDS a token has no other way to present it, and
+  // reading it here — once, from one place — keeps that out of every call site.
+  const api = new TroveApiClient({ baseUrl, token: () => readToken() });
   const workbench = new WorkbenchService(context);
 
   const platform = {

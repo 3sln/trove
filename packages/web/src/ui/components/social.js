@@ -16,7 +16,10 @@ const REACTIONS = ['👍', '❤️', '🎉', '👀', '🚀'];
 
 export function principalChip(state) {
   const me = state.so.me;
-  if (!me) return null;
+  // No identity, no profile. On a deployment with no login the server hands back a
+  // shared anonymous stand-in; rendering an avatar and a name for it would describe a
+  // user who does not exist, and imply an account there is no way to sign in or out of.
+  if (!me || me.anonymous) return null;
   const initial = (me.name || me.id || '?')[0].toUpperCase();
   return div({ className: 'principal', title: me.email || me.name || me.id },
     me.picture ? dd.img({ src: me.picture, alt: '', className: 'avatar-img' }) : span({ className: 'avatar-txt' }, initial),

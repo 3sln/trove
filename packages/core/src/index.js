@@ -35,6 +35,8 @@ export { IndexingCoordinator } from './indexing.js';
 // Work in flight (ephemeral) and standing problems (durable) — see the header of each.
 export { TaskRegistry } from './tasks.js';
 export { IssueRegistry, issueId } from './issues.js';
+// Reconcile a collection against what its store actually holds (changes made outside Trove).
+export { CollectionScanner } from './scan.js';
 export { normalizeContribution, clampContribution, clampTagValue, DEFAULT_CAPS } from './indexers/contribution.js';
 
 // Cloudflare Vectorize — first-class pluggable vector DB.
@@ -49,7 +51,7 @@ export {
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider,
   AnonymousIdentityProvider, principalFromClaims,
 } from './identity/index.js';
-export { verifyJwt, decodeJwt, JwksClient } from './identity/jwt.js';
+export { verifyJwt, decodeJwt, JwksClient, StaticJwks } from './identity/jwt.js';
 
 // Sidecar documents: conversations, tags, indexer facets (CRDT, cold-in-S3).
 export { SidecarService, SidecarStore, SidecarManager } from './sidecar/index.js';

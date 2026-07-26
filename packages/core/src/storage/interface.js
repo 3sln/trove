@@ -27,6 +27,7 @@ export { concatBytes as concat };
  * @property {boolean} presignUpload   single-shot PUT via signed URL
  * @property {boolean} multipart       parallel multipart uploads
  * @property {boolean} range           byte-range GET
+ * @property {boolean} list            can enumerate what the store actually holds
  */
 
 /**
@@ -39,7 +40,7 @@ export { concatBytes as concat };
 export class StorageBackend {
   /** @type {StorageCapabilities} */
   get capabilities() {
-    return { presignDownload: false, presignUpload: false, multipart: false, range: false };
+    return { presignDownload: false, presignUpload: false, multipart: false, range: false, list: false };
   }
 
   /**
@@ -71,6 +72,26 @@ export class StorageBackend {
   /** @param {{signal?: AbortSignal}} [opts] */
   async delete(key, opts) {
     throw TroveError.unsupported('delete not implemented');
+  }
+
+  /**
+   * Page through the objects actually present in the store.
+   *
+   * Everything else here addresses a key the caller already knows. This is the one
+   * operation that asks the store what it HAS — which is what makes it possible to
+   * notice things that happened without Trove: a file dropped in the bucket by
+   * another tool, an object deleted out from under an item, bytes replaced in place.
+   * Without it the drive can only ever know what it did itself.
+   *
+   * Paged with an opaque cursor rather than returning everything, because a real
+   * bucket does not fit in memory. `capabilities.list` says whether a backend can
+   * answer at all.
+   *
+   * @param {{prefix?: string, cursor?: string|null, limit?: number, signal?: AbortSignal}} [opts]
+   * @returns {Promise<{objects: Array<{key: string, size: number, etag?: string, modifiedAt?: number}>, nextCursor: string|null}>}
+   */
+  async list(opts) {
+    throw TroveError.unsupported('list not implemented');
   }
 
   // --- Optional: presigned direct access (S3) --------------------------------

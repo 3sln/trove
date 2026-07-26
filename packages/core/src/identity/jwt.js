@@ -79,6 +79,34 @@ export class JwksClient {
   }
 }
 
+/**
+ * A fixed set of trusted keys — a JWKS you hold rather than one you fetch.
+ *
+ * Same interface as JwksClient, so `verifyJwt` can't tell them apart. It exists because
+ * a JWKS URL assumes someone is running an endpoint to serve it, and plenty of
+ * deployments simply mint their own tokens: a small team, a script, a gateway that
+ * signs with a key you already have. Pointing those at a URL means standing up an HTTP
+ * server whose entire job is to hand back a JSON document you could have pasted in.
+ *
+ * A token whose `kid` isn't in the set is refused. A set with exactly one key accepts a
+ * token with no `kid` at all, since there is no ambiguity about which key was meant —
+ * but with several, an unlabelled token is rejected rather than tried against each,
+ * because "try every key until one verifies" turns key rotation into key confusion.
+ */
+export class StaticJwks {
+  /** @param {{keys: object[]}|object[]} jwks a JWKS document or a bare array of JWKs */
+  constructor(jwks) {
+    const keys = Array.isArray(jwks) ? jwks : jwks?.keys;
+    if (!Array.isArray(keys) || !keys.length) throw TroveError.invalid('StaticJwks requires at least one JWK');
+    this.list = keys;
+    this.keys = new Map(keys.filter((k) => k.kid).map((k) => [k.kid, k]));
+  }
+  async getJwk(kid) {
+    if (kid) return this.keys.get(kid) || null;
+    return this.list.length === 1 ? this.list[0] : null;
+  }
+}
+
 async function importVerifyKey(alg, key) {
   const spec = ALGS[alg];
   if (!spec) throw TroveError.unsupported(`Unsupported JWT alg ${alg}`);
@@ -100,7 +128,7 @@ async function importVerifyKey(alg, key) {
  * @param {string|string[]} [opts.audience] required `aud` (any match)
  * @param {string[]} [opts.algorithms] allow-list (default derived from key material)
  * @param {number} [opts.clockToleranceSec]
- * @param {number} [opts.now]          ms epoch (for testing / sandboxes)
+ * @param {number|null} [opts.now]     ms epoch; pass null to say there is no clock
  */
 export async function verifyJwt(token, opts = {}) {
   const { header, payload, parts } = decodeJwt(token);
@@ -125,8 +153,19 @@ export async function verifyJwt(token, opts = {}) {
   if (!ok) throw TroveError.unauthorized('JWT signature is invalid');
 
   // Claims.
-  const now = Math.floor((opts.now ?? safeNow()) / 1000);
+  // undefined means "not specified" (use the real clock); null means "there is no
+  // clock". `??` would collapse the two, hiding the very case being configured — and
+  // callers routinely pass `now: cfg.now` with cfg.now undefined.
+  const nowMs = opts.now === undefined ? safeNow() : opts.now;
   const skew = opts.clockToleranceSec ?? 60;
+  // No clock means no way to honour `exp`. Refusing is the only safe answer: treating
+  // an unreadable clock as "not expired yet" would accept a token that expired last
+  // year, which is precisely the failure expiry exists to prevent. Tokens carrying no
+  // time claims are unaffected — there is nothing to check.
+  if (nowMs == null && (payload.exp != null || payload.nbf != null)) {
+    throw TroveError.unauthorized('JWT carries time claims but this runtime has no clock to check them against');
+  }
+  const now = Math.floor(nowMs / 1000);
   if (payload.exp != null && now > payload.exp + skew) throw TroveError.unauthorized('JWT expired');
   if (payload.nbf != null && now + skew < payload.nbf) throw TroveError.unauthorized('JWT not yet valid');
   if (opts.issuer && payload.iss !== opts.issuer) throw TroveError.unauthorized('JWT issuer mismatch');
@@ -138,10 +177,12 @@ export async function verifyJwt(token, opts = {}) {
   return payload;
 }
 
+/** ms epoch, or null when the runtime has no clock. Null, NOT 0 — see verifyJwt. */
 function safeNow() {
   try {
-    return Date.now();
+    const t = Date.now();
+    return Number.isFinite(t) && t > 0 ? t : null;
   } catch {
-    return 0;
+    return null;
   }
 }

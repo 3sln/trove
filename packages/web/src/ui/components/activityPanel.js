@@ -122,9 +122,11 @@ export default function activityPanel(state, ui) {
       )
       : null,
 
-    div({ className: 'act-foot' },
+    div({ className: 'act-foot act-actions' },
       button({ className: 'btn small ghost act-rebuild' }, icon('refresh', { size: 12 }), span('Rebuild search index'))
         .on({ click: () => ui.exec('workbench.rebuildIndex') }),
+      button({ className: 'btn small ghost act-scan' }, icon('refresh', { size: 12 }), span('Scan for outside changes'))
+        .on({ click: () => ui.exec('workbench.scanCollection') }),
     ),
   );
 }

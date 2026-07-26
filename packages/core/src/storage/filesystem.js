@@ -48,11 +48,58 @@ export class FilesystemStorage extends StorageBackend {
   }
 
   get capabilities() {
-    return { presignDownload: false, presignUpload: false, multipart: true, range: true };
+    return { presignDownload: false, presignUpload: false, multipart: true, range: true, list: true };
   }
 
   async #ensureDir(dir) {
     await fs.mkdir(dir, { recursive: true });
+  }
+
+  /**
+   * Walk the object tree so a scan can see files that arrived without Trove.
+   *
+   * Keys here are shard-mapped through a LOSSY sanitizer, so the mapping is only
+   * reversible for keys that survive it unchanged — which every key Trove writes does
+   * (`obj_<hex>`), and a hand-dropped `My Photo.jpg` does not. Rather than guess, this
+   * reports only files sitting at the exact path their own name maps to, and counts the
+   * rest as `unaddressable` so the caller can say so out loud instead of silently
+   * ignoring them.
+   */
+  async list({ prefix = '', cursor = null, limit = 1000 } = {}) {
+    const base = path.join(this.root, 'objects');
+    let found;
+    try {
+      found = await fs.readdir(base, { recursive: true, withFileTypes: true });
+    } catch (err) {
+      if (err.code === 'ENOENT') return { objects: [], nextCursor: null, unaddressable: 0 };
+      throw wrapError(err);
+    }
+    const entries = [];
+    let unaddressable = 0;
+    for (const d of found) {
+      if (!d.isFile()) continue;
+      const full = path.join(d.parentPath || d.path, d.name);
+      // The name IS the key only when it round-trips through the shard mapping.
+      if (shardPath(this.root, d.name) !== full) { unaddressable++; continue; }
+      if (prefix && !d.name.startsWith(prefix)) continue;
+      entries.push({ key: d.name, full });
+    }
+    entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const start = cursor ? entries.findIndex((e) => e.key > cursor) : 0;
+    const from = start === -1 ? entries.length : start;
+    const page = entries.slice(from, from + limit);
+    const objects = [];
+    for (const e of page) {
+      try {
+        const st = await fs.stat(e.full);
+        objects.push({ key: e.key, size: st.size, etag: `"${st.size}-${Math.floor(st.mtimeMs)}"`, modifiedAt: Math.floor(st.mtimeMs) });
+      } catch { /* vanished mid-walk; the next scan will see it */ }
+    }
+    return {
+      objects,
+      nextCursor: from + limit < entries.length ? page[page.length - 1].key : null,
+      unaddressable,
+    };
   }
 
   async put(key, body, opts = {}) {

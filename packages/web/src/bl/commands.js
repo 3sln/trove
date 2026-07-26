@@ -32,6 +32,11 @@ export function registerCommands(app) {
   // blocking, because on a large drive it takes minutes.
   cmd('workbench.rebuildIndex', 'Rebuild Search Index',
     () => app.activity.rebuildIndex().catch(() => {}), { category: 'View', icon: 'refresh' });
+  // Trove is not the only thing that can write to the bucket. This is how files added,
+  // replaced, or removed by something else get picked up.
+  cmd('workbench.scanCollection', 'Scan Collection for Outside Changes',
+    () => app.activity.scanCollection(explorer.state.collectionId || 'default').catch(() => {}),
+    { category: 'Explorer', icon: 'refresh' });
 
   // --- explorer --------------------------------------------------------------
   cmd('explorer.refresh', 'Refresh', () => go(new RefreshAction()), { category: 'Explorer', icon: 'refresh' });
@@ -83,9 +88,18 @@ export function registerCommands(app) {
   }, { category: 'Explorer', icon: 'trash' });
 
   cmd('explorer.open', 'Open', (node) => go(new OpenFileAction(node || explorer.selectedNodes()[0])), { palette: false });
-  cmd('explorer.download', 'Download', (node) => {
+  cmd('explorer.download', 'Download', async (node) => {
     const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
-    if (target?.id) triggerDownload(platform.api.downloadUrl(target.id, { attachment: true }), target.name);
+    if (!target?.id) return;
+    try {
+      const { url, revoke } = await platform.api.download(target.id, target.name);
+      triggerDownload(url, target.name);
+      // A blob URL pins the bytes until it is released; the click has already happened
+      // by the time this runs.
+      if (revoke) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      platform.notifications.error(`Couldn't download ${target.name}: ${err.message}`);
+    }
   }, { category: 'Explorer', icon: 'download' });
 
   // --- search ----------------------------------------------------------------

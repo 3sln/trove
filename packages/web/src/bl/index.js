@@ -10,7 +10,7 @@ import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { ActivityService } from './activity.js';
 import { registerCommands } from './commands.js';
-import { NavigateAction, LoadCollectionsAction } from './actions.js';
+import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction } from './actions.js';
 
 export function createApp(platform) {
   const explorer = new ExplorerService(platform.settings);
