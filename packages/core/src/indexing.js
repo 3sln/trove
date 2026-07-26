@@ -163,7 +163,12 @@ export class IndexingCoordinator {
 
   /** Build the context an indexer gets: capped reads + a time-limited read URL. */
   #indexCtx(node, storage) {
-    const readRange = () => storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } });
+    // No Range on an object that already fits: a 0-byte file has no satisfiable range at
+    // all, and asking for one made every empty file permanently un-indexable — a standing
+    // issue whose Retry button re-ran the identical failure forever.
+    const readRange = () => (node.size > this.maxIndexBytes
+      ? storage.get(node.storageKey, { range: { start: 0, end: this.maxIndexBytes - 1 } })
+      : storage.get(node.storageKey));
     return {
       node: { id: node.id, name: node.name, collectionId: node.collectionId, size: node.size, contentType: node.contentType },
       maxBytes: this.maxIndexBytes,

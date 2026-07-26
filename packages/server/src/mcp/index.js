@@ -17,6 +17,7 @@ import { TroveError, challengeHeaders, protectedResourceMetadata } from '@trove/
 import { McpServer, rpcError, JSONRPC_ERRORS } from './protocol.js';
 import { registerTroveTools } from './tools.js';
 import { mcpConfigFromEnv, mcpResourceUri } from './auth.js';
+import { crossSiteRefusal } from '../router.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -126,6 +127,13 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, auth
     // Sessions are not used — every request stands alone — so there is nothing to end.
     if (req.method === 'DELETE') return new Response(null, { status: 204 });
     if (req.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405, { allow: 'POST, OPTIONS' });
+
+    // The OPTIONS allowlist above only governs requests a browser preflights. A
+    // cross-site POST with `content-type: text/plain` is a CORS simple request — no
+    // preflight, so nothing consulted that allowlist, and `delete_file` ran. Agents are
+    // not browsers and send none of these headers, so this costs them nothing.
+    const refused = crossSiteRefusal(req, config);
+    if (refused) return refused;
 
     // --- identity -------------------------------------------------------------
     let principal = null;

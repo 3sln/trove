@@ -12,10 +12,43 @@ import { networkEndpoints, canExecuteCommand, displayName } from './pluginPackag
 import { isAllowedUrl } from './pluginNet.js';
 import { isSourceModule } from './pluginModules.js';
 import { contribUri, parseContribUri } from '@trove/core/plugins/identity.js';
+import { assertSafePluginSql } from '@trove/core/sqlite.js';
 
 // Response bodies larger than this are refused, so a plugin can't exhaust host
 // memory through the brokered fetch.
 const MAX_FETCH_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Read a response body, aborting the moment it exceeds `max`.
+ *
+ * `await res.arrayBuffer()` then checking `.byteLength` does not achieve the thing the
+ * cap exists for: by the time the check runs the whole body is already resident, so a
+ * declared endpoint returning a multi-GB stream OOMs the tab before we ever refuse it.
+ * Check the declared length first, then enforce while streaming in case it lied.
+ */
+async function readCappedBody(res, max) {
+  const declared = Number(res.headers.get('content-length') || 0);
+  if (declared && declared > max) throw new Error('Response too large');
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > max) throw new Error('Response too large');
+    return buf;
+  }
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel().catch(() => {}); throw new Error('Response too large'); }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out.buffer;
+}
 
 export class PluginRpcRouter {
   /**
@@ -216,8 +249,7 @@ export class PluginRpcRouter {
     if (res.url && res.url !== url && !isAllowedUrl(allow, res.url)) {
       throw new Error(`Blocked: request redirected off this plugin's declared endpoints (${res.url})`);
     }
-    const buf = await res.arrayBuffer();
-    if (buf.byteLength > MAX_FETCH_BYTES) throw new Error('Response too large');
+    const buf = await readCappedBody(res, MAX_FETCH_BYTES);
     const outHeaders = {};
     res.headers.forEach((v, k) => { outHeaders[k] = v; });
     return { ok: res.ok, status: res.status, statusText: res.statusText, url: res.url, headers: outHeaders, bytes: buf };
@@ -234,6 +266,13 @@ export class PluginRpcRouter {
     if (side === 'client') {
       // On-device: an isolated wasm SQLite db per scope, held by the host. Domain
       // scope keys by the verified domain so a vendor's plugins share it.
+      //
+      // Same guard as the server path. The client dbs share ONE emscripten module
+      // across every scope, so ATTACH / VACUUM INTO / PRAGMA are an isolation escape
+      // here for the same reason they are on disk — the blast radius is the browser's
+      // in-memory filesystem rather than the host's, which makes it smaller, not fine.
+      if (op === 'batch') for (const s of (Array.isArray(statements) ? statements : [])) assertSafePluginSql(s?.sql);
+      else assertSafePluginSql(sql);
       const key = scope === 'domain' ? `dom:${record.manifest.domain}` : `plg:${record.id}`;
       const db = await this.clientDb.obtain(key);
       return runSqlOp(db, op, sql, params, statements);

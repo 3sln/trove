@@ -97,7 +97,7 @@ export async function createVfs(opts = {}) {
     opts.search ??
     new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, searchTransformer: opts.searchTransformer, issues: opts.issues, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, searchTransformer: opts.searchTransformer, issues: opts.issues, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes, uploadPartSize: opts.uploadPartSize });
   await vfs.init();
   return vfs;
 }

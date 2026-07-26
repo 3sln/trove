@@ -102,6 +102,9 @@ export function statusFacts(state, ui) {
     // what happens to be loaded reports a 3,000-file drive as 500 files — a wrong number,
     // not a rounded one. Falls back to the page only when the server didn't say.
     totalItems: ex.stats?.items ?? items.length,
+    // Whether that total is the COLLECTION's or just the page we happen to hold. With
+    // more pages waiting, the page length is a floor, not a total, and must read as one.
+    totalKnown: ex.stats?.items != null,
     totalBytes: ex.stats?.bytes ?? items.reduce((n, i) => n + (i.size || 0), 0),
     shown: items.length,
     partial: !!ex.nextCursor,
@@ -136,16 +139,25 @@ export default function statusBar(state, ui) {
         : null,
     off.queued ? span({ className: 'seg', title: 'Changes waiting to sync' }, `${off.queued} queued`) : null,
     off.pins.length ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` }, icon('download', { size: 12 }), span(`${off.pins.length} offline`)).on({ click: () => ui.exec('workbench.view.home') }) : null,
-    button({ className: 'seg', title: 'Collection' }, icon('files', { size: 13 }), span(ex.collectionId || 'default'))
-      .on({ click: () => ui.exec('workbench.view.home') }),
+    button({ className: 'seg', title: 'Switch collection' },
+      icon('files', { size: 13 }), span(ex.collectionId || 'default'),
+      (ex.collections || []).length > 1 || ex.canCreateCollection ? icon('chevron-down', { size: 11 }) : null)
+      .on({ click: (e) => {
+        const items = ui.app.collectionMenu?.() || [];
+        // With nowhere else to go, the segment is a label, not a dead menu.
+        if (items.length > 1 || ex.canCreateCollection) {
+          const r = e.currentTarget.getBoundingClientRect();
+          ui.platform.workbench.showContextMenu(r.left, r.top - 8 - items.length * 34, items);
+        } else ui.exec('workbench.view.home');
+      } }),
     active.length
       ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
         .on({ click: (e) => ui.platform.workbench.showContextMenu(e.clientX, e.clientY, active.map((t) => ({
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
           run: () => ui.app.transfers.cancel(t.id),
         }))) })
-      : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${totalItems}` : '' },
-        `${totalItems.toLocaleString()} item${totalItems === 1 ? '' : 's'}`),
+      : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${f.totalKnown ? totalItems : 'more'}` : '' },
+        `${totalItems.toLocaleString()}${f.totalKnown || !f.partial ? '' : '+'} item${totalItems === 1 ? '' : 's'}`),
     ...left,
     div({ className: 'spacer' }),
     ...activityChips(state, ui),

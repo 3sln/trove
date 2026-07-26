@@ -192,7 +192,9 @@ export function reviewSummary(pkg, trust) {
     kind: c.type, name: c.name, uri: c.uri,
     title: c.title || c.name,
     detail: c.type === 'opener' || c.type === 'indexer' ? selectorText(c.match)
-      : c.type === 'statusItem' ? `${c.slot} of the status bar`
+      // What it RUNS, not just where it sits. A status item can carry a command, and a
+      // review that only said "right of the status bar" gave the user nothing to refuse.
+      : c.type === 'statusItem' ? `${c.slot} of the status bar${c.command ? ` — runs ${c.command}` : ''}`
         : c.type === 'keymap' ? c.path : '',
     offline: !!c.offline,
   }));

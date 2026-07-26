@@ -171,13 +171,24 @@ export class UploadManager {
     const s = await this.#session(uploadId);
     const storage = await this.#storage(s.collectionId);
     if (s.strategy === 'direct-single') {
-      const info = await storage.put(s.storageKey, body, { contentType: s.contentType, ...opts });
+      // The proxied body is raw bytes streamed straight to storage — the JSON body cap
+      // deliberately doesn't apply — so this is the only place a client can be stopped
+      // from writing an unbounded object through us.
+      const capped = capStream(body, this.maxBytes);
+      const info = await storage.put(s.storageKey, capped, { contentType: s.contentType, ...opts });
       s.parts[1] = { etag: info.etag || 'single' };
       await this.sessions.put(s);
       return { partNumber: 1, etag: s.parts[1].etag };
     }
     if (s.strategy !== 'direct') throw TroveError.invalid('uploadPart only applies to direct uploads');
-    const res = await storage.putPart(s.storageKey, s.uploadId, partNumber, body, opts);
+    // A part outside the plan is stored, billed, and never merged — `complete` only
+    // walks 1..partCount. Silently accepting one meant a client could believe it had
+    // uploaded bytes that would never become part of the file.
+    if (partNumber < 1 || (s.partCount && partNumber > s.partCount)) {
+      throw TroveError.invalid(`Part ${partNumber} is outside this upload's ${s.partCount} part(s)`);
+    }
+    // A part is exactly `partSize` bytes, except the last, which is smaller.
+    const res = await storage.putPart(s.storageKey, s.uploadId, partNumber, capStream(body, s.partSize), opts);
     s.parts[partNumber] = { etag: res.etag };
     await this.sessions.put(s);
     return res;
@@ -224,10 +235,36 @@ export class UploadManager {
       const res = await storage.completeMultipart(s.storageKey, s.uploadId, parts);
       etag = res.etag;
     }
+    // What actually landed, not what the client said it would send.
+    //
+    // `size` up to here has been the client's DECLARED size — the value the per-file
+    // limit was checked against at create(). Nothing re-checked the bytes, so declaring
+    // `size: 1` and then PUTting gigabytes walked straight past the limit and recorded a
+    // size that was simply false (which the quota meter, the UI and every later
+    // range read then believed). Ask the store.
+    const storage = await this.#storage(s.collectionId);
+    let size = s.size;
+    try {
+      const info = await storage.head(s.storageKey);
+      if (Number.isFinite(info?.size)) size = info.size;
+    } catch {
+      // A backend that can't answer leaves the declared size in place; better an
+      // approximate record than refusing an upload that succeeded.
+    }
+    if (this.maxBytes && size > this.maxBytes) {
+      // It is already in the store, so let it go rather than leaving an orphan that
+      // counts against the quota and belongs to nothing.
+      await storage.delete(s.storageKey).catch(() => {});
+      await this.sessions.delete(uploadId);
+      throw TroveError.tooLarge(
+        `File exceeds the maximum upload size of ${this.maxBytes} bytes`,
+        { details: { maxBytes: this.maxBytes, size } },
+      );
+    }
     await this.sessions.delete(uploadId);
     return {
       storageKey: s.storageKey,
-      size: s.size,
+      size,
       contentType: s.contentType,
       etag,
       collectionId: s.collectionId,
@@ -282,4 +319,33 @@ export class UploadManager {
 
 function planSummary(s) {
   return { uploadId: s.id, storageKey: s.storageKey, partSize: s.partSize, size: s.size, name: s.name, contentType: s.contentType };
+}
+
+/**
+ * Wrap a streamed body so it cannot exceed `max` bytes.
+ *
+ * Uploads bypass the JSON body cap by design — their bytes stream to storage rather
+ * than being buffered — which left the proxied part route with no ceiling at all: the
+ * declared size was checked at create() and nothing checked what actually arrived.
+ * Non-stream bodies (a Uint8Array from a test, a Blob) pass through untouched; they are
+ * already resident, so capping them here would not save the memory.
+ */
+function capStream(body, max) {
+  if (!max || !body || typeof body.getReader !== 'function') return body;
+  const reader = body.getReader();
+  let total = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) { controller.close(); return; }
+      total += value.byteLength;
+      if (total > max) {
+        await reader.cancel().catch(() => {});
+        controller.error(TroveError.tooLarge(`Upload body exceeds ${max} bytes`, { details: { maxBytes: max } }));
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel(reason) { reader.cancel(reason).catch(() => {}); },
+  });
 }

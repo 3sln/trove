@@ -70,6 +70,20 @@ function inlineSafe(ct) {
   return /^image\//.test(t) || /^audio\//.test(t) || /^video\//.test(t) || t === 'application/pdf' || t === 'text/plain';
 }
 
+// Build a Content-Disposition header (RFC 6266).
+//
+// `filename` is a quoted-string, so a browser takes the bytes literally — percent-
+// encoding it, which is what this used to do, is not a decoding any client performs.
+// "Q3 report, final.pdf" arrived as "Q3%20report%2C%20final.pdf" and that is the name
+// that landed on disk, for essentially every real filename. So: an ASCII fallback in
+// `filename` (with the two characters that would break the quoting removed) and the
+// real name in `filename*`, which IS percent-encoded by specification.
+function contentDisposition(type, name) {
+  const clean = String(name || 'download').replace(/[\\"]/g, '').replace(/[\x00-\x1f\x7f]/g, '');
+  const ascii = clean.replace(/[^\x20-\x7e]/g, '_') || 'download';
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(clean)}`;
+}
+
 // Reject SSRF-prone hosts for the server-side assetlinks fetch: IP literals,
 // loopback, link-local (cloud metadata), and internal TLDs. DNS names that resolve
 // to private IPs are a residual (rebinding) risk, documented in the README.
@@ -299,7 +313,7 @@ export function createRouter() {
       'content-length': String(size),
       'x-content-type-options': 'nosniff',
       ...(etag ? { etag } : {}),
-      'content-disposition': `${attach ? 'attachment' : 'inline'}; filename="${encodeURIComponent(node.name)}"`,
+      'content-disposition': contentDisposition(attach ? 'attachment' : 'inline', node.name),
       'cache-control': 'private, max-age=0',
     };
     if (served) {
@@ -473,7 +487,15 @@ export function createRouter() {
     const started = ctx.issues.retry(ctx.params.id);
     started.catch(() => {}); // the task record carries the failure; don't reject globally
     // Hand back the task list so the client can adopt the new task without a round trip.
-    return { ok: true, tasks: ctx.tasks.list({ collectionIds: await readableCollectionIds(ctx) }) };
+    // Scoped exactly like GET /api/tasks — a task title names the file it is working on,
+    // so being allowed to retry one issue must not hand back the drive-wide list.
+    return {
+      ok: true,
+      tasks: ctx.tasks.list({
+        collectionIds: await readableCollectionIds(ctx),
+        includeGlobal: await canWholeDrive(ctx),
+      }),
+    };
   });
 
   // Dismissing is not fixing. Allowed because a problem can become irrelevant (the file

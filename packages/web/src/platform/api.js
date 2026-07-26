@@ -297,11 +297,16 @@ export class TroveApiClient {
    *
    * @returns {Promise<{text: string, truncated: boolean, total: number|null}>}
    */
-  async readTextCapped(id, { maxBytes = 512 * 1024, signal } = {}) {
+  async readTextCapped(id, { maxBytes = 512 * 1024, size = null, signal } = {}) {
+    // Skip the Range when we already know the file fits. An empty file has no
+    // satisfiable range, so asking for one turned "open an empty note" into an error
+    // page; a 416 from any backend would do the same.
+    const ranged = size == null || size > maxBytes;
     const res = await this._fetch(this.downloadUrl(id), {
       signal,
-      headers: { ...this.authHeaders(), range: `bytes=0-${maxBytes - 1}` },
+      headers: { ...this.authHeaders(), ...(ranged ? { range: `bytes=0-${maxBytes - 1}` } : {}) },
     });
+    if (res.status === 416) return { text: '', truncated: false, total: 0 };
     if (!res.ok && res.status !== 206) throw new TroveError('internal', `Download failed (${res.status})`);
     const bytes = new Uint8Array(await res.arrayBuffer());
     // `Content-Range: bytes 0-N/TOTAL` is how we learn the real size; a server that

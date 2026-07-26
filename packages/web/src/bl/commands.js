@@ -137,7 +137,39 @@ export function registerCommands(app) {
   }, { palette: false });
 
   // --- collections -----------------------------------------------------------
-  cmd('collections.switch', 'Switch Collection…', (cid) => { if (cid) go(new NavigateAction('/', cid)); }, { palette: false });
+  // The menu of "where else could I be". Shared by the palette command and the status
+  // bar's collection segment, so both offer the same list.
+  const collectionMenu = () => {
+    const current = explorer.state.collectionId || 'default';
+    const items = (explorer.state.collections || []).map((c) => ({
+      label: c.name || c.id,
+      icon: c.id === current ? 'check' : 'files',
+      run: () => commands.execute('collections.switch', c.id),
+    }));
+    if (explorer.state.canCreateCollection) {
+      if (items.length) items.push({ sep: true });
+      items.push({ label: 'New collection…', icon: 'plus', run: () => commands.execute('collections.create') });
+    }
+    return items;
+  };
+  app.collectionMenu = collectionMenu;
+
+  // `NavigateAction` takes a single collectionId. This passed ('/', cid) — a leftover
+  // from a path+collection signature — so every switch navigated to a collection
+  // literally named "/" and failed to load. It was also unreachable: no caller, and
+  // hidden from the palette.
+  cmd('collections.switch', 'Switch Collection…', (cid) => {
+    if (cid) {
+      go(new NavigateAction(cid));
+      workbench.showHome();
+      return;
+    }
+    // From the palette or a keybinding there is no pointer to anchor a menu to.
+    const items = collectionMenu();
+    if (!items.length) return platform.notifications.info('This drive has one collection.');
+    const w = typeof window === 'undefined' ? 800 : window.innerWidth;
+    workbench.showContextMenu(Math.max(12, Math.round(w / 2) - 110), 120, items);
+  }, { category: 'Collections', icon: 'files' });
   cmd('collections.create', 'New Collection…', () => {
     workbench.showDialog({
       kind: 'collection', title: 'New collection',
@@ -149,7 +181,15 @@ export function registerCommands(app) {
   }, { category: 'Collections', icon: 'files' });
 
   // --- conversations & notifications -----------------------------------------
-  cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => workbench.toggleInfoPanel(), { category: 'View', icon: 'info' });
+  // The details panel is a view OF a file. With nothing open there is nothing for it to
+  // show, and flipping the flag silently was indistinguishable from a broken command.
+  cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => {
+    if (!workbench.activeTab()) {
+      platform.notifications.info('Open a file to see its details and conversation.');
+      return;
+    }
+    workbench.toggleInfoPanel();
+  }, { category: 'View', icon: 'info' });
   cmd('notifications.show', 'Show Notifications', () => app.social.toggleInbox(true), { category: 'View' });
   cmd('notifications.enablePush', 'Enable Push Notifications', () => app.social.enablePush(), { category: 'Notifications' });
 

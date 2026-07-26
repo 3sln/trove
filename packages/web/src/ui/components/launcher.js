@@ -60,11 +60,26 @@ export default function launcher(state, ui, opts = {}) {
     if (filters.length) runFilter(ui, filters, text); // drive-wide tag/property query
     else runSearch(ui, text);
   };
+  // Moving the highlight IS selecting, as far as the rest of the app is concerned.
+  // Without this, `explorer.selectedNodes()` was permanently empty and every command
+  // that works on "the selected item" — delete above all — silently did nothing.
+  const focusAt = (at) => { wb.setLaunchIndex(at); syncSelection(ui, flat[at]); };
+  const move = (delta) => {
+    wb.moveLaunch(delta, flat.length);
+    syncSelection(ui, flat[wb.state.launch.index]);
+  };
   const onKey = (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); wb.moveLaunch(1, flat.length); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); wb.moveLaunch(-1, flat.length); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
     else if (e.key === 'Enter') { e.preventDefault(); flat[idx]?.run(); }
     else if (e.key === 'Escape' && q) { e.preventDefault(); clearSearch(ui); }
+    // The row under the highlight is the subject of the row menu, so the key that opens
+    // one on every other list opens this one too — without making the user leave the
+    // search box to reach it.
+    else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      const it = flat[idx];
+      if (it?.menu) { e.preventDefault(); openRowMenu(e.target, it, ui); }
+    }
   };
 
   // What the server actually searched (transformer output) — shown when it differs
@@ -100,7 +115,7 @@ export default function launcher(state, ui, opts = {}) {
         group.items.length
           ? div({ className: 'launch-list' }, ...group.items.map((it) => {
             const at = ++gi;
-            return itemRow(it, at === idx, () => ui.platform.workbench.setLaunchIndex(at));
+            return itemRow(it, at === idx, () => focusAt(at), ui);
           }))
           : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
       )),
@@ -121,13 +136,38 @@ function resolvedBar(r) {
   );
 }
 
-function itemRow(it, active, hover) {
-  return div({ className: `launch-item ${active ? 'active' : ''}` },
+function itemRow(it, active, focus, ui) {
+  const row = div({ className: `launch-item ${active ? 'active' : ''}` },
     icon(it.icon, { size: 15 }),
     span({ className: 'name' }, it.title),
     it.detail ? span({ className: 'launch-detail' }, it.detail) : null,
     it.badge ? span({ className: 'launch-kind' }, it.badge) : null,
-  ).on({ click: it.run, mouseenter: hover });
+    // Everything you can do to a file, on the file. Rename, download, copy link and
+    // delete were all commands with no way to reach them: the palette's versions act on
+    // "the selection", and until the highlight became a selection there never was one.
+    it.menu
+      ? button({ className: 'launch-more', title: 'Actions', 'aria-label': `Actions for ${it.title}` }, icon('dots', { size: 14 }))
+        .on({ click: (e) => { e.stopPropagation(); focus(); openRowMenu(e.currentTarget, it, ui); } })
+      : null,
+  ).on({ click: it.run, mouseenter: focus });
+  if (it.menu) {
+    row.on({ contextmenu: (e) => { e.preventDefault(); focus(); openRowMenu(e.currentTarget, it, ui, e); } });
+  }
+  return row;
+}
+
+// Anchor the menu to the row (or the pointer, when there was one) rather than to a
+// remembered click position, so the keyboard route lands somewhere sensible too.
+function openRowMenu(anchor, it, ui, event) {
+  const r = anchor?.getBoundingClientRect?.();
+  const x = event?.clientX ?? (r ? r.right - 8 : 0);
+  const y = event?.clientY ?? (r ? r.bottom : 0);
+  ui.platform.workbench.showContextMenu(x, y, it.menu(ui));
+}
+
+// Keep the drive's idea of "what is selected" in step with the highlighted row.
+function syncSelection(ui, item) {
+  ui.app.explorer.select(item?.node?.id ? [item.node.id] : []);
 }
 
 /**
@@ -218,7 +258,12 @@ function buildContent(state, ui, q, mode, modal) {
 
   const ex = state.ex;
   const shown = (ex.items || []).length;
-  const total = ex.stats?.items ?? shown;
+  // `stats` is the collection; `items` is the page. When the server didn't report stats
+  // we only know the page — and saying "500" while a next page exists is a claim about
+  // the drive that is false, so say "500+" instead.
+  const knownTotal = ex.stats?.items ?? null;
+  const total = knownTotal ?? shown;
+  const totalLabel = knownTotal != null ? knownTotal.toLocaleString() : `${shown.toLocaleString()}+`;
   const items = (ex.items || []).map((n) => fileItem(n, ui, modal));
   // A partial list must not be titled "All items" — that is a claim about the drive,
   // and on a collection bigger than one page it is false. Say what is on screen, and
@@ -226,7 +271,8 @@ function buildContent(state, ui, q, mode, modal) {
   if (ex.nextCursor) {
     items.push({
       icon: 'refresh',
-      title: ex.loadingMore ? 'Loading…' : `Show more (${(total - shown).toLocaleString()} more)`,
+      title: ex.loadingMore ? 'Loading…'
+        : knownTotal != null ? `Show more (${(knownTotal - shown).toLocaleString()} more)` : 'Show more',
       detail: 'or search to jump straight to something',
       run: () => ui.exec('explorer.loadMore'),
     });
@@ -240,12 +286,17 @@ function buildContent(state, ui, q, mode, modal) {
       title: ex.trash.length
         ? `Trash · ${ex.trash.length} item${ex.trash.length === 1 ? '' : 's'}`
         : 'Trash',
+      action: ex.trash.length
+        ? button({ className: 'launch-up', title: 'Destroy everything in the trash' },
+          icon('trash', { size: 13 }), 'Empty trash').on({ click: () => ui.exec('explorer.emptyTrash') })
+        : null,
       items: ex.trash.length
         ? ex.trash.map((n) => ({
           icon: 'trash',
           title: n.name,
           detail: `deleted ${new Date(n.deletedAt).toLocaleString()} — restore`,
           run: () => ui.exec('explorer.restore', n.id),
+          menu: () => trashMenu(n, ui),
         }))
         : [],
       empty: 'The trash is empty.',
@@ -253,7 +304,11 @@ function buildContent(state, ui, q, mode, modal) {
   }
 
   groups.push({
-    title: ex.nextCursor ? `All items · showing ${shown.toLocaleString()} of ${total.toLocaleString()}` : 'All items',
+    title: ex.nextCursor ? `All items · showing ${shown.toLocaleString()} of ${totalLabel}` : 'All items',
+    // The empty state told people to upload a file, and on desktop and TV there was
+    // nothing anywhere that would let them. (Phone has the + in its bottom bar.)
+    action: modal ? null : button({ className: 'launch-up', title: 'Upload files to this collection' },
+      icon('upload', { size: 13 }), 'Upload').on({ click: () => ui.exec('explorer.upload') }),
     items,
     // Don't show a false "empty" when the load actually FAILED (e.g. server
     // unreachable) — say so, so the user knows to retry rather than believing the
@@ -268,12 +323,41 @@ function fileItem(node, ui, modal) {
     icon: fileIcon(node),
     title: node.name,
     detail: node.contentType || '',
+    node,
     // From the modal search, `reset` starts a fresh viewer stack; then close it.
     run: () => {
       ui.go(new OpenFileAction(node, { reset: !!modal }));
       if (modal) ui.platform.workbench.closeSearchModal();
     },
+    menu: () => fileMenu(node, ui),
   };
+}
+
+function fileMenu(node, ui) {
+  const pinned = (ui.app.offline?.state?.pins || []).some((p) => p.id === node.id);
+  return [
+    { label: 'Open', icon: 'file-text', run: () => ui.exec('explorer.open', node) },
+    { label: 'Download', icon: 'download', run: () => ui.exec('explorer.download', node) },
+    { label: 'Copy link', icon: 'link', kbd: '⌘⇧L', run: () => ui.exec('explorer.copyLink') },
+    { sep: true },
+    { label: 'Rename…', run: () => ui.exec('explorer.rename') },
+    pinned
+      ? { label: 'Remove from offline', icon: 'close', run: () => ui.exec('offline.unpin', node) }
+      : { label: 'Make available offline', icon: 'download', run: () => ui.exec('offline.pin', node) },
+    { sep: true },
+    { label: 'Move to trash', icon: 'trash', danger: true, kbd: 'Del', run: () => ui.exec('explorer.delete') },
+  ];
+}
+
+// The trash is the one place "delete" means destroy, so its two verbs live together:
+// put it back, or finish the job on this one item. Emptying the whole trash was
+// previously the only way to purge anything.
+function trashMenu(node, ui) {
+  return [
+    { label: 'Restore', icon: 'refresh', run: () => ui.exec('explorer.restore', node.id) },
+    { sep: true },
+    { label: 'Delete forever', icon: 'trash', danger: true, run: () => ui.exec('explorer.purgeOne', node.id) },
+  ];
 }
 
 function fileIcon(node) {

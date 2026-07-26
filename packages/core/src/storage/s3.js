@@ -117,8 +117,10 @@ export class S3Storage extends StorageBackend {
   async get(key, opts = {}) {
     const headers = {};
     if (opts.range) {
-      const end = opts.range.end != null ? opts.range.end : '';
-      headers.range = `bytes=${opts.range.start ?? 0}-${end}`;
+      // S3 understands the suffix form natively, so pass it through rather than
+      // resolving it here — we'd need a HEAD to learn the total first.
+      if (opts.range.suffix != null) headers.range = `bytes=-${opts.range.suffix}`;
+      else headers.range = `bytes=${opts.range.start ?? 0}-${opts.range.end != null ? opts.range.end : ''}`;
     }
     const res = await this.#send('GET', key, { headers, signal: opts.signal });
     if (res.status === 404) throw TroveError.notFound('Object');

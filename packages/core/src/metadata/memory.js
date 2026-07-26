@@ -28,7 +28,14 @@ export class MemoryStore extends MetadataStore {
   }
   #deindex(node) {
     this.nodes.delete(node.id);
-    this.byName.delete(this.#key(node.collectionId, node.name));
+    const key = this.#key(node.collectionId, node.name);
+    // Only when the name still resolves to THIS node. `softDelete` deliberately frees
+    // the name so a replacement can take it, so by the time the trash is emptied that
+    // key belongs to a different, LIVE file. Deleting it blindly made that live file
+    // unreachable by name — `trove:default?name=notes.md` stopped resolving, and the
+    // uniqueness check stopped seeing it, so the next upload created a second row
+    // under the same name.
+    if (this.byName.get(key) === node.id) this.byName.delete(key);
   }
   /** Live rows only. A trashed item keeps its row but must not answer as itself. */
   #live() {

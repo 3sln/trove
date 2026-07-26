@@ -235,7 +235,21 @@ function composer(state, ui) {
   const social = ui.app.social;
   const me = state.so.me;
   const replyTo = state.so.replyTo;
-  if (!me) return div({ className: 'conv-signin' }, 'Sign in to join the conversation.');
+  // `me` is null only when /api/me didn't answer — offline, or refused. It is NOT the
+  // anonymous case (an anonymous deployment returns a real anonymous principal), so
+  // "Sign in to join the conversation" was shown to people with nowhere to sign in,
+  // and to people who were merely offline. Say which it is, and offer the one action
+  // that helps: Trove ships no login of its own, so signing in means letting the
+  // identity proxy in front of it redirect a fresh page load.
+  if (!me) {
+    if (!state.off?.online) {
+      return div({ className: 'conv-signin' }, 'You’re offline. Conversations come back when you reconnect.');
+    }
+    return div({ className: 'conv-signin' },
+      span('You’re signed out, so you can read this conversation but not add to it.'),
+      button({ className: 'c-link' }, 'Reload to sign in').on({ click: () => window.location.reload() }),
+    );
+  }
   return div({ className: 'composer' },
     replyTo ? div({ className: 'replying' }, `Replying to ${replyTo.author?.name || 'comment'}`,
       button({ className: 'c-link' }, 'cancel').on({ click: () => social.setReplyTo(null) })) : null,

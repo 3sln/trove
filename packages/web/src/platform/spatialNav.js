@@ -22,7 +22,11 @@
 // (rather than "anything with a click handler", which the DOM cannot tell us) means a
 // new clickable component is opted in deliberately.
 const NATIVE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
-const APP_CLICKABLE = '.launch-item, .sheet-row, .inbox-item, .plugin-card, .setting-row, .act-task, .act-issue';
+// `.setting-row` used to be listed here and has never existed — the rendered class is
+// `.setting`, and it isn't clickable anyway (its control is). Every entry below is
+// checked by probe15-tv-reach, so a renamed class fails a test instead of silently
+// dropping a destination.
+const APP_CLICKABLE = '.launch-item, .sheet-row, .inbox-item, .plugin-card, .act-task, .act-issue, .chapter';
 const SELECTOR = `${NATIVE}, ${APP_CLICKABLE}`;
 
 // Keys a television sends for "back". The named ones are the web standard; the numbers

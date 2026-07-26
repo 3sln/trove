@@ -178,6 +178,25 @@ function dirname(p) {
 function join(...parts) {
   return parts.join('/').replace(/\/{2,}/g, '/');
 }
+// Map a store key to a filename that is safe AND unique.
+//
+// Sanitizing alone is lossy: every disallowed character collapses to `_`, so
+// `pstore:alice@x.com:plg:p` and `pstore:alice_x.com:plg:p` land on the same file —
+// two principals sharing one database. Since a principal id is often an email, and
+// with a JWT it is whatever `sub` the IdP mints, that is a collision an attacker can
+// sometimes choose. The hash suffix makes the mapping injective; the readable prefix
+// is kept only so the directory is browsable.
 function sanitize(key) {
-  return key.replace(/[^a-zA-Z0-9._-]/g, '_');
+  return key.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96) + '.' + fnv1a(key);
+}
+
+// FNV-1a, 32-bit. Not a security hash — it only has to be collision-resistant enough
+// to separate keys that sanitize to the same string, which are near-identical inputs.
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
 }

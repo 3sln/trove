@@ -28,6 +28,12 @@ export class ExplorerService {
   }
   select(ids, { additive = false } = {}) {
     const next = additive ? Array.from(new Set([...this.state.selection, ...ids])) : ids;
+    // Selecting what is already selected must not emit. The launcher syncs the
+    // highlighted row into here on every mouseenter, and a state push per mouse move
+    // would re-render the list under the pointer.
+    const same = next.length === this.state.selection.length
+      && next.every((id, i) => id === this.state.selection[i]);
+    if (same) return;
     this.set({ selection: next });
   }
   selectedNodes() {

@@ -29,7 +29,7 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null }) {
+  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null, uploadPartSize = undefined }) {
     if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage; // primary backend (default collection + capability reporting)
@@ -41,7 +41,7 @@ export class Vfs {
     this.collections = collections ?? null;
     this.indexers = indexers ?? new IndexerRegistry();
     // One UploadManager; it resolves the right backend per session's collection.
-    this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes });
+    this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes, partSize: uploadPartSize });
     this.maxIndexBytes = maxIndexBytes;
     // The indexing subsystem (run/backfill/purge/contributions) lives here.
     // Where a failure to index becomes a standing, retryable problem rather than a
@@ -501,22 +501,37 @@ export class Vfs {
       const items = await this.metadata.searchByName(query, opts);
       return items.map((n) => ({ nodeId: n.id, score: 1, node: n, snippet: null }));
     }
-    const results = await this.search.search(query, opts);
-    const out = [];
-    for (const r of results) {
-      const node = await this.metadata.getById(r.nodeId);
-      if (!node) continue;
-      // A trashed item must never surface in search. Deleting removes it from the index,
-      // but that removal can fail — and when it does, the alternative to this check is a
-      // result the user clicks and gets a 404 for, on a file they deliberately deleted.
-      // getById deliberately does NOT filter (restore and purge both need to see it),
-      // so the filtering belongs here.
-      if (node.deletedAt) continue;
-      // Scope to the requested collections (permission-filtered by the server).
-      if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
-      out.push({ ...r, node });
+    const want = opts.limit ?? 20;
+    // The index ranks across the WHOLE drive and applies its limit before we get to
+    // filter, so every trashed row and every collection this caller can't read still
+    // occupies one of the N slots. On a drive where someone else's large collection
+    // outranks yours, all N can be rows you can't see — and the answer that comes back
+    // is a confident "no matches" for files you can. So widen the ask until there are
+    // `want` VISIBLE results, or the index has nothing more to give. It only escalates
+    // when filtering actually removed something, so the common case is one query.
+    const ceiling = Math.min(Math.max(want, 1) * 16, 500);
+    let out = [];
+    for (let fetch = want; ; fetch = Math.min(fetch * 4, ceiling)) {
+      const results = await this.search.search(query, { ...opts, limit: fetch });
+      out = [];
+      for (const r of results) {
+        const node = await this.metadata.getById(r.nodeId);
+        if (!node) continue;
+        // A trashed item must never surface in search. Deleting removes it from the
+        // index, but that removal can fail — and when it does, the alternative to this
+        // check is a result the user clicks and gets a 404 for, on a file they
+        // deliberately deleted. getById deliberately does NOT filter (restore and purge
+        // both need to see it), so the filtering belongs here.
+        if (node.deletedAt) continue;
+        // Scope to the requested collections (permission-filtered by the server).
+        if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
+        out.push({ ...r, node });
+      }
+      // Enough, or the index is exhausted (it returned less than we asked for), or we
+      // have widened as far as we are willing to.
+      if (out.length >= want || results.length < fetch || fetch >= ceiling) break;
     }
-    return out;
+    return out.slice(0, want);
   }
 
   // Indexing lives in IndexingCoordinator (this.indexing); these thin delegations keep

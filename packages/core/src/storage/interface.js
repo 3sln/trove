@@ -170,6 +170,41 @@ export async function toBytes(body) {
   throw TroveError.invalid('Unsupported body type');
 }
 
+/**
+ * Resolve a requested byte range against an object's real size.
+ *
+ * Two cases the per-backend copies of this arithmetic each got wrong:
+ *
+ * The SUFFIX form — `bytes=-500` means "the last 500 bytes" (RFC 9110 §14.1.4), and
+ * media players and container-footer probes send it routinely. Read as `{start: 0}`
+ * it served the FRONT of the file under a 206 that claimed to be what was asked for,
+ * which a client has no way to detect.
+ *
+ * An EMPTY object is deliberately not treated as unsatisfiable. A 0-byte file is a
+ * real file, and `end = total - 1 = -1` made every one of them throw: permanently
+ * un-indexable (a standing issue whose Retry re-runs the same failure) and unopenable
+ * in the text viewer, which reads through a range. The whole of it is zero bytes, so
+ * that is what we serve.
+ *
+ * @returns {{start:number,end:number,total:number}|null} null → serve the whole object
+ */
+export function resolveRange(range, total) {
+  if (!range || total === 0) return null;
+  let start;
+  let end;
+  if (range.suffix != null) {
+    const n = Math.min(range.suffix, total);
+    if (n <= 0) throw TroveError.invalid('Range not satisfiable');
+    start = total - n;
+    end = total - 1;
+  } else {
+    start = range.start ?? 0;
+    end = range.end != null ? Math.min(range.end, total - 1) : total - 1;
+  }
+  if (start < 0 || start > end || start >= total) throw TroveError.invalid('Range not satisfiable');
+  return { start, end, total };
+}
+
 /** A ReadableStream over an in-memory byte array (with optional range). */
 export function bytesStream(bytes, range) {
   const start = range?.start ?? 0;

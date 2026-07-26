@@ -3,7 +3,7 @@
 // disk or the network. Not for production (everything lives in a Map), but it
 // keeps the higher layers honest.
 
-import { StorageBackend, toBytes, bytesStream, concat } from './interface.js';
+import { StorageBackend, toBytes, bytesStream, concat, resolveRange } from './interface.js';
 import { TroveError } from '../errors.js';
 
 function etagOf(bytes) {
@@ -61,13 +61,7 @@ export class MemoryStorage extends StorageBackend {
     const rec = this.objects.get(key);
     if (!rec) throw TroveError.notFound('Object');
     const total = rec.bytes.length;
-    let range;
-    if (opts.range) {
-      const start = opts.range.start ?? 0;
-      const end = opts.range.end != null ? Math.min(opts.range.end, total - 1) : total - 1;
-      if (start > end || start >= total) throw TroveError.invalid('Range not satisfiable');
-      range = { start, end, total };
-    }
+    const range = resolveRange(opts.range, total);
     return {
       stream: bytesStream(rec.bytes, range && { start: range.start, end: range.end }),
       size: range ? range.end - range.start + 1 : total,

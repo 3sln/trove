@@ -153,19 +153,29 @@ export function contextMenu(state, ui) {
   const m = state.overlay.contextMenu;
   if (!m || !m.items?.length) return null;
   const wb = ui.platform.workbench;
-  const x = Math.min(m.x, window.innerWidth - 220);
-  const y = Math.min(m.y, window.innerHeight - m.items.length * 34 - 20);
+  // Clamp on both edges. Anchoring a menu ABOVE its trigger (the status bar opens
+  // upward) produces a negative top, and only the far edge used to be clamped.
+  const x = Math.max(8, Math.min(m.x, window.innerWidth - 220));
+  const y = Math.max(8, Math.min(m.y, window.innerHeight - m.items.length * 34 - 20));
   return div({},
     div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => wb.closeContextMenu(), contextmenu: (e) => { e.preventDefault(); wb.closeContextMenu(); } }),
     div({ className: 'menu', $styling: { left: x + 'px', top: y + 'px' } },
-      ...m.items.map((it) =>
+      ...m.items.map((it, i) =>
         it.sep
           ? div({ className: 'sep' })
-          : div({ className: `mi ${it.danger ? 'danger' : ''}` },
+          // A real <button>, not a click-handling div: menu entries were unreachable by
+          // keyboard and invisible to the TV shell's spatial navigation, which only
+          // considers focusable elements.
+          : button({ className: `mi ${it.danger ? 'danger' : ''}`, autofocus: i === 0 },
               it.icon ? icon(it.icon, { size: 15 }) : null,
               span(it.label),
               it.kbd ? span({ className: 'kbd' }, it.kbd) : null,
-            ).on({ click: () => { wb.closeContextMenu(); it.run?.(); } }),
+            ).on({
+              click: () => { wb.closeContextMenu(); it.run?.(); },
+              // The first item is focused on open, so Escape has to get you back out.
+              keydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); wb.closeContextMenu(); } },
+              $attach: (el) => { if (i === 0) queueMicrotask(() => el.focus()); },
+            }),
       ),
     ),
   );

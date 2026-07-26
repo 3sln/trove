@@ -107,9 +107,14 @@ test('vfs: names are unique per collection, so a trove: link resolves to one ite
 });
 
 test('vfs: resumable multipart upload lifecycle', async () => {
-  const vfs = await createVfs();
+  // A 3-byte part size so 5 bytes is genuinely two parts. It used to declare 5 bytes
+  // against the 8 MiB default — a ONE-part plan — then upload two parts and assert the
+  // node was 5 bytes. It passed because the recorded size was the client's declared
+  // number; the object in the store only ever held part 1.
+  const vfs = await createVfs({ uploadPartSize: 3 });
   const plan = await vfs.createUpload({ name: 'movie.bin', size: 5, contentType: 'application/octet-stream' });
   expect(['direct', 'presign', 'single', 'direct-single']).toContain(plan.strategy);
+  expect(plan.partCount).toBe(2);
 
   // memory storage → direct multipart
   await vfs.uploadPart(plan.uploadId, 1, new Uint8Array([9, 9, 9]));
@@ -118,6 +123,21 @@ test('vfs: resumable multipart upload lifecycle', async () => {
   await vfs.uploadPart(plan.uploadId, 2, new Uint8Array([1, 1]));
   const node = await vfs.completeUpload(plan.uploadId);
   expect(node.size).toBe(5);
+});
+
+test('an upload records the bytes that arrived, not the size the client claimed', async () => {
+  const vfs = await createVfs({ uploadPartSize: 3 });
+  // Declare one byte, send three. `create` checked the declaration and nothing checked
+  // the delivery, so both the per-file limit and the recorded size took the client's
+  // word for it.
+  const plan = await vfs.createUpload({ name: 'liar.bin', size: 1 });
+  await vfs.uploadPart(plan.uploadId, 1, new Uint8Array([1, 2, 3]));
+  const node = await vfs.completeUpload(plan.uploadId);
+  expect(node.size).toBe(3);
+
+  // And a part the plan never asked for is refused rather than silently orphaned.
+  const two = await vfs.createUpload({ name: 'stray.bin', size: 1 });
+  await expect(vfs.uploadPart(two.uploadId, 4, new Uint8Array([0]))).rejects.toThrow(/outside this upload/i);
 });
 
 test('search: hybrid semantic + keyword finds content', async () => {

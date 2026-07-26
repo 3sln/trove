@@ -5,7 +5,53 @@
 // one place so a TroveError becomes the right status + JSON body, and anything
 // unexpected becomes a clean 500 without leaking internals.
 
-import { TroveError, wrapError, ErrorCode } from '@trove/core';
+import { TroveError, wrapError, ErrorCode, publicOrigin } from '@trove/core';
+
+// Methods that change state. A GET is safe by definition, so it isn't checked.
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
+
+/**
+ * Refuse a state-changing request that another site made using the user's session.
+ *
+ * The CORS allowlist governs whether an attacker can READ the reply, and it only stops
+ * requests that need a preflight. A POST with `content-type: text/plain` is a CORS
+ * *simple request*: no preflight is sent, the allowlist is never consulted, and the
+ * write happens. The reply being unreadable is no comfort when the call was
+ * `delete_file`. Both the JSON API and the MCP endpoint were reachable that way, and
+ * the zero-config deployment needs no credential at all — the attacker's own browser
+ * is the credential.
+ *
+ * Browsers send `Sec-Fetch-Site` on every request and `Origin` on every state-changing
+ * one, so a cross-site call identifies itself. Non-browser clients (curl, an agent, a
+ * script) send neither and are unaffected — they carry no ambient credential, which is
+ * the entire basis of the attack. A bearer token is likewise not ambient, but it is not
+ * special-cased: a request that presents one is same-origin or scripted anyway.
+ *
+ * @returns {Response|null} a 403 to return instead of handling, or null to proceed
+ */
+export function crossSiteRefusal(req, config = {}) {
+  if (!UNSAFE_METHODS.has(req.method)) return null;
+  const site = req.headers.get('sec-fetch-site');
+  const origin = req.headers.get('origin');
+  if (!site && !origin) return null; // not a browser
+
+  // An operator who opted into CORS for an origin meant it: that site may call us.
+  const allowed = corsOriginFor(config?.corsOrigin, origin);
+  if (allowed === '*' || (allowed && allowed === origin)) return null;
+
+  if (site) {
+    if (site === 'same-origin' || site === 'none') return null;
+  } else if (origin === publicOrigin(req, config) || origin === new URL(req.url).origin) {
+    return null;
+  }
+  return json({
+    error: {
+      code: 'forbidden',
+      message: 'Cross-site requests may not change this drive. If this is intentional, set TROVE_CORS_ORIGIN.',
+      retryable: false,
+    },
+  }, 403);
+}
 
 export class Router {
   constructor() {
@@ -50,6 +96,9 @@ export class Router {
     const origin = corsOriginFor(ctx.config?.corsOrigin, req.headers.get('origin'));
     if (req.method === 'OPTIONS') return cors(new Response(null, { status: 204 }), origin);
 
+    const refused = crossSiteRefusal(req, ctx.config);
+    if (refused) return cors(refused, origin);
+
     const found = this.#match(req.method, url.pathname);
     if (!found) return cors(json({ error: { code: 'not_found', message: 'No such route' } }, 404), origin);
 
@@ -84,24 +133,52 @@ export function json(body, status = 200, headers = {}) {
 }
 
 export function cors(res, origin = null) {
+  const out = writable(res);
   // Never let a browser sniff an API response into a different content type.
-  res.headers.set('x-content-type-options', 'nosniff');
+  out.headers.set('x-content-type-options', 'nosniff');
   if (origin) {
-    res.headers.set('access-control-allow-origin', origin);
-    if (origin !== '*') res.headers.set('vary', 'Origin');
-    res.headers.set('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.headers.set('access-control-allow-headers', 'content-type, authorization, x-trove-indexer');
-    res.headers.set('access-control-expose-headers', 'content-range, accept-ranges, etag, content-length, content-disposition');
+    out.headers.set('access-control-allow-origin', origin);
+    if (origin !== '*') out.headers.set('vary', 'Origin');
+    out.headers.set('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    out.headers.set('access-control-allow-headers', 'content-type, authorization, x-trove-indexer');
+    out.headers.set('access-control-expose-headers', 'content-range, accept-ranges, etag, content-length, content-disposition');
   }
-  return res;
+  return out;
 }
 
-/** Parse a Range header into { start, end? } (single range only). */
+// `Response.redirect()` produces a response whose headers guard is IMMUTABLE — setting
+// anything on it throws `TypeError: immutable`. Every response funnels through cors(),
+// so on a runtime that enforces the guard (Node, Workers; Bun happens not to) a single
+// presigned-download redirect became a 500 caught by the same try/catch that logs it as
+// an internal error. Copy into a plain Response, whose headers are always writable.
+function writable(res) {
+  try {
+    res.headers.set('x-content-type-options', 'nosniff');
+    return res;
+  } catch {
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers: new Headers(res.headers) });
+  }
+}
+
+/**
+ * Parse a Range header (single range only).
+ *
+ * `bytes=500-999` → `{start, end}`. `bytes=-500` is the SUFFIX form and means the last
+ * 500 bytes, not the first 501 — it resolves against the object's real size, so it comes
+ * back as `{suffix}` for the storage layer to apply.
+ *
+ * @returns {{start:number, end?:number}|{suffix:number}|null}
+ */
 export function parseRange(header) {
   if (!header) return null;
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (!m) return null;
-  const start = m[1] === '' ? 0 : parseInt(m[1], 10);
+  if (m[1] === '') {
+    if (m[2] === '') return null; // "bytes=-" is neither form
+    const suffix = parseInt(m[2], 10);
+    return Number.isNaN(suffix) ? null : { suffix };
+  }
+  const start = parseInt(m[1], 10);
   const end = m[2] === '' ? undefined : parseInt(m[2], 10);
   if (Number.isNaN(start)) return null;
   return { start, end };

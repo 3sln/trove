@@ -120,9 +120,18 @@ export class PluginHost {
           break;
 
         // A slot in the status bar, empty and hidden until the plugin pushes content.
-        case 'statusItem':
-          keep(reg.register(c.uri, { ...base, html: '', visible: false }));
+        // A CLICKABLE one is the plugin asking the host to run something — the same ask
+        // a keyboard shortcut makes — so it goes through the same per-command grant.
+        // Without this, a manifest holding only the `ui` capability could put an
+        // inviting button in the status bar wired to `explorer.delete` or
+        // `plugins.installFromUrl`, and the install review never mentioned the field.
+        case 'statusItem': {
+          const command = c.command
+            ? this.#resolveCommand(runtime, c.command, label, `status item “${c.name}”`)
+            : null;
+          keep(reg.register(c.uri, { ...base, command, html: '', visible: false }));
           break;
+        }
 
         // A context value slot. Seed the context with its declared default so
         // when-clauses referencing it evaluate sensibly before the plugin runs.
@@ -170,16 +179,30 @@ export class PluginHost {
   #resolveBindings(runtime, bindings, label) {
     const out = [];
     for (const b of bindings) {
-      const uri = contribUri(runtime.manifest, b.command);
-      const own = declaredContributions(runtime.manifest).some((c) => c.uri === uri && c.type === 'command');
-      const command = own ? uri : b.command;
-      if (!own && !canExecuteCommand(runtime.manifest, command)) {
-        this.platform.notifications.warn(`Plugin "${label}": shortcut ${b.key} is bound to "${b.command}", which it isn't allowed to run — ignored.`);
-        continue;
-      }
-      out.push({ ...b, command });
+      const command = this.#resolveCommand(runtime, b.command, label, `shortcut ${b.key}`);
+      if (command) out.push({ ...b, command });
     }
     return out;
+  }
+
+  /**
+   * One command address the plugin wants to be able to trigger, resolved and checked.
+   *
+   * A short name is one of the plugin's own commands and becomes its contribution URI.
+   * Anything else is a FOREIGN address and must appear in the manifest's `commands`
+   * allowlist. Returns null (with a warning naming `what`) when it isn't allowed, so
+   * every route by which a plugin can ask the host to run something — keymaps, status
+   * items — passes through the same grant the user actually approved.
+   */
+  #resolveCommand(runtime, wanted, label, what) {
+    const uri = contribUri(runtime.manifest, wanted);
+    const own = declaredContributions(runtime.manifest).some((c) => c.uri === uri && c.type === 'command');
+    if (own) return uri;
+    if (!canExecuteCommand(runtime.manifest, wanted)) {
+      this.platform.notifications.warn(`Plugin "${label}": ${what} runs "${wanted}", which it isn't allowed to run — ignored.`);
+      return null;
+    }
+    return wanted;
   }
 
   list() {

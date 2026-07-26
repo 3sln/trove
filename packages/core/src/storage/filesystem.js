@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { StorageBackend } from './interface.js';
+import { StorageBackend, resolveRange } from './interface.js';
 import { TroveError, wrapError } from '../errors.js';
 import { newId } from '../util.js';
 
@@ -183,15 +183,8 @@ export class FilesystemStorage extends StorageBackend {
       throw wrapError(err);
     }
     const total = stat.size;
-    let range;
-    let streamOpts = {};
-    if (opts.range) {
-      const start = opts.range.start ?? 0;
-      const end = opts.range.end != null ? Math.min(opts.range.end, total - 1) : total - 1;
-      if (start > end || start >= total) throw TroveError.invalid('Range not satisfiable');
-      range = { start, end, total };
-      streamOpts = { start, end };
-    }
+    const range = resolveRange(opts.range, total);
+    const streamOpts = range ? { start: range.start, end: range.end } : {};
     const nodeStream = createReadStream(file, { ...streamOpts, signal: opts.signal });
     return {
       stream: Readable.toWeb(nodeStream),

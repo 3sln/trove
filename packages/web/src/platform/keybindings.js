@@ -28,7 +28,7 @@ export function normalizeKey(str) {
   return [...order.filter((m) => mods.has(m)), key].filter(Boolean).join('+');
 }
 
-function eventToKey(e) {
+export function eventToKey(e) {
   const mods = [];
   if (e.ctrlKey) mods.push('ctrl');
   if (e.metaKey) mods.push('meta');

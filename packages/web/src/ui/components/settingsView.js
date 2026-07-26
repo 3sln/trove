@@ -1,5 +1,5 @@
 import { dd } from '../../runtime.js';
-import { prettyKey } from '../../platform/keybindings.js';
+import { prettyKey, eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
 
@@ -193,19 +193,55 @@ function openersSection(ui) {
   );
 }
 
+// Which shortcut is currently listening for its new chord. Module-level because the
+// settings view re-renders from scratch and this is transient UI state, not a setting.
+let capturing = null;
+
 function keybindingsSection(ui) {
-  const bindings = ui.platform.keybindings.resolved();
+  const kb = ui.platform.keybindings;
+  const bindings = kb.resolved();
   const cmds = ui.platform.contributions;
+  const overrides = kb.overrides();
+  const stop = () => { capturing = null; ui.rerender?.(); };
   return div({ className: 'group' },
     h3('Keyboard Shortcuts'),
-    ...bindings.slice(0, 40).map((b) => {
+    p({ className: 'sub' }, 'Click a shortcut to record a new one. Esc cancels; Backspace clears it.'),
+    // Every binding, not the first 40. The cap was arbitrary and silent — with no "N
+    // more" anywhere, the shortcuts past it simply did not exist as far as anyone could
+    // tell, and one plugin keymap was enough to push real ones off the end.
+    ...bindings.map((b) => {
       const cmd = cmds.get(b.command);
+      const listening = capturing === b.command;
+      const custom = !!overrides[b.command];
       return div({ className: 'setting' },
         div({ className: 'info' },
           div({ className: 't' }, cmd?.title || b.command),
           div({ className: 'd' }, b.command),
         ),
-        div({ className: 'control' }, span({ className: 'kbd' }, dd.h('kbd', prettyKey(b.key)))),
+        div({ className: 'control' },
+          button({ className: `kbd-edit ${listening ? 'listening' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
+            listening ? span('Press keys…') : dd.h('kbd', prettyKey(b.key)))
+            .on({
+              click: () => { capturing = listening ? null : b.command; ui.rerender?.(); },
+              blur: () => { if (listening) stop(); },
+              keydown: (e) => {
+                if (!listening) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.key === 'Escape') return stop();
+                if (e.key === 'Backspace') { kb.rebind(b.command, null); return stop(); }
+                // A bare modifier isn't a chord yet — wait for the key it modifies.
+                if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return;
+                kb.rebind(b.command, eventToKey(e));
+                stop();
+              },
+              $attach: (el) => { if (listening) queueMicrotask(() => el.focus()); },
+            }),
+          custom
+            ? button({ className: 'c-link', title: 'Back to the default' }, 'reset')
+              .on({ click: () => { kb.rebind(b.command, null); ui.rerender?.(); } })
+            : null,
+        ),
       );
     }),
   );
