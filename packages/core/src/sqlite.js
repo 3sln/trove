@@ -65,6 +65,14 @@ export function assertSafePluginSql(sql) {
 
 /** A keyed pool/factory of databases. The shell injects one. */
 export class SqliteProvider {
+  /**
+   * Does data written through this provider survive a restart? False unless a backend
+   * says otherwise, so "durable" is something a provider claims rather than something
+   * callers assume. The server asks before putting the search index in SQLite: an
+   * index in an ephemeral database is worse than one in memory, because it looks
+   * persistent right up until the restart that proves it isn't.
+   */
+  get durable() { return false; }
   async init() {}
   /** @returns {Promise<SqliteDatabase>} the lazily-created, memoized db for `key`. */
   async obtain({ key }) { throw TroveError.unsupported('SqliteProvider.obtain'); }
@@ -112,6 +120,8 @@ export class LocalSqliteProvider extends SqliteProvider {
     this.path = opts.path || ':memory:';
     this._pool = new Map(); // resolvedPath -> LocalSqliteDatabase
   }
+
+  get durable() { return this.path !== ':memory:'; }
 
   // Resolve a key to a pool token. In-memory: core keys share one db, every other
   // key gets its own isolated in-memory db (so plugin scopes never collide). On

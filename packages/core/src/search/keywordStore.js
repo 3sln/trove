@@ -38,6 +38,11 @@ export class KeywordStore {
   async snippet(docId, query) {
     return null;
   }
+  /** Optional: number of stored documents. Null when the store can't say — which is
+   *  not the same as zero, and the startup rebuild check depends on the difference. */
+  async count() {
+    return null;
+  }
 }
 
 export class MemoryKeywordStore extends KeywordStore {
@@ -94,5 +99,9 @@ export class MemoryKeywordStore extends KeywordStore {
     if (at < 0) return r.text.slice(0, 160).trim();
     const start = Math.max(0, at - 60);
     return (start > 0 ? '…' : '') + r.text.slice(start, start + 200).trim() + '…';
+  }
+
+  async count() {
+    return this.docs.size;
   }
 }

@@ -29,7 +29,10 @@ async function open(pathOrMemory) {
   }
   try {
     const { DatabaseSync } = await import('node:sqlite');
-    return new DatabaseSync(pathOrMemory);
+    // `allowExtension` has to be set at CONSTRUCTION — enableLoadExtension() alone
+    // isn't enough on node:sqlite. It only permits loading; nothing is loaded unless
+    // something asks (the sqlite-vec store does, and degrades if it can't).
+    return new DatabaseSync(pathOrMemory, { allowExtension: true });
   } catch (err) {
     throw TroveError.unsupported(
       'No SQLite driver available — run under Bun (bun:sqlite) or Node ≥ 22.5 (node:sqlite), or supply another store',

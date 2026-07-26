@@ -205,6 +205,10 @@ Dockerfile (`/data`):
 
 - **Objects** — `TROVE_FS_ROOT` (filesystem) or your S3/R2 bucket.
 - **Metadata + KV** — the SQLite file at `TROVE_DB_PATH` (WAL mode).
+- **The search index** — the same SQLite file: vectors via `sqlite-vec`, keywords
+  via FTS5. It is derived state, so it is not something you *have* to back up —
+  if it is missing on startup and the drive is not, Trove rebuilds it in the
+  background and says so in the log.
 
 To back up the SQLite database safely while running, use SQLite's online backup
 rather than copying the file mid-write:
@@ -243,6 +247,22 @@ and `KeywordStore`. Or drive it all from env:
 TROVE_VECTOR=qdrant TROVE_QDRANT_URL=http://localhost:6333 \
 TROVE_QDRANT_COLLECTION=trove node packages/server/src/adapters/node.js
 ```
+
+### Where the search index lives
+
+`TROVE_VECTOR` (`sqlite` | `memory` | `qdrant` | `vectorize`) and `TROVE_KEYWORD`
+(`sqlite` | `memory`) pick the stores. You normally set neither: a deployment with
+a SQLite database gets the durable SQLite stores, and one with nothing to persist
+to gets the in-memory ones — an index in an ephemeral database is worse than one
+in memory, because it looks persistent until the restart that proves it isn't.
+`GET /api/capabilities` reports which stores are in use and whether they're
+`durable`.
+
+FTS5 (keywords) is compiled into both `bun:sqlite` and `node:sqlite`, so there is
+nothing to install. `sqlite-vec` (vectors) is a prebuilt native artifact and
+therefore an **optional** dependency: if it can't load on your platform, Trove
+logs a warning, keeps keyword search durable, and falls back to an in-memory
+vector index rather than refusing to start.
 
 The lower-level `createVfs` helper does the same wiring for library use:
 

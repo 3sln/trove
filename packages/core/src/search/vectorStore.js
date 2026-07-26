@@ -55,9 +55,10 @@ export class VectorStore {
 }
 
 // ---------------------------------------------------------------------------
-// MemoryVectorStore — exact, brute-force, dependency-free. Correct and fine up
-// to ~10^5 vectors; the default when no external store is provided. `persist`/
-// `load` snapshot to JSON so an index can survive a restart without a DB.
+// MemoryVectorStore — exact, brute-force, dependency-free. Correct up to ~10^5
+// vectors, and EPHEMERAL: everything in it is gone on restart. That makes it a test
+// double and a last-resort fallback, not a default for a drive with files in it —
+// SqliteVectorStore (search/sqliteStores.js) is the durable local answer.
 // ---------------------------------------------------------------------------
 
 export class MemoryVectorStore extends VectorStore {
@@ -123,18 +124,6 @@ export class MemoryVectorStore extends VectorStore {
 
   async count() {
     return this.docs.size;
-  }
-
-  persist() {
-    return {
-      dimensions: this._dimensions,
-      docs: [...this.docs.values()].map((r) => ({ id: r.id, nodeId: r.nodeId, indexerId: r.indexerId, vector: Array.from(r.vector), fields: r.fields })),
-    };
-  }
-  static async load(snapshot) {
-    const store = new MemoryVectorStore({ dimensions: snapshot.dimensions });
-    await store.add(snapshot.docs.map((d) => ({ ...d, vector: Float32Array.from(d.vector) })));
-    return store;
   }
 }
 

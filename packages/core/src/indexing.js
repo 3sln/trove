@@ -141,6 +141,52 @@ export class IndexingCoordinator {
   }
 
   /**
+   * Rebuild the whole search index from the drive's contents.
+   *
+   * The search index is derived state — every document in it can be recomputed from
+   * the file it came from — so losing it is recoverable, but only if something
+   * actually recovers it. This is that something: the server calls it at startup when
+   * a non-empty drive meets an empty index (a store that was in-memory, a dropped
+   * vector table after an embedding change, a restore from a metadata-only backup).
+   *
+   * Every file is re-read and every matching indexer re-run, so this is proportional
+   * to the drive, not to what changed. It pages, tolerates a per-file failure, and
+   * takes an `onProgress` so a caller can report on a long rebuild instead of going
+   * quiet.
+   *
+   * `shouldStop` exists because a rebuild outlives the request that started it: a
+   * server shutting down mid-rebuild would otherwise fail on every remaining file
+   * against a closing database, turning one event into a page of errors. Stopping is
+   * safe — the index is still empty, so the next start simply rebuilds it again.
+   *
+   * @param {{pageSize?: number, onProgress?: Function, shouldStop?: () => boolean}} [opts]
+   */
+  async reindexAll({ pageSize = 200, onProgress, shouldStop } = {}) {
+    let indexed = 0;
+    let failed = 0;
+    let afterId = null;
+    let stopped = false;
+    outer: for (;;) {
+      const files = await this.metadata.scanItems({ afterId, limit: pageSize });
+      if (!files.length) break;
+      for (const node of files) {
+        if (shouldStop?.()) { stopped = true; break outer; }
+        afterId = node.id;
+        try {
+          await this.indexNode(node);
+          indexed++;
+        } catch (err) {
+          failed++;
+          console.error(`reindex failed for ${node.name}:`, err.message);
+        }
+      }
+      onProgress?.({ indexed, failed });
+      if (files.length < pageSize) break;
+    }
+    return { indexed, failed, stopped };
+  }
+
+  /**
    * Remove one contributor's contributions from every node (e.g. on uninstall).
    *
    * The search index is dropped in ONE bulk call — the stores can delete by indexer

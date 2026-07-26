@@ -23,6 +23,9 @@ export { SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer
 export { VectorStore, MemoryVectorStore, QdrantVectorStore } from './search/vectorStore.js';
 export { KeywordStore, MemoryKeywordStore } from './search/keywordStore.js';
 export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/embeddings.js';
+// Durable local search: vectors via sqlite-vec, keywords via FTS5, both in the
+// SQLite file the metadata already lives in.
+export { SqliteVectorStore, SqliteKeywordStore, SEARCH_DB_KEY } from './search/sqliteStores.js';
 
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
 export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, PluginIndexers, matchFromSelector } from './plugins/index.js';

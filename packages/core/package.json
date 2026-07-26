@@ -23,5 +23,8 @@
     "fflate": "^0.8.3"
   },
   "license": "MIT",
-  "author": "Ray Stubbs"
+  "author": "Ray Stubbs",
+  "optionalDependencies": {
+    "sqlite-vec": "^0.1.9"
+  }
 }

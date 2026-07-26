@@ -39,6 +39,11 @@ export class SearchService {
       keywordStore: this.keywords?.constructor?.name || null,
       embeddings: this.embeddings?.constructor?.name || null,
       dimensions: this.vectors?.dimensions || null,
+      // Whether the index survives a restart. Stated outright rather than left to be
+      // inferred from a class name, because "your search index is rebuilt from scratch
+      // every restart" is an operational fact an admin should be able to read off
+      // /api/capabilities without knowing which store maps to which guarantee.
+      durable: this.vectors instanceof MemoryVectorStore || this.keywords instanceof MemoryKeywordStore ? false : true,
     };
   }
 
@@ -85,6 +90,24 @@ export class SearchService {
     await this.keywords.add([{ id: `name:${node.id}`, nodeId: node.id, indexerId: 'core.name', text: node.name, fields: { name: node.name, collectionId: node.collectionId } }]);
   }
 
+  /**
+   * Does at least one configured store hold nothing?
+   *
+   * This is the startup signal for "the index was lost" — a drive with files always
+   * has at least one keyword doc per node (indexName writes one), so an empty store
+   * beside a non-empty metadata store means the index needs rebuilding. Asked per
+   * store rather than of the pair, because a deployment can persist vectors and not
+   * keywords (or the reverse), and half a search index is still a broken one.
+   *
+   * @returns {Promise<boolean|null>} null when neither store can report a count — a
+   *   store that can't say is never taken as evidence that a rebuild is needed.
+   */
+  async looksUnindexed() {
+    const [vectors, keywords] = await Promise.all([safeCount(this.vectors), safeCount(this.keywords)]);
+    if (vectors == null && keywords == null) return null;
+    return (vectors ?? 1) === 0 || (keywords ?? 1) === 0;
+  }
+
   async removeNode(nodeId) {
     await Promise.all([this.vectors.removeByNode(nodeId), this.keywords.removeByNode(nodeId)]);
   }
@@ -124,6 +147,10 @@ export class SearchService {
     const qv = await this.embeddings.embedOne(query);
     return this.vectors.query(qv, { limit: limit * 4, indexers });
   }
+}
+
+async function safeCount(store) {
+  try { return (await store?.count?.()) ?? null; } catch { return null; }
 }
 
 function accumulate(map, nodeId, score, indexerId, docId, fields) {

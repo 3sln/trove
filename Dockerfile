@@ -14,6 +14,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 # bun:sqlite is built in; no native build step needed. (Node ≥22.5's node:sqlite
 # works too — swap the CMD for adapters/node.js to run under Node instead.)
+# The search index lives in the same SQLite file: FTS5 is compiled into the driver,
+# and sqlite-vec is an OPTIONAL dependency shipping prebuilt binaries — still no
+# compiler here. Don't add --omit=optional above: without it semantic search falls
+# back to an in-memory index that is rebuilt on every restart.
 COPY --from=build /app /app
 ENV PORT=8787 HOST=0.0.0.0
 ENV TROVE_STORAGE=filesystem TROVE_FS_ROOT=/data/objects

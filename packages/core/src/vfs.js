@@ -319,6 +319,7 @@ export class Vfs {
   removeContributions(nodeId, contributorId) { return this.indexing.removeContributions(nodeId, contributorId); }
   backfillIndexer(indexer, opts) { return this.indexing.backfillIndexer(indexer, opts); }
   purgeIndexer(contributorId, opts) { return this.indexing.purgeIndexer(contributorId, opts); }
+  reindexAll(opts) { return this.indexing.reindexAll(opts); }
 }
 
 function cryptoId() {

@@ -11,7 +11,8 @@ import {
   MetadataStore, MemoryStore, SqliteStore,
   SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,
   SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer,
-  VectorStore, MemoryVectorStore, QdrantVectorStore, VectorizeVectorStore,
+  VectorStore, MemoryVectorStore, QdrantVectorStore, VectorizeVectorStore, SqliteVectorStore,
+  KeywordStore, MemoryKeywordStore, SqliteKeywordStore,
   IndexerRegistry,
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
   KeyValueStore, MemoryKV, SqliteKV,
@@ -52,11 +53,32 @@ function buildEmbeddings(cfg) {
   if (cfg.driver === 'http') return new HttpEmbedding(cfg.http);
   return new LocalHashEmbedding({ dimensions: cfg.dimensions ?? 256 });
 }
-function buildVectorStore(cfg, dimensions) {
+async function buildVectorStore(cfg, dimensions, sqlite) {
   switch (cfg.driver) {
     case 'qdrant': return new QdrantVectorStore({ dimensions, ...cfg.qdrant });
     case 'vectorize': return new VectorizeVectorStore({ dimensions, binding: cfg.binding, ...cfg.vectorize });
+    case 'sqlite': {
+      // sqlite-vec is an optional native dependency: absent on an unsupported platform
+      // or a `--omit=optional` install. Degrade loudly to memory rather than refusing to
+      // start — keyword search still works, and the warning says what was lost.
+      const store = await SqliteVectorStore.open({ provider: sqlite, dimensions });
+      if (store) return store;
+      console.warn(
+        '[trove] sqlite-vec is not loadable here — semantic search is falling back to an '
+        + 'IN-MEMORY index that is rebuilt from scratch on every restart. Install the '
+        + 'optional `sqlite-vec` dependency, or set TROVE_VECTOR to an external store.',
+      );
+      return new MemoryVectorStore({ dimensions });
+    }
     case 'memory': default: return new MemoryVectorStore({ dimensions });
+  }
+}
+// FTS5 is compiled into both bun:sqlite and node:sqlite, so unlike the vector half
+// there is nothing here that can be missing.
+async function buildKeywordStore(cfg, sqlite) {
+  switch (cfg.driver) {
+    case 'sqlite': return SqliteKeywordStore.open({ provider: sqlite });
+    case 'memory': default: return new MemoryKeywordStore();
   }
 }
 // Search transformer factory. `parse` (default) is deterministic `#tag` parsing;
@@ -90,7 +112,8 @@ function buildSqliteProvider(cfg) {
  * @param {MetadataStore|{driver,path?}} [config.metadata]
  * @param {EmbeddingProvider|{driver,http?,dimensions?}} [config.embeddings]
  * @param {VectorStore|{driver,qdrant?}} [config.vectorStore] the pluggable vector DB
- * @param {import('@trove/core').KeywordStore} [config.keywordStore]
+ * @param {KeywordStore|{driver}} [config.keywordStore] the pluggable lexical index
+ * @param {boolean} [config.rebuildIndexOnStart] false to skip the empty-index rebuild
  * @param {SearchService} [config.search] a fully-built search service (overrides the above)
  * @param {IndexerRegistry} [config.indexers]
  * @param {(req: Request) => Promise<Response|null>} [config.assets] static file fetcher
@@ -110,9 +133,22 @@ export async function createServer(config = {}) {
 
   const metadata = resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, (cfg) => buildMetadata(cfg, sqliteProvider));
   const embeddings = resolve(config.embeddings, EmbeddingProvider, buildEmbeddings);
-  const vectorStore = resolve(config.vectorStore, VectorStore, (cfg) => buildVectorStore(cfg, embeddings.dimensions));
 
-  const search = resolve(config.search, SearchService, () => new SearchService({ embeddings, vectorStore, keywordStore: config.keywordStore }));
+  // Where the search index lives follows the SQLite provider, not the config: the
+  // question is whether there is somewhere durable to write, and only the provider
+  // knows. A file-backed provider gets a SQLite index that survives a restart; an
+  // in-memory one gets the memory stores, because an index in an ephemeral database is
+  // strictly worse than one in memory — it looks persistent until the restart that
+  // proves it isn't. An explicit driver in config always wins.
+  const searchDriver = (cfg) => (cfg?.driver ? cfg : { ...cfg, driver: sqliteProvider.durable ? 'sqlite' : 'memory' });
+
+  const search = await resolve(config.search, SearchService, async () => new SearchService({
+    embeddings,
+    vectorStore: await resolve(config.vectorStore, VectorStore, (cfg) =>
+      buildVectorStore(searchDriver(cfg), embeddings.dimensions, sqliteProvider)),
+    keywordStore: await resolve(config.keywordStore, KeywordStore, (cfg) =>
+      buildKeywordStore(searchDriver(cfg), sqliteProvider)),
+  }));
 
   const indexers = resolve(config.indexers, IndexerRegistry, () => new IndexerRegistry());
 
@@ -166,6 +202,18 @@ export async function createServer(config = {}) {
 
   const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxUploadBytes: config.maxUploadBytes ?? null });
   await vfs.init();
+
+  // A drive with files and an empty index is a drive where nothing can be found, and
+  // in an app where search IS the navigation that reads as data loss. It happens for
+  // ordinary reasons — an index that lived in memory, a vector table dropped after an
+  // embedding change, a restore from a metadata-only backup — so the fix is to notice
+  // and rebuild rather than to assume it can't happen.
+  //
+  // Runs in the BACKGROUND: a rebuild re-reads every file, and holding up the server
+  // until it finishes would turn a recoverable state into an outage. The promise is
+  // returned so a caller (a test, a CLI) can wait for it.
+  let closing = false;
+  const indexRebuild = config.rebuildIndexOnStart === false ? null : rebuildIndexIfLost(vfs, search, () => closing);
 
   // Server plugin installs: bulk package blobs go in a pluggable PackageStore
   // (default = the primary storage backend under a prefix; TROVE_PACKAGE_STORE points
@@ -232,13 +280,50 @@ export async function createServer(config = {}) {
   }
 
   async function close() {
+    // Tell an in-flight index rebuild to stop before the database goes away, and let it
+    // unwind — otherwise every remaining file fails against a closing handle. Stopping
+    // early is safe: a half-built index is still an empty-looking one, so the next
+    // start rebuilds it.
+    closing = true;
+    await indexRebuild?.catch(() => {});
     notifications.stop();
     if (maintenance) clearInterval(maintenance);
     await sidecar.dispose?.();
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, indexRebuild, close };
+}
+
+/**
+ * Rebuild the search index when it is empty but the drive is not. Resolves to null
+ * when no rebuild was needed (the common case — every start after the first).
+ * @returns {Promise<{indexed:number, failed:number}|null>}
+ */
+async function rebuildIndexIfLost(vfs, search, shouldStop) {
+  try {
+    if (!search?.looksUnindexed) return null;
+    // Cheapest question first: an index that reports documents needs nothing, and a
+    // store that can't report (null) is never taken as evidence that it's empty.
+    if ((await search.looksUnindexed()) !== true) return null;
+    // …then the one that costs a query: is there anything to rebuild FROM?
+    if (!(await vfs.metadata.scanItems({ limit: 1 })).length) return null;
+
+    console.warn('[trove] the search index is empty but the drive is not — rebuilding it in the background');
+    const started = Date.now();
+    const result = await vfs.reindexAll({
+      shouldStop,
+      onProgress: ({ indexed }) => { if (indexed % 500 === 0) console.log(`[trove] reindexed ${indexed} items…`); },
+    });
+    if (result.stopped) console.warn(`[trove] index rebuild stopped at ${result.indexed} items (shutting down) — it will resume on the next start`);
+    else console.log(`[trove] search index rebuilt: ${result.indexed} items in ${Date.now() - started}ms${result.failed ? `, ${result.failed} failed` : ''}`);
+    return result;
+  } catch (err) {
+    // A failed rebuild leaves a searchless-but-working drive; that has to be said out
+    // loud, not swallowed into an unhandled rejection.
+    console.error('[trove] search index rebuild failed — items may not be findable:', err.message);
+    return null;
+  }
 }
 
 // A CSP starting point for deployments that DON'T rely on sandboxed plugins (opt in
@@ -329,8 +414,14 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
     config.embeddings.driver = 'local';
   }
 
-  // Pluggable vector DB: default in-memory; Qdrant or Cloudflare Vectorize.
-  config.vectorStore.driver = env.TROVE_VECTOR || 'memory';
+  // Pluggable search stores. Deliberately left UNSET unless asked for: createServer
+  // picks 'sqlite' or 'memory' from the SQLite provider it actually resolved, which is
+  // the only thing that knows whether there's a durable database to write into (a
+  // Worker supplying its own metadata store must not get a local SQLite index).
+  //   TROVE_VECTOR  = sqlite | memory | qdrant | vectorize
+  //   TROVE_KEYWORD = sqlite | memory
+  if (env.TROVE_VECTOR) config.vectorStore.driver = env.TROVE_VECTOR;
+  if (env.TROVE_KEYWORD) config.keywordStore = { driver: env.TROVE_KEYWORD };
   if (config.vectorStore.driver === 'qdrant') {
     config.vectorStore.qdrant = {
       url: env.TROVE_QDRANT_URL || 'http://localhost:6333',
