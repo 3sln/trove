@@ -11,6 +11,22 @@ import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 
 const { div, span, input, button } = dd;
 
+// What to put in the search box, and how much of it fits.
+//
+// The server tells us, because the search TRANSFORMER decides what the box accepts and
+// that is deployment configuration — swap in an LLM transformer and "# filter by tag"
+// stops being the right advice. The fallback covers the moment before capabilities
+// arrive and any server too old to say; `!` is ours either way, since running a command
+// from here is a client convention the server knows nothing about.
+function promptFor(ui, { compact = false, modal = false } = {}) {
+  const p = ui.platform.capabilities?.searchPrompt;
+  const base = (compact ? p?.short || p?.placeholder : p?.placeholder)
+    || (compact ? 'Search files' : 'Search files · # filter by tag');
+  // On a phone the box is ~300px wide; adding a second clause guarantees an ellipsis
+  // in the middle of the instructions, which reads as broken rather than terse.
+  return compact || modal ? base : `${base} · ! run a command`;
+}
+
 let searchTimer = null;
 function runSearch(ui, query) {
   // SearchAction owns search state; the launcher only dispatches (no direct .set).
@@ -63,7 +79,7 @@ export default function launcher(state, ui, opts = {}) {
     div({ className: 'launch-box' },
       icon(mode === 'command' ? 'command' : mode === 'filter' ? 'tag' : 'search', { size: 18 }),
       input({ className: 'launch-input', value: q, autofocus: true, spellcheck: 'false',
-        placeholder: 'Search files · ! run a command · # filter by tag' })
+        placeholder: promptFor(ui, { compact: state.vp?.mode === 'phone', modal }) })
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
         .on({ click: () => clearSearch(ui) }) : null,
@@ -79,6 +95,7 @@ export default function launcher(state, ui, opts = {}) {
           }))
           : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
       )),
+      searchHelp(state, ui, mode),
     ),
   );
   return modal ? inner : div({ className: 'editor' }, inner);
@@ -102,6 +119,42 @@ function itemRow(it, active, hover) {
     it.detail ? span({ className: 'launch-detail' }, it.detail) : null,
     it.badge ? span({ className: 'launch-kind' }, it.badge) : null,
   ).on({ click: it.run, mouseenter: hover });
+}
+
+/**
+ * How this search box works — shown when, and only when, a search came back empty.
+ *
+ * That is the one moment the syntax is worth explaining: the user asked for something
+ * and got nothing, and "you typed it wrong" is a real possibility they can act on.
+ * Showing it any earlier is a permanent instruction panel above an empty drive, and
+ * showing it when there ARE results would be explaining a thing that just worked.
+ *
+ * The text comes from the server's transformer, so it describes the grammar this
+ * deployment actually runs rather than the one this file was written against.
+ */
+function searchHelp(state, ui, mode) {
+  if (mode === 'command') return null;
+  const se = state.se;
+  if (!se.ran || se.loading || se.error || (se.results || []).length) return null;
+  const p = ui.platform.capabilities?.searchPrompt;
+  if (!p?.hint && !p?.examples?.length) return null;
+  const wb = ui.platform.workbench;
+  const tryIt = (query) => () => {
+    wb.setLaunchQuery(query);
+    const { text, filters } = parseTagQuery(query);
+    if (filters.length) ui.go(new FilterAction(filters, text));
+    else ui.go(new SearchAction(text));
+  };
+  return div({ className: 'launch-help' },
+    p.hint ? div({ className: 'lh-hint' }, icon('info', { size: 13 }), span(p.hint)) : null,
+    p.examples?.length
+      ? div({ className: 'lh-examples' }, ...p.examples.map((ex) =>
+        button({ className: 'lh-example', title: ex.label || 'Try this search' },
+          span({ className: 'lh-q' }, ex.query),
+          ex.label ? span({ className: 'lh-label' }, ex.label) : null,
+        ).on({ click: tryIt(ex.query) })))
+      : null,
+  );
 }
 
 function buildContent(state, ui, q, mode, modal) {

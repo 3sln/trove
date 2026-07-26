@@ -11,6 +11,14 @@ import { TroveError } from '../errors.js';
 
 /** @typedef {{ semanticText: string, tagFilters: Array<object>, source?: string, note?: string }} ResolvedQuery */
 
+/**
+ * @typedef {object} SearchPrompt
+ * @property {string} placeholder what to show in an empty search box
+ * @property {string} [short] a phone-width version of the same
+ * @property {string} [hint] one line explaining what the box accepts
+ * @property {Array<{query: string, label?: string}>} [examples] queries worth trying
+ */
+
 export class SearchTransformer {
   /**
    * @param {string} rawQuery the user's input
@@ -19,6 +27,21 @@ export class SearchTransformer {
    */
   async transform(rawQuery, ctx) {
     throw TroveError.unsupported('SearchTransformer.transform');
+  }
+
+  /**
+   * What to tell the user this search box accepts.
+   *
+   * The transformer defines the grammar, so the transformer has to define the prompt.
+   * A hardcoded "# filter by tag" is a lie the moment an LLM transformer is plugged in
+   * and the right thing to type becomes a sentence — and it is the specific kind of lie
+   * that teaches people the search doesn't work, because they type what the box told
+   * them to and get nothing.
+   *
+   * @returns {SearchPrompt}
+   */
+  describe() {
+    return { placeholder: 'Search files', short: 'Search' };
   }
 }
 
@@ -69,6 +92,20 @@ export class ParsingSearchTransformer extends SearchTransformer {
     const { text, filters } = parseTagFilters(rawQuery);
     return { semanticText: text, tagFilters: filters, source: 'parse' };
   }
+
+  describe() {
+    return {
+      placeholder: 'Search files · # filter by tag',
+      short: 'Search files',
+      hint: 'Words match content and meaning. #tag narrows to items carrying that tag, '
+        + 'and #key:value compares one — with =, !=, <, <=, > or >=.',
+      examples: [
+        { query: '#draft', label: 'everything tagged draft' },
+        { query: '#year:>2023', label: 'a comparison on a tag value' },
+        { query: 'sailing #draft', label: 'meaning and a tag together' },
+      ],
+    };
+  }
 }
 
 // An LLM-assisted transformer for Cloudflare Workers AI (or any compatible runner).
@@ -84,6 +121,22 @@ export class WorkersAiSearchTransformer extends SearchTransformer {
     this._run = run || (ai ? (m, input) => ai.run(m, input) : null);
     this.model = model;
     this._fallback = new ParsingSearchTransformer();
+  }
+
+  describe() {
+    // With a model in the loop the right thing to type is a sentence, so that is what
+    // the box should ask for. The `#tag` grammar still works — explicit filters are
+    // passed through untouched below — so it is mentioned rather than dropped.
+    return {
+      placeholder: 'Describe what you\'re looking for',
+      short: 'Describe what you want',
+      hint: 'Plain language works — "invoices from last spring". Explicit #tag filters '
+        + 'are still applied exactly as written.',
+      examples: [
+        { query: 'photos from the trip last summer' },
+        { query: 'contracts I haven\'t signed #draft', label: 'a sentence plus an exact filter' },
+      ],
+    };
   }
 
   async transform(rawQuery, ctx = {}) {

@@ -131,6 +131,10 @@ export function createRouter() {
       },
       principal: principal || null,
       search: vfs.search ? vfs.search.describe() : null,
+      // What this deployment's search box actually accepts. The transformer owns the
+      // grammar, so it owns the prompt — a client that hardcodes "# filter by tag"
+      // tells people the wrong thing the moment a different transformer is configured.
+      searchPrompt: vfs.searchTransformer?.describe?.() || null,
       ...(config?.clientConfig || {}),
     };
   });

@@ -84,8 +84,11 @@ export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000, page:
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console.error: ' + m.text()); });
   page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure()?.errorText || '')));
 
-  async function close() {
-    clearTimeout(watchdog);
+  // `exit: false` tears this instance down but leaves the process running, so one probe
+  // can compare two differently-configured servers. The default still exits, because a
+  // probe that is finished should not be kept alive by a socket that won't close.
+  async function close({ exit = true } = {}) {
+    if (exit) clearTimeout(watchdog);
     // Race teardown against a hard deadline — browser.close()/server.close() can hang on
     // lingering keep-alive sockets, and a probe is one-shot, so exit deterministically.
     server.closeAllConnections?.();
@@ -93,6 +96,7 @@ export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000, page:
       (async () => { await browser.close().catch(() => {}); await new Promise((r) => server.close(r)); })(),
       new Promise((r) => setTimeout(r, 1500)),
     ]);
+    if (!exit) return;
     // Flush stdout before exiting — process.exit() truncates buffered output when the
     // probe's stdout is a pipe (as it is under run-all.mjs).
     await new Promise((r) => process.stdout.write('', r));
