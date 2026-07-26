@@ -946,6 +946,18 @@ kbd {
 .shell.tv .launch-item .name { max-width: none; }
 .shell.tv .launch-h { font-size: 14px; }
 .shell.tv .btn { padding: 11px 20px; font-size: 16px; }
+/* And the content, which is the point of opening the file. A 12.5px monospace line on
+   a 1080p panel viewed from three metres is roughly what 4px looks like on a laptop —
+   scaling the chrome without scaling the document would be scaling the wrong half. */
+.shell.tv .viewer.text pre { font-size: 19px; line-height: 1.7; padding: 28px 34px; }
+.shell.tv .md { font-size: 21px; max-width: 1000px; }
+.shell.tv .viewer.markdown { padding: 40px 52px; }
+.shell.tv .viewer-nav { height: 54px; padding: 0 14px; }
+.shell.tv .vn-crumb { font-size: 17px; max-width: 420px; padding: 8px 12px; }
+.shell.tv .vn-back { width: 44px; height: 40px; }
+.shell.tv .settings { max-width: 1000px; font-size: 17px; }
+.shell.tv .settings .setting .info .d { font-size: 15px; }
+.shell.tv .infopanel { font-size: 16px; }
 
 /* The remote's cursor. Both :focus and :focus-visible — a d-pad move is a programmatic
    focus() and browsers disagree about whether that counts as "visible". */
@@ -957,6 +969,17 @@ kbd {
 }
 .shell.tv .launch-item:focus,
 .shell.tv .sheet-row:focus { background: var(--bg-selected); }
+/* The launcher keeps its OWN selection while focus stays in the search box — up/down
+   walk the results without focus ever leaving the field, which is the right behaviour
+   for typing and picking in one motion. But then the browser's focus ring is on the
+   search box while the thing that will actually open is four rows below it, and at
+   three metres the default 1px highlight on that row is invisible. So the launcher's
+   selection gets the same ring the remote's focus does. */
+.shell.tv .launch-item.active {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  background: var(--bg-selected);
+}
 /* A focus ring clipped by an ancestor's overflow is a selection that vanishes mid-list. */
 .shell.tv .launch-body { overflow-x: visible; }
 
@@ -989,3 +1012,22 @@ kbd {
   border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
 }
 .mcp-warn svg { flex: none; margin-top: 1px; }
+
+/* A two-column setting row assumes a window. At 390px the fixed 200px control leaves
+   the description in a gutter, and a text field in a gutter is not usable — so the row
+   stacks and the control takes the full width. */
+.shell.phone .settings { padding: 18px 14px 40px; }
+.shell.phone .setting { flex-direction: column; align-items: stretch; gap: 8px; }
+.shell.phone .setting .control { width: 100%; justify-content: stretch; }
+.shell.phone .setting .control > * { flex: 1; }
+/* Not everything wants the full width. A toggle stretched across the screen reads as a
+   button; a copy icon stretched across it reads as broken. */
+.shell.phone .setting .control .switch,
+.shell.phone .setting .control .iconbtn,
+.shell.phone .mcp-url .btn { flex: none; }
+.shell.phone .setting .control .switch { align-self: flex-start; }
+.shell.phone .mcp-url .mono { flex: 1; min-width: 0; }
+/* A row whose only control is an icon button has nothing to stack — keep it on one
+   line, with the button where the thumb expects it. */
+.shell.phone .setting:has(.control > .iconbtn:only-child) { flex-direction: row; align-items: center; }
+.shell.phone .setting:has(.control > .iconbtn:only-child) .control { width: auto; justify-content: flex-end; }

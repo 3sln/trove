@@ -35,6 +35,7 @@ const focused = () => page.evaluate(() => {
   return { tag: el.tagName, cls: el.className || '', text: (el.innerText || el.value || '').trim().slice(0, 40) };
 });
 const press = async (key) => { await page.keyboard.press(key); await page.waitForTimeout(90); };
+const settle_ = (p) => p.waitForTimeout(400);
 // The app's clickable rows only become focusable once the service stamps a tabindex on
 // them, which it does per frame. A probe that focused one before that would be testing
 // its own timing, not the app.
@@ -125,6 +126,26 @@ await press('ArrowLeft');
 const caret = await page.evaluate(() => document.querySelector('.launch-input').selectionStart);
 check('left moves the caret instead of leaving the field', caret === 3,
   `caret at ${caret}, focus ${(await focused())?.cls}`);
+
+// --- 5b. Typing and picking in one motion -------------------------------------
+// The most common thing anyone does on a TV: type a bit, then arrow down into the
+// results. Focus stays in the search box (the launcher owns up/down there), so the
+// browser's focus ring is on the FIELD while the row that will actually open is
+// further down. That row has to carry a ring of its own, or the user is reading a
+// screen where nothing visibly indicates what Enter will do.
+await page.evaluate(() => { const i = document.querySelector('.launch-input'); i.focus(); i.select(); });
+await page.keyboard.press('Backspace');
+await settle_(page);
+await press('ArrowDown');
+await press('ArrowDown');
+const activeRing = await page.evaluate(() => {
+  const row = document.querySelector('.launch-item.active');
+  if (!row) return null;
+  const s = getComputedStyle(row);
+  return { name: row.innerText.split('\n')[0], width: s.outlineWidth, style: s.outlineStyle };
+});
+check('the row the launcher has selected is ringed too, not just the search box',
+  activeRing && parseFloat(activeRing.width) >= 3 && activeRing.style !== 'none', JSON.stringify(activeRing));
 
 // --- 6. The focus ring is actually visible from a sofa ------------------------
 await focusRow('.launch-item');
