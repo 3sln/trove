@@ -272,6 +272,40 @@ export class TroveApiClient {
   }
 
   /**
+   * Read at most `maxBytes` of a file as text.
+   *
+   * A viewer must never pull a whole file just to show the top of it. A drive holds
+   * logs, exports and dumps that are hundreds of megabytes; `readText` on one of those
+   * buffers the entire thing in the tab before a single character is drawn, and the
+   * browser is gone before the user learns anything. A Range request costs one extra
+   * byte over the wire and bounds the damage at the transfer rather than the render.
+   *
+   * The cut is at a BYTE boundary, which can land mid-character in UTF-8, so the
+   * decoder is told to tolerate it — a trailing replacement glyph beats throwing away
+   * the read. The last partial line is dropped for the same reason.
+   *
+   * @returns {Promise<{text: string, truncated: boolean, total: number|null}>}
+   */
+  async readTextCapped(id, { maxBytes = 512 * 1024, signal } = {}) {
+    const res = await this._fetch(this.downloadUrl(id), {
+      signal,
+      headers: { ...this.authHeaders(), range: `bytes=0-${maxBytes - 1}` },
+    });
+    if (!res.ok && res.status !== 206) throw new TroveError('internal', `Download failed (${res.status})`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // `Content-Range: bytes 0-N/TOTAL` is how we learn the real size; a server that
+    // ignored the Range header just sent everything, which is also fine.
+    const total = Number(/\/(\d+)$/.exec(res.headers.get('content-range') || '')?.[1]) || null;
+    const truncated = bytes.length >= maxBytes && (total == null || total > bytes.length);
+    let text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    if (truncated) {
+      const lastBreak = text.lastIndexOf('\n');
+      if (lastBreak > 0) text = text.slice(0, lastBreak);
+    }
+    return { text, truncated, total };
+  }
+
+  /**
    * Upload a File/Blob with progress + resume.
    * @param {Blob & {name?:string}} file
    * @param {object} opts

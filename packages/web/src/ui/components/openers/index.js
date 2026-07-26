@@ -74,12 +74,29 @@ export function renderOpener(node, openerId, ui) {
 
 // ---- component openers -----------------------------------------------------
 
+// How much of a text file the viewer will pull and draw. A drive holds logs, CSV
+// exports and database dumps in the hundreds of megabytes; reading one whole just to
+// show its beginning buffers the entire file in the tab and then asks the browser to
+// lay out ten million characters. Both halves are bounded here — the Range request
+// means the bytes never arrive, not merely that they aren't drawn.
+const TEXT_VIEW_BYTES = 512 * 1024;
+
 function textOpener(node, ui) {
-  const src = Observable.fromAsync(() => ui.platform.api.readText(node.id));
+  const src = Observable.fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: TEXT_VIEW_BYTES }));
   return dd.alias(() =>
     ui.platform.reactive.watch(
       src,
-      (text) => div({ className: 'viewer text' }, pre(text)),
+      ({ text, truncated, total }) => div({ className: 'viewer text' },
+        pre(text),
+        // Say what is missing rather than trailing off. A viewer that silently shows
+        // the first slice of a file is worse than one that refuses: the reader believes
+        // they have seen the end of it.
+        truncated
+          ? div({ className: 'md-truncated' },
+            `Showing the first ${Math.round(text.length / 1024)} KB${total ? ` of ${(total / 1048576).toFixed(1)} MB` : ''}. `,
+            span('Download the file to read all of it.'))
+          : null,
+      ),
       {
         placeholder: () => div({ className: 'viewer' }, div({ className: 'loading' }, div({ className: 'spinner' }), span('Loading…'))),
         error: (e) => errorView(e.message),

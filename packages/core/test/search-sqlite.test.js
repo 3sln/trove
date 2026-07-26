@@ -220,3 +220,83 @@ test('looksUnindexed answers only when the stores can actually count', async () 
   const mute = new SearchService({ embeddings, vectorStore: new Mute({ dimensions: 16 }), keywordStore: { async count() { return null; } } });
   expect(await mute.looksUnindexed()).toBe(null);
 });
+
+test('re-indexing cost does not grow with the size of the index', async () => {
+  // This is a shape test, not a speed test — it asserts an algorithm, not a machine.
+  //
+  // FTS5 can only be searched by its term index, so a predicate on an UNINDEXED column
+  // is a full scan. Every write re-indexes a node, which deletes its old rows first, so
+  // without a rowid sidecar each upload scanned the whole index and the drive got
+  // slower the more it held: uploading 2,000 files took 14s for the first 500 and 40s
+  // for the last 500. That is the regression this pins.
+  const p = new LocalSqliteProvider({ path: ':memory:' });
+  const store = await SqliteKeywordStore.open({ provider: p });
+
+  const fill = async (upTo) => {
+    for (let i = await store.count(); i < upTo; i++) {
+      await store.add([{ id: `d${i}`, nodeId: `n${i}`, indexerId: 'ix', text: `document number ${i} about sailing`, fields: {} }]);
+    }
+  };
+  // Average over several writes so one outlier can't decide the result.
+  const costPerWrite = async (label) => {
+    const start = performance.now();
+    for (let k = 0; k < 40; k++) {
+      await store.add([{ id: `probe_${label}_${k}`, nodeId: `p${k}`, indexerId: 'ix', text: 'probe document', fields: {} }]);
+    }
+    return (performance.now() - start) / 40;
+  };
+
+  await fill(500);
+  const small = await costPerWrite('small');
+  await fill(6000);
+  const large = await costPerWrite('large');
+
+  // 12× the index. Linear behaviour would show up as roughly 12× the cost; a generous
+  // 4× ceiling catches that while leaving room for cache effects and a noisy CI box.
+  expect(large).toBeLessThan(small * 4 + 1);
+  await p.close();
+});
+
+test('a snippet is fetched by rowid, not by scanning the index', async () => {
+  // Same failure in the read path: one snippet per result row meant a page of results
+  // did forty full scans, and search slowed from 27ms to 685ms as the drive grew.
+  const p = new LocalSqliteProvider({ path: ':memory:' });
+  const store = await SqliteKeywordStore.open({ provider: p });
+  for (let i = 0; i < 3000; i++) {
+    await store.add([{ id: `d${i}`, nodeId: `n${i}`, indexerId: 'ix', text: `filler document ${i}`, fields: {} }]);
+  }
+  await store.add([{ id: 'target', nodeId: 'nt', indexerId: 'ix', text: 'the spice melange extends life', fields: {} }]);
+
+  const start = performance.now();
+  for (let k = 0; k < 40; k++) await store.snippet('target', 'melange');
+  const perSnippet = (performance.now() - start) / 40;
+  expect(await store.snippet('target', 'melange')).toMatch(/melange/);
+  // A full scan of 3,000 FTS rows is milliseconds; a rowid lookup is microseconds.
+  expect(perSnippet).toBeLessThan(1);
+  // A snippet for something that isn't there is null, not a throw.
+  expect(await store.snippet('no-such-doc', 'melange')).toBe(null);
+  await p.close();
+});
+
+test('an index written before the sidecar existed is adopted, not leaked', async () => {
+  // Upgrading a real drive: rows inserted by the previous version have no sidecar entry,
+  // so nothing could ever delete them — a re-index would double-count every document.
+  const t = await tempProvider();
+  try {
+    let store = await SqliteKeywordStore.open({ provider: t.provider });
+    // Simulate the old shape: a row in the FTS table with no kw_meta entry.
+    await store.db.run(
+      "INSERT INTO kw_docs(content, body, doc_id, nodeId, indexerId, fields) VALUES ('legacy text','legacy text','old1','nOld','ix','{}')",
+    );
+    await store.db.run("DELETE FROM kw_meta WHERE doc_id = 'old1'");
+
+    const reopened = await t.restart();
+    store = await SqliteKeywordStore.open({ provider: reopened });
+    // Adopted on open, so it is now deletable like anything else.
+    await store.removeByNode('nOld');
+    expect(await store.count()).toBe(0);
+    await reopened.close();
+  } finally {
+    await t.cleanup();
+  }
+});

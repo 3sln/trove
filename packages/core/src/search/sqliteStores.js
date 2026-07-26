@@ -212,11 +212,23 @@ export class SqliteKeywordStore extends KeywordStore {
   constructor(db) {
     super();
     this.db = db;
+    this._nextRowid = 1;
   }
 
   async init() {
-    // `content` is indexed; doc_id/nodeId/indexerId are UNINDEXED so they're stored
-    // and returnable without polluting the term index.
+    // `content` is indexed; the rest are UNINDEXED so they're stored and returnable
+    // without polluting the term index.
+    //
+    // The `kw_meta` sidecar exists for DELETES, and it is the difference between a
+    // drive that stays fast and one that doesn't. An FTS5 table can only be searched by
+    // its term index — a predicate on an UNINDEXED column is a full scan of every row.
+    // Every single write re-indexes a node, which means deleting its old rows first, so
+    // without this each upload costs a scan of the entire index and the drive slows
+    // down in proportion to how much is in it. Measured: uploading 2,000 files took
+    // 14s for the first 500 and 40s for the last 500, purely from this.
+    //
+    // With the sidecar, a delete is an indexed lookup followed by `WHERE rowid = ?`,
+    // which is the one predicate FTS5 answers directly.
     await this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS kw_docs USING fts5(
         content,
@@ -227,34 +239,94 @@ export class SqliteKeywordStore extends KeywordStore {
         fields UNINDEXED,
         tokenize = 'porter unicode61'
       );
+      CREATE TABLE IF NOT EXISTS kw_meta (
+        doc_id TEXT PRIMARY KEY,
+        rid INTEGER NOT NULL,
+        nodeId TEXT NOT NULL,
+        indexerId TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_kw_meta_node ON kw_meta(nodeId);
+      CREATE INDEX IF NOT EXISTS idx_kw_meta_indexer ON kw_meta(indexerId);
+      CREATE INDEX IF NOT EXISTS idx_kw_meta_node_indexer ON kw_meta(nodeId, indexerId);
     `);
+    // Rowids are assigned here rather than by SQLite so a batched insert doesn't have to
+    // read last_insert_rowid() back between statements. Seeded from what's on disk, so
+    // reopening an existing index continues rather than colliding.
+    const max = await this.db.get('SELECT MAX(rid) AS m FROM kw_meta');
+    this._nextRowid = (max?.m ?? 0) + 1;
+
+    // An index written before kw_meta existed has rows the sidecar doesn't know about.
+    // Backfill it once rather than silently leaking those rows forever — they would
+    // never be deleted, so a re-index would double-count every document.
+    const orphaned = await this.db.get(
+      'SELECT COUNT(*) AS n FROM kw_docs WHERE rowid NOT IN (SELECT rid FROM kw_meta)',
+    );
+    if (orphaned?.n) await this.#adoptExistingRows();
+  }
+
+  /** Bring pre-sidecar rows under management (one-time, on upgrade). */
+  async #adoptExistingRows() {
+    const rows = await this.db.all(
+      'SELECT rowid AS rid, doc_id, nodeId, indexerId FROM kw_docs WHERE rowid NOT IN (SELECT rid FROM kw_meta)',
+    );
+    if (!rows.length) return;
+    await this.db.batch(rows.map((r) => ({
+      sql: 'INSERT INTO kw_meta(doc_id, rid, nodeId, indexerId) VALUES (?,?,?,?) ON CONFLICT(doc_id) DO UPDATE SET rid = excluded.rid',
+      params: [r.doc_id, r.rid, r.nodeId, r.indexerId],
+    })));
+    const max = await this.db.get('SELECT MAX(rid) AS m FROM kw_meta');
+    this._nextRowid = (max?.m ?? 0) + 1;
+    console.warn(`[trove] adopted ${rows.length} pre-existing keyword rows into the delete index`);
   }
 
   async add(docs) {
+    if (!docs.length) return;
+    // Resolve the rowids of anything being replaced first — an indexed lookup, not a
+    // scan of the term index.
+    const ids = docs.map((d) => d.id);
+    const existing = await this.db.all(
+      `SELECT doc_id, rid FROM kw_meta WHERE doc_id IN (${ids.map(() => '?').join(',')})`,
+      ...ids,
+    );
     const statements = [];
+    for (const row of existing) statements.push({ sql: 'DELETE FROM kw_docs WHERE rowid = ?', params: [row.rid] });
     for (const d of docs) {
       const body = d.text || '';
       // `content` is what gets INDEXED — the text plus the field values, so a search
       // for a filename finds the chunk. `body` is what gets SHOWN, kept separate so a
       // snippet is the document's prose and not prose with metadata glued on.
       const content = [body, ...Object.values(d.fields || {})].join(' ');
-      statements.push({ sql: 'DELETE FROM kw_docs WHERE doc_id = ?', params: [d.id] });
+      const rid = this._nextRowid++;
       statements.push({
-        sql: 'INSERT INTO kw_docs(content, body, doc_id, nodeId, indexerId, fields) VALUES (?,?,?,?,?,?)',
-        params: [content, body, d.id, d.nodeId, d.indexerId, JSON.stringify(d.fields || {})],
+        sql: 'INSERT INTO kw_docs(rowid, content, body, doc_id, nodeId, indexerId, fields) VALUES (?,?,?,?,?,?,?)',
+        params: [rid, content, body, d.id, d.nodeId, d.indexerId, JSON.stringify(d.fields || {})],
+      });
+      statements.push({
+        sql: 'INSERT INTO kw_meta(doc_id, rid, nodeId, indexerId) VALUES (?,?,?,?) '
+          + 'ON CONFLICT(doc_id) DO UPDATE SET rid = excluded.rid, nodeId = excluded.nodeId, indexerId = excluded.indexerId',
+        params: [d.id, rid, d.nodeId, d.indexerId],
       });
     }
-    if (statements.length) await this.db.batch(statements);
+    await this.db.batch(statements);
   }
 
   async removeByNode(nodeId) {
-    await this.db.run('DELETE FROM kw_docs WHERE nodeId = ?', nodeId);
+    await this.#removeWhere('nodeId = ?', [nodeId]);
   }
   async removeByIndexer(indexerId) {
-    await this.db.run('DELETE FROM kw_docs WHERE indexerId = ?', indexerId);
+    await this.#removeWhere('indexerId = ?', [indexerId]);
   }
   async removeByNodeIndexer(nodeId, indexerId) {
-    await this.db.run('DELETE FROM kw_docs WHERE nodeId = ? AND indexerId = ?', nodeId, indexerId);
+    await this.#removeWhere('nodeId = ? AND indexerId = ?', [nodeId, indexerId]);
+  }
+  /** Indexed lookup in the sidecar, then delete by rowid — the one predicate FTS5 answers. */
+  async #removeWhere(where, params) {
+    const rows = await this.db.all(`SELECT rid FROM kw_meta WHERE ${where}`, ...params);
+    if (!rows.length) return;
+    await this.db.batch([
+      ...rows.map((r) => ({ sql: 'DELETE FROM kw_docs WHERE rowid = ?', params: [r.rid] })),
+      { sql: `DELETE FROM kw_meta WHERE ${where}`, params },
+    ]);
   }
 
   async search(query, opts = {}) {
@@ -291,7 +363,13 @@ export class SqliteKeywordStore extends KeywordStore {
    * what a result looks like.
    */
   async snippet(docId, query) {
-    const row = await this.db.get('SELECT body FROM kw_docs WHERE doc_id = ?', docId);
+    // Via the sidecar, for the same reason deletes go through it: `doc_id` is an
+    // UNINDEXED FTS5 column, so looking a document up by it scans the whole index. One
+    // snippet per result row means a page of results was doing forty full scans — the
+    // single largest cost in a search, and it grew with the drive.
+    const meta = await this.db.get('SELECT rid FROM kw_meta WHERE doc_id = ?', docId);
+    if (!meta) return null;
+    const row = await this.db.get('SELECT body FROM kw_docs WHERE rowid = ?', meta.rid);
     const text = row?.body;
     if (!text) return null;
     const lower = text.toLowerCase();
@@ -306,6 +384,12 @@ export class SqliteKeywordStore extends KeywordStore {
   }
 
   async count() {
+    // Counts the REAL index, not the sidecar. The sidecar is a delete index; it is not
+    // authoritative about what the index contains, and the two can drift — a restore
+    // that lost the FTS table, or someone clearing it by hand. Since the only caller is
+    // the startup "was the index lost?" check, an honest answer is worth more than the
+    // cheaper one: reading the sidecar would report a full index sitting on top of no
+    // content, and the rebuild that exists for exactly that case would never fire.
     return (await this.db.get('SELECT COUNT(*) AS n FROM kw_docs'))?.n ?? 0;
   }
 }

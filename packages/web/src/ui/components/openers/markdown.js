@@ -26,7 +26,9 @@ import { openTroveLink } from '../../../bl/links.js';
 const { div, span, h1, h2, h3, p, ul, ol, li, pre, code, a, em, strong, blockquote, hr, br } = dd;
 
 export function markdownOpener(node, ui) {
-  const src = Observable.fromAsync(() => ui.platform.api.readText(node.id));
+  // Bounded at the TRANSFER, not just the render: MAX_CHARS below stops us laying out a
+  // huge document, but without this the whole file is still pulled into the tab first.
+  const src = Observable.fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: MAX_CHARS }).then((r) => r.text));
   return dd.alias(() =>
     ui.platform.reactive.watch(
       src,
