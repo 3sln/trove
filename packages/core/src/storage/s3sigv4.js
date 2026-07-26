@@ -25,8 +25,16 @@ function hex(buf) {
   return s;
 }
 
-// RFC 3986 encoding. S3 requires each path segment encoded but slashes kept.
-function uriEncode(str, encodeSlash = true) {
+/**
+ * RFC 3986 encoding — the `UriEncode()` SigV4 specifies. Deliberately stricter than
+ * `encodeURIComponent`, which leaves `!'()*` literal; S3 percent-encodes those when it
+ * recomputes the canonical request, so a URL built with encodeURIComponent gets signed
+ * one way and verified another.
+ *
+ * @param {string} str
+ * @param {boolean} [encodeSlash] false for a path (slashes are separators, not data)
+ */
+export function uriEncode(str, encodeSlash = true) {
   let out = '';
   for (const ch of String(str)) {
     if (/[A-Za-z0-9\-._~]/.test(ch)) out += ch;
@@ -100,7 +108,12 @@ export async function presignUrl(creds, o) {
 
   const canonicalRequest = [
     o.method,
-    uriEncode(url.pathname, false),
+    // The path VERBATIM. `url.pathname` is already percent-encoded, and S3 (alone among
+    // AWS services) single-encodes the canonical URI — re-encoding here would turn the
+    // %20 we send into the %2520 we sign, and every key with a space in it would come
+    // back 403 SignatureDoesNotMatch. Callers must therefore hand us a URL whose path
+    // was built with `uriEncode`, not `encodeURIComponent`.
+    url.pathname,
     canonicalQuery,
     canonicalHeaders,
     signedHeaders,
@@ -152,7 +165,7 @@ export async function signRequest(creds, o) {
 
   const canonicalRequest = [
     o.method,
-    uriEncode(url.pathname, false),
+    url.pathname, // verbatim — see the note in presignUrl
     canonicalQuery,
     canonicalHeaders,
     signedHeaders,

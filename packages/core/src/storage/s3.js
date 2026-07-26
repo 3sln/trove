@@ -8,7 +8,7 @@
 // MinIO/R2-with-custom-domain want path style, real AWS wants virtual host.
 
 import { StorageBackend, toBytes } from './interface.js';
-import { presignUrl, signRequest, sha256Hex } from './s3sigv4.js';
+import { presignUrl, signRequest, sha256Hex, uriEncode } from './s3sigv4.js';
 import { TroveError, wrapError } from '../errors.js';
 import { withRetry } from '../retry.js';
 
@@ -49,9 +49,21 @@ export class S3Storage extends StorageBackend {
     return { presignDownload: true, presignUpload: true, multipart: true, range: true };
   }
 
+  /**
+   * The object's URL, encoded the way SigV4 will canonicalize it.
+   *
+   * `uriEncode`, not `encodeURIComponent`/`URLSearchParams`: the signature is computed
+   * over this exact string, so anything that encodes differently here than the signer
+   * does there produces a URL we send one way and sign another — a 403 from S3 for any
+   * key or parameter containing a space, a `+`, a `!`, or a non-ASCII character.
+   */
   #url(key, query) {
-    const u = new URL(`${this.base}/${key.split('/').map(encodeURIComponent).join('/')}`);
-    if (query) for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v);
+    const u = new URL(`${this.base}/${uriEncode(key, false)}`);
+    if (query) {
+      u.search = Object.entries(query)
+        .map(([k, v]) => `${uriEncode(k)}=${uriEncode(v)}`)
+        .join('&');
+    }
     return u.toString();
   }
 

@@ -21,6 +21,8 @@
   "license": "MIT",
   "author": "Ray Stubbs",
   "devDependencies": {
-    "playwright-core": "^1.61.1"
+    "aws4": "^1.13.2",
+    "playwright-core": "^1.61.1",
+    "s3rver": "^3.7.1"
   }
 }

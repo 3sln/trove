@@ -394,6 +394,29 @@ server-side uninstall fails. They deliberately trigger 404s and faults, so they 
 outside the strict e2e suites. The **walkthrough** drives the whole app end to end and
 screenshots each step — the "does it all still work together" check.
 
+### Testing against S3
+
+`bun test` runs the S3 backend against **s3rver**, an in-process S3 server (a
+devDependency — no daemon, no container). That covers the wire protocol: paths,
+Range, ETags, XML, and the multipart create/put/complete dance. It does **not**
+cover authentication — s3rver doesn't implement SigV4 verification and will
+accept any signature. Signing is covered separately in
+`packages/core/test/s3sigv4.test.js`, which diffs our signer against `aws4` (an
+independent implementation) and against AWS's own published example, so nothing
+in the signing path is checked only by code we wrote.
+
+For real-server fidelity — signature verification, the 5 MiB minimum part size,
+real error codes — point the same tests at MinIO, Garage, R2, or S3:
+
+```sh
+docker run -p 9000:9000 -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
+# create the bucket, then:
+TROVE_S3_TEST_ENDPOINT=http://127.0.0.1:9000 TROVE_S3_TEST_BUCKET=trove-test \
+TROVE_S3_TEST_KEY=minioadmin TROVE_S3_TEST_SECRET=minioadmin \
+bun test packages/core/test/s3-e2e.test.js
+```
+
 ## License
 
 MIT © Ray Stubbs
