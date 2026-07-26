@@ -15,6 +15,7 @@ import {
   KeywordStore, MemoryKeywordStore, SqliteKeywordStore,
   IndexerRegistry,
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
+  cloudflareAccess, accessHost,
   KeyValueStore, MemoryKV, SqliteKV,
   SqliteProvider, LocalSqliteProvider,
   SidecarService, NotificationCenter, WebPushService,
@@ -95,6 +96,12 @@ function buildSearchTransformer(cfg, config) {
 }
 function buildIdentity(cfg) {
   switch (cfg.driver) {
+    // Cloudflare Access, configured by team name alone. Everything else about Access —
+    // the JWKS path, the issuer, and (since managed OAuth) the authorization server an
+    // agent signs in at — is that same domain, and writing it into three settings that
+    // must agree is three chances to get it wrong.
+    case 'cloudflare-access':
+      return new JwtIdentityProvider(cloudflareAccess({ ...(cfg.access || {}), ...(cfg.jwt || {}) }));
     case 'jwt': return new JwtIdentityProvider(cfg.jwt || {});
     case 'header': return new HeaderIdentityProvider(cfg.header || {});
     case 'anonymous': default: return new AnonymousIdentityProvider();
@@ -631,8 +638,25 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // the same URL; set it when they genuinely differ.
   if (env.TROVE_AUTH_SERVER) config.authServer = env.TROVE_AUTH_SERVER;
 
-  // Identity: default anonymous; 'jwt' for Cloudflare Access / Zero Trust.
+  // Identity: default anonymous; 'jwt' for a generic IdP, 'cloudflare-access' for Zero
+  // Trust (which only needs the team name).
   config.identity = { driver: env.TROVE_AUTH || 'anonymous' };
+  if (config.identity.driver === 'cloudflare-access') {
+    config.identity.access = {
+      team: env.TROVE_CF_ACCESS_TEAM,
+      // The Access application's AUD tag. The one value that can't be derived from the
+      // team, and the one that stops a token minted for a DIFFERENT application in the
+      // same Access account from being accepted here.
+      audience: env.TROVE_CF_ACCESS_AUD,
+      required: env.TROVE_AUTH_REQUIRED !== 'false',
+    };
+    // Access is also where agents sign in (managed OAuth), and that is the same domain.
+    // Derived rather than asked for again — see resolveAuthDiscovery's issuer fallback,
+    // which this is just making explicit and immune to the issuer being unset.
+    if (!config.authServer && env.TROVE_CF_ACCESS_TEAM) {
+      config.authServer = `https://${accessHost(env.TROVE_CF_ACCESS_TEAM)}`;
+    }
+  }
   if (config.identity.driver === 'jwt') {
     config.identity.jwt = {
       jwksUrl: env.TROVE_JWKS_URL, // e.g. https://<team>.cloudflareaccess.com/cdn-cgi/access/certs

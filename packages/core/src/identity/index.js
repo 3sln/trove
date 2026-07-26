@@ -35,12 +35,72 @@ export function principalFromClaims(claims) {
   };
 }
 
+/**
+ * The credential on a request.
+ *
+ * `Cf-Access-Jwt-Assertion` is checked FIRST, and that order matters twice.
+ *
+ * Correctness: with Cloudflare's managed OAuth an agent holds an OPAQUE token, not a
+ * JWT. It sends that in `Authorization: Bearer`, Access resolves it at the edge, and
+ * the origin receives the real signed JWT in the assertion header. Reading Authorization
+ * first means picking up the opaque string, failing to decode it, and refusing a request
+ * that arrived with a perfectly good assertion attached.
+ *
+ * Security: the assertion header is set by the edge that just authenticated the request.
+ * The Authorization header is whatever the client typed. When both are present, the one
+ * we did not have to trust the client for is the one to believe.
+ */
 function bearer(request) {
+  const assertion = request.headers.get('cf-access-jwt-assertion');
+  if (assertion) return assertion;
   const auth = request.headers.get('authorization') || '';
   const m = /^Bearer\s+(.+)$/i.exec(auth);
-  if (m) return m[1];
-  // Cloudflare Access puts the assertion here.
-  return request.headers.get('cf-access-jwt-assertion') || null;
+  return m ? m[1] : null;
+}
+
+/**
+ * Everything Cloudflare Access needs, derived from the team name.
+ *
+ * Access is the deployment Trove was designed around, and configuring it by hand means
+ * writing the team domain into three settings that must agree: a JWKS URL with a
+ * `/cdn-cgi/access/certs` path nobody remembers, an issuer, and — since Access became an
+ * OAuth authorization server for agents — the authorization server too. They are all the
+ * same domain, so ask for it once.
+ *
+ * The audience is the Access **application** AUD tag, which is per-application and the
+ * one value that genuinely cannot be derived. Without it a token minted for any other
+ * app in the same Access account would be accepted here, so it is worth the argument.
+ *
+ * @param {{team: string, audience?: string|string[], required?: boolean}} cfg
+ */
+export function cloudflareAccess({ team, audience, required = true, ...rest } = {}) {
+  const host = accessHost(team);
+  if (!host) throw TroveError.invalid('cloudflareAccess requires a team name, e.g. "myteam" or "myteam.cloudflareaccess.com"');
+  const issuer = `https://${host}`;
+  return {
+    jwksUrl: `${issuer}/cdn-cgi/access/certs`,
+    issuer,
+    audience: audience || undefined,
+    // Behind Access, every request has already been authenticated at the edge. An
+    // "anonymous" fallthrough would only fire when something is misconfigured, and
+    // silently serving the drive to a shared anonymous user is the wrong way to find out.
+    required,
+    ...rest,
+  };
+}
+
+/** Normalize `myteam`, `myteam.cloudflareaccess.com`, or the full URL to a hostname. */
+export function accessHost(team) {
+  if (!team) return null;
+  let t = String(team).trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+  if (!t) return null;
+  if (!t.includes('.')) t = `${t}.cloudflareaccess.com`;
+  // A team domain that isn't Cloudflare's is a typo we should not paper over: it would
+  // send token verification, and now agent sign-in, to somewhere unintended.
+  if (!t.endsWith('.cloudflareaccess.com')) {
+    throw TroveError.invalid(`"${team}" is not a Cloudflare Access team domain (expected <team>.cloudflareaccess.com)`);
+  }
+  return t;
 }
 
 export class JwtIdentityProvider extends IdentityProvider {

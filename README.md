@@ -212,11 +212,16 @@ them:
 #    oauth2-proxy). The browser sends nothing; Trove trusts the header.
 TROVE_AUTH=header TROVE_AUTH_ID_HEADER=cf-access-authenticated-user-email
 
-# 2. An IdP publishes a JWKS you fetch.
-TROVE_AUTH=jwt TROVE_JWKS_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/certs \
-TROVE_JWT_ISSUER=... TROVE_JWT_AUDIENCE=...
+# 2. Cloudflare Access / Zero Trust — the team name is the only thing that isn't
+#    derivable. TROVE_CF_ACCESS_AUD is the Access *application's* AUD tag: without it,
+#    a token minted for any other app in the same Access account verifies here too.
+TROVE_AUTH=cloudflare-access TROVE_CF_ACCESS_TEAM=acme TROVE_CF_ACCESS_AUD=<aud-tag>
 
-# 3. You mint your own tokens, so there is no JWKS endpoint to point at — name the
+# 3. Any other IdP that publishes a JWKS you fetch.
+TROVE_AUTH=jwt TROVE_JWKS_URL=https://issuer.example.com/.well-known/jwks.json \
+TROVE_JWT_ISSUER=https://issuer.example.com TROVE_JWT_AUDIENCE=trove
+
+# 4. You mint your own tokens, so there is no JWKS endpoint to point at — name the
 #    keys directly. Inline JSON, or a file (which keeps a multi-line document out of
 #    the environment and out of `docker inspect`).
 TROVE_AUTH=jwt TROVE_JWT_JWKS_FILE=/run/secrets/trove-jwks.json \
@@ -453,6 +458,38 @@ const { handle } = await createServer({
   identity: { driver: 'jwt', jwt: { jwksUrl: '...', audience: '...' } },
 });
 ```
+
+### Cloudflare Access (Zero Trust)
+
+Two env vars, and both the browser and agents are covered:
+
+```sh
+TROVE_AUTH=cloudflare-access
+TROVE_CF_ACCESS_TEAM=acme          # or acme.cloudflareaccess.com
+TROVE_CF_ACCESS_AUD=<aud-tag>      # the Access application's AUD
+```
+
+That derives the JWKS URL, the issuer, and the authorization server — they are all the
+same team domain, and writing it into three settings is three chances to have them
+disagree. A domain that isn't `*.cloudflareaccess.com` is refused rather than accepted,
+since it would send both token verification and agent sign-in somewhere unintended.
+
+**For agents, turn on [Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
+on the Access application.** Access then acts as the OAuth authorization server itself —
+including dynamic client registration, which the MCP spec expects and which a plain
+Access SaaS/OIDC app does not do. Without it, an agent hitting `/mcp` gets Access's HTML
+login page, which it cannot do anything with.
+
+With managed OAuth on, Access answers the 401 at the edge, so **Trove's own challenge is
+never reached** — that is fine and intended, and it is why Trove doesn't need to be
+configured differently for it. What arrives at the origin is the resolved
+`Cf-Access-Jwt-Assertion`, which Trove verifies exactly as it does a browser's.
+
+One subtlety worth knowing, because it is invisible when it goes wrong: the agent's token
+under managed OAuth is **opaque**, not a JWT, and it travels in `Authorization: Bearer`.
+The real signed JWT is the assertion header. Trove reads the assertion header *first* for
+that reason — and because it is the one the edge vouched for, rather than the one the
+caller typed.
 
 ## Connecting an AI agent (MCP)
 
