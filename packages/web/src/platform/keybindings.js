@@ -62,16 +62,44 @@ export class KeybindingService {
     return () => target.removeEventListener('keydown', this._onKeyDown);
   }
 
-  /** User rebinds: `{ [commandId]: "mod+k" }` from settings. */
+  /**
+   * User rebinds, keyed by BINDING rather than by command.
+   *
+   * Keyed by command, one shortcut could not be changed without changing the others:
+   * `workbench.view.home` ships bound twice (⌘⇧F and ⌘⇧E), so rebinding either
+   * collapsed both onto the new chord — two identical rows in Settings and one shortcut
+   * silently gone. A binding's identity is (command, the key it was DECLARED with),
+   * which is stable across restarts and unique per row.
+   */
   overrides() {
     return this.settings?.get(OVERRIDES_KEY) || {};
   }
-  /** Rebind one command (null clears it back to whatever its keymap declared). */
-  rebind(command, key) {
+
+  /** The override key for one declared binding. */
+  static bindingId(binding) {
+    return `${binding.command}\u0000${normalizeKey(binding.defaultKey || binding.key)}`;
+  }
+
+  /**
+   * Rebind one BINDING (null clears it back to what its keymap declared).
+   * @param {{command: string, defaultKey?: string, key: string}|string} binding
+   *   a resolved binding, or a bare command id for the legacy single-binding case.
+   */
+  rebind(binding, key) {
     if (!this.settings) return;
+    const id = typeof binding === 'string'
+      ? this.#idForCommand(binding)
+      : KeybindingService.bindingId(binding);
+    if (!id) return;
     const next = { ...this.overrides() };
-    if (key) next[command] = key; else delete next[command];
+    if (key) next[id] = key; else delete next[id];
     this.settings.set(OVERRIDES_KEY, next);
+  }
+
+  /** Resolve a bare command id to its (single) binding id, for older callers. */
+  #idForCommand(command) {
+    const b = this.contributions.keybindings().find((x) => x?.command === command && x.key);
+    return b ? KeybindingService.bindingId({ ...b, defaultKey: b.key }) : null;
   }
 
   /** Current effective bindings (every keymap's, plus user overrides). */
@@ -79,7 +107,13 @@ export class KeybindingService {
     const overrides = this.overrides();
     return this.contributions.keybindings()
       .filter((b) => b?.key && b.command)
-      .map((b) => ({ ...b, key: normalizeKey(overrides[b.command] || b.key) }));
+      .map((b) => {
+        // `defaultKey` is what the keymap declared — the row's stable identity, and what
+        // "reset" restores to.
+        const defaultKey = normalizeKey(b.key);
+        const id = KeybindingService.bindingId({ command: b.command, defaultKey });
+        return { ...b, defaultKey, bindingId: id, key: normalizeKey(overrides[id] || b.key) };
+      });
   }
 
   #matchFor(keyChord) {

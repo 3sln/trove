@@ -194,14 +194,17 @@ export function resolveRange(range, total) {
   let end;
   if (range.suffix != null) {
     const n = Math.min(range.suffix, total);
-    if (n <= 0) throw TroveError.invalid('Range not satisfiable');
+    // `bytes=-0` asks for the last zero bytes, which is unsatisfiable by definition —
+    // and S3 answers it with the WHOLE object under a 200, so it has to be caught here
+    // rather than left to the backend.
+    if (n <= 0) throw TroveError.badRange('Range not satisfiable');
     start = total - n;
     end = total - 1;
   } else {
     start = range.start ?? 0;
     end = range.end != null ? Math.min(range.end, total - 1) : total - 1;
   }
-  if (start < 0 || start > end || start >= total) throw TroveError.invalid('Range not satisfiable');
+  if (start < 0 || start > end || start >= total) throw TroveError.badRange('Range not satisfiable');
   return { start, end, total };
 }
 

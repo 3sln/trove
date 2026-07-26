@@ -16,6 +16,7 @@ export const ErrorCode = Object.freeze({
   UNSUPPORTED: 'unsupported', // backend can't do this (e.g. presign on fs)
   QUOTA: 'quota', // out of space (507) / rate limited by capacity (429) — see below
   TOO_LARGE: 'too_large', // this request is bigger than a configured limit allows
+  BAD_RANGE: 'bad_range', // the requested byte range doesn't exist in this object (416)
   TRANSIENT: 'transient', // network blip, 5xx, throttle — safe to retry
   TIMEOUT: 'timeout',
   ABORTED: 'aborted', // caller cancelled (AbortSignal)
@@ -36,6 +37,7 @@ const HTTP_STATUS = {
   [ErrorCode.UNSUPPORTED]: 501,
   [ErrorCode.QUOTA]: 429,
   [ErrorCode.TOO_LARGE]: 413,
+  [ErrorCode.BAD_RANGE]: 416,
   [ErrorCode.TRANSIENT]: 503,
   [ErrorCode.TIMEOUT]: 504,
   [ErrorCode.ABORTED]: 499,
@@ -108,6 +110,10 @@ export class TroveError extends Error {
   }
   static tooLarge(message = 'Too large', opts) {
     return new TroveError(ErrorCode.TOO_LARGE, message, { retryable: false, ...opts });
+  }
+  /** The requested byte range doesn't exist in this object — 416, not 400 or 500. */
+  static badRange(message = 'Range not satisfiable', opts) {
+    return new TroveError(ErrorCode.BAD_RANGE, message, { retryable: false, ...opts });
   }
   static forbidden(message = 'Forbidden', opts) {
     return new TroveError(ErrorCode.FORBIDDEN, message, opts);

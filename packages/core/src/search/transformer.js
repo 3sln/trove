@@ -64,27 +64,9 @@ export function parseTagFilters(query) {
   return { text: text.replace(/\s+/g, ' ').trim(), filters };
 }
 
-/** Match a node's merged tags (+ meta) against parsed filters. Used to post-filter
- * semantic results by tags, and mirrors the client matcher. */
-export function matchTagFilters(node, filters) {
-  const props = { ...(node.meta || {}), ...(node.tags || {}) };
-  return (filters || []).every((f) => {
-    const v = props[f.key];
-    if (f.present) return v != null && v !== false && v !== '';
-    if (v == null) return false;
-    const na = Number(v);
-    const nb = Number(f.value);
-    const numeric = !Number.isNaN(na) && !Number.isNaN(nb);
-    switch (f.op) {
-      case '!=': return String(v).toLowerCase() !== String(f.value).toLowerCase();
-      case '<': return numeric ? na < nb : String(v) < String(f.value);
-      case '<=': return numeric ? na <= nb : String(v) <= String(f.value);
-      case '>': return numeric ? na > nb : String(v) > String(f.value);
-      case '>=': return numeric ? na >= nb : String(v) >= String(f.value);
-      default: return numeric ? na === nb : String(v).toLowerCase() === String(f.value).toLowerCase();
-    }
-  });
-}
+// Re-exported so existing importers keep working; the semantics live in tagMatch.js,
+// which the sqlite store's SQL is also written to agree with.
+export { matchTagFilters, matchesFilter, tagProps } from './tagMatch.js';
 
 /** The default: deterministic `#tag` parsing, no external calls. */
 export class ParsingSearchTransformer extends SearchTransformer {

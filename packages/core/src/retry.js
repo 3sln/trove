@@ -16,11 +16,16 @@ const DEFAULTS = {
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(TroveError.aborted());
-    const t = setTimeout(resolve, ms);
-    const onAbort = () => {
+    // `{ once: true }` removes the listener when it FIRES — not when the timer wins,
+    // which is the normal case. One long-lived signal driving a few retried operations
+    // therefore accumulated a listener per attempt and released none of them.
+    const done = (fn) => (arg) => {
       clearTimeout(t);
-      reject(TroveError.aborted());
+      signal?.removeEventListener('abort', onAbort);
+      fn(arg);
     };
+    const t = setTimeout(() => done(resolve)(), ms);
+    const onAbort = () => done(reject)(TroveError.aborted());
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

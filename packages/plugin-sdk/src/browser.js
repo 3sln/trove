@@ -23,10 +23,20 @@
 
   const now = () => { try { return Date.now(); } catch { return 0; } };
 
+  // The HOST times its own calls out; this side did not, and `pending` was never
+  // rejected — not on a dropped reply, not on port close. A plugin awaiting one hung
+  // forever with no way to find out, and the entry leaked with it.
+  const CALL_TIMEOUT_MS = 30_000;
+
   function call(method, params, transfer) {
     const id = ++seq;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`Timed out waiting for the host to answer "${method}"`));
+      }, CALL_TIMEOUT_MS);
+      if (timer && timer.unref) timer.unref();
+      pending.set(id, { resolve, reject, timer });
       port.postMessage({ __trove: 'req', id, method, params }, transfer || []);
     });
   }
@@ -51,6 +61,7 @@
     if (m.__trove === 'res') {
       const p = pending.get(m.id);
       if (!p) return;
+      clearTimeout(p.timer);
       pending.delete(m.id);
       m.error ? p.reject(Object.assign(new Error(m.error.message), m.error)) : p.resolve(m.result);
     } else if (m.__trove === 'req') {
@@ -63,7 +74,13 @@
   }
 
   function dispatch(method, params) {
-    if (method === 'command:execute') return commandHandlers.get(params.id) && commandHandlers.get(params.id)(...(params.args || []));
+    if (method === 'command:execute') {
+      const h = commandHandlers.get(params.id);
+      // Throw, like `opener:open` two lines down. Resolving `undefined` for an id with
+      // no handler told the host the command had RUN when nothing had.
+      if (!h) throw new Error(`No handler registered for command "${params.id}"`);
+      return h(...(params.args || []));
+    }
     if (method === 'opener:open') {
       // An opener frame boots at that opener's entry module and runs exactly one
       // opener, so an unkeyed onOpen(fn) handler is the normal case.
@@ -227,7 +244,12 @@
             body = JSON.stringify(body);
             if (!hasHeader(headers, 'content-type')) headers['Content-Type'] = 'application/json';
           }
-          if (body instanceof Uint8Array) body = body.buffer;
+          // `.buffer` ignores byteOffset/byteLength, so any view produced by `subarray` or
+    // `slice` — or a view into a pooled buffer — sent the WHOLE backing store: the wrong
+    // payload, and an out-of-band leak of whatever else was in it.
+    if (ArrayBuffer.isView(body)) {
+      body = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+    }
           return call('net:fetch', { url: String(url), method: opts.method || 'GET', headers: headers, body: body })
             .then(makeResponse);
         },

@@ -89,7 +89,11 @@ export function clampContribution(raw, caps = DEFAULT_CAPS) {
   if (metadata && typeof metadata === 'object') {
     try {
       const json = JSON.stringify(metadata);
-      if (json && json.length <= c.maxMetadataBytes) out.metadata = JSON.parse(json);
+      // BYTES, as the cap's name says. `json.length` counts UTF-16 code units, so
+      // non-ASCII metadata could run to roughly three times the advertised limit.
+      if (json && new TextEncoder().encode(json).length <= c.maxMetadataBytes) {
+        out.metadata = JSON.parse(json);
+      }
     } catch { /* non-serializable metadata is dropped */ }
   }
 

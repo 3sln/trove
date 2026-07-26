@@ -330,9 +330,14 @@ export class PluginHost {
           id: rec.pluginId, manifest: pkg.manifest,
           files: Object.fromEntries([...pkg.files.entries()]),
           grants,
-          // The server already gated storage scopes at install; expose what's declared.
+          // The SHARED domain scope comes from the server's install record, not from
+          // the package's own manifest. The install path gates it on verified domain
+          // ownership (`grantedStorageScopes` requires trust.status === 'verified') and
+          // the review UI shows it as blocked; this sync path set `trust: null` and read
+          // the self-declared manifest — so a package refused the shared store on the
+          // device it was installed on got it on the next device that synced.
           storage: grants.includes('storage')
-            ? { plugin: true, domain: !!pkg.manifest.capabilities?.storage?.domain }
+            ? { plugin: true, domain: !!rec.sharedStorage }
             : { plugin: false, domain: false },
           trust: null, scope: 'account',
           settings: {}, secrets: {}, installedAt: rec.createdAt || Date.now(),

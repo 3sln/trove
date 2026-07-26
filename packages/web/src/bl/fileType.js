@@ -34,7 +34,14 @@ function matchesCategory(cat, ext, ct) {
 export function kindOf(node) {
   const ext = extOf(node);
   const ct = node?.contentType || '';
-  if (/audiobook/.test((node?.name || '').toLowerCase())) return 'audiobook';
+  // The name hint only counts for a file that is actually AUDIO. Matched anywhere in the
+  // name and ahead of the extension table, `audiobook-notes.md` classified as an
+  // audiobook — which made it non-texty, so pinning it skipped text extraction and it was
+  // unfindable in offline search.
+  if (/audiobook/.test((node?.name || '').toLowerCase())
+      && (ct.startsWith('audio/') || ['.m4b', '.m4a', '.mp3', '.aac', '.opus'].includes(ext))) {
+    return 'audiobook';
+  }
   for (const cat of CATEGORIES) if (matchesCategory(cat, ext, ct)) return cat.kind;
   return 'file';
 }

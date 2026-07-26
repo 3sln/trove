@@ -32,9 +32,11 @@ async function getServer(env, buildVfs) {
   if (env.DB && !config.sqlite) {
     config.sqlite = new D1SqliteProvider({
       db: env.DB,
-      // Plugin scopes need their own databases — D1 cannot create them on demand, and
-      // co-locating them would put one plugin's tables next to the drive's metadata.
-      scopes: env.PLUGIN_DB ? { plugins: env.PLUGIN_DB } : {},
+      // Plugin storage. `scopes: { plugins: … }` named a key that is already a CORE key
+      // (the install-record store), so the binding was silently ignored and every
+      // /api/plugins/:id/sql call was a 501 — the real keys look like
+      // `pstore:<user>:plg:<pluginId>` and cannot be pre-bound at all.
+      pluginStore: env.PLUGIN_DB || null,
     });
     config.metadata = { driver: 'sqlite' };
   }

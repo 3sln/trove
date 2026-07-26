@@ -282,7 +282,15 @@ export class Vfs {
     if (searchErr) await this.#note('search-cleanup', node.id, 'Removing a deleted item from the search index failed', searchErr);
     await this.metadata.remove(node.id);
     if (node.storageKey) {
-      await (await this.storageFor(node.collectionId)).delete(node.storageKey).catch((err) => this.#note(
+      // The catch has to cover BOTH calls. Guarding only `delete()` meant a failure in
+      // `storageFor` — a collection record that has gone — rejected `remove()` AFTER the
+      // metadata row was already gone, so the caller saw an error for a delete that had
+      // in fact succeeded, and the orphan-bytes issue that exists for exactly this case
+      // never fired.
+      await (async () => {
+        const storage = await this.storageFor(node.collectionId);
+        return storage.delete(node.storageKey);
+      })().catch((err) => this.#note(
         'orphan-bytes', node.storageKey,
         `Deleted "${node.name}" but its stored bytes could not be removed`, err));
     }

@@ -114,9 +114,21 @@ function normalize(record) {
     createdAt: record.createdAt ?? now, updatedAt: now,
   };
 }
+// A corrupt JSON column is a real possibility (a partial write, a hand-edited db), and
+// it threw a bare SyntaxError straight out to the router — a 500 with a parser message
+// rather than something a caller can act on.
+function parseJson(text, fallback, what) {
+  if (text == null || text === '') return fallback;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw TroveError.internal(`This plugin's stored ${what} is corrupt and could not be read`, { cause: err });
+  }
+}
+
 function hydrate(row) {
   if (!row) return null;
   const out = { ...row };
-  for (const f of JSON_FIELDS) out[f] = row[f] ? JSON.parse(row[f]) : (f === 'config' || f === 'secrets' ? {} : []);
+  for (const f of JSON_FIELDS) out[f] = parseJson(row[f], (f === 'config' || f === 'secrets' ? {} : []), f);
   return out;
 }

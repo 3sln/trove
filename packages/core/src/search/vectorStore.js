@@ -95,13 +95,27 @@ export class MemoryVectorStore extends VectorStore {
     this.byIndexer.get(rec.indexerId)?.delete(docId);
   }
 
+  // Both of these dropped the docs and their OWN index entry, but left the docs' ids
+  // sitting in the SIBLING index forever — so a drive that re-indexes repeatedly grew a
+  // per-indexer (or per-node) id list without bound. Queries stayed correct, which is
+  // why it never showed up as anything but memory.
   async removeByNode(nodeId) {
-    for (const id of this.byNode.get(nodeId) || []) this.docs.delete(id);
+    for (const id of [...(this.byNode.get(nodeId) || [])]) this.#drop(id);
     this.byNode.delete(nodeId);
   }
   async removeByIndexer(indexerId) {
-    for (const id of this.byIndexer.get(indexerId) || []) this.docs.delete(id);
+    for (const id of [...(this.byIndexer.get(indexerId) || [])]) this.#drop(id);
     this.byIndexer.delete(indexerId);
+  }
+  /** Forget one doc from `docs` and from BOTH indexes. */
+  #drop(docId) {
+    const rec = this.docs.get(docId);
+    if (!rec) return;
+    this.docs.delete(docId);
+    const byNode = this.byNode.get(rec.nodeId);
+    if (byNode) { byNode.delete(docId); if (!byNode.size) this.byNode.delete(rec.nodeId); }
+    const byIndexer = this.byIndexer.get(rec.indexerId);
+    if (byIndexer) { byIndexer.delete(docId); if (!byIndexer.size) this.byIndexer.delete(rec.indexerId); }
   }
   async removeByNodeIndexer(nodeId, indexerId) {
     for (const id of this.byNode.get(nodeId) || []) {

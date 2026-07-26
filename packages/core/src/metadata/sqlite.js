@@ -295,19 +295,9 @@ export class SqliteStore extends MetadataStore {
 
     const params = [];
     for (const f of filters) {
-      // Query the denormalized merged-tags view: facets['#tags'][key].
-      const path = '$."' + MERGED_TAGS + '"."' + String(f.key).replace(/["\\]/g, '') + '"';
-      if (f.present) {
-        where.push('json_extract(facets, ?) IS NOT NULL');
-        params.push(path);
-      } else if (f.op === '=' || f.op === '!=') {
-        where.push(`json_extract(facets, ?) ${f.op} ?`);
-        params.push(path, String(f.value));
-      } else {
-        const op = { '<': '<', '<=': '<=', '>': '>', '>=': '>=' }[f.op] || '=';
-        where.push(`CAST(json_extract(facets, ?) AS REAL) ${op} ?`);
-        params.push(path, Number(f.value));
-      }
+      const { sql, args } = tagCondition(f);
+      where.push(sql);
+      params.push(...args);
     }
     if (opts.q) { where.push(`name LIKE ? ESCAPE '\\' COLLATE NOCASE`); params.push('%' + escapeLike(opts.q) + '%'); }
     // `?.length` here was a whole-drive read: the server passes [] to mean "you may see
@@ -370,4 +360,53 @@ function row(r) {
 
 function escapeLike(s) {
   return s.replace(/[\\%_]/g, (c) => '\\' + c);
+}
+
+/**
+ * One filter, as SQL — written to agree with `search/tagMatch.js`, which is the single
+ * definition of what a tag filter means.
+ *
+ * Three ways this used to disagree with every other matcher in the drive, all of them
+ * silent wrong answers rather than errors:
+ *
+ *   - `String(f.value)` was bound against `json_extract`, which PRESERVES JSON types. A
+ *     numeric tag (`pages: 120`, or the built-in `links` count) compared integer against
+ *     text, so `#pages:120` matched nothing and `#pages:!=120` matched the file.
+ *   - `present` was `IS NOT NULL`, so a tag explicitly set to `false` counted as present.
+ *   - `meta` was never consulted at all, though the store interface documents a filter as
+ *     matching "a node's merged tags (+ meta)" and both other matchers include it.
+ */
+function tagCondition(f) {
+  const key = String(f.key).replace(/["\\]/g, '');
+  const tagPath = '$."' + MERGED_TAGS + '"."' + key + '"';
+  const metaPath = '$."' + key + '"';
+  // Merged tags win over meta — the same precedence as `{ ...meta, ...tags }`.
+  const val = 'COALESCE(json_extract(facets, ?), json_extract(meta, ?))';
+  const type = "COALESCE(json_type(facets, ?), json_type(meta, ?))";
+  const paths = [tagPath, metaPath];
+
+  if (f.present) {
+    // Exists, and is neither `false` nor the empty string.
+    return {
+      sql: `(${type} IS NOT NULL AND ${type} != 'false' AND ${val} != '')`,
+      args: [...paths, ...paths, ...paths],
+    };
+  }
+
+  const nb = Number(f.value);
+  const numeric = f.value !== '' && f.value != null && !Number.isNaN(nb);
+  const op = { '=': '=', '!=': '!=', '<': '<', '<=': '<=', '>': '>', '>=': '>=' }[f.op] || '=';
+  const textCmp = `LOWER(CAST(${val} AS TEXT)) ${op} LOWER(?)`;
+  const textArgs = [...paths, String(f.value)];
+
+  // A non-numeric filter value can only ever match textually, so emit only that branch.
+  if (!numeric) return { sql: `(${val} IS NOT NULL AND ${textCmp})`, args: [...paths, ...textArgs] };
+
+  // Numeric filter value: compare numerically when the STORED value is a number too,
+  // textually otherwise — exactly what matchesFilter does.
+  return {
+    sql: `(${val} IS NOT NULL AND CASE WHEN ${type} IN ('integer','real')`
+      + ` THEN ${val} ${op} ? ELSE ${textCmp} END)`,
+    args: [...paths, ...paths, ...paths, nb, ...textArgs],
+  };
 }

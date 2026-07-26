@@ -216,8 +216,8 @@ function keybindingsSection(ui) {
     // tell, and one plugin keymap was enough to push real ones off the end.
     ...bindings.map((b) => {
       const cmd = cmds.get(b.command);
-      const listening = capturing === b.command;
-      const custom = !!overrides[b.command];
+      const listening = capturing === b.bindingId;
+      const custom = !!overrides[b.bindingId];
       const clash = byKey.get(b.key) > 1;
       return div({ className: 'setting' },
         div({ className: 'info' },
@@ -232,24 +232,24 @@ function keybindingsSection(ui) {
           button({ className: `kbd-edit ${listening ? 'listening' : ''} ${clash ? 'clash' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
             listening ? span('Press keys…') : dd.h('kbd', prettyKey(b.key)))
             .on({
-              click: () => { capturing = listening ? null : b.command; ui.rerender?.(); },
+              click: () => { capturing = listening ? null : b.bindingId; ui.rerender?.(); },
               blur: () => { if (listening) stop(); },
               keydown: (e) => {
                 if (!listening) return;
                 e.preventDefault();
                 e.stopPropagation();
                 if (e.key === 'Escape') return stop();
-                if (e.key === 'Backspace') { kb.rebind(b.command, null); return stop(); }
+                if (e.key === 'Backspace') { kb.rebind(b, null); return stop(); }
                 // A bare modifier isn't a chord yet — wait for the key it modifies.
                 if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return;
-                kb.rebind(b.command, eventToKey(e));
+                kb.rebind(b, eventToKey(e));
                 stop();
               },
               $attach: (el) => { if (listening) queueMicrotask(() => el.focus()); },
             }),
           custom
             ? button({ className: 'c-link', title: 'Back to the default' }, 'reset')
-              .on({ click: () => { kb.rebind(b.command, null); ui.rerender?.(); } })
+              .on({ click: () => { kb.rebind(b, null); ui.rerender?.(); } })
             : null,
         ),
       );

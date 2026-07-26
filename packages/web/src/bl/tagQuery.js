@@ -6,6 +6,8 @@
 // Values may be "quoted" to include spaces. Comparisons are numeric when both
 // sides parse as numbers, otherwise case-insensitive string comparisons.
 
+import { matchTagFilters } from '@trove/core/search/tagMatch.js';
+
 const TOKEN = /#([\w.-]+)(?::(<=|>=|!=|=|<|>)?("[^"]*"|[^#\s]+)?)?/g;
 
 /** @returns {{ text: string, filters: {key,op,value,present}[] }} */
@@ -23,39 +25,17 @@ export function parseTagQuery(query) {
   return { text: text.replace(/\s+/g, ' ').trim(), filters };
 }
 
-/** The flat property map a node exposes to filters: user meta + merged tags
- * (all contributors' tags, e.g. user tags + indexer-contributed tags). */
-function nodeProps(node) {
-  return { ...(node.meta || {}), ...(node.tags || {}) };
-}
-
-function compare(a, op, b) {
-  const na = Number(a);
-  const nb = Number(b);
-  const numeric = a !== '' && b !== '' && !Number.isNaN(na) && !Number.isNaN(nb);
-  const x = numeric ? na : String(a).toLowerCase();
-  const y = numeric ? nb : String(b).toLowerCase();
-  switch (op) {
-    case '=': return x === y;
-    case '!=': return x !== y;
-    case '<': return x < y;
-    case '<=': return x <= y;
-    case '>': return x > y;
-    case '>=': return x >= y;
-    default: return false;
-  }
-}
-
-/** True if `node` satisfies ALL filters (AND). */
+/**
+ * True if `node` satisfies ALL filters (AND).
+ *
+ * Delegates to core rather than re-implementing. This file had its own copy, and the
+ * two drifted on the ordering operators — the client lowercased both operands, the
+ * server did not — so `#author:>Bob` against `author: "alice"` answered differently
+ * online and offline. Same query, same drive, different files.
+ */
 export function matchesTagFilters(node, filters) {
   if (!filters || !filters.length) return true;
-  const props = nodeProps(node);
-  return filters.every((f) => {
-    const v = props[f.key];
-    if (f.present) return v != null && v !== false && v !== '';
-    if (v == null) return false;
-    return compare(v, f.op, f.value);
-  });
+  return matchTagFilters(node, filters);
 }
 
 /** Short human label for a filter (for the results heading). */

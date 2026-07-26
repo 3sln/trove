@@ -96,14 +96,19 @@ export class D1SqliteProvider extends SqliteProvider {
    * @param {object} opts
    * @param {object} opts.db      the main D1 binding (metadata, kv, plugin installs)
    * @param {Record<string, object>} [opts.scopes]
-   *   extra bindings by key, for plugin scopes that need their own database. Without an
-   *   entry, a scope is refused — see the header.
+   *   extra bindings by key, for scopes that need their own database.
+   * @param {object} [opts.pluginStore]
+   *   one binding to hold EVERY plugin scope. A scope key embeds the runtime principal,
+   *   so it cannot be pre-bound and D1 cannot create databases on demand — without this,
+   *   plugin storage simply doesn't exist on Workers.
    */
-  constructor({ db, scopes = {} } = {}) {
+  constructor({ db, scopes = {}, pluginStore = null } = {}) {
     super();
     if (!db) throw TroveError.invalid('D1SqliteProvider requires a D1 binding (env.DB)');
     this.main = new D1Database(db);
     this.scopes = new Map(Object.entries(scopes).map(([k, v]) => [k, new D1Database(v)]));
+    // The catch-all for plugin scopes (see obtain).
+    this.pluginStore = pluginStore ? new D1Database(pluginStore) : null;
   }
 
   // D1 is a real database that survives the isolate being torn down — which is the
@@ -114,6 +119,19 @@ export class D1SqliteProvider extends SqliteProvider {
     if (CORE_KEYS.has(key)) return this.main;
     const scoped = this.scopes.get(key);
     if (scoped) return scoped;
+    // One binding for every plugin store.
+    //
+    // A plugin scope key embeds the runtime principal — `pstore:alice@x.com:plg:acme/notes`
+    // — so it can never be pre-bound, and D1 cannot create a database on demand. The
+    // adapter's `scopes: { plugins: … }` therefore bound a name that (a) is a CORE key
+    // already, so it short-circuited to `main`, and (b) is not what any real store asks
+    // for: every /api/plugins/:id/sql call on Workers was a 501.
+    //
+    // So a deployment may nominate ONE database to hold them all. Weaker isolation than
+    // the local provider's file-per-scope — the tables live side by side — but the keys
+    // are still distinct per (user, plugin) and it is the strongest thing D1's model
+    // allows. Stated here rather than discovered.
+    if (this.pluginStore) return this.pluginStore;
     // Plugin scopes are an isolation boundary. Handing back the main database would
     // put a plugin's tables next to the drive's metadata, which is precisely what the
     // scope exists to prevent.

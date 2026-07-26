@@ -53,14 +53,24 @@ export class SearchService {
    * (embedded here) or { vector } (precomputed by a plugin).
    */
   async indexDocuments(nodeId, indexerId, documents) {
+    if (!documents?.length) {
+      await Promise.all([
+        this.vectors.removeByNodeIndexer(nodeId, indexerId),
+        this.keywords.removeByNodeIndexer(nodeId, indexerId),
+      ]);
+      return { indexed: 0 };
+    }
+
+    // Embed BEFORE removing anything. Both removals used to run first, so a transient
+    // embedding outage during a re-index left the file with zero vectors and zero
+    // keywords — recoverable through the issue, but unfindable in the meantime, and the
+    // old index was perfectly good until we threw it away.
+    const needEmbedding = documents.filter((d) => !d.vector && d.text);
+    const embedded = needEmbedding.length ? await this.embeddings.embed(needEmbedding.map((d) => d.text)) : [];
     await Promise.all([
       this.vectors.removeByNodeIndexer(nodeId, indexerId),
       this.keywords.removeByNodeIndexer(nodeId, indexerId),
     ]);
-    if (!documents?.length) return { indexed: 0 };
-
-    const needEmbedding = documents.filter((d) => !d.vector && d.text);
-    const embedded = needEmbedding.length ? await this.embeddings.embed(needEmbedding.map((d) => d.text)) : [];
 
     const vectorDocs = [];
     const keywordDocs = [];
@@ -140,7 +150,7 @@ export class SearchService {
     const ranked = [...perNode.values()].sort((a, b) => b.score - a.score).slice(0, limit);
     // Attach snippets (best-effort; keyword store owns the text).
     for (const r of ranked) r.snippet = await this.keywords.snippet(r.docId, query);
-    return ranked.map(({ docId, ...rest }) => rest);
+    return ranked.map(({ docId, best, ...rest }) => rest);
   }
 
   async #dense(query, limit, indexers) {
@@ -153,16 +163,37 @@ async function safeCount(store) {
   try { return (await store?.count?.()) ?? null; } catch { return null; }
 }
 
+/**
+ * Fold one document's hit into its node's running score.
+ *
+ * A node can be hit by several documents and by both channels (dense and sparse), and
+ * the score has to grow with that rather than being replaced by whichever hit arrived
+ * with the larger number. The old form assigned `cur.score = score` on the better hit,
+ * DISCARDING everything accumulated so far — so a file matching both channels could
+ * rank below one matching only lexically, which is the opposite of what hybrid search
+ * is for. It also moved `docId`/`indexerId` without moving `fields`, so the snippet
+ * came from one chunk and the fields from another.
+ *
+ * Now: the score is the best hit plus a small bonus for each additional one, and the
+ * document a result POINTS at is always the best-scoring one, with its own fields.
+ */
 function accumulate(map, nodeId, score, indexerId, docId, fields) {
   const cur = map.get(nodeId);
   if (!cur) {
-    map.set(nodeId, { nodeId, score, indexerId, docId, fields });
-  } else if (score > cur.score) {
-    cur.score = score;
+    map.set(nodeId, { nodeId, score, best: score, indexerId, docId, fields });
+    return;
+  }
+  // Every additional matching chunk adds a little — matching in ten places is more
+  // relevant than matching in one.
+  cur.score += score * 0.1;
+  if (score > cur.best) {
+    // A new best: raise the floor to it, keeping the bonuses already earned, and take
+    // the whole descriptor from this document so snippet and fields agree.
+    cur.score += score - cur.best;
+    cur.best = score;
     cur.indexerId = indexerId;
     cur.docId = docId;
-  } else {
-    cur.score += score * 0.1; // small bonus for matching multiple chunks
+    cur.fields = fields;
   }
 }
 

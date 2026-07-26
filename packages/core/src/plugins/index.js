@@ -109,8 +109,7 @@ export class PluginService {
     await this.installs.put(record);
     // The bytes the previous install pointed at are now unreferenced — unless another
     // account installed the identical package, which is what countByDigest answers.
-    if (prev?.packageRef && prev.packageRef !== ref && prev.digest
-        && (await this.installs.countByDigest(prev.digest)) === 0) {
+    if (prev?.packageRef && prev.packageRef !== ref && !(await this.#refIsShared(prev.packageRef, account))) {
       await this.packages.delete(prev.packageRef).catch(() => {});
     }
     // Register + backfill any server indexers this package ships.
@@ -148,7 +147,13 @@ export class PluginService {
       catch (err) { console.error(`deactivating indexers for ${pluginId} failed:`, err.message); }
     }
     await this.installs.delete(account, pluginId);
-    if (r.digest && (await this.installs.countByDigest(r.digest)) === 0) await this.packages.delete(r.packageRef);
+    // Refs embed the ACCOUNT, so two accounts holding the same digest hold two distinct
+    // blobs — a global digest count said "someone still has it" and left this one behind
+    // with nothing that would ever reference it again. Ask about the blob we actually
+    // hold, not about its contents.
+    if (r.packageRef && !(await this.#refIsShared(r.packageRef, account))) {
+      await this.packages.delete(r.packageRef).catch(() => {});
+    }
     return { ok: true, removed: pluginId, indexers: (r.indexers || []).map((i) => i.id || i) };
   }
 
@@ -202,6 +207,13 @@ export class PluginService {
     if (!r.grants.includes(cap)) {
       throw TroveError.forbidden(`Plugin "${pluginId}" was not granted the "${cap}" capability`);
     }
+  }
+
+  /** Does any remaining install still point at this exact blob? */
+  async #refIsShared(packageRef, exceptAccount) {
+    if (!this.installs.all) return false;
+    const all = await this.installs.all();
+    return all.some((r) => r.packageRef === packageRef && r.account !== exceptAccount);
   }
 
   #publicRecord(r) {

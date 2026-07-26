@@ -118,12 +118,19 @@ export class S3Storage extends StorageBackend {
     const headers = {};
     if (opts.range) {
       // S3 understands the suffix form natively, so pass it through rather than
-      // resolving it here — we'd need a HEAD to learn the total first.
-      if (opts.range.suffix != null) headers.range = `bytes=-${opts.range.suffix}`;
-      else headers.range = `bytes=${opts.range.start ?? 0}-${opts.range.end != null ? opts.range.end : ''}`;
+      // resolving it here — we'd need a HEAD to learn the total first. Except `-0`,
+      // which S3 answers with the entire object under a 200 where every other backend
+      // calls it unsatisfiable.
+      if (opts.range.suffix != null) {
+        if (!(opts.range.suffix > 0)) throw TroveError.badRange('Range not satisfiable');
+        headers.range = `bytes=-${opts.range.suffix}`;
+      } else headers.range = `bytes=${opts.range.start ?? 0}-${opts.range.end != null ? opts.range.end : ''}`;
     }
     const res = await this.#send('GET', key, { headers, signal: opts.signal });
     if (res.status === 404) throw TroveError.notFound('Object');
+    // 416 is a real answer, not an internal error: a media player seeking past the end
+    // of a file got "Internal error" on S3 and a 400 everywhere else.
+    if (res.status === 416) throw TroveError.badRange('Range not satisfiable');
     if (!res.ok && res.status !== 206) throw await s3Error(res, 'get');
     let range;
     const cr = res.headers.get('content-range'); // bytes start-end/total

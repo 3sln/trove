@@ -10,6 +10,7 @@ import {
 import { TroveError } from '../errors.js';
 import { newId } from '../util.js';
 import { decodeCursor, encodeCursor, afterCursor, compareValues } from './cursor.js';
+import { matchTagFilters } from '../search/tagMatch.js';
 
 export class MemoryStore extends MetadataStore {
   constructor() {
@@ -256,29 +257,9 @@ function clone(n) {
   return copy;
 }
 
-// Server-side mirror of the client tag matcher (web/src/bl/tagQuery.js).
+// One matcher, shared with the transformer, the browser and (in SQL) the sqlite store.
 function matchTags(node, filters) {
-  const merged = mergeContributionTags(node.facets || {});
-  const props = { ...(node.meta || {}), ...merged };
-  return (filters || []).every((f) => {
-    const v = props[f.key];
-    if (f.present) return v != null && v !== false && v !== '';
-    if (v == null) return false;
-    const na = Number(v);
-    const nb = Number(f.value);
-    const numeric = v !== '' && f.value !== '' && !Number.isNaN(na) && !Number.isNaN(nb);
-    const x = numeric ? na : String(v).toLowerCase();
-    const y = numeric ? nb : String(f.value).toLowerCase();
-    switch (f.op) {
-      case '=': return x === y;
-      case '!=': return x !== y;
-      case '<': return x < y;
-      case '<=': return x <= y;
-      case '>': return x > y;
-      case '>=': return x >= y;
-      default: return false;
-    }
-  });
+  return matchTagFilters(node, filters, mergeContributionTags(node.facets || {}));
 }
 
 // One ordering, shared with the cursor. `id` breaks ties so the order is total.

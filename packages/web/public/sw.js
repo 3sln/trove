@@ -50,12 +50,48 @@ self.addEventListener('fetch', (event) => {
 async function pinnedFirst(req) {
   const cache = await caches.open(FILES);
   const hit = await cache.match(req.url, { ignoreVary: true });
-  if (hit) return hit;
+  if (hit) return sliceForRange(hit, req.headers.get('range'));
   try {
     return await fetch(req);
   } catch {
     return new Response('Offline and not available offline', { status: 504 });
   }
+}
+
+/**
+ * Serve the range the caller actually asked for.
+ *
+ * The cache is keyed by URL alone, so a ranged request matched the full 200 response and
+ * got the WHOLE file back. The MP4 parser walks a container with 16-byte range reads and
+ * re-read offset 0 every time — 64 fetches, no chapters, no cover — and each of those
+ * materialised the entire body, so a pinned 600 MB audiobook read tens of gigabytes out
+ * of CacheStorage behind a spinner. `readTextCapped` lost its 512 KB cap the same way.
+ */
+async function sliceForRange(res, header) {
+  if (!header) return res;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m) return res;
+  const buf = new Uint8Array(await res.clone().arrayBuffer());
+  const total = buf.byteLength;
+  let start;
+  let end;
+  if (m[1] === '') {
+    const n = Math.min(Number(m[2] || 0), total);
+    if (!(n > 0)) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${total}` } });
+    start = total - n;
+    end = total - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? total - 1 : Math.min(Number(m[2]), total - 1);
+  }
+  if (!(start >= 0) || start > end || start >= total) {
+    return new Response(null, { status: 416, headers: { 'content-range': `bytes */${total}` } });
+  }
+  const headers = new Headers(res.headers);
+  headers.set('content-range', `bytes ${start}-${end}/${total}`);
+  headers.set('content-length', String(end - start + 1));
+  headers.set('accept-ranges', 'bytes');
+  return new Response(buf.subarray(start, end + 1), { status: 206, statusText: 'Partial Content', headers });
 }
 
 async function networkFirst(req) {

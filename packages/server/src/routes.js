@@ -232,8 +232,22 @@ export function createRouter() {
     return { collection: await collections.update(params.id, b, principal) };
   });
 
-  r.delete('/api/collections/:id', async ({ collections, principal, params }) => {
+  r.delete('/api/collections/:id', async ({ collections, vfs, principal, params }) => {
     if (!collections) throw TroveError.unsupported('Collections are not enabled');
+    // A collection record is the only thing that knows where its items' BYTES live, so
+    // deleting it while items still reference it stranded every one of them: `storageFor`
+    // throws "Collection not found", and since reindex walks the whole metadata store,
+    // every rebuild — including the one at boot — failed on them forever, raising a
+    // retryable issue whose Retry re-ran the same failure. Refuse, and say what to do.
+    const n = await vfs.metadata.countItems?.(params.id);
+    if (n) {
+      throw TroveError.conflict(
+        `“${params.id}” still holds ${n.toLocaleString()} item${n === 1 ? '' : 's'}. `
+        + 'Move or delete them first — removing the collection would leave them with no '
+        + 'store to read their bytes from.',
+        { details: { collectionId: params.id, items: n } },
+      );
+    }
     return collections.remove(params.id, principal);
   });
 
