@@ -148,6 +148,36 @@ export class RefreshAction extends AppAction {
   }
 }
 
+/** Show what's been deleted but not destroyed, and act on it. */
+export class TrashAction extends AppAction {
+  constructor(op = 'list', id = null) {
+    super();
+    this.op = op;
+    this.id = id;
+  }
+  async execute({ app }) {
+    const { explorer, platform } = app;
+    const collection = explorer.state.collectionId;
+    try {
+      if (this.op === 'restore') {
+        const { node } = await platform.api.restore(this.id);
+        platform.notifications.success(`Restored “${node.name}”`);
+      } else if (this.op === 'purge') {
+        await platform.api.purgeTrash({ id: this.id });
+      } else if (this.op === 'empty') {
+        const { purged } = await platform.api.purgeTrash({ collection });
+        platform.notifications.success(`Deleted ${purged} item${purged === 1 ? '' : 's'} for good`);
+      }
+      const { items } = await platform.api.trash(collection);
+      explorer.set({ trash: items });
+      // Restoring puts something back in the drive, so the list on screen is now stale.
+      if (this.op !== 'list') await app.engine.dispatch(new NavigateAction(collection));
+    } catch (err) {
+      platform.notifications.error(`Trash: ${err.message}`);
+    }
+  }
+}
+
 export class DeleteAction extends AppAction {
   constructor(ids) {
     super();

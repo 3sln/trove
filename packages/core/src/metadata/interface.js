@@ -117,9 +117,37 @@ export class MetadataStore {
   async update(id, patch) {
     throw TroveError.unsupported('update not implemented');
   }
-  /** Delete a single item. */
+  /** PERMANENTLY delete a single item. The trash lives above this, in the Vfs. */
   async remove(id) {
     throw TroveError.unsupported('remove not implemented');
+  }
+  /**
+   * Move an item to the trash: still stored, no longer part of the drive.
+   *
+   * Optional — a store that doesn't implement it makes deletes permanent, which is a
+   * legitimate choice for an ephemeral or append-only backend. Where it IS implemented,
+   * every read path must exclude trashed rows, and name uniqueness must apply only to
+   * live ones; otherwise deleting `notes.md` would prevent ever creating another.
+   */
+  async softDelete(id, at) {
+    throw TroveError.unsupported('softDelete not implemented');
+  }
+  /**
+   * Bring a trashed item back, optionally under a different name. The rename is part of
+   * the restore rather than a separate step, so a name freed for a replacement can be
+   * resolved without a window where the item is live under a colliding name.
+   * Rejects ALREADY_EXISTS if the name is taken.
+   */
+  async restore(id, newName) {
+    throw TroveError.unsupported('restore not implemented');
+  }
+  /** Trashed items, newest first. @returns {Promise<object[]>} */
+  async listTrash(collectionId, opts) {
+    throw TroveError.unsupported('listTrash not implemented');
+  }
+  /** Trashed before `cutoff` — what the retention sweep collects. */
+  async trashedBefore(cutoff, limit) {
+    throw TroveError.unsupported('trashedBefore not implemented');
   }
   /** Rename an item. Rejects ALREADY_EXISTS if the name is taken in its collection. */
   async rename(id, newName) {

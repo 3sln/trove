@@ -30,17 +30,22 @@ export class MemoryStore extends MetadataStore {
     this.nodes.delete(node.id);
     this.byName.delete(this.#key(node.collectionId, node.name));
   }
+  /** Live rows only. A trashed item keeps its row but must not answer as itself. */
+  #live() {
+    return [...this.nodes.values()].filter((n) => !n.deletedAt);
+  }
 
   async getById(id) {
     return clone(this.nodes.get(id));
   }
   async getByName(collectionId = 'default', name) {
     const id = this.byName.get(this.#key(collectionId, name));
-    return id ? clone(this.nodes.get(id)) : null;
+    const node = id ? this.nodes.get(id) : null;
+    return node && !node.deletedAt ? clone(node) : null;
   }
 
   async listItems(collectionId = 'default', opts = {}) {
-    const items = [...this.nodes.values()].filter((n) => n.collectionId === collectionId);
+    const items = this.#live().filter((n) => n.collectionId === collectionId);
     const sort = opts.sort ?? 'name';
     const dir = opts.order === 'desc' ? -1 : 1;
     items.sort((a, b) => {
@@ -81,15 +86,55 @@ export class MemoryStore extends MetadataStore {
     return clone(node);
   }
 
+  /** Permanently forget an item. The trash is a VFS concern; this is the real delete. */
   async remove(id) {
     const node = this.nodes.get(id);
     if (!node) return;
     this.#deindex(node);
   }
 
-  async rename(id, newName) {
+  async softDelete(id, at = Date.now()) {
     const node = this.nodes.get(id);
     if (!node) throw TroveError.notFound('Item');
+    node.deletedAt = at;
+    node.updatedAt = at;
+    // Free the name so a replacement can take it — otherwise the trash holds the name
+    // hostage and you can never re-create what you just deleted.
+    this.byName.delete(this.#key(node.collectionId, node.name));
+    return clone(node);
+  }
+
+  async restore(id, newName = null) {
+    const node = this.nodes.get(id);
+    if (!node) throw TroveError.notFound('Item');
+    const name = newName || node.name;
+    if (this.byName.has(this.#key(node.collectionId, name))) throw TroveError.alreadyExists(name);
+    delete node.deletedAt;
+    node.name = name;
+    node.updatedAt = Date.now();
+    this.byName.set(this.#key(node.collectionId, name), node.id);
+    return clone(node);
+  }
+
+  async listTrash(collectionId, { limit = 200, before = null } = {}) {
+    return [...this.nodes.values()]
+      .filter((n) => n.deletedAt && (!collectionId || n.collectionId === collectionId) && (!before || n.deletedAt < before))
+      .sort((a, b) => b.deletedAt - a.deletedAt)
+      .slice(0, limit)
+      .map(clone);
+  }
+
+  async trashedBefore(cutoff, limit = 500) {
+    return [...this.nodes.values()]
+      .filter((n) => n.deletedAt && n.deletedAt < cutoff)
+      .sort((a, b) => a.deletedAt - b.deletedAt)
+      .slice(0, limit)
+      .map(clone);
+  }
+
+  async rename(id, newName) {
+    const node = this.nodes.get(id);
+    if (!node || node.deletedAt) throw TroveError.notFound('Item');
     if (!newName) throw TroveError.invalid('An item needs a name');
     if (newName === node.name) return clone(node);
     if (this.byName.has(this.#key(node.collectionId, newName))) throw TroveError.alreadyExists(newName);
@@ -116,7 +161,7 @@ export class MemoryStore extends MetadataStore {
 
   async searchByName(query, opts = {}) {
     const q = query.toLowerCase();
-    return [...this.nodes.values()]
+    return this.#live()
       .filter((n) => n.name.toLowerCase().includes(q))
       .filter((n) => !opts.collectionId || n.collectionId === opts.collectionId)
       .slice(0, opts.limit ?? 50)
@@ -124,34 +169,34 @@ export class MemoryStore extends MetadataStore {
   }
 
   async scanItems({ afterId = null, limit = 200 } = {}) {
-    const files = [...this.nodes.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const files = this.#live().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const start = afterId ? files.findIndex((n) => n.id > afterId) : 0;
     const from = start === -1 ? files.length : start;
     return files.slice(from, from + limit).map(clone);
   }
 
   async countItems(collectionId) {
-    if (!collectionId) return this.nodes.size;
-    let n = 0;
-    for (const node of this.nodes.values()) if (node.collectionId === collectionId) n++;
-    return n;
+    const live = this.#live();
+    return collectionId ? live.filter((n) => n.collectionId === collectionId).length : live.length;
   }
 
   async collectionStats(collectionId = 'default') {
     let items = 0;
     let bytes = 0;
+    let trashed = 0;
     for (const node of this.nodes.values()) {
       if (node.collectionId !== collectionId) continue;
+      if (node.deletedAt) { trashed++; continue; }
       items++;
       bytes += node.size || 0;
     }
-    return { items, bytes };
+    return { items, bytes, trashed };
   }
 
   async findByTags(filters = [], opts = {}) {
     const q = opts.q ? opts.q.toLowerCase() : null;
     const out = [];
-    for (const node of this.nodes.values()) {
+    for (const node of this.#live()) {
       if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
       if (q && !node.name.toLowerCase().includes(q)) continue;
       if (matchTags(node, filters)) out.push(node);
@@ -164,7 +209,7 @@ export class MemoryStore extends MetadataStore {
     if (!uris.length) return [];
     const want = new Set(uris);
     const out = [];
-    for (const node of this.nodes.values()) {
+    for (const node of this.#live()) {
       if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
       const links = node.facets?.[LINKS_CONTRIBUTOR]?.metadata?.[LINKS_KEY];
       if (Array.isArray(links) && links.some((l) => want.has(l))) out.push(node);

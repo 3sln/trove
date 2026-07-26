@@ -84,6 +84,15 @@ export class Vfs {
   /** Like resolve(), but returns null instead of throwing — for link resolution,
    *  where "no such item" is a broken link to render, not an error. */
   async find(ref, collectionId = 'default') {
+    // Trashed items are not part of the drive: a deleted file must not answer a link, a
+    // name, or a download-by-id just because someone kept the id. The trash reaches them
+    // through listTrash/restore, which go to the metadata store directly.
+    const node = await this.#findAny(ref, collectionId);
+    return node && !node.deletedAt ? node : null;
+  }
+
+  /** Resolve a reference INCLUDING trashed items — for restore and permanent delete. */
+  async #findAny(ref, collectionId = 'default') {
     if (!ref) return null;
     const link = parseTroveUri(ref);
     if (link) {
@@ -163,8 +172,41 @@ export class Vfs {
     return renamed;
   }
 
-  async remove(id) {
-    const node = await this.resolve(id);
+  /**
+   * Delete an item.
+   *
+   * By default this moves it to the TRASH: the bytes stay exactly where they are and
+   * the record keeps its id, but the item leaves the drive — gone from listings, from
+   * search, from name lookups, from backlinks. A misclick on a file you cannot get back
+   * is the worst thing a drive can do, and "are you sure?" is not a safety net, it is a
+   * dialog people click through.
+   *
+   * `permanent: true` is the old behaviour, and it is what the retention sweep and an
+   * explicit "delete forever" use. A store with no trash (softDelete unimplemented)
+   * falls back to it — better a permanent delete than a delete that silently doesn't
+   * happen.
+   *
+   * @param {string} id
+   * @param {{permanent?: boolean}} [opts]
+   */
+  async remove(id, { permanent = false } = {}) {
+    // #findAny, not resolve: emptying the trash deletes items that are already out of
+    // the drive, and resolve() correctly refuses to see those.
+    const node = await this.#findAny(id);
+    if (!node) throw TroveError.notFound('Item');
+    if (!permanent && this.metadata.softDelete) {
+      const trashed = await this.metadata.softDelete(node.id).catch((err) => {
+        if (err?.code !== 'unsupported') throw err;
+        return null;
+      });
+      if (trashed) {
+        // Out of the index, but NOT out of storage. Everything here is derived and is
+        // rebuilt on restore; the bytes are the one thing that can't be.
+        await this.search?.removeNode(node.id);
+        await this.issues?.clear('index', node.id).catch(() => {});
+        return { ok: true, trashed: true, id: node.id };
+      }
+    }
     if (node.storageKey) (await this.storageFor(node.collectionId)).delete(node.storageKey).catch(() => {});
     await this.search?.removeNode(node.id);
     // A deleted item can't be "failing to index" any more — leaving the issue behind
@@ -172,7 +214,59 @@ export class Vfs {
     await this.issues?.clear('index', node.id).catch(() => {});
     await this.sidecar?.remove(node.id).catch(() => {});
     await this.metadata.remove(node.id);
-    return { ok: true };
+    return { ok: true, trashed: false, id: node.id };
+  }
+
+  /** What's in the trash, newest first. */
+  async listTrash(collectionId, opts) {
+    if (!this.metadata.listTrash) return [];
+    return this.metadata.listTrash(collectionId, opts);
+  }
+
+  /**
+   * Bring a trashed item back, re-indexing it so it is findable again.
+   *
+   * If its name was taken while it was in the trash, it comes back under a free one
+   * rather than failing — someone restoring a file wants the file, and refusing because
+   * of a name collision leaves them with no way to get it except to rename the other.
+   */
+  async restore(id) {
+    if (!this.metadata.restore) throw TroveError.unsupported('This drive has no trash');
+    const node = await this.metadata.getById(id);
+    if (!node) throw TroveError.notFound('Item');
+    if (!node.deletedAt) return node; // already live; restoring twice is not an error
+    let restored;
+    try {
+      restored = await this.metadata.restore(id);
+    } catch (err) {
+      if (err?.code !== 'already_exists') throw err;
+      restored = await this.metadata.restore(id, await this.#uniqueName(node.collectionId, node.name));
+    }
+    await this.indexing.indexNode(restored).catch((e) => console.error('reindex after restore failed', e));
+    return restored;
+  }
+
+  /**
+   * Permanently delete everything trashed before `cutoff`. Returns what it freed.
+   *
+   * This is the only thing that destroys data on a timer, so it is deliberately narrow:
+   * it takes an explicit cutoff rather than reading a policy, and the caller decides.
+   */
+  async purgeTrash({ before, limit = 500 } = {}) {
+    if (!this.metadata.trashedBefore) return { purged: 0, bytes: 0 };
+    const doomed = await this.metadata.trashedBefore(before, limit);
+    let purged = 0;
+    let bytes = 0;
+    for (const node of doomed) {
+      try {
+        await this.remove(node.id, { permanent: true });
+        purged++;
+        bytes += node.size || 0;
+      } catch (err) {
+        console.error(`purging ${node.name} failed:`, err.message);
+      }
+    }
+    return { purged, bytes };
   }
 
   // --- download --------------------------------------------------------------

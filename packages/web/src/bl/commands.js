@@ -5,7 +5,7 @@
 
 import {
   NavigateAction, RefreshAction, DeleteAction, RenameAction,
-  UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction, LoadMoreAction,
+  UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction, LoadMoreAction, TrashAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri } from '@trove/core/links.js';
@@ -77,15 +77,35 @@ export function registerCommands(app) {
     const doDelete = () => go(new DeleteAction(nodes.map((n) => n.id)));
     if (platform.settings.get('explorer.confirmDelete')) {
       workbench.showDialog({
-        kind: 'confirm', title: `Delete ${nodes.length} item${nodes.length > 1 ? 's' : ''}?`,
-        body: nodes.length === 1 ? `"${nodes[0].name}" will be permanently deleted.` : 'These items will be permanently deleted.',
-        danger: true, confirmLabel: 'Delete',
+        kind: 'confirm', title: `Move ${nodes.length} item${nodes.length > 1 ? 's' : ''} to the trash?`,
+        // Say what actually happens. Telling someone a file will be "permanently
+        // deleted" when it goes to the trash trains them to fear a safe action; the
+        // reverse — promising recovery that doesn't exist — is worse.
+        body: nodes.length === 1
+          ? `"${nodes[0].name}" leaves the drive but is kept, and can be restored from the trash.`
+          : 'They leave the drive but are kept, and can be restored from the trash.',
+        confirmLabel: 'Move to trash',
         onConfirm: () => {
           workbench.closeDialog();
           doDelete();
         },
       });
     } else doDelete();
+  }, { category: 'Explorer', icon: 'trash' });
+
+  cmd('explorer.showTrash', 'Show Trash', () => {
+    go(new TrashAction('list'));
+    workbench.showHome();
+  }, { category: 'Explorer', icon: 'trash' });
+  cmd('explorer.restore', 'Restore from Trash', (id) => id && go(new TrashAction('restore', id)), { palette: false });
+  cmd('explorer.purgeOne', 'Delete Forever', (id) => id && go(new TrashAction('purge', id)), { palette: false });
+  cmd('explorer.emptyTrash', 'Empty Trash', () => {
+    workbench.showDialog({
+      kind: 'confirm', title: 'Empty the trash?',
+      body: 'Everything in the trash will be destroyed. This cannot be undone.',
+      danger: true, confirmLabel: 'Delete forever',
+      onConfirm: () => { workbench.closeDialog(); go(new TrashAction('empty')); },
+    });
   }, { category: 'Explorer', icon: 'trash' });
 
   cmd('explorer.open', 'Open', (node) => go(new OpenFileAction(node || explorer.selectedNodes()[0])), { palette: false });

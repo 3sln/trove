@@ -47,9 +47,32 @@ export class SqliteStore extends MetadataStore {
         meta TEXT NOT NULL DEFAULT '{}',
         facets TEXT NOT NULL DEFAULT '{}'
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_coll_name ON nodes(collectionId, name);
       CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
       CREATE INDEX IF NOT EXISTS idx_nodes_updated ON nodes(updatedAt);
+    `);
+    await this.#migrate();
+  }
+
+  /**
+   * Add `deletedAt` (the trash) to a database that predates it.
+   *
+   * The name-uniqueness index has to become PARTIAL as part of the same step. A trashed
+   * item still holds its row, so under the old unconditional index deleting `notes.md`
+   * would block ever creating another `notes.md` — the trash would take the name hostage.
+   * `WHERE deletedAt IS NULL` scopes uniqueness to the live drive, which is where it
+   * means something.
+   */
+  async #migrate() {
+    const cols = await this.db.all('PRAGMA table_info(nodes)');
+    if (!cols.some((c) => c.name === 'deletedAt')) {
+      await this.db.exec('ALTER TABLE nodes ADD COLUMN deletedAt INTEGER');
+    }
+    // Recreating the index is cheap and idempotent; naming the new one differently is
+    // what makes "has this run?" answerable without a migrations table.
+    await this.db.exec(`
+      DROP INDEX IF EXISTS idx_nodes_coll_name;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_live_name ON nodes(collectionId, name) WHERE deletedAt IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_nodes_deleted ON nodes(deletedAt);
     `);
   }
 
@@ -57,7 +80,11 @@ export class SqliteStore extends MetadataStore {
     return row(await this.db.get('SELECT * FROM nodes WHERE id = ?', id));
   }
   async getByName(collectionId = 'default', name) {
-    return row(await this.db.get('SELECT * FROM nodes WHERE collectionId = ? AND name = ?', collectionId, name));
+    // Live items only: a trashed `notes.md` must not answer a link or a name lookup, or
+    // deleting something would leave it silently reachable.
+    return row(await this.db.get(
+      'SELECT * FROM nodes WHERE collectionId = ? AND name = ? AND deletedAt IS NULL', collectionId, name,
+    ));
   }
 
   async listItems(collectionId = 'default', opts = {}) {
@@ -66,7 +93,7 @@ export class SqliteStore extends MetadataStore {
     const limit = opts.limit ?? 500;
     const offset = opts.cursor ? Number(opts.cursor) : 0;
     const rows = await this.db.all(
-      `SELECT * FROM nodes WHERE collectionId = ?
+      `SELECT * FROM nodes WHERE collectionId = ? AND deletedAt IS NULL
        ORDER BY ${sortCol} COLLATE NOCASE ${dir}
        LIMIT ? OFFSET ?`,
       collectionId, limit + 1, offset,
@@ -115,8 +142,48 @@ export class SqliteStore extends MetadataStore {
     return next;
   }
 
+  /** Permanently forget an item. The trash is a VFS concern; this is the real delete. */
   async remove(id) {
     await this.db.run('DELETE FROM nodes WHERE id = ?', id);
+  }
+
+  async softDelete(id, at = Date.now()) {
+    await this.db.run('UPDATE nodes SET deletedAt = ?, updatedAt = ? WHERE id = ?', at, at, id);
+    return this.getById(id);
+  }
+  async restore(id, newName = null) {
+    try {
+      if (newName) {
+        await this.db.run('UPDATE nodes SET deletedAt = NULL, name = ?, updatedAt = ? WHERE id = ?', newName, Date.now(), id);
+      } else {
+        await this.db.run('UPDATE nodes SET deletedAt = NULL, updatedAt = ? WHERE id = ?', Date.now(), id);
+      }
+    } catch (err) {
+      // The partial unique index fires here when the name was taken while it was away.
+      if (String(err?.message || '').includes('UNIQUE')) throw TroveError.alreadyExists(newName || id, { cause: err });
+      throw wrapError(err);
+    }
+    return this.getById(id);
+  }
+  /** Trashed items, newest first — the order someone looking for a mistake wants. */
+  async listTrash(collectionId, { limit = 200, before = null } = {}) {
+    const where = ['deletedAt IS NOT NULL'];
+    const params = [];
+    if (collectionId) { where.push('collectionId = ?'); params.push(collectionId); }
+    if (before) { where.push('deletedAt < ?'); params.push(before); }
+    params.push(limit);
+    const rows = await this.db.all(
+      `SELECT * FROM nodes WHERE ${where.join(' AND ')} ORDER BY deletedAt DESC LIMIT ?`, ...params,
+    );
+    return rows.map(row);
+  }
+  /** Items trashed before `cutoff` — what the purge sweep collects. */
+  async trashedBefore(cutoff, limit = 500) {
+    const rows = await this.db.all(
+      'SELECT * FROM nodes WHERE deletedAt IS NOT NULL AND deletedAt < ? ORDER BY deletedAt ASC LIMIT ?',
+      cutoff, limit,
+    );
+    return rows.map(row);
   }
 
   async rename(id, newName) {
@@ -160,7 +227,7 @@ export class SqliteStore extends MetadataStore {
     if (opts.collectionId) params.push(opts.collectionId);
     params.push(opts.limit ?? 50);
     const rows = await this.db.all(
-      `SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\' COLLATE NOCASE ${clause} LIMIT ?`,
+      `SELECT * FROM nodes WHERE deletedAt IS NULL AND name LIKE ? ESCAPE '\\' COLLATE NOCASE ${clause} LIMIT ?`,
       ...params,
     );
     return rows.map(row);
@@ -171,28 +238,34 @@ export class SqliteStore extends MetadataStore {
     const params = [];
     if (afterId) { where.push('id > ?'); params.push(afterId); }
     params.push(limit);
-    const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const rows = await this.db.all(`SELECT * FROM nodes ${sql} ORDER BY id ASC LIMIT ?`, ...params);
+    where.push('deletedAt IS NULL'); // sweeps operate on the live drive
+    const rows = await this.db.all(
+      `SELECT * FROM nodes WHERE ${where.join(' AND ')} ORDER BY id ASC LIMIT ?`, ...params,
+    );
     return rows.map(row);
   }
 
   async countItems(collectionId) {
     const row = collectionId
-      ? await this.db.get('SELECT COUNT(*) AS n FROM nodes WHERE collectionId = ?', collectionId)
-      : await this.db.get('SELECT COUNT(*) AS n FROM nodes');
+      ? await this.db.get('SELECT COUNT(*) AS n FROM nodes WHERE collectionId = ? AND deletedAt IS NULL', collectionId)
+      : await this.db.get('SELECT COUNT(*) AS n FROM nodes WHERE deletedAt IS NULL');
     return row?.n ?? 0;
   }
 
   async collectionStats(collectionId = 'default') {
     const row = await this.db.get(
-      'SELECT COUNT(*) AS items, COALESCE(SUM(size), 0) AS bytes FROM nodes WHERE collectionId = ?',
+      'SELECT COUNT(*) AS items, COALESCE(SUM(size), 0) AS bytes FROM nodes WHERE collectionId = ? AND deletedAt IS NULL',
       collectionId,
     );
-    return { items: row?.items ?? 0, bytes: row?.bytes ?? 0 };
+    const trash = await this.db.get(
+      'SELECT COUNT(*) AS n FROM nodes WHERE collectionId = ? AND deletedAt IS NOT NULL', collectionId,
+    );
+    return { items: row?.items ?? 0, bytes: row?.bytes ?? 0, trashed: trash?.n ?? 0 };
   }
 
   async findByTags(filters = [], opts = {}) {
-    const where = ['1=1'];
+    const where = ['deletedAt IS NULL']; // the trash is not part of the drive
+
     const params = [];
     for (const f of filters) {
       // Query the denormalized merged-tags view: facets['#tags'][key].
@@ -228,6 +301,7 @@ export class SqliteStore extends MetadataStore {
     if (!uris.length) return [];
     const linksPath = `$."${LINKS_CONTRIBUTOR}".metadata."${LINKS_KEY}"`;
     const where = [
+      'deletedAt IS NULL', // a trashed document must not still be listed as linking here
       `EXISTS (SELECT 1 FROM json_each(json_extract(facets, ?)) WHERE json_each.value IN (${uris.map(() => '?').join(',')}))`,
     ];
     const params = [linksPath, ...uris];

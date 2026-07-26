@@ -167,6 +167,23 @@ function buildContent(state, ui, q, mode, modal) {
       run: () => ui.exec('explorer.loadMore'),
     });
   }
+  // The trash, when it has been opened. Not shown by default: it is a place you go to
+  // recover a mistake, not part of browsing the drive.
+  if (ex.trash) {
+    groups.push({
+      title: `Trash · ${ex.trash.length} item${ex.trash.length === 1 ? '' : 's'}`,
+      items: ex.trash.length
+        ? ex.trash.map((n) => ({
+          icon: 'trash',
+          title: n.name,
+          detail: `deleted ${new Date(n.deletedAt).toLocaleString()} — restore`,
+          run: () => ui.exec('explorer.restore', n.id),
+        }))
+        : [],
+      empty: 'The trash is empty.',
+    });
+  }
+
   groups.push({
     title: ex.nextCursor ? `All items · showing ${shown.toLocaleString()} of ${total.toLocaleString()}` : 'All items',
     items,

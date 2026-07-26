@@ -236,6 +236,29 @@ fetched and handed to the browser as a blob rather than streamed — an `<a href
 can't carry an Authorization header, and putting the token in the URL would leak it
 into logs and history.
 
+### Deleting
+
+Deleting moves an item to the **trash**: it leaves the drive — gone from listings,
+search, name lookups and backlinks — but the bytes stay exactly where they are and
+the record keeps its id. A confirm dialog is not a safety net; it is a thing people
+click through, and on a drive holding your only copy of something that matters.
+
+```
+POST /api/items/delete       → trash it (recoverable)
+GET  /api/trash              → what's in there
+POST /api/trash/restore      → put it back, re-indexed
+POST /api/trash/purge        → destroy one item, or empty the trash
+```
+
+Restoring re-indexes the item, so it is findable again rather than merely visible.
+If its name was taken while it was away, it comes back under a free one — someone
+restoring a file wants the file, not an error about a name.
+
+`TROVE_TRASH_DAYS` (default 30) is how long an item stays recoverable; `0` keeps
+the trash forever. That timer is the only thing in Trove that destroys data
+without someone asking, which is why it is a number you set rather than a default
+buried in code.
+
 ### Data & backups
 
 State lives in two places, both configurable and mounted as a volume in the

@@ -325,9 +325,15 @@ export async function createServer(config = {}) {
   let maintenance = null;
   if (config.startFlusher !== false && config.maintenanceIntervalMs !== 0) {
     const everyMs = config.maintenanceIntervalMs ?? 5 * 60 * 1000;
+    // Trash retention. This is the only thing in Trove that destroys data on a timer,
+    // so it is opt-outable (TROVE_TRASH_DAYS=0 keeps the trash forever) and it says what
+    // it removed. 30 days is the same grace period the drives people are used to give.
+    const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     maintenance = setInterval(() => {
       Promise.resolve(vfs.uploads.sessions.sweep?.(Date.now()))
         .then(() => sidecar.sweep?.())
+        .then(() => (trashMs > 0 ? vfs.purgeTrash({ before: Date.now() - trashMs }) : null))
+        .then((r) => { if (r?.purged) console.log(`[trove] purged ${r.purged} item(s) from the trash after ${config.trashRetentionDays ?? 30} days`); })
         .catch((e) => console.error('maintenance sweep failed', e));
     }, everyMs);
     maintenance.unref?.();
@@ -608,6 +614,10 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   config.creatorRoles = (env.TROVE_COLLECTION_CREATOR_ROLES || '').split(',').map((s) => s.trim()).filter(Boolean);
   // 'default' collection grants everyone all caps unless locked down.
   config.defaultOpen = env.TROVE_DEFAULT_OPEN !== 'false';
+
+  // How long a deleted item stays recoverable. 0 keeps the trash forever — the only
+  // setting here that can cause data loss, so it is explicit rather than inferred.
+  if (env.TROVE_TRASH_DAYS != null && env.TROVE_TRASH_DAYS !== '') config.trashRetentionDays = Number(env.TROVE_TRASH_DAYS);
 
   // Reconcile with the object store on a timer. Off unless set: a scan lists the whole
   // bucket, which costs API calls and load. Turn it on when something other than Trove

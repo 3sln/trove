@@ -15,7 +15,7 @@ export class ExplorerService {
       collectionId: 'default', collections: [], canCreateCollection: false,
       // `stats` is the whole collection; `items` is the page on screen. Keeping both
       // is what lets the UI say "500 of 3,006" instead of quietly claiming 500.
-      stats: null, nextCursor: null, loadingMore: false,
+      stats: null, nextCursor: null, loadingMore: false, trash: null,
     };
     this.subject = new ObservableSubject(this.state);
   }

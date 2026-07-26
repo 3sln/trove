@@ -110,6 +110,17 @@ export class TroveApiClient {
   remove(id) {
     return this.request('POST', '/api/items/delete', { body: { id } });
   }
+  /** What's been deleted but not yet destroyed. */
+  trash(collection) {
+    return this.request('GET', '/api/trash', { query: collection ? { collection } : {} });
+  }
+  restore(id) {
+    return this.request('POST', '/api/trash/restore', { body: { id } });
+  }
+  /** Destroy for real — one item, or everything in a collection's trash. */
+  purgeTrash({ id, collection } = {}) {
+    return this.request('POST', '/api/trash/purge', { body: id ? { id } : { collection } });
+  }
   search(q, opts = {}) {
     return this.request('GET', '/api/search', { query: { q, ...opts } });
   }

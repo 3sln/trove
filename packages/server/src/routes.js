@@ -466,6 +466,47 @@ export function createRouter() {
     return { task: ctx.tasks.list().find((t) => t.kind === 'index' && t.status === 'running') || null };
   });
 
+  // --- trash -----------------------------------------------------------------
+  // Deleting moves an item here rather than destroying it. Everything below needs
+  // `delete` on the collection, the same capability the delete itself needed — seeing
+  // what you deleted, and undoing it, are not lesser rights than deleting.
+
+  r.get('/api/trash', async (ctx) => {
+    const collectionId = collectionOf(ctx.query);
+    await assertCap(ctx, collectionId, 'delete');
+    return { items: await ctx.vfs.listTrash(collectionId, { limit: clampLimit(ctx.query.limit, 200) }), collectionId };
+  });
+
+  r.post('/api/trash/restore', async (ctx) => {
+    const b = await body(ctx.req);
+    if (!b.id) throw TroveError.invalid('id is required');
+    const node = await ctx.vfs.metadata.getById(b.id);
+    if (!node) throw TroveError.notFound('Item');
+    await assertCap(ctx, node.collectionId, 'delete');
+    return { node: await ctx.vfs.restore(b.id) };
+  });
+
+  // Destroy for real. Separate from DELETE /api/items so that emptying the trash can
+  // never be something you reach by accident from the ordinary delete path.
+  r.post('/api/trash/purge', async (ctx) => {
+    const b = await body(ctx.req);
+    if (b.id) {
+      const node = await ctx.vfs.metadata.getById(b.id);
+      if (!node) throw TroveError.notFound('Item');
+      await assertCap(ctx, node.collectionId, 'delete');
+      await ctx.vfs.remove(b.id, { permanent: true });
+      return { purged: 1 };
+    }
+    const collectionId = collectionOf(b);
+    await assertCap(ctx, collectionId, 'delete');
+    const trash = await ctx.vfs.listTrash(collectionId, { limit: MAX_PAGE });
+    let purged = 0;
+    for (const node of trash) {
+      await ctx.vfs.remove(node.id, { permanent: true }).then(() => { purged++; }).catch(() => {});
+    }
+    return { purged };
+  });
+
   // Reconcile a collection against the bytes actually in its store — how files added,
   // replaced, or removed by anything other than Trove get noticed. Needs `write` on the
   // collection, because a scan can create items in it.
