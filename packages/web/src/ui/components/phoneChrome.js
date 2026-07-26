@@ -130,10 +130,11 @@ function statusSheet(state, ui) {
       icon: 'files',
       label: 'Items',
       value: f.partial
-        ? `${f.shown.toLocaleString()} of ${f.totalItems.toLocaleString()}`
+        ? `${f.shown.toLocaleString()} of ${f.totalKnown ? f.totalItems.toLocaleString() : 'more'}`
         : f.totalItems.toLocaleString(),
     }),
-    sheetRow({ icon: 'file', label: 'Size', value: bytes(f.totalBytes) }),
+    // `+` where the figure covers only what has loaded, matching the desktop bar.
+    sheetRow({ icon: 'file', label: 'Size', value: `${bytes(f.totalBytes)}${f.totalKnown || !f.partial ? '' : '+'}` }),
     // Only where the backend can actually answer — see usageChip.
     f.usage?.total
       ? div({ className: 'sheet-row static usage' },

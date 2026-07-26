@@ -97,6 +97,7 @@ export function registerCommands(app) {
     go(new TrashAction('list'));
     workbench.showHome();
   }, { category: 'Explorer', icon: 'trash' });
+  cmd('explorer.hideTrash', 'Hide Trash', () => go(new TrashAction('hide')), { palette: false });
   cmd('explorer.restore', 'Restore from Trash', (id) => id && go(new TrashAction('restore', id)), { palette: false });
   cmd('explorer.purgeOne', 'Delete Forever', (id) => id && go(new TrashAction('purge', id)), { palette: false });
   cmd('explorer.emptyTrash', 'Empty Trash', () => {

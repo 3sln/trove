@@ -138,7 +138,23 @@ export default function statusBar(state, ui) {
         ? span({ className: 'seg', title: 'Syncing offline changes' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span('Syncing…'))
         : null,
     off.queued ? span({ className: 'seg', title: 'Changes waiting to sync' }, `${off.queued} queued`) : null,
-    off.pins.length ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` }, icon('download', { size: 12 }), span(`${off.pins.length} offline`)).on({ click: () => ui.exec('workbench.view.home') }) : null,
+    // The pinned files themselves. There is no offline-files view anywhere, so a chip
+    // counting them that only dropped you on the home screen was a label pretending to
+    // be a control — and unpinning meant finding each file again through search.
+    off.pins.length
+      ? button({ className: 'seg', title: `${off.pins.length} file(s) available offline` },
+        icon('download', { size: 12 }), span(`${off.pins.length} offline`), icon('chevron-down', { size: 11 }))
+        .on({ click: (e) => {
+          const items = off.pins.slice(0, 12).flatMap((p) => [
+            { label: p.name, icon: 'file-text', run: () => ui.exec('explorer.open', p) },
+            { label: `Remove “${p.name}” from offline`, icon: 'close', run: () => ui.exec('offline.unpin', p) },
+            { sep: true },
+          ]);
+          if (off.pins.length > 12) items.push({ label: `…and ${off.pins.length - 12} more`, run: () => {} });
+          const r = e.currentTarget.getBoundingClientRect();
+          ui.platform.workbench.showContextMenu(r.left, r.top - 8 - items.length * 34, items);
+        } })
+      : null,
     button({ className: 'seg', title: 'Switch collection' },
       icon('files', { size: 13 }), span(ex.collectionId || 'default'),
       (ex.collections || []).length > 1 || ex.canCreateCollection ? icon('chevron-down', { size: 11 }) : null)
@@ -162,7 +178,15 @@ export default function statusBar(state, ui) {
     div({ className: 'spacer' }),
     ...activityChips(state, ui),
     ...right,
-    span({ className: 'seg', title: 'Total size of this collection' }, bytes(totalBytes)),
+    // Same qualifier as the item count beside it. Without it the two numbers in one bar
+    // disagreed about their own honesty: "500+ items" next to a byte figure that was
+    // only the loaded page's, presented as the collection's.
+    span({
+      className: 'seg',
+      title: f.totalKnown || !f.partial
+        ? 'Total size of this collection'
+        : `Size of the ${f.shown.toLocaleString()} items loaded so far — this server doesn’t report a collection total`,
+    }, `${bytes(totalBytes)}${f.totalKnown || !f.partial ? '' : '+'}`),
     usageChip(ex),
     caps ? span({ className: 'seg', title: 'Storage backend capabilities' },
       icon(caps.storage?.presignDownload ? 'download' : 'files', { size: 12 }),

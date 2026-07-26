@@ -40,7 +40,12 @@ export function writeToken(token) {
 
 export function createPlatform({ baseUrl = '' } = {}) {
   const contributions = new ContributionRegistry();
-  const context = new ContextKeyService({ 'view.active': 'explorer', 'sidebar.visible': true });
+  // 'home' is where the app actually starts (WorkbenchService's initial `activity`), and
+  // nothing writes this key until the user navigates. Seeding it with a view that no
+  // longer exists left every `when: view.active == 'home'` binding — the Delete
+  // shortcut among them — dead from boot until the first click on the rail, while the
+  // row menu cheerfully advertised "Del" as the way to delete.
+  const context = new ContextKeyService({ 'view.active': 'home', 'sidebar.visible': true });
   const notifications = new NotificationService();
   const commands = new CommandService(contributions, context, notifications);
   const settings = new SettingsService();

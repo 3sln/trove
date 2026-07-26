@@ -26,7 +26,12 @@ export class NavigateAction extends AppAction {
   async execute({ app }) {
     const { explorer, platform } = app;
     const collectionId = this.collectionId || explorer.state.collectionId || 'default';
-    explorer.set({ loading: true, error: null, collectionId });
+    const switching = collectionId !== explorer.state.collectionId;
+    // A collection's trash belongs to that collection. Carrying it across a switch
+    // listed the OLD collection's deleted files under the new one — above an "Empty
+    // trash" button that purges the new one, so the rows and the button disagreed
+    // about which drive they were talking about.
+    explorer.set({ loading: true, error: null, collectionId, ...(switching ? { trash: null } : {}) });
     try {
       const sort = platform.settings.get('explorer.sort');
       const order = platform.settings.get('explorer.sortOrder');
@@ -159,6 +164,13 @@ export class TrashAction extends AppAction {
   async execute({ app }) {
     const { explorer, platform } = app;
     const collection = explorer.state.collectionId;
+    // Putting it away is one of the things you can do to the trash. Without this the
+    // section, once opened, stayed on screen until a page reload — there was no way
+    // back to a plain list of files.
+    if (this.op === 'hide') {
+      explorer.set({ trash: null });
+      return;
+    }
     try {
       if (this.op === 'restore') {
         const { node } = await platform.api.restore(this.id);

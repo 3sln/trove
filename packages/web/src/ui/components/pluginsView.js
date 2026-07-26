@@ -97,6 +97,14 @@ function trustBadge(t) {
   if (!t) return null;
   if (t.status === 'verified') return span({ className: 'trust verified', title: 'Signed by ' + t.domain }, icon('check', { size: 12 }), t.domain);
   if (t.status === 'signed') return span({ className: 'trust signed' }, icon('info', { size: 12 }), 'signed');
+  // A BROKEN signature is not the same as no signature. The install dialog says so in
+  // red; this list used to fall through to the same amber "unverified" an ordinary
+  // unsigned plugin gets, so a package whose signature failed to verify — the one case
+  // that means someone tampered with it — looked like the common, benign one.
+  if (t.status === 'invalid') {
+    return span({ className: 'trust invalid', title: t.reason || 'The signature did not verify — this package may have been altered' },
+      icon('warn', { size: 12 }), 'invalid signature');
+  }
   return span({ className: 'trust unverified' }, icon('warn', { size: 12 }), 'unverified');
 }
 

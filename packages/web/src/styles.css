@@ -99,7 +99,16 @@ body {
   text-rendering: optimizeLegibility;
   overflow: hidden;
 }
-button { font: inherit; color: inherit; cursor: pointer; }
+/* A full reset, not a partial one. Inheriting only font/colour left every button that
+   didn't name its own background wearing the UA's `ButtonFace` — a light-grey 3D box
+   with `var(--text)` on it, i.e. light-on-light in the dark theme. It stayed invisible
+   for as long as every button in the app happened to be styled, and surfaced the moment
+   one wasn't: turning context-menu rows into real <button>s made every menu in the app
+   unreadable. `.btn` and friends set their own background and border below. */
+button {
+  font: inherit; color: inherit; cursor: pointer;
+  background: none; border: 0; text-align: inherit;
+}
 input, select, textarea { font: inherit; color: inherit; }
 ::selection { background: var(--accent); color: var(--accent-text); }
 
@@ -394,6 +403,14 @@ kbd {
 }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 82%, black)); color: var(--accent-text); border: 0; font-weight: 600; }
+/* Two modifiers eight call sites already used and no rule had ever defined, so a
+   "small ghost" button came out full-size and solid — two of them wrapped onto two
+   lines each in the 380px Activity panel. */
+.btn.small { padding: 4px 9px; font-size: 12px; gap: 5px; border-radius: 6px; }
+.btn.ghost { background: none; border-color: transparent; color: var(--text-dim); }
+.btn.ghost:hover { background: var(--bg-hover); border-color: var(--border); color: var(--text); }
+/* The pinned/"available offline" state of the info panel's toggle. */
+.btn.on { border-color: var(--accent); color: var(--accent); background: var(--bg-active); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
 .btn.danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
@@ -1065,6 +1082,15 @@ kbd {
   left: 8px; right: 8px; width: auto;
   bottom: calc(var(--phonetabs-h) + env(safe-area-inset-bottom) + 8px);
 }
+/* The docked plugin mini-player was missed when the rest were re-anchored: pinned to
+   the viewport bottom at up to 480px wide, it covered the Files/Upload/Plugins/More row
+   and hung off the left edge of a 390px screen. `!important` because the width is an
+   inline style — the dock sizes itself from the plugin's declared minimum, which is a
+   desktop number that a phone simply cannot honour. */
+.shell.phone .viewer-dock {
+  left: 8px; right: 8px; width: auto !important;
+  bottom: calc(var(--phonetabs-h) + env(safe-area-inset-bottom) + 8px);
+}
 
 /* --- TV shell ----------------------------------------------------------------
    A television is a screen you read from three metres away with a four-button remote.
@@ -1133,8 +1159,10 @@ kbd {
   outline: none;
   background: var(--bg-hover);
 }
-/* A focus ring clipped by an ancestor's overflow is a selection that vanishes mid-list. */
-.shell.tv .launch-body { overflow-x: visible; }
+/* A focus ring clipped by an ancestor's overflow is a selection that vanishes mid-list.
+   `overflow-x: visible` cannot express that — CSS computes it back to `auto` whenever
+   the other axis scrolls — so the room for the ring has to be real space instead. */
+.shell.tv .launch-body { padding-left: 8px; padding-right: 8px; }
 
 /* --- "How does this search box work" — only after a search found nothing ------ */
 .launch-help { margin: 6px 10px 0; padding: 12px 0 0; border-top: 1px solid var(--border); }
@@ -1187,4 +1215,5 @@ kbd {
 /* The part of a group header that is the user's own text — case preserved, because
    `#draft` uppercased to `#DRAFT` names a tag they did not type. */
 .launch-h .lh-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.launch-h .lh-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 .launch-h .lh-verbatim { text-transform: none; font-weight: 500; color: var(--text-dim); letter-spacing: 0; }

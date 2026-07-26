@@ -303,10 +303,15 @@ function buildContent(state, ui, q, mode, modal) {
       title: ex.trash.length
         ? `Trash · ${ex.trash.length} item${ex.trash.length === 1 ? '' : 's'}`
         : 'Trash',
-      action: ex.trash.length
-        ? button({ className: 'launch-up', title: 'Destroy everything in the trash' },
-          icon('trash', { size: 13 }), 'Empty trash').on({ click: () => ui.exec('explorer.emptyTrash') })
-        : null,
+      action: div({ className: 'lh-actions' },
+        ex.trash.length
+          ? button({ className: 'launch-up', title: 'Destroy everything in the trash' },
+            icon('trash', { size: 13 }), 'Empty trash').on({ click: () => ui.exec('explorer.emptyTrash') })
+          : null,
+        // The way back out. Opening the trash used to be one-way until a page reload.
+        button({ className: 'launch-up', title: 'Hide the trash' },
+          icon('close', { size: 13 }), 'Close').on({ click: () => ui.exec('explorer.hideTrash') }),
+      ),
       items: ex.trash.length
         ? ex.trash.map((n) => ({
           icon: 'trash',
@@ -352,17 +357,21 @@ function fileItem(node, ui, modal) {
 
 function fileMenu(node, ui) {
   const pinned = (ui.app.offline?.state?.pins || []).some((p) => p.id === node.id);
+  // Ask what the shortcut actually IS. Hardcoding "⌘⇧L" told a Windows or Linux user
+  // about a key their machine does not have, and told everyone the default even after
+  // they had rebound it.
+  const kbd = (id) => ui.platform.keybindings.labelFor(id) || undefined;
   return [
     { label: 'Open', icon: 'file-text', run: () => ui.exec('explorer.open', node) },
     { label: 'Download', icon: 'download', run: () => ui.exec('explorer.download', node) },
-    { label: 'Copy link', icon: 'link', kbd: '⌘⇧L', run: () => ui.exec('explorer.copyLink') },
+    { label: 'Copy link', icon: 'link', kbd: kbd('explorer.copyLink'), run: () => ui.exec('explorer.copyLink') },
     { sep: true },
     { label: 'Rename…', run: () => ui.exec('explorer.rename') },
     pinned
       ? { label: 'Remove from offline', icon: 'close', run: () => ui.exec('offline.unpin', node) }
       : { label: 'Make available offline', icon: 'download', run: () => ui.exec('offline.pin', node) },
     { sep: true },
-    { label: 'Move to trash', icon: 'trash', danger: true, kbd: 'Del', run: () => ui.exec('explorer.delete') },
+    { label: 'Move to trash', icon: 'trash', danger: true, kbd: kbd('explorer.delete'), run: () => ui.exec('explorer.delete') },
   ];
 }
 
