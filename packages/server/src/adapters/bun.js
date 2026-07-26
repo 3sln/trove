@@ -22,8 +22,10 @@ if (process.env.TROVE_JWT_JWKS_FILE && !process.env.TROVE_JWT_JWKS) {
 }
 
 
-const PORT = Number(process.env.PORT || 8787);
-const HOST = process.env.HOST || '0.0.0.0';
+// TROVE_-prefixed to match every other setting; bare PORT/HOST still work, since that
+// is what most platforms inject and breaking them would be gratuitous.
+const PORT = Number(process.env.TROVE_PORT || process.env.PORT || 8787);
+const HOST = process.env.TROVE_HOST || process.env.HOST || '0.0.0.0';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = process.env.TROVE_WEB_DIST || path.resolve(__dirname, '../../../web/dist');

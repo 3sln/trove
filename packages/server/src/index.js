@@ -712,6 +712,19 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // writes to the same bucket.
   if (env.TROVE_SCAN_INTERVAL_MS) config.scanIntervalMs = Number(env.TROVE_SCAN_INTERVAL_MS);
 
+  // Sweeping abandoned upload sessions and cold sidecars. Both caches are otherwise
+  // unbounded, so this is a knob rather than a switch — 0 turns it off entirely.
+  if (env.TROVE_MAINTENANCE_INTERVAL_MS != null && env.TROVE_MAINTENANCE_INTERVAL_MS !== '') {
+    config.maintenanceIntervalMs = Number(env.TROVE_MAINTENANCE_INTERVAL_MS);
+  }
+
+  // Rebuilding the index at startup when it is empty and the drive is not. Wanted almost
+  // always — an empty index in a search-first app reads as data loss — but on a very
+  // large drive an operator may want to schedule it instead of paying for it on boot.
+  if (env.TROVE_REBUILD_INDEX_ON_START != null && env.TROVE_REBUILD_INDEX_ON_START !== '') {
+    config.rebuildIndexOnStart = !/^(0|off|false|no)$/i.test(String(env.TROVE_REBUILD_INDEX_ON_START));
+  }
+
   // Per-file upload quota (bytes). Unbounded unless set.
   if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);
 

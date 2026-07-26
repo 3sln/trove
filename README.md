@@ -183,13 +183,13 @@ thin and there is no runtime-specific code below it. Pick a row:
 ```sh
 bun install
 bun run build:web                       # builds packages/web/dist
-TROVE_STORAGE=filesystem TROVE_ROOT=./data/objects \
-TROVE_METADATA=sqlite TROVE_DB=./data/trove.db \
+TROVE_STORAGE=filesystem TROVE_FS_ROOT=./data/objects \
+TROVE_METADATA=sqlite TROVE_DB_PATH=./data/trove.db \
 bun packages/server/src/adapters/bun.js  # :8787, API + web app
 ```
 
-That is the whole thing: files under `./data/objects`, everything else in one SQLite
-file. Back it up with `npm run backup` (a `VACUUM INTO` snapshot, safe on a live
+That is the whole thing: object bytes under `$TROVE_FS_ROOT/objects/` (the backend
+creates that subdirectory, sharded two levels deep), everything else in one SQLite file. Back it up with `npm run backup` (a `VACUUM INTO` snapshot, safe on a live
 database) and copy the objects directory.
 
 ### Node
@@ -197,8 +197,8 @@ database) and copy the objects directory.
 Identical, with `node`:
 
 ```sh
-TROVE_STORAGE=filesystem TROVE_ROOT=./data/objects \
-TROVE_METADATA=sqlite TROVE_DB=./data/trove.db \
+TROVE_STORAGE=filesystem TROVE_FS_ROOT=./data/objects \
+TROVE_METADATA=sqlite TROVE_DB_PATH=./data/trove.db \
 node packages/server/src/adapters/node.js
 ```
 
@@ -260,6 +260,62 @@ want their own D1 database, since D1 cannot create one on demand and co-locating
 would put a plugin's tables next to the drive's metadata. Bind `PLUGIN_DB` if you use
 server-side plugin storage — without it, that one feature reports a clear error and the
 rest of the drive is unaffected.
+
+### Every setting
+
+Defaults are what you get with the variable unset. Everything here is read once at
+startup by `configFromEnv` (`packages/server/src/index.js`), so a library caller can pass
+the same values as config fields instead.
+
+| variable | default | what it does |
+| --- | --- | --- |
+| **storage** | | |
+| `TROVE_STORAGE` | `memory` | `memory` · `filesystem` · `s3` |
+| `TROVE_FS_ROOT` | `./data/objects` | filesystem root; bytes go in `<root>/objects/` |
+| `TROVE_S3_BUCKET` / `_REGION` / `_ENDPOINT` | — | S3/R2/MinIO; endpoint for non-AWS |
+| `TROVE_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | — | credentials (use secrets, not env files) |
+| `TROVE_S3_PATH_STYLE` | `false` | MinIO and most S3-compatibles need `true` |
+| `TROVE_MAX_UPLOAD_BYTES` | unlimited | per-file ceiling; over it is `413`, not `507` |
+| **metadata + search** | | |
+| `TROVE_METADATA` | `sqlite` unless storage is memory | `memory` · `sqlite` |
+| `TROVE_DB_PATH` | `./data/trove.db` | the one file holding metadata, KV, and installs |
+| `TROVE_VECTOR` | follows durability | `sqlite` · `memory` · `qdrant` · `vectorize` |
+| `TROVE_KEYWORD` | follows durability | `sqlite` · `memory` |
+| `TROVE_EMBEDDINGS_URL` / `_KEY` / `_MODEL` / `_DIM` | offline hash model | any OpenAI-compatible endpoint |
+| `TROVE_SEARCH_TRANSFORMER` | `parse` | `parse` · `workers-ai` (query understanding) |
+| `TROVE_REBUILD_INDEX_ON_START` | `true` | rebuild when the index is empty and the drive isn't |
+| **identity** | | |
+| `TROVE_AUTH` | `anonymous` | `anonymous` · `cloudflare-access` · `jwt` · `header` |
+| `TROVE_AUTH_REQUIRED` | `false` | **set this** — else unauthenticated is anonymous |
+| `TROVE_CF_ACCESS_TEAM` / `_AUD` | — | Cloudflare Access, derives everything else |
+| `TROVE_JWKS_URL` / `TROVE_JWT_JWKS` / `_JWKS_FILE` | — | keys to trust: fetched, inline, or a file |
+| `TROVE_JWT_ISSUER` / `_AUDIENCE` / `_ALGS` | — | claim checks after the signature passes |
+| `TROVE_AUTH_SERVER` | the JWT issuer | where refused clients are sent to sign in |
+| `TROVE_ADMINS` | — | comma-separated ids with whole-drive rights |
+| **collections** | | |
+| `TROVE_COLLECTIONS` | on | `false` for one open store with no ACLs |
+| `TROVE_DEFAULT_OPEN` | `true` | **set `false`** before exposing it |
+| `TROVE_COLLECTION_CREATOR_ROLES` | — | roles allowed to create collections |
+| **agents** | | |
+| `TROVE_MCP` | on | `off` disables the endpoint |
+| `TROVE_MCP_PATH` / `_RESOURCE` / `_REQUIRE_AUTH` | `/mcp` | see [Connecting an AI agent](#connecting-an-ai-agent-mcp) |
+| **housekeeping** | | |
+| `TROVE_TRASH_DAYS` | `30` | `0` keeps the trash forever |
+| `TROVE_SCAN_INTERVAL_MS` | off | reconcile with the store on a timer |
+| `TROVE_MAINTENANCE_INTERVAL_MS` | `300000` | sweep stale uploads and sidecars |
+| `TROVE_MENTION_FLUSH_MS` | — | how often mention notifications batch out |
+| `TROVE_VAPID_PUBLIC_KEY` / `_PRIVATE_KEY` / `_SUBJECT` | — | Web Push for @mentions |
+| **limits + serving** | | |
+| `TROVE_MAX_JSON_BYTES` | `4 MiB` | JSON body cap (uploads stream, so bound those at the proxy) |
+| `TROVE_MAX_PAGE` | `1000` | ceiling on any client-supplied `limit` |
+| `TROVE_PORT` / `TROVE_HOST` | `8787` / `0.0.0.0` | |
+| `TROVE_WEB_DIST` | `packages/web/dist` | built web app to serve |
+| `TROVE_CORS_ORIGIN` | off | `*` or an allowlist; the app is same-origin |
+| `TROVE_CSP` | off | opt-in shell CSP (see `SAMPLE_CSP`) |
+| **plugins** | | |
+| `TROVE_SERVER_INDEXERS` | on | `false` disables server-side plugin indexers |
+| `TROVE_ENFORCE_PLUGIN_CAPS` | `false` | strict capability enforcement |
+| `TROVE_PACKAGE_STORE` / `TROVE_PACKAGE_FS_ROOT` | primary storage | where plugin zips live |
 
 ### Before you expose it
 
