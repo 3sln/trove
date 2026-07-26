@@ -183,8 +183,13 @@ function openRowMenu(anchor, it, ui, event, select) {
 }
 
 // Keep the drive's idea of "what is selected" in step with the highlighted row.
+//
+// The NODE goes along with the id. A search result or a recent can be from a collection
+// that isn't loaded — or a page that isn't — so an id alone is something the explorer
+// cannot resolve, and the commands that act on "the selection" then do nothing at all.
 function syncSelection(ui, item) {
-  ui.app.explorer.select(item?.node?.id ? [item.node.id] : []);
+  const node = item?.node;
+  ui.app.explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
 }
 
 /**

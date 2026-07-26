@@ -41,12 +41,12 @@ export function decodeCursor(sort, cursor) {
 export function afterCursor(node, sort, at, desc) {
   const a = node[sort];
   const b = at.value;
-  const cmp = compare(a, b);
+  const cmp = compareValues(a, b);
   if (cmp !== 0) return desc ? cmp < 0 : cmp > 0;
   return desc ? node.id < at.id : node.id > at.id;
 }
 
-function compare(a, b) {
+export function compareValues(a, b) {
   // Text compares case-insensitively to match the stores' NOCASE ordering; anything
   // else compares naturally.
   if (typeof a === 'string' && typeof b === 'string') {

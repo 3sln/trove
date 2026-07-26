@@ -22,11 +22,27 @@
 
 import { TroveError } from './errors.js';
 import { extname } from './util.js';
+import { PACKAGE_PREFIX } from './plugins/packageStore.js';
 
 /** Objects Trove wrote itself. Anything else in the store arrived some other way. */
 const TROVE_KEY = /^obj_[0-9a-f]+$/i;
-/** Keys that are Trove's own bookkeeping, not user data. */
-const RESERVED_PREFIXES = ['sidecars/', 'packages/', 'plugins/'];
+/**
+ * Keys that are Trove's own bookkeeping, not user data.
+ *
+ * These MUST match what the writers actually use, and one of them didn't: the package
+ * store writes under `_plugins/` (StoragePackageStore's default prefix) while this list
+ * said `plugins/`. Since that store wraps the primary backend — which is also the
+ * `default` collection's — every account's uploaded plugin zip sat in the default
+ * collection's key space as an unreserved object, and a scan adopted it: the package
+ * bytes became a file anyone with read on `default` could download, its name leaked the
+ * installing account's id (usually an email), its contents went into the shared search
+ * index, and because the adopted item's storageKey IS the real blob key, deleting it
+ * destroyed the owner's package.
+ *
+ * `plugins/` and `packages/` are kept as well — they cost nothing and a store
+ * constructed with a different prefix should still be skipped.
+ */
+const RESERVED_PREFIXES = ['sidecars/', PACKAGE_PREFIX, 'packages/', 'plugins/'];
 
 export class CollectionScanner {
   /**

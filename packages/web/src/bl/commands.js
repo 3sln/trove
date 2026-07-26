@@ -5,7 +5,7 @@
 
 import {
   NavigateAction, RefreshAction, DeleteAction, RenameAction,
-  UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction, LoadMoreAction, TrashAction,
+  UploadFilesAction, OpenFileAction, CreateCollectionAction, LoadMoreAction, TrashAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri } from '@trove/core/links.js';
@@ -46,8 +46,16 @@ export function registerCommands(app) {
   }, { category: 'Explorer', icon: 'upload' });
 
   // Copy the item's trove: link, which is how one item references another in markdown.
+  // "Nothing is selected" is a real answer, and it has to be said out loud: these used
+  // to return silently, which is indistinguishable from a broken command.
+  const subject = (fallbackNode) => {
+    const node = fallbackNode || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    if (!node) platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
+    return node;
+  };
+
   cmd('explorer.copyLink', 'Copy Link to Item', async () => {
-    const node = explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    const node = subject();
     if (!node) return;
     const uri = troveUri(node);
     try {
@@ -60,7 +68,7 @@ export function registerCommands(app) {
   }, { category: 'Explorer', icon: 'link' });
 
   cmd('explorer.rename', 'Rename', () => {
-    const node = explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    const node = subject();
     if (!node) return;
     workbench.showDialog({
       kind: 'prompt', title: 'Rename', label: 'New name', value: node.name, confirmLabel: 'Rename',
@@ -73,7 +81,12 @@ export function registerCommands(app) {
 
   cmd('explorer.delete', 'Delete', () => {
     const nodes = explorer.selectedNodes();
-    if (!nodes.length) return;
+    const fallback = nodes.length ? null : workbench.activeTab()?.node;
+    if (fallback) nodes.push(fallback); // deleting the file you have open is the obvious intent
+    if (!nodes.length) {
+      platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
+      return;
+    }
     const doDelete = () => go(new DeleteAction(nodes.map((n) => n.id)));
     if (platform.settings.get('explorer.confirmDelete')) {
       workbench.showDialog({
@@ -123,9 +136,6 @@ export function registerCommands(app) {
       platform.notifications.error(`Couldn't download ${target.name}: ${err.message}`);
     }
   }, { category: 'Explorer', icon: 'download' });
-
-  // --- search ----------------------------------------------------------------
-  cmd('search.run', 'Search Files', (q) => go(new SearchAction(q, undefined)), { palette: false });
 
   // --- offline ---------------------------------------------------------------
   cmd('offline.pin', 'Make Available Offline', (node) => {

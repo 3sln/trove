@@ -67,7 +67,13 @@ export function phoneBottomBar(state, ui) {
       $attrs: { 'aria-label': t.label },
     }, icon(t.icon, { size: 21 }), span({ className: 'pb-label' }, t.label))
       .on({ click: () => { ui.platform.workbench.closeSheet(); ui.exec(t.command); } })),
-    button({ className: `pb-tab ${sheet === 'more' ? 'active' : ''}`, $attrs: { 'aria-label': 'More' } },
+    // Settings is reached FROM the More sheet, so while you are in it "More" is where
+    // you are — otherwise all four tabs read as inactive and the bar claims you are
+    // nowhere.
+    button({
+      className: `pb-tab ${sheet === 'more' || (!sheet && !TABS.some((t) => t.id === active)) ? 'active' : ''}`,
+      $attrs: { 'aria-label': 'More' },
+    },
       icon('dots', { size: 21 }),
       unread ? span({ className: 'pb-badge' }, String(unread > 9 ? '9+' : unread)) : null,
       span({ className: 'pb-label' }, 'More'),

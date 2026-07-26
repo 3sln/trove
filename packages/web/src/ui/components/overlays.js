@@ -155,8 +155,12 @@ export function contextMenu(state, ui) {
   const wb = ui.platform.workbench;
   // Clamp on both edges. Anchoring a menu ABOVE its trigger (the status bar opens
   // upward) produces a negative top, and only the far edge used to be clamped.
+  // The height is whatever the menu needs OR whatever the window allows, whichever is
+  // smaller — past that the menu scrolls (see `.menu`), so pushing it further up buys
+  // nothing and would just leave a gap at the bottom.
+  const wanted = Math.min(m.items.length * 34 + 20, window.innerHeight - 24);
   const x = Math.max(8, Math.min(m.x, window.innerWidth - 220));
-  const y = Math.max(8, Math.min(m.y, window.innerHeight - m.items.length * 34 - 20));
+  const y = Math.max(8, Math.min(m.y, window.innerHeight - wanted));
   return div({},
     div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => wb.closeContextMenu(), contextmenu: (e) => { e.preventDefault(); wb.closeContextMenu(); } }),
     div({ className: 'menu', $styling: { left: x + 'px', top: y + 'px' } },

@@ -98,6 +98,12 @@ export class PluginService {
       scope: 'account', grants: granted, indexers: pkg.indexers, // full specs (id/match/entry/dir)
       config: {}, secrets: {},
       installedBy: principal.id, adminApprovedBy: this.requiresAdmin(pkg) ? principal.id : null,
+      // Whether the SHARED domain store was actually approved. Computed at install
+      // (it is what makes the package admin-only) and never written down, so the
+      // runtime check in /api/plugins/:id/sql had nothing to consult: a plugin that
+      // declared plain `storage: true`, needing no admin at all, could then open
+      // `scope: "domain"` and reach its vendor's shared database.
+      sharedStorage: !!pkg.sharedStorage,
       packageRef: ref, digest: pkg.digest, createdAt: Date.now(), updatedAt: Date.now(),
     };
     await this.installs.put(record);
@@ -166,6 +172,24 @@ export class PluginService {
   async assertInstalled(principal, pluginId) {
     const r = await this.installs.get(accountOf(principal), pluginId);
     if (!r) throw TroveError.forbidden(`Plugin "${pluginId}" is not installed on this account`);
+    return r;
+  }
+
+  /**
+   * May this plugin open its vendor's SHARED domain store?
+   *
+   * Only if it declared that scope, which is what made the package admin-gated in the
+   * first place. Declaring plain `storage: true` installs without an admin — and used
+   * to reach the domain scope anyway, because nothing recorded which of the two had
+   * been approved.
+   */
+  async assertSharedStorage(principal, pluginId) {
+    const r = await this.assertInstalled(principal, pluginId);
+    if (!r.sharedStorage) {
+      throw TroveError.forbidden(
+        `Plugin "${pluginId}" did not declare shared (domain) storage, so it cannot open it`,
+      );
+    }
     return r;
   }
 

@@ -119,7 +119,10 @@ for (const [name, sel] of [
 // --- A file open: viewer chrome, prose links, panel buttons -------------------
 await page.evaluate(() => window.__trove.platform.commands.execute('workbench.view.home'));
 await page.waitForSelector('.launch-item', { timeout: 5000 });
-await page.click('.launch-item');
+// By name, not by position. The list is sorted case-INSENSITIVELY (which is what the
+// sqlite store always did and the memory store now matches), so "Reading list.md" is
+// not the first row and clicking blind opened a plain text file with no links in it.
+await page.locator('.launch-item', { hasText: 'Reading list.md' }).first().click();
 await page.waitForSelector('.viewer-nav', { timeout: 5000 });
 await page.waitForTimeout(500);
 

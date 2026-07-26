@@ -169,7 +169,13 @@ export class S3Storage extends StorageBackend {
       objects.push({
         key: decodeXml(key),
         size: Number(tag(entry, 'Size') || 0),
-        etag: tag(entry, 'ETag') || undefined,
+        // decodeXml here too. S3 wraps an ETag in quotes and then XML-escapes them, so
+        // the raw text is `&quot;d16f…&quot;` while `head()` reports `"d16f…"`. The
+        // scanner's normalizeEtag strips a real quote but not the entity, so the first
+        // scan of any S3 collection called every object changed, re-read and re-embedded
+        // the whole drive, and persisted the escaped form — after which every later
+        // upload flipped it back and triggered the same spurious refresh again.
+        etag: decodeXml(tag(entry, 'ETag') || '') || undefined,
         modifiedAt: Number.isNaN(modified) ? null : modified,
       });
     }

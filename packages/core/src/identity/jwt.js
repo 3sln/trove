@@ -8,6 +8,10 @@
 import { TroveError } from '../errors.js';
 
 const enc = new TextEncoder();
+// How long a `kid` miss suppresses another JWKS refetch. Long enough that a flood of
+// unknown kids costs one request, short enough that a real key rotation is picked up
+// well inside a token's lifetime.
+const MISS_REFRESH_COOLDOWN_MS = 30_000;
 
 export function base64urlToBytes(str) {
   const b64 = str.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(str.length / 4) * 4, '=');
@@ -74,7 +78,14 @@ export class JwksClient {
   }
   async getJwk(kid) {
     await this.#refresh(false);
-    if (!this.keys.has(kid)) await this.#refresh(true);
+    // A miss forces a refetch so a freshly-rotated key is picked up — but ONLY if we
+    // haven't just done that. Unbounded, this ran during authentication, before any
+    // credential was checked, so anyone who could reach the API pinned one outbound
+    // HTTPS request to the IdP per inbound request simply by varying `kid`.
+    if (!this.keys.has(kid) && Date.now() - (this._lastMissRefresh || 0) > MISS_REFRESH_COOLDOWN_MS) {
+      this._lastMissRefresh = Date.now();
+      await this.#refresh(true);
+    }
     return this.keys.get(kid) || null;
   }
 }

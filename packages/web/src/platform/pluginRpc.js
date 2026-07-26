@@ -128,7 +128,13 @@ export class PluginRpcRouter {
 
       // Files — inherit the host's authenticated API client.
       case 'files:read': return cap('files'), { text: await this.platform.api.readText(params.id) };
-      case 'files:list': return cap('files'), this.platform.api.list(params.pathOrId, params);
+      // ONE options object — `api.list(opts)`. Called as `list(pathOrId, params)` the
+      // collection became the query string's key and everything else was dropped, so a
+      // plugin asking for `photos` silently got the default collection unsorted.
+      case 'files:list': return cap('files'), this.platform.api.list({
+        collection: params.collection || params.pathOrId || undefined,
+        sort: params.sort, order: params.order, limit: params.limit, cursor: params.cursor,
+      });
       case 'files:stat': return cap('files'), this.platform.api.stat(params.id);
       case 'files:downloadUrl': return cap('files'), { url: this.platform.api.downloadUrl(params.id) };
       case 'files:index': {
@@ -155,7 +161,11 @@ export class PluginRpcRouter {
         this.platform.settings.set(`${pid}.${params.key}`, params.value);
         return { ok: true };
 
+      // Putting a panel on screen is a UI action, and this was the one `ui:` method with
+      // no check — so a plugin granted nothing at all could open its own panel (and, with
+      // an unvalidated displayName, render into the host page from `activate()`).
       case 'ui:showPanel':
+        cap('ui');
         record.hasUi = true;
         this.platform.openPluginPanel?.(pid);
         this.onChange();

@@ -167,7 +167,11 @@ export class OfflineService {
           await idbDelete(this.db, 'queue', key);
           synced++;
         } catch (err) {
-          if (err.code === 'transient' || err.code === 'timeout') break; // retry later
+          // Anything that could succeed later stays queued. `unauthorized` is the case
+          // that mattered: a session expiring while offline is not a permanent failure,
+          // and dropping the entry destroyed a comment the user had written and told
+          // them it "couldn't be applied" — when signing in again would have applied it.
+          if (['transient', 'timeout', 'unauthorized', 'quota'].includes(err.code)) break;
           // A permanent failure (e.g. the file was deleted) — drop it so we don't loop,
           // but don't pretend it synced.
           await idbDelete(this.db, 'queue', key);

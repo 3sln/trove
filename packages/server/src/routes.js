@@ -105,7 +105,16 @@ function contentDisposition(type, name) {
 // loopback, link-local (cloud metadata), and internal TLDs. DNS names that resolve
 // to private IPs are a residual (rebinding) risk, documented in the README.
 function assertPublicHost(hostname) {
-  const h = hostname.toLowerCase();
+  // Normalise the way `fetch` will. This tested the RAW string against a dotted-quad
+  // regex, but the WHATWG URL parser accepts `127.1`, `0x7f.0.0.1`, `0177.0.0.1` and
+  // `2130706433` and turns them all into 127.0.0.1 — so anything that wasn't already
+  // dotted-quad walked straight past the private-address check.
+  let h;
+  try {
+    h = new URL(`https://${hostname}`).hostname.toLowerCase();
+  } catch {
+    throw TroveError.invalid('That is not a valid host');
+  }
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) {
     throw TroveError.invalid('Refusing to fetch from an internal host');
   }
@@ -116,7 +125,8 @@ function assertPublicHost(hostname) {
       throw TroveError.invalid('Refusing to fetch from a private address');
     }
   }
-  if (h.includes(':')) throw TroveError.invalid('Refusing to fetch from an IP literal');
+  if (h.includes(':') || h.startsWith('[')) throw TroveError.invalid('Refusing to fetch from an IP literal');
+  return h;
 }
 
 // Which collection a request targets. There is no folder to infer one from any more,
@@ -812,7 +822,9 @@ export function createRouter() {
     // already scoped to this principal, so the worst it reaches is their own data.)
     if (scope === 'domain') {
       assertOwnDomain(params.pluginId, domain);
-      if (plugins) await plugins.assertInstalled(principal, params.pluginId);
+      // Installed AND approved for the shared scope — the two are different questions,
+      // and only the second is the one an administrator was asked about.
+      if (plugins) await plugins.assertSharedStorage(principal, params.pluginId);
     }
     const db = await sqlite.obtain({ key: storeKey(principal, params.pluginId, scope, domain) });
     return { result: await runPluginSql(db, op, { sql, args, statements }) };

@@ -26,7 +26,12 @@ export class ExplorerService {
     this.state = { ...this.state, ...patch };
     this.subject.next(this.state);
   }
-  select(ids, { additive = false } = {}) {
+  /**
+   * @param {string[]} ids
+   * @param {{additive?: boolean, nodes?: object[]}} [opts] `nodes` is the caller's own
+   *   copy of what it selected — pass it whenever you have it (see selectedNodes).
+   */
+  select(ids, { additive = false, nodes = null } = {}) {
     const next = additive ? Array.from(new Set([...this.state.selection, ...ids])) : ids;
     // Selecting what is already selected must not emit. The launcher syncs the
     // highlighted row into here on every mouseenter, and a state push per mouse move
@@ -34,9 +39,22 @@ export class ExplorerService {
     const same = next.length === this.state.selection.length
       && next.every((id, i) => id === this.state.selection[i]);
     if (same) return;
-    this.set({ selection: next });
+    this.set({ selection: next, selectionNodes: nodes && !additive ? nodes : null });
   }
+  /**
+   * The nodes the selection refers to.
+   *
+   * Resolving ids against `items` only finds rows on the LOADED PAGE of the CURRENT
+   * collection — and the launcher's rows come from search (which the server scopes to
+   * every readable collection) and from recents (which survive a collection switch).
+   * So every row reached by searching resolved to nothing, and rename / move-to-trash /
+   * copy-link returned silently while `explorer.hasSelection` said there was a
+   * selection. Preferring the nodes the selecting caller already held fixes the whole
+   * class; the `items` lookup stays for callers that only have ids.
+   */
   selectedNodes() {
+    const held = this.state.selectionNodes;
+    if (held?.length) return held.filter((n) => this.state.selection.includes(n.id));
     return this.state.items.filter((i) => this.state.selection.includes(i.id));
   }
 }

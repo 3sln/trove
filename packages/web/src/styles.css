@@ -246,6 +246,8 @@ kbd {
 }
 .kbd-edit:hover { border-color: var(--border); background: var(--bg-hover); }
 .kbd-edit:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.kbd-clash { display: inline-flex; align-items: center; color: var(--warn); margin-right: 4px; }
+.kbd-edit.clash kbd { border-color: color-mix(in srgb, var(--warn) 50%, transparent); color: var(--warn); }
 .kbd-edit.listening {
   border-color: var(--accent); background: var(--bg-active); color: var(--accent);
   font-size: 11px; padding: 3px 8px;
@@ -477,6 +479,10 @@ kbd {
 .pf-row.off { opacity: .55; }
 .pf-row .pf-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-row .pf-kind { font-size: 10px; color: var(--text-faint); }
+.pf-badge {
+  font-size: 9.5px; color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 5px; margin-left: auto; white-space: nowrap;
+}
 .pf-badge.offline-ok { font-size: 9.5px; color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 40%, transparent); border-radius: 5px; padding: 1px 5px; }
 .pf-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .pf-dot.on { background: var(--success); }
@@ -507,6 +513,11 @@ kbd {
 .opener-remember input { accent-color: var(--accent); }
 
 .menu {
+  /* A menu can be long — the offline-files list runs to 24 entries — and it had no
+     height bound and no scrolling, so anything past the viewport was simply
+     unreachable. Unpinning has no other route in the UI, so a clipped row is a lost
+     action. */
+  max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain;
   position: fixed; z-index: 60; min-width: 200px; background: var(--bg-elevated);
   border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow); padding: 5px;
   animation: pop .1s var(--ease);
@@ -621,7 +632,11 @@ kbd {
 .cap-list { display: flex; flex-direction: column; gap: 8px; }
 .cap-row { display: flex; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; align-items: flex-start; }
 .cap-row:hover { border-color: var(--border-strong); }
-.cap-row.blocked { opacity: .6; cursor: not-allowed; }
+/* Blocked means the plugin asked for something it will not get. It has to look
+   different from something it will — `.contrib-row.blocked` was styled nowhere, so a
+   refused command and an available one were identical. */
+.cap-row.blocked, .contrib-row.blocked { opacity: .6; cursor: not-allowed; }
+.contrib-row.blocked .pf-title { text-decoration: line-through; }
 .cap-row input { margin-top: 2px; accent-color: var(--accent); }
 .cap-row .cap-name { font-weight: 600; font-size: 13px; }
 .cap-row .cap-desc { color: var(--text-dim); font-size: 12px; margin-top: 2px; line-height: 1.4; }
@@ -718,7 +733,13 @@ kbd {
 
 /* ---- Info panel: tags + conversation ------------------------------------ */
 .editor-split { display: grid; grid-template-columns: 1fr 340px; min-width: 0; overflow: hidden; }
-.infopanel { border-left: 1px solid var(--border); background: var(--bg-sidebar); display: flex; flex-direction: column; min-height: 0; }
+/* `min-width: 0` matters as much as min-height here. A grid/flex item defaults to
+   `min-width: auto` — "never shrink below your content" — so on a phone, where the panel
+   is the whole 1fr column, one long filename in the trove: link pushed it wider than the
+   screen and took its own Close button and the Comment button off the right edge.
+   `body { overflow: hidden }` then hid the evidence: it just looked cropped. */
+.infopanel { border-left: 1px solid var(--border); background: var(--bg-sidebar); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.infopanel > * { min-width: 0; }
 .ip-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
 .ip-head .iconbtn { margin-left: auto; }
 .ip-body { flex: 1; overflow-y: auto; }
@@ -853,9 +874,16 @@ kbd {
   display: flex; align-items: center; gap: 6px; width: 100%;
   padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--bg-elevated); color: var(--text-dim);
-  font: 11px/1.4 var(--mono, ui-monospace, monospace); text-align: left; cursor: pointer;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 11px/1.4 var(--font-mono, ui-monospace, monospace); text-align: left; cursor: pointer;
+  min-width: 0; overflow: hidden;
 }
+/* The ellipsis has to live on the TEXT, not on the flex container — `text-overflow` does
+   nothing to a flex box, and a flex item defaults to `min-width: auto`, meaning "never
+   shrink below your content". So a long name pushed the panel wider than the phone,
+   putting Close and Comment off-screen (`body { overflow: hidden }` hid the evidence),
+   and on desktop hard-clipped the link with no `…` at all — presenting half a URI as
+   though it were the whole one. */
+.ip-uri > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ip-uri:hover { color: var(--text); border-color: var(--accent); }
 .ip-backlinks { display: flex; flex-direction: column; gap: 4px; }
 .ip-backlink {
@@ -875,6 +903,10 @@ kbd {
 .md-h { font-weight: 650; line-height: 1.3; margin: 1.6em 0 .6em; }
 .md-h:first-child { margin-top: 0; }
 .md-h1 { font-size: 1.7em; } .md-h2 { font-size: 1.35em; } .md-h3 { font-size: 1.12em; }
+/* Levels past 3 render as an <h3> element, whose UA font-size is 1.17em — bigger than
+   our own .md-h3. Without these the outline inverted at #### and then flattened. */
+.md-h4 { font-size: 1em; } .md-h5 { font-size: .92em; color: var(--text-dim); }
+.md-h6 { font-size: .88em; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
 .md-p { margin: 0 0 1em; }
 .md-list { margin: 0 0 1em; padding-left: 1.4em; }
 .md-li { margin: .25em 0; }
@@ -886,11 +918,11 @@ kbd {
 .md-code {
   margin: 0 0 1em; padding: 12px 14px; border-radius: 8px; overflow-x: auto;
   background: var(--bg-elevated); border: 1px solid var(--border);
-  font: 12px/1.55 var(--mono, ui-monospace, monospace);
+  font: 12px/1.55 var(--font-mono, ui-monospace, monospace);
 }
 .md-inline-code {
   padding: .12em .35em; border-radius: 4px; background: var(--bg-elevated);
-  font: .9em var(--mono, ui-monospace, monospace);
+  font: .9em var(--font-mono, ui-monospace, monospace);
 }
 .md-link { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
 .md-link:hover { border-bottom-color: currentColor; }
@@ -1131,13 +1163,29 @@ kbd {
 .shell.tv .settings .setting .info .d { font-size: 15px; }
 .shell.tv .infopanel { font-size: 16px; }
 
+/* The overlays. `.shell.tv` reserves an overscan-safe area with padding, but a fixed
+   overlay is positioned against the VIEWPORT and so sits outside it — on a set that
+   crops the outer few percent, the toast, the activity panel and the plugin panel are
+   partly or wholly off the picture. The phone shell re-anchors all of these; the TV
+   shell has to as well. */
+.shell.tv .toasts { right: 2.6%; bottom: calc(var(--statusbar-h) + 2.2%); }
+.shell.tv .activity-panel { right: 2.6%; bottom: calc(var(--statusbar-h) + 2.2%); }
+.shell.tv .plugin-panel { top: 2.2%; right: 2.6%; }
+.shell.tv .tray { left: calc(var(--activity-w) + 2.6%); bottom: calc(var(--statusbar-h) + 2.2%); }
+.shell.tv .inbox { left: calc(var(--activity-w) + 2.6%); bottom: 2.2%; }
+.shell.tv .viewer-dock { right: 2.6%; bottom: calc(var(--statusbar-h) + 2.2%); }
+
 /* The remote's cursor. Both :focus and :focus-visible — a d-pad move is a programmatic
-   focus() and browsers disagree about whether that counts as "visible". */
+   focus() and browsers disagree about whether that counts as "visible".
+
+   No `border-radius` here. It out-specifies `.btn` (7px), `.tag-x` (50%) and `.iconbtn`
+   (6px), so focusing one of those squared it off mid-interaction — the exact shape-jolt
+   the base focus rule was rewritten to remove. The outline already follows whatever
+   radius the element has. */
 .shell.tv :focus,
 .shell.tv :focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
-  border-radius: 10px;
 }
 .shell.tv .launch-item:focus,
 .shell.tv .sheet-row:focus { background: var(--bg-selected); }

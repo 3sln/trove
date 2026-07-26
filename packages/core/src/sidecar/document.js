@@ -26,7 +26,7 @@ function newer(a, b) {
   if (!a) return false;
   if (!b) return true;
   if (a.at !== b.at) return a.at > b.at;
-  return String(a.actor) > String(b.actor);
+  return String(a.actor) >= String(b.actor);
 }
 function tick(doc) {
   doc.clock = (doc.clock || 0) + 1;

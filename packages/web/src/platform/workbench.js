@@ -84,6 +84,12 @@ export class WorkbenchService {
     if (!count) return;
     this.#set({ launch: { ...this.state.launch, index: wrapIndex(this.state.launch.index, delta, count) } });
   }
+  /** The command palette's highlighted row. Missing entirely, so every `mouseenter`
+   *  threw and the highlight never followed the pointer — hover row 5, press Enter,
+   *  run row 0. */
+  setPaletteIndex(index) {
+    this.overlay.setPaletteIndex?.(index);
+  }
   setLaunchIndex(index) {
     this.#set({ launch: { ...this.state.launch, index } });
   }

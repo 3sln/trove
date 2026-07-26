@@ -115,7 +115,28 @@ export class SqliteVectorStore extends VectorStore {
     await this.db.run("INSERT INTO vec_config(k, v) VALUES ('dimensions', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(this._dimensions));
   }
 
-  async add(docs) {
+  /**
+   * Add documents — serialized, one caller at a time.
+   *
+   * The INSERT and the `SELECT last_insert_rowid()` that reads its rowid are two
+   * separate round trips on a SHARED connection, and FTS5 cannot return the rowid
+   * inline (`RETURNING rowid` on a virtual table yields -1). So two concurrent
+   * `indexNode` calls — two simultaneous uploads — interleaved between them, and
+   * document A recorded document B's rowid in `kw_meta`. Re-indexing A then deleted
+   * B's row: B disappeared from keyword search with nothing having touched it, and A's
+   * superseded chunk was orphaned in the index for good.
+   *
+   * A promise chain is enough because the hazard is within one process on one
+   * connection; across processes SQLite's own locking applies.
+   */
+  add(docs) {
+    const run = () => this.#addLocked(docs);
+    const next = (this._writes || Promise.resolve()).then(run, run);
+    this._writes = next.catch(() => {});
+    return next;
+  }
+
+  async #addLocked(docs) {
     for (const doc of docs) {
       const vector = toF32(doc.vector);
       if (vector.length !== this._dimensions) {

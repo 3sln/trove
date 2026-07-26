@@ -9,7 +9,7 @@ import {
 } from './interface.js';
 import { TroveError } from '../errors.js';
 import { newId } from '../util.js';
-import { decodeCursor, encodeCursor, afterCursor } from './cursor.js';
+import { decodeCursor, encodeCursor, afterCursor, compareValues } from './cursor.js';
 
 export class MemoryStore extends MetadataStore {
   constructor() {
@@ -53,18 +53,21 @@ export class MemoryStore extends MetadataStore {
   }
 
   async listItems(collectionId = 'default', opts = {}) {
-    const sort = opts.sort ?? 'name';
+    // Same resolution as the sqlite store — an unknown sort falls back to `name` in
+    // both, and the cursor is keyed by the RESOLVED field so the two never disagree.
+    const sort = ['name', 'size', 'updatedAt'].includes(opts.sort) ? opts.sort : 'name';
     const desc = opts.order === 'desc';
     const dir = desc ? -1 : 1;
     const items = this.#live().filter((n) => n.collectionId === collectionId);
     // `id` breaks ties, so two files of the same size still have one stable order — the
     // cursor below depends on the ordering being total.
-    items.sort((a, b) => {
-      const av = a[sort], bv = b[sort];
-      if (av < bv) return -1 * dir;
-      if (av > bv) return 1 * dir;
-      return a.id < b.id ? -1 * dir : a.id > b.id ? dir : 0;
-    });
+    // The SAME comparison the cursor uses. This sorted with raw `<`/`>` — code-unit and
+    // case-sensitive — while `afterCursor` lowercases both sides, so on mixed-case names
+    // the two orders disagreed and items fell straight through the page boundary, never
+    // returned by any page. Worse through the scanner, which pages `listItems` to learn
+    // what it already has: the files it never saw were adopted again on every scan, one
+    // duplicate per run, all sharing one storage key.
+    items.sort((a, b) => compareForSort(a, b, sort, dir));
     const limit = opts.limit ?? 500;
     const at = decodeCursor(sort, opts.cursor);
     const rest = at ? items.filter((n) => afterCursor(n, sort, at, desc)) : items;
@@ -276,4 +279,11 @@ function matchTags(node, filters) {
       default: return false;
     }
   });
+}
+
+// One ordering, shared with the cursor. `id` breaks ties so the order is total.
+function compareForSort(a, b, sort, dir) {
+  const c = compareValues(a[sort], b[sort]);
+  if (c !== 0) return c * dir;
+  return a.id < b.id ? -1 * dir : a.id > b.id ? dir : 0;
 }

@@ -34,11 +34,28 @@ export class PluginIndexers {
    */
   async activate(record, { backfill = true } = {}) {
     const specs = record.indexers || [];
+    // Retire anything this plugin used to declare and no longer does. Both this and
+    // deactivate() iterated only the record in hand, so an indexer dropped by an
+    // upgrade stayed registered — running code the user upgraded away from on every
+    // upload, served from the in-memory bundle cache even after the blob was deleted —
+    // and its contributions were orphaned in the index for good.
+    const keep = new Set(specs.map((s) => s?.id).filter(Boolean));
+    for (const id of this.#idsFor(record.account, record.pluginId)) {
+      if (keep.has(id)) continue;
+      this._active.get(this.#key(record.account, id))?.();
+      this._active.delete(this.#key(record.account, id));
+      try { await this.vfs.purgeIndexer(id); }
+      catch (err) { console.error(`purge for retired indexer ${id} failed:`, err.message); }
+    }
     for (const spec of specs) {
       if (!spec?.id) continue;
       const key = this.#key(record.account, spec.id);
-      this._active.get(key)?.(); // drop any prior registration
+      // Build BEFORE dropping the previous registration. Dropping first meant a
+      // transient package-read failure left a previously-working indexer unregistered
+      // while the install still reported success — and #loadPackage caches the rejected
+      // promise, so it never recovered without a restart.
       const indexer = await this.#buildIndexer(record, spec);
+      this._active.get(key)?.();
       const unregister = this.vfs.indexers.register(indexer);
       this._active.set(key, unregister);
       if (backfill) {
@@ -59,6 +76,20 @@ export class PluginIndexers {
       try { await this.vfs.purgeIndexer(spec.id); }
       catch (err) { console.error(`purge for indexer ${spec.id} failed:`, err.message); }
     }
+  }
+
+  /** Which indexer ids this account currently has registered for one plugin. */
+  #idsFor(account, pluginId) {
+    const prefix = `${account}\0`;
+    const out = [];
+    for (const key of this._active.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const id = key.slice(prefix.length);
+      // Contribution URIs are `trove+contrib:<domain>/<name>/<contribution>`.
+      if (pluginId && !id.includes(`:${pluginId}/`)) continue;
+      out.push(id);
+    }
+    return out;
   }
 
   /** Re-activate all installed indexers across accounts at startup (no backfill). */
@@ -94,6 +125,10 @@ export class PluginIndexers {
     let p = this._bundles.get(ref);
     if (!p) {
       p = this.packages.get(ref).then(async ({ stream }) => unzipSync(await readAll(stream)));
+      // Never cache a REJECTION. A transient read failure otherwise poisoned this ref
+      // for the life of the process: every later activate got the same rejected promise
+      // back and the indexer could not be brought up again without a restart.
+      p.catch(() => this._bundles.delete(ref));
       this._bundles.set(ref, p);
     }
     return p;

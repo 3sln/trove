@@ -54,7 +54,12 @@ export class IndexerRegistry {
       throw new Error('Indexer requires an id and an index() function');
     }
     this.indexers.set(indexer.id, indexer);
-    return () => this.indexers.delete(indexer.id);
+    // Only unregister if THIS registration is still the live one. Indexer ids are
+    // contribution URIs, which are account-independent, so a second account installing
+    // the same package replaces the first's entry — and the first's stale closure then
+    // deleted the second's, taking that account's indexer out of the drive-wide registry
+    // and purging its contributions.
+    return () => { if (this.indexers.get(indexer.id) === indexer) this.indexers.delete(indexer.id); };
   }
   unregister(id) {
     this.indexers.delete(id);

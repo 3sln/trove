@@ -203,6 +203,11 @@ function keybindingsSection(ui) {
   const cmds = ui.platform.contributions;
   const overrides = kb.overrides();
   const stop = () => { capturing = null; ui.rerender?.(); };
+  // Which chords more than one command answers to. Nothing rejects a collision, and
+  // `#matchFor` scans in reverse so the LAST registration wins — bind Delete onto
+  // ⌘P and Quick Open stops opening, with no hint anywhere that that is why.
+  const byKey = new Map();
+  for (const b of bindings) byKey.set(b.key, (byKey.get(b.key) || 0) + 1);
   return div({ className: 'group' },
     h3('Keyboard Shortcuts'),
     p({ className: 'sub' }, 'Click a shortcut to record a new one. Esc cancels; Backspace clears it.'),
@@ -213,13 +218,18 @@ function keybindingsSection(ui) {
       const cmd = cmds.get(b.command);
       const listening = capturing === b.command;
       const custom = !!overrides[b.command];
+      const clash = byKey.get(b.key) > 1;
       return div({ className: 'setting' },
         div({ className: 'info' },
           div({ className: 't' }, cmd?.title || b.command),
           div({ className: 'd' }, b.command),
         ),
         div({ className: 'control' },
-          button({ className: `kbd-edit ${listening ? 'listening' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
+          clash && !listening
+            ? span({ className: 'kbd-clash', title: 'Another command answers to this shortcut too — the one registered last wins' },
+              icon('warn', { size: 12 }))
+            : null,
+          button({ className: `kbd-edit ${listening ? 'listening' : ''} ${clash ? 'clash' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
             listening ? span('Press keys…') : dd.h('kbd', prettyKey(b.key)))
             .on({
               click: () => { capturing = listening ? null : b.command; ui.rerender?.(); },

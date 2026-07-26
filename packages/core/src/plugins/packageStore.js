@@ -23,10 +23,20 @@ export class PackageStore {
   async presignGet(ref, opts) { throw TroveError.unsupported('This package store cannot presign'); }
 }
 
+/**
+ * The key space plugin packages live in.
+ *
+ * Exported because the collection SCANNER has to skip it, and the two drifted: the
+ * scanner's reserved list said `plugins/` while this said `_plugins/`, so every
+ * account's package was adopted into the default collection as an ordinary file.
+ * One constant, one source of truth.
+ */
+export const PACKAGE_PREFIX = '_plugins/';
+
 /** Default PackageStore: a namespaced view over any StorageBackend. */
 export class StoragePackageStore extends PackageStore {
   /** @param {import('../storage/interface.js').StorageBackend} storage */
-  constructor(storage, { prefix = '_plugins/' } = {}) {
+  constructor(storage, { prefix = PACKAGE_PREFIX } = {}) {
     super();
     this.storage = prefix ? new PrefixedStorage(storage, prefix) : storage;
   }

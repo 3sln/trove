@@ -485,8 +485,14 @@ export class Vfs {
     const { semanticText, tagFilters = [] } = resolved;
     let results;
     if (semanticText && semanticText.trim()) {
-      results = await this.searchQuery(semanticText, opts);
-      if (tagFilters.length) results = results.filter((r) => matchTagFilters(r.node, tagFilters));
+      // The tag filter goes INSIDE searchQuery's widening loop, not after it. Applied
+      // here it ran on an already-truncated page, so `sailing #draft` — one of the
+      // examples the transformer itself advertises — returned nothing while `#draft`
+      // alone returned the file.
+      results = await this.searchQuery(semanticText, {
+        ...opts,
+        postFilter: tagFilters.length ? (node) => matchTagFilters(node, tagFilters) : null,
+      });
     } else if (tagFilters.length) {
       const nodes = await this.metadata.findByTags(tagFilters, { collectionIds: opts.collectionIds, limit: opts.limit });
       results = nodes.map((node) => ({ nodeId: node.id, score: 1, node, snippet: null }));
@@ -511,6 +517,7 @@ export class Vfs {
     // when filtering actually removed something, so the common case is one query.
     const ceiling = Math.min(Math.max(want, 1) * 16, 500);
     let out = [];
+    let lastCount = -1;
     for (let fetch = want; ; fetch = Math.min(fetch * 4, ceiling)) {
       const results = await this.search.search(query, { ...opts, limit: fetch });
       out = [];
@@ -525,11 +532,20 @@ export class Vfs {
         if (node.deletedAt) continue;
         // Scope to the requested collections (permission-filtered by the server).
         if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
+        // Anything else the caller wants excluded — tag filters, for one. It has to be
+        // counted against `want` here, or widening chases a target it can never reach.
+        if (opts.postFilter && !opts.postFilter(node)) continue;
         out.push({ ...r, node });
       }
-      // Enough, or the index is exhausted (it returned less than we asked for), or we
-      // have widened as far as we are willing to.
-      if (out.length >= want || results.length < fetch || fetch >= ceiling) break;
+      // Enough, or we have widened as far as we are willing to. NOT "the index returned
+      // fewer rows than we asked for": `search()` slices `limit` NODES out of `limit*4`
+      // DOCUMENTS, so one heavily-chunked file legitimately yields a short list while
+      // plenty more matches wait behind it — and reading that as exhaustion stopped the
+      // widening early, which is the failure this loop exists to prevent.
+      if (out.length >= want || fetch >= ceiling) break;
+      // Exhaustion is when widening stopped adding anything.
+      if (results.length === lastCount) break;
+      lastCount = results.length;
     }
     return out.slice(0, want);
   }

@@ -77,8 +77,14 @@ export class SocialService {
     this.loadBacklinks(nodeId);
     try {
       const view = await this.api.sidecar(nodeId);
+      // A slower request for a previously-open item must not land on this one — the
+      // same guard loadBacklinks already had. Without it, opening A then quickly opening
+      // B let A resolve last, so `state.sidecar.nodeId` became A while B was on screen
+      // and comment()/addTag()/removeTag() all wrote to A.
+      if (this.state.sidecar?.nodeId !== nodeId) return;
       this.#set({ sidecar: { ...view, loading: false } });
     } catch (err) {
+      if (this.state.sidecar?.nodeId !== nodeId) return;
       this.#set({ sidecar: { nodeId, loading: false, error: err.message, tags: [], comments: [] } });
     }
   }

@@ -89,7 +89,17 @@ export function networkEndpoints(manifest) {
 
 /** The human-facing name: `displayName` if given, else the package name. */
 export function displayName(manifest) {
-  return manifest?.displayName || manifest?.name || 'Plugin';
+  // A STRING, always — and this is a security boundary, not tidiness.
+  //
+  // dodo decides "is this argument a props map or a child?" by `x.constructor === Object`,
+  // and every prop on an HTML element is assigned as a DOM PROPERTY. `JSON.parse` gives
+  // objects whose constructor is Object, so a manifest with
+  // `"displayName": {"innerHTML": "<img src=x onerror=…>"}` — nothing validates it —
+  // reaches `span(plugin.name)` in the plugin panel and `h3(g.category)` in Settings as
+  // the FIRST argument, becomes the element's prop map, and executes in the host page.
+  // That is a complete escape from the opaque-origin, connect-src 'none' iframe.
+  const name = manifest?.displayName ?? manifest?.name;
+  return typeof name === 'string' && name.trim() ? name : 'Plugin';
 }
 
 /**

@@ -49,7 +49,11 @@ const PATHS = {
 export { iconForKind as iconForNode } from '../bl/fileType.js';
 
 export function icon(name, { size = 18, strokeWidth = 1.6, className } = {}) {
-  const specs = PATHS[name] || PATHS.file;
+  // `Object.hasOwn`, not a bare lookup: `PATHS` is a plain object, so a contribution
+  // declaring `"icon": "constructor"` (kept verbatim from the manifest) otherwise
+  // resolves to a function and takes down the whole render with `specs.map is not a
+  // function`.
+  const specs = Object.hasOwn(PATHS, name) ? PATHS[name] : PATHS.file;
   return svg(
     {
       $attrs: {

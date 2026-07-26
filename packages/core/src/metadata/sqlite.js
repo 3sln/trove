@@ -89,6 +89,11 @@ export class SqliteStore extends MetadataStore {
   }
 
   async listItems(collectionId = 'default', opts = {}) {
+    // Resolve ONCE and use the resolved name everywhere, cursor included. Encoding the
+    // cursor under the caller's raw string while querying by the mapped column made
+    // `?sort=createdAt` compare `name > <timestamp>` — and TEXT always sorts above
+    // INTEGER in SQLite, so the predicate was always true and paging never terminated:
+    // the same first row, forever.
     const sortCol = { name: 'name', size: 'size', updatedAt: 'updatedAt' }[opts.sort] || 'name';
     const dir = opts.order === 'desc' ? 'DESC' : 'ASC';
     const cmp = dir === 'DESC' ? '<' : '>';
@@ -97,7 +102,7 @@ export class SqliteStore extends MetadataStore {
     // keyset comparison, or the page boundary won't line up with the ordering.
     const key = sortCol === 'name' ? `${sortCol} COLLATE NOCASE` : sortCol;
     const limit = opts.limit ?? 500;
-    const at = decodeCursor(opts.sort ?? 'name', opts.cursor);
+    const at = decodeCursor(sortCol, opts.cursor);
     // Keyset, not OFFSET: resume from the last row of the previous page, so an insert
     // or delete before the cut can't shift a row past it unseen. `id` breaks ties.
     const where = at ? `AND (${key} ${cmp} ? OR (${key} = ? AND id ${cmp} ?))` : '';
@@ -112,7 +117,7 @@ export class SqliteStore extends MetadataStore {
     const page = rows.slice(0, limit).map(row);
     return {
       items: page,
-      nextCursor: hasMore ? encodeCursor(opts.sort ?? 'name', page[page.length - 1]) : null,
+      nextCursor: hasMore ? encodeCursor(sortCol, page[page.length - 1]) : null,
     };
   }
 

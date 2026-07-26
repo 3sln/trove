@@ -104,7 +104,17 @@ function buildIdentity(cfg) {
       return new JwtIdentityProvider(cloudflareAccess({ ...(cfg.access || {}), ...(cfg.jwt || {}) }));
     case 'jwt': return new JwtIdentityProvider(cfg.jwt || {});
     case 'header': return new HeaderIdentityProvider(cfg.header || {});
-    case 'anonymous': default: return new AnonymousIdentityProvider();
+    case 'anonymous': case undefined: case null: return new AnonymousIdentityProvider();
+    default:
+      // A typo must NOT open the drive. `TROVE_AUTH=JWT` (wrong case), `oidc`,
+      // `cloudflare_access` all fell through to anonymous — which also skipped the
+      // per-driver branch that reads TROVE_AUTH_REQUIRED, and silenced the boot warning
+      // (it only fires when the driver string IS 'anonymous'). The result was a
+      // world-readable, world-writable drive with a clean log, and an MCP endpoint that
+      // dropped its own auth requirement because it sniffs the provider's class name.
+      throw TroveError.invalid(
+        `Unknown TROVE_AUTH driver "${cfg.driver}" — expected one of: anonymous, jwt, header, cloudflare-access`,
+      );
   }
 }
 // The SQLite provider: a keyed pool the whole server shares (metadata + kv co-locate

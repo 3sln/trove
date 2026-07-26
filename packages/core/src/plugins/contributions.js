@@ -37,14 +37,14 @@ const TYPES = {
   opener: {
     needsEntry: true,
     normalize: (c) => ({
-      title: c.title || null, match: c.match || {}, priority: c.priority ?? 50,
+      title: c.title || null, match: normalizeMatch(c.match), priority: c.priority ?? 50,
       when: c.when || null, offline: !!c.offline, dock: c.dock || null,
     }),
   },
   // Indexes matching files. ALWAYS runs on the server (see serverIndexers).
   indexer: {
     needsEntry: true,
-    normalize: (c) => ({ title: c.title || null, match: c.match || {} }),
+    normalize: (c) => ({ title: c.title || null, match: normalizeMatch(c.match) }),
   },
   // A slot in the status bar. The plugin pushes content into it at runtime; for now
   // the only content type is sanitized HTML.
@@ -151,4 +151,27 @@ export function parseKeymap(text) {
       when: typeof b.when === 'string' ? b.when : null,
       args: Array.isArray(b.args) ? b.args : undefined,
     }));
+}
+
+/**
+ * A file-match selector, coerced into the shape `selectorMatches` actually indexes.
+ *
+ * It was passed through verbatim, so `"match": { "ext": ".demo" }` — a string where an
+ * array belongs, which no validation rejected — installed cleanly and then threw
+ * `(selector.ext || []).some is not a function` at selection time. Server-side the
+ * throw was swallowed, so the plugin backfilled nothing and indexed nothing with no
+ * error anywhere; in the browser `openersFor` is unguarded, so ONE bad declaration
+ * broke opener selection for every file in the drive.
+ */
+function normalizeMatch(match) {
+  if (!match || typeof match !== 'object' || Array.isArray(match)) return {};
+  const list = (v) => (v == null ? undefined : (Array.isArray(v) ? v : [v]).filter((x) => typeof x === 'string'));
+  const out = {};
+  const ext = list(match.ext);
+  const mime = list(match.mime ?? match.contentType);
+  if (ext) out.ext = ext;
+  if (mime) out.mime = mime;
+  // A `match` function can only come from in-process code, never from a manifest.
+  if (typeof match.match === 'function') out.match = match.match;
+  return out;
 }

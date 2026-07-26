@@ -130,7 +130,6 @@ export class UploadManager {
     // Multipart (presigned parts straight to storage, or streamed through us).
     if (caps.multipart) {
       session.strategy = caps.presignUpload ? 'presign' : 'direct';
-      session.uploadId = await storage.createMultipart(storageKey, { contentType });
       const partCount = Math.max(1, Math.ceil(req.size / this.partSize));
       // `#limits()` advertises maxParts in the very same response, and nothing enforced
       // it: a 150 GiB file planned 19,200 parts against a ceiling of 10,000, which S3
@@ -143,6 +142,9 @@ export class UploadManager {
           { details: { maxParts: MAX_PARTS, partCount, partSize: this.partSize, size: req.size } },
         );
       }
+      // Only now open the multipart. Refusing AFTER creating it left an upload open in
+      // the bucket with no session record, so nothing could ever abort it.
+      session.uploadId = await storage.createMultipart(storageKey, { contentType });
       session.partCount = partCount;
       await this.sessions.put(session);
       const parts = [];
@@ -172,6 +174,12 @@ export class UploadManager {
   async reportPart(uploadId, partNumber, etag) {
     const s = await this.#session(uploadId);
     if (!etag) throw TroveError.invalid('Part ETag required');
+    // Same bounds as uploadPart. Unbounded, a client could report hundreds of thousands
+    // of out-of-plan parts, all retained for the session's 24h TTL — and `status` hands
+    // that list back as the parts it may SKIP.
+    if (!Number.isInteger(partNumber) || partNumber < 1 || (s.partCount && partNumber > s.partCount)) {
+      throw TroveError.invalid(`Part ${partNumber} is outside this upload's ${s.partCount} part(s)`);
+    }
     s.parts[partNumber] = { etag };
     await this.sessions.put(s);
     return { ok: true };
@@ -195,7 +203,10 @@ export class UploadManager {
     // A part outside the plan is stored, billed, and never merged — `complete` only
     // walks 1..partCount. Silently accepting one meant a client could believe it had
     // uploaded bytes that would never become part of the file.
-    if (partNumber < 1 || (s.partCount && partNumber > s.partCount)) {
+    // `NaN < 1` and `NaN > partCount` are BOTH false, so a non-numeric part number
+    // walked through and its bytes were written under the key "NaN" — billed, and
+    // unmergeable, since `complete` only ever walks 1..partCount.
+    if (!Number.isInteger(partNumber) || partNumber < 1 || (s.partCount && partNumber > s.partCount)) {
       throw TroveError.invalid(`Part ${partNumber} is outside this upload's ${s.partCount} part(s)`);
     }
     // A part is exactly `partSize` bytes, except the last, which is smaller.
@@ -325,7 +336,11 @@ export class UploadManager {
     const s = await this.sessions.get(uploadId);
     if (!s) return;
     const storage = await this.#storage(s.collectionId);
-    if (s.uploadId) await storage.abortMultipart(s.storageKey, s.uploadId).catch(() => {});
+    // The session record holds the multipart uploadId, and that is the ONLY handle that
+    // can ever reclaim the staged parts. Swallowing the backend's failure and deleting
+    // the record anyway is precisely how the bytes became unreclaimable — and it made
+    // sweepExpired's failure branch, whose comment says exactly that, unreachable.
+    if (s.uploadId) await storage.abortMultipart(s.storageKey, s.uploadId);
     else await storage.delete(s.storageKey).catch(() => {});
     await this.sessions.delete(uploadId);
   }

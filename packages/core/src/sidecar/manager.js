@@ -34,9 +34,19 @@ export class SidecarManager {
     this.hot.set(nodeId, e);
     e.loading = (async () => {
       e.doc = (await this.store.load(nodeId)) || this.store.emptyDoc(nodeId);
-      e.loading = null;
     })();
-    await e.loading;
+    try {
+      await e.loading;
+    } catch (err) {
+      // Drop the entry rather than leaving a permanently-rejecting `loading` in the map.
+      // A single transient read failure otherwise made that file's conversation and tags
+      // unreadable AND unwritable until the sweeper happened to evict it — indefinitely
+      // with maintenance off — every later call re-throwing the very same error.
+      this.hot.delete(nodeId);
+      throw err;
+    } finally {
+      e.loading = null;
+    }
     return e;
   }
 
@@ -185,6 +195,11 @@ export class SidecarManager {
       if (e.dirty) {
         try {
           await this.flush(id);
+          // Flushing can succeed and leave the entry DIRTY: the generation guard in
+          // #flushOnce returns cleanly when a mutation landed mid-save, precisely so
+          // the newcomer gets carried by the next write. Evicting on "didn't throw"
+          // discards it — the one thing this method exists not to do.
+          if (e.dirty) { this.#schedule(id, e); continue; }
         } catch {
           // Still unsaved: keep it in memory and let the retry schedule own it. Memory
           // growth is bounded by the store being broken, which is a loud condition.
