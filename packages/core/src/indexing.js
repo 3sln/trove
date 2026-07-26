@@ -22,14 +22,17 @@ export class IndexingCoordinator {
    * @param {(collectionId: string) => Promise<object>} deps.storageFor
    * @param {number} deps.maxIndexBytes
    * @param {object} [deps.caps]  contribution size caps (see indexers/contribution.js)
+   * @param {import('./issues.js').IssueRegistry} [deps.issues] where a failure to index
+   *   becomes a standing, retryable problem instead of a console line nobody reads
    */
-  constructor({ metadata, search, indexers, storageFor, maxIndexBytes, caps }) {
+  constructor({ metadata, search, indexers, storageFor, maxIndexBytes, caps, issues }) {
     this.metadata = metadata;
     this.search = search ?? null;
     this.indexers = indexers;
     this.storageFor = storageFor;
     this.maxIndexBytes = maxIndexBytes;
     this.caps = { ...DEFAULT_CAPS, ...caps };
+    this.issues = issues ?? null;
   }
 
   /**
@@ -74,15 +77,78 @@ export class IndexingCoordinator {
     await this.metadata.clearContribution(nodeId, contributorId);
   }
 
-  /** Index a freshly written/uploaded node: its name (for keyword search) + every
-   *  matching indexer's contribution. */
+  /**
+   * Index a freshly written/uploaded node: its name (for keyword search) + every
+   * matching indexer's contribution.
+   *
+   * Whether this succeeded is recorded, not just logged. An item that fails to index is
+   * an item that cannot be found, and in a drive with no folders that is indistinguishable
+   * from an item that isn't there — so the failure becomes a standing issue the user can
+   * see and retry, and the next success clears it.
+   */
   async indexNode(node) {
+    let failure = null;
+    try {
+      if (this.search) await this.search.indexName(node);
+      const matching = this.indexers.matching(node);
+      if (matching.length) {
+        const storage = await this.storageFor(node.collectionId);
+        const ctx = this.#indexCtx(node, storage);
+        // #runOneIndexer already contains a single indexer's failure; what escapes here
+        // is the shared work (reading the object, the search store itself).
+        for (const indexer of matching) {
+          const err = await this.#runOneIndexer(indexer, node, ctx);
+          if (err && !failure) failure = err;
+        }
+      }
+    } catch (err) {
+      failure = err;
+    }
+    await this.#recordIndexOutcome(node, failure);
+    if (failure) throw failure;
+  }
+
+  /** Raise or clear the standing "this item isn't findable" issue for a node. */
+  async #recordIndexOutcome(node, failure) {
+    if (!this.issues) return;
+    try {
+      if (!failure) {
+        await this.issues.clear('index', node.id);
+        return;
+      }
+      await this.issues.raise({
+        kind: 'index',
+        subject: node.id,
+        collectionId: node.collectionId,
+        title: `“${node.name}” could not be indexed — it won't turn up in search`,
+        detail: failure.message || String(failure),
+        retry: { op: 'reindex-node', nodeId: node.id },
+      });
+    } catch (err) {
+      // The issue store failing is not a reason to fail the write that triggered it.
+      console.error('could not record an indexing issue:', err.message);
+    }
+  }
+
+  /**
+   * Re-index just the NAME of a node. Split out from `indexNode` because a rename
+   * changes nothing about the content: re-running every content indexer (re-reading the
+   * blob, re-embedding it) to correct one keyword document would make renaming a file
+   * as expensive as uploading it.
+   */
+  async reindexName(node) {
     if (this.search) await this.search.indexName(node);
-    const matching = this.indexers.matching(node);
-    if (!matching.length) return;
-    const storage = await this.storageFor(node.collectionId);
-    const ctx = this.#indexCtx(node, storage);
-    for (const indexer of matching) await this.#runOneIndexer(indexer, node, ctx);
+  }
+
+  /**
+   * Re-index a node by id — the retry behind an indexing issue, and the full-content
+   * counterpart to `reindexName`.
+   */
+  async reindexNode(nodeId) {
+    const node = await this.metadata.getById(nodeId);
+    if (!node) throw TroveError.notFound('Item');
+    await this.indexNode(node);
+    return { ok: true };
   }
 
   /** Build the context an indexer gets: capped reads + a time-limited read URL. */
@@ -105,13 +171,20 @@ export class IndexingCoordinator {
     };
   }
 
-  /** Run a single indexer against a node and apply (or clear) its contribution. */
+  /**
+   * Run a single indexer against a node and apply its contribution. One misbehaving
+   * indexer must not stop the others, so the error is returned rather than thrown —
+   * the caller decides whether the node as a whole counts as failed.
+   * @returns {Promise<Error|null>}
+   */
   async #runOneIndexer(indexer, node, ctx) {
     try {
       const contribution = await indexer.index(node, ctx ?? this.#indexCtx(node, await this.storageFor(node.collectionId)));
       await this.#applyContribution(node.id, indexer.id, contribution);
+      return null;
     } catch (err) {
       console.error(`indexer ${indexer.id} failed on ${node.name}:`, err.message);
+      return err;
     }
   }
 
@@ -162,10 +235,16 @@ export class IndexingCoordinator {
    * @param {{pageSize?: number, onProgress?: Function, shouldStop?: () => boolean}} [opts]
    */
   async reindexAll({ pageSize = 200, onProgress, shouldStop } = {}) {
+    // Ask for a total so progress can be honest about how far along it is. A store that
+    // can't count leaves this null, and the caller shows an indeterminate indicator —
+    // which is the right answer. Inventing a total would produce a progress bar that
+    // lies, and that is worse than a spinner.
+    const total = await this.metadata.countItems?.().catch(() => null) ?? null;
     let indexed = 0;
     let failed = 0;
     let afterId = null;
     let stopped = false;
+    onProgress?.({ indexed, failed, total });
     outer: for (;;) {
       const files = await this.metadata.scanItems({ afterId, limit: pageSize });
       if (!files.length) break;
@@ -180,10 +259,37 @@ export class IndexingCoordinator {
           console.error(`reindex failed for ${node.name}:`, err.message);
         }
       }
-      onProgress?.({ indexed, failed });
+      onProgress?.({ indexed, failed, total });
       if (files.length < pageSize) break;
     }
-    return { indexed, failed, stopped };
+    const result = { indexed, failed, stopped, total };
+    await this.#recordScanOutcome(result);
+    return result;
+  }
+
+  /**
+   * A scan that couldn't index everything is a standing problem about the DRIVE, not
+   * about any one file: search is incomplete and the user has no way to know unless
+   * we say so. Cleared by the next clean scan — which is what makes the retry button
+   * on it meaningful.
+   */
+  async #recordScanOutcome({ indexed, failed, stopped }) {
+    if (!this.issues) return;
+    try {
+      if (!failed && !stopped) {
+        await this.issues.clear('reindex');
+        return;
+      }
+      if (stopped) return; // interrupted by shutdown; the next start picks it up
+      await this.issues.raise({
+        kind: 'reindex',
+        title: `${failed} item${failed === 1 ? '' : 's'} could not be indexed — search is incomplete`,
+        detail: `${indexed} indexed, ${failed} failed. Individual items are listed separately where they could be identified.`,
+        retry: { op: 'reindex-all' },
+      });
+    } catch (err) {
+      console.error('could not record a reindex issue:', err.message);
+    }
   }
 
   /**

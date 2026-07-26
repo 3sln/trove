@@ -151,6 +151,16 @@ export class MetadataStore {
     throw TroveError.unsupported('scanItems not implemented');
   }
   /**
+   * How many items the drive holds, across all collections. Optional: it exists so a
+   * drive-wide sweep can show real progress ("142 of 3,100") instead of a spinner. A
+   * store that can't answer cheaply should return null rather than guess — the caller
+   * falls back to an indeterminate indicator, which is honest.
+   * @returns {Promise<number|null>}
+   */
+  async countItems() {
+    return null;
+  }
+  /**
    * Drive-wide tag/property query. `filters` is a list of
    * `{ key, present } | { key, op, value }` (op ∈ = != < <= > >=), matched against
    * a node's merged `tags` (+ meta). `opts`: { q (name substring), collectionIds,

@@ -130,6 +130,10 @@ export class MemoryStore extends MetadataStore {
     return files.slice(from, from + limit).map(clone);
   }
 
+  async countItems() {
+    return this.nodes.size;
+  }
+
   async findByTags(filters = [], opts = {}) {
     const q = opts.q ? opts.q.toLowerCase() : null;
     const out = [];

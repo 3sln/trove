@@ -14,6 +14,7 @@ import pluginsView from '../components/pluginsView.js';
 import editorArea from '../components/editorArea.js';
 import commandPalette from '../components/commandPalette.js';
 import { dialog, contextMenu, toasts, transferTray, pluginPanel } from '../components/overlays.js';
+import activityPanel from '../components/activityPanel.js';
 import { infoPanel } from '../components/social.js';
 
 const { alias, div } = dd;
@@ -30,8 +31,8 @@ export default function workbench({ engine, app, platform, plugins }) {
 
   const { watch, zip } = platform.reactive;
   const combined$ = zip(
-    (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, _bump) =>
-      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off }),
+    (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, _bump) =>
+      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act }),
     platform.workbench.observe(),
     platform.workbench.observeOverlay(),
     platform.workbench.observeNav(),
@@ -45,6 +46,7 @@ export default function workbench({ engine, app, platform, plugins }) {
     platform.contributions.observeType('statusItem'),
     app.social.observe(),
     app.offline.observe(),
+    app.activity.observe(),
     bump$,
   );
 
@@ -66,6 +68,7 @@ function view(state, ui) {
     pluginPanel(state, ui),
     toasts(state, ui),
     transferTray(state, ui),
+    activityPanel(state, ui),
   );
 }
 

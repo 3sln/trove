@@ -129,6 +129,28 @@ export class CollectionService {
     return c;
   }
 
+  /**
+   * May this principal act on the drive AS A WHOLE?
+   *
+   * True for a named admin, and also for anyone who can already read and write every
+   * collection that exists — which is not a new grant, it is naming what is already
+   * true. It matters because the default zero-config self-host is exactly that shape:
+   * one anonymous user with full access to an open default collection. Gating
+   * drive-wide maintenance (rebuilding the search index) behind a TROVE_ADMINS list
+   * nobody is on would make it unreachable in the configuration most people run first,
+   * while a locked-down multi-tenant drive still restricts it to real admins.
+   *
+   * Deliberately NOT used for anything that grants new power — installing a server
+   * indexer runs code, and stays `isAdmin` only.
+   */
+  async hasWholeDrive(principal) {
+    if (this.isAdmin(principal)) return true;
+    if (!principal) return false;
+    const all = (await this.kv.list(NS)).map((r) => r.value).filter(Boolean);
+    if (!all.length) return false;
+    return all.every((c) => this.can(principal, c, 'read') && this.can(principal, c, 'write'));
+  }
+
   /** Global admin (can do anything, incl. grant admin-only plugin capabilities). */
   isAdmin(principal) {
     return !!principal && this.admins.has(principal.id);

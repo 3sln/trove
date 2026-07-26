@@ -95,10 +95,15 @@ export const textIndexer = {
     const text = await ctx.readText();
     if (!text.trim()) return { semanticTexts: [] };
     const chunks = chunkText(text, 1200, 200);
+    // Fields describe the CHUNK (which chunk it is), not the node. The node's name
+    // deliberately isn't copied in: field values are indexed, so a name duplicated
+    // across every chunk goes stale the moment the item is renamed — leaving the file
+    // findable under a name it no longer has. Name search belongs to the `core.name`
+    // index, which is a single document and is refreshed on rename.
     const semanticTexts = chunks.map((chunk, i) => ({
       id: `${node.id}:${i}`,
       text: chunk,
-      fields: { name: node.name, chunk: i },
+      fields: { chunk: i },
     }));
     return {
       semanticTexts,

@@ -70,7 +70,7 @@ test('an empty index beside a non-empty drive is rebuilt at startup', async () =
 
     srv = await open();
     const rebuild = await srv.indexRebuild;
-    expect(rebuild).toEqual({ indexed: 3, failed: 0, stopped: false });
+    expect(rebuild).toEqual({ indexed: 3, failed: 0, stopped: false, total: 3 });
     expect(await hits(srv, 'melange')).toBe(3);
     await srv.close();
 

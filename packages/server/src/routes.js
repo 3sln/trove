@@ -379,6 +379,89 @@ export function createRouter() {
     });
   });
 
+  // --- background work, and problems that outlived it ------------------------
+  //
+  // Two endpoints that look similar and mean different things. `/api/tasks` is work
+  // happening NOW — it is in memory, it is gone when the server restarts, and that is
+  // correct, because the work is gone too. `/api/issues` is what a failure LEFT BEHIND:
+  // durable, because a file that failed to index is still unindexed tomorrow.
+  //
+  // Both are polled rather than streamed. There is no streaming transport anywhere in
+  // this server yet, and adding one for a progress bar would mean SSE plumbing through
+  // three adapters; the client polls fast only while something is running and goes
+  // silent otherwise, which costs nothing at rest.
+
+  r.get('/api/tasks', async (ctx) => {
+    const collectionIds = await readableCollectionIds(ctx);
+    return {
+      tasks: ctx.tasks.list({
+        collectionIds,
+        // A drive-wide task (a full reindex) names no collection, so scoping can't
+        // place it — only someone who can act on the whole drive is shown one.
+        includeGlobal: await canWholeDrive(ctx),
+      }),
+    };
+  });
+
+  r.post('/api/tasks/:id/cancel', async (ctx) => {
+    await assertTaskAccess(ctx, ctx.tasks.get(ctx.params.id), 'cancel');
+    return { cancelled: ctx.tasks.cancel(ctx.params.id) };
+  });
+
+  r.delete('/api/tasks/:id', async (ctx) => {
+    await assertTaskAccess(ctx, ctx.tasks.get(ctx.params.id), 'dismiss');
+    ctx.tasks.dismiss(ctx.params.id);
+    return { ok: true };
+  });
+
+  r.get('/api/issues', async (ctx) => {
+    const collectionIds = await readableCollectionIds(ctx);
+    const admin = await canWholeDrive(ctx);
+    const issues = await ctx.issues.list({ collectionIds, includeGlobal: admin });
+    // `retryable` is computed here, not stored: whether a fix can be attempted depends
+    // on which handlers this deployment registered, and the client should offer a Retry
+    // button only when pressing it will do something.
+    return { issues: issues.map((i) => ({ ...i, retryable: ctx.issues.canRetry(i) })) };
+  });
+
+  // Retrying starts a task and returns it immediately — the fix may take minutes, and
+  // holding the request open for it would just time out. The issue is NOT cleared here;
+  // it clears when the work actually succeeds.
+  r.post('/api/issues/:id/retry', async (ctx) => {
+    const issue = await ctx.issues.get(ctx.params.id);
+    if (!issue) throw TroveError.notFound('Issue');
+    await assertIssueAccess(ctx, issue, 'write');
+    const started = ctx.issues.retry(ctx.params.id);
+    started.catch(() => {}); // the task record carries the failure; don't reject globally
+    // Hand back the task list so the client can adopt the new task without a round trip.
+    return { ok: true, tasks: ctx.tasks.list({ collectionIds: await readableCollectionIds(ctx) }) };
+  });
+
+  // Dismissing is not fixing. Allowed because a problem can become irrelevant (the file
+  // was deleted, the plugin uninstalled) and a list you can't clear stops being read —
+  // but if the underlying failure recurs, it comes straight back.
+  r.delete('/api/issues/:id', async (ctx) => {
+    const issue = await ctx.issues.get(ctx.params.id);
+    if (!issue) return { ok: true };
+    await assertIssueAccess(ctx, issue, 'write');
+    await ctx.issues.remove(ctx.params.id);
+    return { ok: true };
+  });
+
+  // Rebuild the search index on demand. Admin-only: it re-reads every object in the
+  // drive, so it is a real load, and it is drive-wide rather than scoped to anything
+  // the caller owns. Returns the task, which is how the caller watches it.
+  r.post('/api/reindex', async (ctx) => {
+    await requireWholeDrive(ctx, 'rebuild the search index');
+    if (!ctx.startReindex) throw TroveError.unsupported('Reindexing is not available on this deployment');
+    const running = ctx.tasks.list().find((t) => t.kind === 'index' && t.status === 'running');
+    // Two concurrent full rebuilds would double the work to reach the same place.
+    if (running) return { task: running, alreadyRunning: true };
+    const task = ctx.startReindex({ reason: 'Started manually' });
+    task.catch(() => {});
+    return { task: ctx.tasks.list().find((t) => t.kind === 'index' && t.status === 'running') || null };
+  });
+
   // --- identity --------------------------------------------------------------
 
   r.get('/api/me', ({ principal, collections }) => ({
@@ -684,6 +767,39 @@ async function readableCollectionIds(ctx, narrowTo) {
 async function assertCap(ctx, collectionId, capability) {
   if (!ctx.collections) return; // collections disabled → no per-collection ACL
   await ctx.collections.assert(ctx.principal, collectionId, capability);
+}
+
+/**
+ * Gate an operation that acts on the whole drive rather than on anything the caller
+ * owns — rebuilding the index, cancelling someone else's task. See
+ * CollectionService.hasWholeDrive for why this isn't plain `isAdmin`.
+ */
+async function requireWholeDrive(ctx, what) {
+  const allowed = ctx.collections ? await ctx.collections.hasWholeDrive(ctx.principal) : !!ctx.principal;
+  if (!allowed) throw TroveError.forbidden(`You do not have permission to ${what}`);
+}
+const canWholeDrive = (ctx) =>
+  (ctx.collections ? ctx.collections.hasWholeDrive(ctx.principal) : Promise.resolve(!!ctx.principal));
+
+/**
+ * Who may act on an issue: whoever may act on the thing it is about.
+ *
+ * An issue names a file ("welcome.md could not be indexed"), so it leaks that file's
+ * existence and name — it has to be scoped exactly like the file is. A drive-wide issue
+ * belongs to no collection, so it takes admin. This is the same reasoning as
+ * readableCollectionIds, applied to a different surface, and it must not be skipped
+ * just because an issue "is only an error message".
+ */
+async function assertIssueAccess(ctx, issue, capability) {
+  if (issue.collectionId == null) return requireWholeDrive(ctx, 'act on a drive-wide problem');
+  await assertCap(ctx, issue.collectionId, capability);
+}
+
+/** Same rule for tasks: a task about a collection follows that collection. */
+async function assertTaskAccess(ctx, task, what) {
+  if (!task) throw TroveError.notFound('Task');
+  if (task.collectionId == null) return requireWholeDrive(ctx, `${what} a drive-wide task`);
+  await assertCap(ctx, task.collectionId, 'write');
 }
 // Stat a node and enforce a capability on its collection in one step — the single
 // most repeated shape across the mutating routes.

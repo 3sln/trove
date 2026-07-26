@@ -107,6 +107,32 @@ export class TroveApiClient {
     return this.request('GET', '/api/indexers');
   }
 
+  // --- background work + standing problems -----------------------------------
+  // Tasks are in-flight and ephemeral; issues are what a failure left behind and are
+  // durable. Ids can contain anything (an issue id embeds a node id), so every one of
+  // these encodes before it becomes a path segment.
+  tasks() {
+    return this.request('GET', '/api/tasks');
+  }
+  cancelTask(id) {
+    return this.request('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`);
+  }
+  dismissTask(id) {
+    return this.request('DELETE', `/api/tasks/${encodeURIComponent(id)}`);
+  }
+  issues() {
+    return this.request('GET', '/api/issues');
+  }
+  retryIssue(id) {
+    return this.request('POST', `/api/issues/${encodeURIComponent(id)}/retry`);
+  }
+  dismissIssue(id) {
+    return this.request('DELETE', `/api/issues/${encodeURIComponent(id)}`);
+  }
+  reindex() {
+    return this.request('POST', '/api/reindex');
+  }
+
   // --- server plugin installs (account-scoped, synced across devices) ---------
   /** Upload a package zip for account install; returns the server install record. */
   async installPlugin(bytes, grants) {

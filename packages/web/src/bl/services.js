@@ -46,11 +46,26 @@ export class SearchClientService {
   }
 }
 
+/**
+ * Uploads in flight.
+ *
+ * This owns the DETAIL an upload needs and a generic task doesn't — bytes moved, an
+ * AbortController, per-file retry. It also projects each transfer into ActivityService
+ * so the drive has ONE list of "what is happening", covering work on both sides of the
+ * wire: an upload running in this browser and a reindex running on the server show up
+ * together, because a user doesn't care which machine is busy.
+ *
+ * The projection is one-way and this stays the owner. Two writable copies of the same
+ * fact is how they drift.
+ */
 export class TransfersService {
-  constructor() {
+  /** @param {import('./activity.js').ActivityService} [activity] */
+  constructor(activity = null) {
     this.state = { items: [] }; // { id, name, direction, ratio, loaded, total, status, error }
     this.subject = new ObservableSubject(this.state);
     this._controllers = new Map();
+    this.activity = activity;
+    this._tasks = new Map(); // transfer id -> activity task handle
   }
   observe() {
     return this.subject;
@@ -62,15 +77,28 @@ export class TransfersService {
     this._controllers.set(id, controller);
     this.state = { items: [...this.state.items, { id, name, direction: 'up', ratio: 0, loaded: 0, total, status: 'active', error: null }] };
     this.#emit();
+    const task = this.activity?.start({
+      kind: 'transfer', title: `Uploading ${name}`, total: total || null, unit: 'bytes',
+      onCancel: () => this.cancel(id),
+    });
+    if (task) this._tasks.set(id, task);
   }
   progress(id, { loaded, total, ratio }) {
     this.state = { items: this.state.items.map((t) => (t.id === id ? { ...t, loaded, total, ratio } : t)) };
     this.#emit();
+    this._tasks.get(id)?.progress({ done: loaded, total: total || null });
   }
   finish(id, status = 'done', error = null) {
     this.state = { items: this.state.items.map((t) => (t.id === id ? { ...t, status, error, ratio: status === 'done' ? 1 : t.ratio } : t)) };
     this._controllers.delete(id);
     this.#emit();
+    const task = this._tasks.get(id);
+    if (task) {
+      if (status === 'done') task.succeed();
+      else if (status === 'cancelled') task.cancel();
+      else task.fail(error || new Error('Upload failed'));
+      this._tasks.delete(id);
+    }
     if (status === 'done') setTimeout(() => this.dismiss(id), 4000);
   }
   cancel(id) {

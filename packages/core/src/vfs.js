@@ -28,7 +28,7 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null }) {
+  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null }) {
     if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage; // primary backend (default collection + capability reporting)
@@ -43,9 +43,12 @@ export class Vfs {
     this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes });
     this.maxIndexBytes = maxIndexBytes;
     // The indexing subsystem (run/backfill/purge/contributions) lives here.
+    // Where a failure to index becomes a standing, retryable problem rather than a
+    // console line. Optional — core works without one, it just can't report.
+    this.issues = issues ?? null;
     this.indexing = new IndexingCoordinator({
       metadata: this.metadata, search: this.search, indexers: this.indexers,
-      storageFor: (cid) => this.storageFor(cid), maxIndexBytes,
+      storageFor: (cid) => this.storageFor(cid), maxIndexBytes, issues: this.issues,
     });
   }
 
@@ -149,13 +152,23 @@ export class Vfs {
    */
   async rename(id, newName) {
     const node = await this.resolve(id);
-    return this.metadata.rename(node.id, newName);
+    const renamed = await this.metadata.rename(node.id, newName);
+    // The name is INDEXED (it's how "find the file I called X" works), so a rename that
+    // doesn't re-index leaves the item findable only under a name it no longer has —
+    // which, in a drive with no folders, is the item disappearing. Awaited: renaming is
+    // a small, interactive operation, and it would be strange for the result to be
+    // stale by the time the rename returns.
+    await this.indexing.reindexName(renamed).catch((e) => console.error('reindex after rename failed', e));
+    return renamed;
   }
 
   async remove(id) {
     const node = await this.resolve(id);
     if (node.storageKey) (await this.storageFor(node.collectionId)).delete(node.storageKey).catch(() => {});
     await this.search?.removeNode(node.id);
+    // A deleted item can't be "failing to index" any more — leaving the issue behind
+    // would leave an un-fixable row pointing at nothing.
+    await this.issues?.clear('index', node.id).catch(() => {});
     await this.sidecar?.remove(node.id).catch(() => {});
     await this.metadata.remove(node.id);
     return { ok: true };
@@ -320,6 +333,7 @@ export class Vfs {
   backfillIndexer(indexer, opts) { return this.indexing.backfillIndexer(indexer, opts); }
   purgeIndexer(contributorId, opts) { return this.indexing.purgeIndexer(contributorId, opts); }
   reindexAll(opts) { return this.indexing.reindexAll(opts); }
+  reindexNode(nodeId) { return this.indexing.reindexNode(nodeId); }
 }
 
 function cryptoId() {

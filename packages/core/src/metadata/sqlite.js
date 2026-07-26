@@ -176,6 +176,10 @@ export class SqliteStore extends MetadataStore {
     return rows.map(row);
   }
 
+  async countItems() {
+    return (await this.db.get('SELECT COUNT(*) AS n FROM nodes'))?.n ?? 0;
+  }
+
   async findByTags(filters = [], opts = {}) {
     const where = ['1=1'];
     const params = [];

@@ -25,6 +25,14 @@ export function registerCommands(app) {
   cmd('workbench.openSettings', 'Open Settings', () => workbench.setActivity('settings'), { category: 'Preferences', icon: 'gear' });
   cmd('workbench.closeOverlays', 'Close', () => workbench.closeOverlays(), { palette: false });
 
+  // --- background work + standing problems -----------------------------------
+  cmd('workbench.showActivity', 'Show Activity (running work & problems)',
+    () => app.activity.togglePanel(true), { category: 'View', icon: 'refresh' });
+  // The manual scan the drive had no way to ask for. Reports as a task rather than
+  // blocking, because on a large drive it takes minutes.
+  cmd('workbench.rebuildIndex', 'Rebuild Search Index',
+    () => app.activity.rebuildIndex().catch(() => {}), { category: 'View', icon: 'refresh' });
+
   // --- explorer --------------------------------------------------------------
   cmd('explorer.refresh', 'Refresh', () => go(new RefreshAction()), { category: 'Explorer', icon: 'refresh' });
   cmd('explorer.upload', 'Upload Files…', () => {

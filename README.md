@@ -221,6 +221,54 @@ Back up the object store with your storage's native tooling (`rsync` the
 filesystem root, or bucket replication/versioning for S3/R2). `/api/health` is a
 liveness check; `/api/ready` probes the store for readiness gating.
 
+## Background work and standing problems
+
+Two registries, split by **lifetime** — the distinction is the design, not an
+implementation detail:
+
+| | Tasks | Issues |
+|---|---|---|
+| What | work in flight | a problem that outlived the work |
+| Where | in memory, per process | the KV store, durable |
+| Ends when | the work ends | the underlying thing actually succeeds |
+| API | `GET /api/tasks` | `GET /api/issues` |
+
+A task that was running when the server stopped is *not* running — forgetting it is
+correct. But a file that failed to index is still unindexed tomorrow, so that has to
+survive a restart. They meet at the retry: **a failure raises an issue, retrying it
+starts a task, and the task succeeding clears the issue.** Nothing is cleared by being
+acknowledged.
+
+The client shows one list covering both sides of the wire — an upload running in the
+browser and a reindex running on the server appear together, because a user doesn't
+care which machine is busy. Server tasks are a read-only mirror; the browser never
+drives them. Progress is determinate (`done`/`total`/`unit`) or explicitly
+indeterminate: a caller that doesn't know the total leaves it `null` and gets a
+spinner, rather than a progress bar that guesses.
+
+Transport is adaptive polling — 1 s while something is running, a minute when idle.
+There's no streaming transport in the server yet, and SSE through three runtime
+adapters isn't worth it to move a progress bar; only the poll would change if one
+ever exists.
+
+### Reindexing
+
+Indexing runs when an item is written (`writeFile`) or when an upload completes
+(`POST /api/uploads/:id/complete`) — including uploads that went straight to S3, since
+the *complete* call is the trigger. Objects written directly into the bucket behind
+Trove's back are invisible: Trove owns its key namespace, and there's no bucket scan.
+
+A full rebuild happens automatically when the index is empty and the drive is not, and
+on demand:
+
+```sh
+curl -X POST http://localhost:8787/api/reindex     # or: "Rebuild Search Index" in the palette
+```
+
+It returns a task rather than blocking. Drive-wide, so it requires either a
+`TROVE_ADMINS` admin or someone who can already read and write every collection —
+which the default single-user self-host is.
+
 ## Using the core as a library
 
 Every backend is a provider you inject into the server (or `createVfs`) — pass a
@@ -380,7 +428,7 @@ npm run test:browser --prefix packages/web      # web units in real Chromium (@w
 node packages/web/test/e2e.mjs                  # full workbench in headless Chromium
 node packages/web/test/plugins.e2e.mjs          # sandboxed plugin install, brokered network, offline availability
 node packages/web/test/offline.e2e.mjs          # service worker, pinning, offline queue + sync
-node packages/web/test/probe/run-all.mjs        # error-path probes: broken openers, server faults, retry, uninstall failure, opener choice
+node packages/web/test/probe/run-all.mjs        # error-path probes: broken openers, server faults, retry, uninstall failure, opener choice, activity/issues
 node packages/web/test/probe/walkthrough.mjs    # full in-browser user journey + screenshots (test/screens/)
 ```
 

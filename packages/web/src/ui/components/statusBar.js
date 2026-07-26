@@ -24,6 +24,44 @@ function statusSlot(item, ui) {
     : span({ className: 'seg', title }, ...content);
 }
 
+/**
+ * The two things that make background work and standing problems discoverable at all.
+ *
+ * Running work shows only while it is running — a status bar that always carries an
+ * "Activity" button teaches people to ignore it. The attention badge is the opposite:
+ * it stays until the problem is actually fixed, because that is the whole point of an
+ * issue as against a toast that scrolls away.
+ */
+function activityChips(state, ui) {
+  const act = state.act || { tasks: [], issues: [] };
+  const running = act.tasks.filter((t) => t.status === 'running');
+  const open = () => ui.app.activity.togglePanel(true);
+  const chips = [];
+
+  if (running.length) {
+    const first = running[0];
+    const determinate = first.total != null && first.total > 0;
+    const pct = determinate ? Math.round(((first.done || 0) / first.total) * 100) : null;
+    chips.push(button({
+      className: 'seg sb-activity',
+      title: running.map((t) => t.title).join('\n'),
+    },
+    div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }),
+    span(running.length > 1
+      ? `${running.length} running`
+      : `${first.title}${pct == null ? '' : ` ${pct}%`}`)).on({ click: open }));
+  }
+
+  if (act.issues.length) {
+    chips.push(button({
+      className: 'seg sb-attention',
+      title: act.issues.map((i) => i.title).join('\n'),
+    }, icon('info', { size: 12 }), span(`${act.issues.length} need${act.issues.length === 1 ? 's' : ''} attention`))
+      .on({ click: open }));
+  }
+  return chips;
+}
+
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
@@ -57,6 +95,7 @@ export default function statusBar(state, ui) {
       : span({ className: 'seg' }, `${items.length} item${items.length === 1 ? '' : 's'}`),
     ...left,
     div({ className: 'spacer' }),
+    ...activityChips(state, ui),
     ...right,
     span({ className: 'seg', title: 'Total size of this collection' }, bytes(totalBytes)),
     caps ? span({ className: 'seg', title: 'Storage backend capabilities' },

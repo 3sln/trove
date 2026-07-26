@@ -32,6 +32,9 @@ export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, S
 export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 export { IndexingCoordinator } from './indexing.js';
+// Work in flight (ephemeral) and standing problems (durable) — see the header of each.
+export { TaskRegistry } from './tasks.js';
+export { IssueRegistry, issueId } from './issues.js';
 export { normalizeContribution, clampContribution, clampTagValue, DEFAULT_CAPS } from './indexers/contribution.js';
 
 // Cloudflare Vectorize — first-class pluggable vector DB.
@@ -84,7 +87,7 @@ export async function createVfs(opts = {}) {
     opts.search ??
     new SearchService({ embeddings, vectorStore: opts.vectorStore, keywordStore: opts.keywordStore });
   const indexers = opts.indexers ?? new IndexerRegistry();
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, searchTransformer: opts.searchTransformer, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar: opts.sidecar, collections: opts.collections, searchTransformer: opts.searchTransformer, issues: opts.issues, maxIndexBytes: opts.maxIndexBytes, maxUploadBytes: opts.maxUploadBytes });
   await vfs.init();
   return vfs;
 }

@@ -735,3 +735,47 @@ kbd {
   margin: 1.5em 0 0; padding: 10px 12px; border-radius: 8px;
   border: 1px dashed var(--border); color: var(--text-faint); font-size: 12.5px;
 }
+
+/* --- Activity: running work, and problems that outlived it ------------------- */
+/* Anchored above the status bar rather than centred: it reports on work that keeps
+   going while you use the app, so it must not sit in front of the app. */
+.activity-panel {
+  position: fixed; right: 12px; bottom: calc(var(--statusbar-h) + 10px); z-index: 60;
+  width: 380px; max-height: 62vh; overflow-y: auto;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+}
+.act-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.act-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.act-section { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.act-section:last-of-type { border-bottom: none; }
+.act-section-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); margin-bottom: 8px; }
+.act-empty { margin: 0; color: var(--text-faint); font-size: 12.5px; }
+.act-row { display: flex; align-items: flex-start; gap: 8px; }
+.act-body { flex: 1; min-width: 0; }
+.act-title { font-size: 12.5px; overflow-wrap: anywhere; }
+.act-detail, .act-meta { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; overflow-wrap: anywhere; }
+.act-meta { color: var(--text-faint); }
+.act-error { font-size: 11.5px; color: var(--danger); margin-top: 2px; overflow-wrap: anywhere; }
+.act-amount { font-size: 11px; color: var(--text-faint); margin-top: 3px; }
+.act-action { background: none; border: none; color: var(--text-faint); cursor: pointer; padding: 2px; border-radius: 4px; }
+.act-action:hover { background: var(--bg-hover); color: var(--text); }
+.act-task, .act-issue { padding: 7px 0; }
+.act-task + .act-task, .act-issue + .act-issue { border-top: 1px solid var(--border); }
+.act-actions { display: flex; gap: 6px; margin: 6px 0 0 21px; }
+.act-done .act-title, .act-cancelled .act-title { color: var(--text-dim); }
+.act-failed .act-title { color: var(--danger); }
+.act-sev-warning .act-title { color: var(--warn); }
+.act-offline { display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 11.5px; color: var(--warn); background: var(--bg-hover); }
+.act-foot { padding: 10px 12px; }
+
+.act-bar { height: 3px; margin: 6px 0 0 21px; background: var(--bg-input); border-radius: 2px; overflow: hidden; }
+.act-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .25s var(--ease); }
+/* Indeterminate: it slides, it does not claim a position. A task that doesn't know its
+   total must not render a percentage — a progress bar that lies is worse than a spinner. */
+.act-bar.indeterminate .act-fill { width: 35%; animation: act-slide 1.1s var(--ease) infinite; }
+@keyframes act-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+.sb-attention { color: var(--warn); }
+.sb-attention:hover { color: var(--warn); }

@@ -21,6 +21,7 @@ import {
   CollectionService,
   PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
   IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
+  TaskRegistry, IssueRegistry,
   TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
@@ -169,6 +170,18 @@ export async function createServer(config = {}) {
       : new MemoryKV());
   await kv.init?.();
 
+  // The two halves of "tell the user what's going on", split by lifetime:
+  //
+  //   tasks   in-flight work, in memory, per-process. A reindex that was running when
+  //           the server stopped is not running now — forgetting it is correct.
+  //   issues  standing problems, in the KV store, durable. A file that failed to index
+  //           is STILL unindexed after a restart, so this one has to survive.
+  //
+  // They meet at the retry: a failure raises an issue, retrying it starts a task, and
+  // the task succeeding clears the issue.
+  const tasks = resolve(config.tasks, TaskRegistry, () => new TaskRegistry());
+  const issues = resolve(config.issues, IssueRegistry, () => new IssueRegistry({ kv }));
+
   // Web push (optional — only when VAPID keys are configured).
   const push = resolve(config.push, WebPushService, () =>
     config.vapid?.publicKey && config.vapid?.privateKey
@@ -200,7 +213,7 @@ export async function createServer(config = {}) {
     }));
   }
 
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, maxUploadBytes: config.maxUploadBytes ?? null });
+  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, maxUploadBytes: config.maxUploadBytes ?? null });
   await vfs.init();
 
   // A drive with files and an empty index is a drive where nothing can be found, and
@@ -213,7 +226,48 @@ export async function createServer(config = {}) {
   // until it finishes would turn a recoverable state into an outage. The promise is
   // returned so a caller (a test, a CLI) can wait for it.
   let closing = false;
-  const indexRebuild = config.rebuildIndexOnStart === false ? null : rebuildIndexIfLost(vfs, search, () => closing);
+
+  // ONE reindex verb, used by all three callers — the startup rebuild, the manual
+  // command, and the retry on a failed-index issue. Written once so a user watching a
+  // rebuild sees the same task whichever of them started it, and so "reindex" can't
+  // drift into three subtly different operations.
+  const startReindex = ({ reason, title } = {}) => tasks.run(
+    {
+      kind: 'index',
+      title: title || 'Rebuilding the search index',
+      detail: reason || null,
+      unit: 'items',
+      cancellable: true,
+    },
+    async (task) => {
+      const result = await vfs.reindexAll({
+        // The registry stops at a cancel; `closing` covers a shutdown, which is the
+        // same need with no one to click the button.
+        shouldStop: () => closing || task.cancelled,
+        onProgress: ({ indexed, failed, total }) => task.progress({
+          done: indexed,
+          total,
+          detail: failed ? `${failed} could not be indexed` : null,
+        }),
+      });
+      if (result.stopped) throw TroveError.internal('Reindex stopped before it finished');
+      return result;
+    },
+  );
+  // Retrying an issue runs the same work as everything else, and reports it the same
+  // way. The issue is not cleared here — it is cleared by the indexing that succeeds,
+  // so a retry can't report success over a problem that is still there.
+  issues.handle('reindex-all', () => startReindex({ reason: 'Retrying after a failed scan' }));
+  issues.handle('reindex-node', (issue) => tasks.run(
+    // Carries the issue's collection, so the person who can see the file can also see
+    // the task fixing it — a task nobody is allowed to watch is not a task worth having.
+    { kind: 'index', title: 'Re-indexing an item', detail: issue.title, collectionId: issue.collectionId },
+    () => vfs.reindexNode(issue.retry.nodeId),
+  ));
+
+  const indexRebuild = config.rebuildIndexOnStart === false
+    ? null
+    : rebuildIndexIfLost(vfs, search, startReindex);
 
   // Server plugin installs: bulk package blobs go in a pluggable PackageStore
   // (default = the primary storage backend under a prefix; TROVE_PACKAGE_STORE points
@@ -270,7 +324,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -292,7 +346,7 @@ export async function createServer(config = {}) {
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, indexRebuild, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, close };
 }
 
 /**
@@ -300,7 +354,7 @@ export async function createServer(config = {}) {
  * when no rebuild was needed (the common case — every start after the first).
  * @returns {Promise<{indexed:number, failed:number}|null>}
  */
-async function rebuildIndexIfLost(vfs, search, shouldStop) {
+async function rebuildIndexIfLost(vfs, search, startReindex) {
   try {
     if (!search?.looksUnindexed) return null;
     // Cheapest question first: an index that reports documents needs nothing, and a
@@ -311,17 +365,17 @@ async function rebuildIndexIfLost(vfs, search, shouldStop) {
 
     console.warn('[trove] the search index is empty but the drive is not — rebuilding it in the background');
     const started = Date.now();
-    const result = await vfs.reindexAll({
-      shouldStop,
-      onProgress: ({ indexed }) => { if (indexed % 500 === 0) console.log(`[trove] reindexed ${indexed} items…`); },
-    });
-    if (result.stopped) console.warn(`[trove] index rebuild stopped at ${result.indexed} items (shutting down) — it will resume on the next start`);
-    else console.log(`[trove] search index rebuilt: ${result.indexed} items in ${Date.now() - started}ms${result.failed ? `, ${result.failed} failed` : ''}`);
+    // Goes through the task registry like every other reindex, so a user who opens the
+    // app mid-rebuild sees it running rather than a drive that mysteriously finds
+    // nothing.
+    const result = await startReindex({ reason: 'The index was empty and the drive was not' });
+    console.log(`[trove] search index rebuilt: ${result.indexed} items in ${Date.now() - started}ms${result.failed ? `, ${result.failed} failed` : ''}`);
     return result;
   } catch (err) {
-    // A failed rebuild leaves a searchless-but-working drive; that has to be said out
-    // loud, not swallowed into an unhandled rejection.
-    console.error('[trove] search index rebuild failed — items may not be findable:', err.message);
+    // A failed or interrupted rebuild leaves a searchless-but-working drive; that has
+    // to be said out loud, not swallowed into an unhandled rejection. The task record
+    // already carries it for the UI; this is for the operator's log.
+    console.warn('[trove] search index rebuild did not complete — items may not be findable:', err.message);
     return null;
   }
 }
