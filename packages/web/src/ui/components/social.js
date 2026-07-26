@@ -112,7 +112,10 @@ function fileHeader(node, state, ui) {
   return div({ className: 'ip-file' },
     div({ className: 'ip-name' }, node.name),
     div({ className: 'ip-path' }, node.contentType || ''),
-    button({ className: `btn ${pinned ? '' : 'primary'}`, $styling: { marginTop: '10px', padding: '6px 11px' } },
+    // Secondary, not primary. Pinning a file for offline is a useful thing to be able
+    // to do and not the thing you came to this panel for — as the brightest element on
+    // screen it out-shouted the file's own links, tags and conversation.
+    button({ className: `btn small ${pinned ? 'on' : ''}`, $styling: { marginTop: '10px' } },
       icon(pinned ? 'check' : 'download', { size: 14 }),
       pinned ? 'Available offline' : 'Make available offline',
     ).on({ click: () => (pinned ? ui.exec('offline.unpin', node) : ui.exec('offline.pin', node)) }),

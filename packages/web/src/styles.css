@@ -1031,3 +1031,7 @@ kbd {
    line, with the button where the thumb expects it. */
 .shell.phone .setting:has(.control > .iconbtn:only-child) { flex-direction: row; align-items: center; }
 .shell.phone .setting:has(.control > .iconbtn:only-child) .control { width: auto; justify-content: flex-end; }
+/* The part of a group header that is the user's own text — case preserved, because
+   `#draft` uppercased to `#DRAFT` names a tag they did not type. */
+.launch-h .lh-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.launch-h .lh-verbatim { text-transform: none; font-weight: 500; color: var(--text-dim); letter-spacing: 0; }

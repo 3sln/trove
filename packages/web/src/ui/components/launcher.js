@@ -87,7 +87,16 @@ export default function launcher(state, ui, opts = {}) {
     showResolved ? resolvedBar(resolved) : null,
     div({ className: 'launch-body' },
       ...groups.map((group) => div({ className: 'launch-group' },
-        div({ className: 'launch-h' }, span(group.title), group.action || null),
+        // `group.title` is uppercased by CSS, which is right for a label and wrong for
+        // anything the user typed — it turns their `#draft` into `#DRAFT`, a tag that
+        // isn't what they wrote. So a group can carry a verbatim half.
+        div({ className: 'launch-h' },
+          // Label and value together on the left; `.launch-h` is space-between, so an
+          // ungrouped value gets flung to the far edge away from the label it belongs to.
+          div({ className: 'lh-title' },
+            span(group.title),
+            group.verbatim ? span({ className: 'lh-verbatim' }, group.verbatim) : null),
+          group.action || null),
         group.items.length
           ? div({ className: 'launch-list' }, ...group.items.map((it) => {
             const at = ++gi;
@@ -182,7 +191,9 @@ function buildContent(state, ui, q, mode, modal) {
   if (filters.length) {
     const label = filters.map(filterLabel).join(' ') + (text.trim() ? ` · "${text.trim()}"` : '');
     return [{
-      title: state.se.loading ? 'Filtering…' : err ? 'Filter failed' : `Filtered · ${label}`,
+      title: state.se.loading ? 'Filtering…' : err ? 'Filter failed' : 'Filtered',
+      // Shown as typed: a tag is a value, not a heading.
+      verbatim: state.se.loading || err ? null : label,
       action: err ? retryBtn(new FilterAction(filters, text)) : null,
       items: nodes.map((n) => fileItem(n, ui, modal)),
       empty: state.se.loading ? 'Filtering…' : err ? `Couldn’t filter: ${err}` : 'No files match those filters.',
@@ -224,7 +235,11 @@ function buildContent(state, ui, q, mode, modal) {
   // recover a mistake, not part of browsing the drive.
   if (ex.trash) {
     groups.push({
-      title: `Trash · ${ex.trash.length} item${ex.trash.length === 1 ? '' : 's'}`,
+      // One line, not two: a header reading "0 items" above a body reading "the trash is
+      // empty" is the same sentence twice, permanently parked above the drive.
+      title: ex.trash.length
+        ? `Trash · ${ex.trash.length} item${ex.trash.length === 1 ? '' : 's'}`
+        : 'Trash',
       items: ex.trash.length
         ? ex.trash.map((n) => ({
           icon: 'trash',
