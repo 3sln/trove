@@ -23,6 +23,7 @@ import {
   IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
   TaskRegistry, IssueRegistry,
   TroveError,
+  resolveAuthDiscovery, protectedResourceMetadata, challengeHeaders, publicOrigin,
 } from '@trove/core';
 import { createRouter } from './routes.js';
 import { createMcpHandler } from './mcp/index.js';
@@ -362,15 +363,37 @@ export async function createServer(config = {}) {
 
   const router = createRouter();
 
+  // Where an unauthenticated client is sent — ONE answer for the whole drive, used by
+  // the JSON API's 401s and by MCP's discovery alike. Falls back to the JWT issuer,
+  // which for essentially every OIDC provider IS the authorization server.
+  const auth = resolveAuthDiscovery(config);
+
   // MCP: the same drive, the same identity, spoken to by an agent instead of a browser.
   // Null when switched off, and then nothing below routes to it.
   const mcp = createMcpHandler({
-    vfs, collections, identity, config, kv,
+    vfs, collections, identity, config, auth,
     version: config.version || '0.0.1',
   });
 
   async function handle(req) {
     const url = new URL(req.url);
+
+    // The drive's own protected-resource metadata. Same document MCP serves for its
+    // endpoint, describing the drive instead — because "where do I sign in" has one
+    // answer here and a client that found the drive should not have to know that MCP
+    // exists to get it. Unauthenticated, necessarily: it is the way in.
+    if (url.pathname === '/.well-known/oauth-protected-resource') {
+      return new Response(JSON.stringify(protectedResourceMetadata(publicOrigin(req), auth)), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 'public, max-age=3600',
+          'access-control-allow-origin': '*',
+          'x-content-type-options': 'nosniff',
+        },
+      });
+    }
+
     // Before the API check: the MCP endpoint and its discovery document live outside
     // /api/ because an agent is given ONE URL and everything it needs must hang off it.
     if (mcp) {
@@ -385,15 +408,32 @@ export async function createServer(config = {}) {
         principal = await identity.authenticate(req);
       } catch (err) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
-        return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } });
+        return withChallenge(new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } }), req);
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan, mcp });
+      const res = await router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan, mcp, auth });
+      // A route can refuse on its own (a token that verified but names nobody we know,
+      // a session that expired between calls). Whatever refused, the answer to "so
+      // where do I sign in" is the same one, so it is attached in one place rather
+      // than at every throw site.
+      return withChallenge(res, req);
     }
     if (config.assets) {
       const asset = await config.assets(req);
       if (asset) return hardenAsset(asset, config);
     }
     return new Response('Not found', { status: 404 });
+  }
+
+  /** Attach the sign-in directions to a 401 that doesn't already carry them. */
+  function withChallenge(res, req) {
+    if (res.status !== 401 || res.headers.has('www-authenticate')) return res;
+    const headers = challengeHeaders(publicOrigin(req), auth);
+    for (const [k, v] of Object.entries(headers)) res.headers.set(k, v);
+    // Without this a browser can't read the header cross-origin, which is exactly the
+    // case where a client most needs it.
+    const expose = res.headers.get('access-control-expose-headers');
+    res.headers.set('access-control-expose-headers', expose ? `${expose}, www-authenticate` : 'www-authenticate');
+    return res;
   }
 
   async function close() {
@@ -410,7 +450,7 @@ export async function createServer(config = {}) {
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, mcp, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, mcp, auth, close };
 }
 
 /**
@@ -580,6 +620,12 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
       indexName: env.TROVE_VECTORIZE_INDEX || 'trove',
     };
   }
+
+  // Where a refused client is told to sign in — one value for the whole drive, used by
+  // every 401 the API returns and by the MCP discovery document alike. Left unset it
+  // falls back to TROVE_JWT_ISSUER below, which for essentially every OIDC provider is
+  // the same URL; set it when they genuinely differ.
+  if (env.TROVE_AUTH_SERVER) config.authServer = env.TROVE_AUTH_SERVER;
 
   // Identity: default anonymous; 'jwt' for Cloudflare Access / Zero Trust.
   config.identity = { driver: env.TROVE_AUTH || 'anonymous' };

@@ -389,6 +389,51 @@ It returns a task rather than blocking. Drive-wide, so it requires either a
 `TROVE_ADMINS` admin or someone who can already read and write every collection —
 which the default single-user self-host is.
 
+## Where clients sign in
+
+Trove does not run a login system. It verifies tokens somebody else issued, which leaves
+one question every refused request has to answer: *where do I go and get one?* A bare 401
+is a dead end for a browser and an absolute dead end for an agent, which has no human to
+ask.
+
+So the drive publishes it, once, for everything:
+
+```sh
+TROVE_AUTH_SERVER=https://auth.example.com
+```
+
+Every 401 — from the JSON API, from the MCP endpoint — then carries a pointer:
+
+```
+WWW-Authenticate: Bearer realm="Trove", error="invalid_token",
+  error_description="...",
+  resource_metadata="https://drive.example.com/.well-known/oauth-protected-resource"
+```
+
+and that document ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html)) names the
+authorization server. It is the same mechanism the MCP authorization spec is built on,
+which is why implementing it once serves both a browser and an agent.
+
+**You usually don't have to set it.** For essentially every OIDC provider the issuer URL
+*is* the authorization server, so if `TROVE_JWT_ISSUER` is set Trove uses that. Set
+`TROVE_AUTH_SERVER` only when they genuinely differ. Asking for the same URL under two
+names is a good way to end up with two different answers.
+
+Not setting either is the failure that looks like success: auth is required, and there is
+nowhere to send anyone. Trove says so in the challenge itself and in Settings, rather
+than leaving you to infer it from an empty field.
+
+It is deployment configuration, not a preference — pointing the drive at a different
+authorization server changes who can reach every file in it — so it comes from the
+environment, or from the library caller:
+
+```js
+const { handle } = await createServer({
+  authServer: 'https://auth.example.com',
+  identity: { driver: 'jwt', jwt: { jwksUrl: '...', audience: '...' } },
+});
+```
+
 ## Connecting an AI agent (MCP)
 
 Trove speaks the [Model Context Protocol](https://modelcontextprotocol.io) at `/mcp`.
@@ -399,7 +444,7 @@ there is no service account and no MCP-shaped path around the collection ACL.
 
 ```sh
 # What to paste into an assistant, and whether it needs a token:
-curl http://localhost:8787/api/mcp
+curl http://localhost:8787/api/capabilities | jq '.mcp, .auth'
 ```
 
 On an open drive (the zero-config default) an agent just connects. Demanding a bearer
@@ -426,25 +471,24 @@ $ curl http://localhost:8787/.well-known/oauth-protected-resource/mcp
  "bearer_methods_supported":["header"]}
 ```
 
-The agent reads that, runs the OAuth flow at your authorization server, and comes back
+The client reads that, runs the OAuth flow at your authorization server, and comes back
 with a token. Trove never runs the login itself — it verifies what your IdP issued.
 
-**The one thing you have to supply is the authorization server**, because only you know
-which IdP sits in front of your drive. Without it an agent gets a 401 and has nowhere to
-go, which is the failure that looks like a working configuration. Trove says so out loud
-in the challenge, and in Settings → *AI agents (MCP)*.
+**This is the drive's authorization server, not MCP's.** "Where do I sign in" is a
+property of the deployment, so a 401 from `/api/items` carries the same challenge, and
+`/.well-known/oauth-protected-resource` describes the drive itself. One setting, two
+surfaces, no way for them to disagree — see [Where clients sign in](#where-clients-sign-in).
 
 | variable | what it does |
 | --- | --- |
 | `TROVE_MCP` | `off` to disable the endpoint entirely |
-| `TROVE_MCP_AUTH_SERVER` | issuer URL(s) of your IdP, comma-separated |
 | `TROVE_MCP_RESOURCE` | the canonical public URL, when a proxy rewrites the Host |
 | `TROVE_MCP_PATH` | serve it somewhere other than `/mcp` |
 | `TROVE_MCP_REQUIRE_AUTH` | force auth on or off, rather than following the drive |
 
-An admin can also set the authorization server from Settings without a redeploy — it is
-stored in KV and overrides the environment. Only `https` (or localhost) is accepted: an
-agent hands a bearer token to whatever that URL names.
+Note what is *not* in that table: the authorization server. Those four are all about
+*this endpoint* — where it lives and whether it demands a token. Where the token comes
+from belongs to the drive.
 
 ### Tools
 

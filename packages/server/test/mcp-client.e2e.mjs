@@ -128,7 +128,9 @@ async function sign(claims) {
 
 const locked = await listen({
   identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
-  mcp: { authorizationServers: ['https://auth.example.com'] },
+  // The drive's authorization server, not MCP's — the same value the JSON API's 401s
+  // point at. MCP's discovery document is one consumer of it, not its owner.
+  authServer: 'https://auth.example.com',
 });
 await locked.trove.vfs.writeFile('private.txt', 'for authorized eyes', { contentType: 'text/plain' });
 

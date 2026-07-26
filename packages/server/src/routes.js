@@ -3,9 +3,10 @@
 // a presigned URL when the backend supports it, otherwise stream through here.
 
 import { Router, json, parseRange } from './router.js';
-import { TroveError, assertSafePluginSql, concatBytes } from '@trove/core';
+import {
+  TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
+} from '@trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@trove/core/plugins/identity.js';
-import { resourceUri as mcpResourceUri, metadataUrl as mcpMetadataUrl } from './mcp/auth.js';
 
 const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
 // Cap JSON request bodies so a giant payload can't exhaust server memory. Uploads
@@ -110,7 +111,7 @@ export function createRouter() {
   });
 
   r.get('/api/capabilities', async (ctx) => {
-    const { vfs, config, sidecar, notifications, principal, query } = ctx;
+    const { vfs, config, sidecar, notifications, principal, query, auth, mcp } = ctx;
     // Storage is per-collection, so report the backend for the requested collection
     // (else the client picks the wrong upload strategy on a non-default collection).
     let storage = vfs.storage;
@@ -136,54 +137,33 @@ export function createRouter() {
       // grammar, so it owns the prompt — a client that hardcodes "# filter by tag"
       // tells people the wrong thing the moment a different transformer is configured.
       searchPrompt: vfs.searchTransformer?.describe?.() || null,
+
+      // Where a refused client is sent, and where an agent connects. Both are DEPLOYMENT
+      // facts — env, or a field the library caller passed — so they are reported here
+      // rather than made editable: pointing the drive at a different authorization
+      // server changes who can reach every file in it, which is a deploy-time decision,
+      // not a preference.
+      auth: {
+        authorizationServers: auth?.authorizationServers || [],
+        // Which of TROVE_AUTH_SERVER / TROVE_JWT_ISSUER the value came from, or 'none'.
+        // "We inferred this from your issuer" is a different fact from "you set this",
+        // and someone debugging a mismatch needs to know which.
+        source: auth?.source || 'none',
+        metadataUrl: metadataUrl(publicOrigin(ctx.req)),
+      },
+      mcp: mcp ? {
+        enabled: true,
+        endpoint: mcp.endpoint(ctx.req),
+        metadataUrl: metadataUrl(mcp.endpoint(ctx.req)),
+        requiresAuth: mcp.requiresAuth(),
+        // The one state that makes the endpoint unusable while looking configured: a
+        // token is required and there is nowhere to go and get one. Named as a problem
+        // rather than left to be inferred from an empty array.
+        needsAuthorizationServer: mcp.requiresAuth() && !(auth?.authorizationServers || []).length,
+      } : { enabled: false },
+
       ...(config?.clientConfig || {}),
     };
-  });
-
-  // --- MCP ------------------------------------------------------------------
-  // Where an agent connects, and whether this deployment can actually tell one how to
-  // authenticate. Readable by anyone who can reach the drive: it is the same information
-  // an agent gets from the discovery document, and hiding it from the person who has to
-  // paste the URL into their client helps nobody.
-  r.get('/api/mcp', async (ctx) => {
-    if (!ctx.mcp) return { enabled: false };
-    const cfg = await ctx.mcp.store.get();
-    const resource = mcpResourceUri(ctx.req, cfg);
-    return {
-      enabled: true,
-      endpoint: resource,
-      metadataUrl: mcpMetadataUrl(resource),
-      authorizationServers: cfg.authorizationServers || [],
-      requireAuth: ctx.mcp.authRequired(cfg),
-      // The one thing that makes an MCP endpoint unusable while looking configured: auth
-      // is on, but there is nowhere for an agent to go and get a token. Named as a
-      // problem rather than left for someone to infer from an empty array.
-      needsAuthorizationServer: ctx.mcp.authRequired(cfg) && !(cfg.authorizationServers || []).length,
-      canEdit: await canWholeDrive(ctx),
-    };
-  });
-
-  r.put('/api/mcp', async (ctx) => {
-    if (!ctx.mcp) throw TroveError.unsupported('MCP is disabled on this server');
-    // Pointing the drive at a different authorization server changes who can reach every
-    // file in it, so it sits behind the same gate as rebuilding the index.
-    await requireWholeDrive(ctx, 'change the MCP configuration');
-    const b = await body(ctx.req);
-    if (b.authorizationServers != null) {
-      const list = Array.isArray(b.authorizationServers) ? b.authorizationServers : String(b.authorizationServers).split(',');
-      for (const s of list.map((x) => String(x).trim()).filter(Boolean)) {
-        // An issuer that isn't https is either a typo or a downgrade, and an agent will
-        // hand a bearer token to whatever this names.
-        let u;
-        try { u = new URL(s); } catch { throw TroveError.invalid(`"${s}" is not a URL`); }
-        if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
-          throw TroveError.invalid(`Authorization servers must be https (got ${s})`);
-        }
-      }
-    }
-    const next = await ctx.mcp.store.set(b);
-    const resource = mcpResourceUri(ctx.req, next);
-    return { ok: true, endpoint: resource, authorizationServers: next.authorizationServers || [] };
   });
 
   // --- collections -----------------------------------------------------------

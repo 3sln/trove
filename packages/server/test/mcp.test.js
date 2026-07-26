@@ -16,8 +16,11 @@
 
 import { test, expect } from 'bun:test';
 import { createServer } from '../src/index.js';
-import { CollectionService, MemoryKV, MemoryStorage } from '@trove/core';
-import { metadataUrl, resourceUri, protectedResourceMetadata, challengeHeaders } from '../src/mcp/auth.js';
+import {
+  CollectionService, MemoryKV, MemoryStorage,
+  metadataUrl, protectedResourceMetadata, challengeHeaders, resolveAuthDiscovery,
+} from '@trove/core';
+import { mcpResourceUri } from '../src/mcp/auth.js';
 
 // --- helpers -----------------------------------------------------------------
 
@@ -74,9 +77,9 @@ test('the resource URI follows the proxy headers, because the drive is usually b
   const req = new Request('http://10.0.0.4:8080/mcp', {
     headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'drive.example.com' },
   });
-  expect(resourceUri(req, { path: '/mcp' })).toBe('https://drive.example.com/mcp');
+  expect(mcpResourceUri(req, { path: '/mcp' })).toBe('https://drive.example.com/mcp');
   // And an explicit setting beats every guess.
-  expect(resourceUri(req, { resource: 'https://pinned.example/mcp/' })).toBe('https://pinned.example/mcp');
+  expect(mcpResourceUri(req, { resource: 'https://pinned.example/mcp/' })).toBe('https://pinned.example/mcp');
 });
 
 test('the discovery document is served, and served without a token', async () => {
@@ -84,22 +87,61 @@ test('the discovery document is served, and served without a token', async () =>
   // be a loop with no entry.
   const { handle } = await openDrive({
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
-    mcp: { authorizationServers: ['https://auth.example.com'] },
+    authServer: 'https://auth.example.com',
   });
-  for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
-    const res = await handle(new Request(`${ORIGIN}${path}`));
-    expect(res.status).toBe(200);
-    const doc = await res.json();
-    expect(doc.resource).toBe(`${ORIGIN}/mcp`);
-    expect(doc.authorization_servers).toEqual(['https://auth.example.com']);
-    expect(doc.bearer_methods_supported).toEqual(['header']);
-  }
+  // Two documents, one per resource: the drive itself and the MCP endpoint. They name
+  // the SAME authorization server, because "where do I sign in" is a property of the
+  // deployment and not of whichever door you knocked on.
+  const drive = await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource`));
+  const forMcp = await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`));
+  expect(drive.status).toBe(200);
+  expect(forMcp.status).toBe(200);
+  const [a, b] = [await drive.json(), await forMcp.json()];
+  expect(a.resource).toBe(ORIGIN);
+  expect(b.resource).toBe(`${ORIGIN}/mcp`);
+  expect(a.authorization_servers).toEqual(['https://auth.example.com']);
+  expect(b.authorization_servers).toEqual(a.authorization_servers);
+  expect(b.bearer_methods_supported).toEqual(['header']);
+});
+
+test('the JSON API refuses with the same directions the MCP endpoint gives', async () => {
+  // The generalization that makes this one mechanism instead of two: an agent hitting
+  // /mcp and a client hitting /api/items are both stuck on "where do I sign in", and
+  // both get pointed at a document naming the same authorization server.
+  const { handle } = await openDrive({
+    identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
+    authServer: 'https://auth.example.com',
+  });
+  const res = await handle(new Request(`${ORIGIN}/api/items`));
+  expect(res.status).toBe(401);
+  const challenge = res.headers.get('www-authenticate');
+  expect(challenge).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`);
+  // A browser can only read that header cross-origin if it is exposed.
+  expect(res.headers.get('access-control-expose-headers')).toContain('www-authenticate');
+});
+
+test('the authorization server defaults to the JWT issuer, which is usually the same URL', () => {
+  // Making someone state the same URL under two names is a way to have them disagree.
+  const inferred = resolveAuthDiscovery({ identity: { jwt: { issuer: 'https://login.example.com/' } } });
+  expect(inferred.authorizationServers).toEqual(['https://login.example.com']);
+  expect(inferred.source).toBe('jwt-issuer');
+
+  // An explicit setting wins, for the deployments where they genuinely differ.
+  const explicit = resolveAuthDiscovery({
+    authServer: 'https://auth.example.com',
+    identity: { jwt: { issuer: 'https://login.example.com' } },
+  });
+  expect(explicit.authorizationServers).toEqual(['https://auth.example.com']);
+  expect(explicit.source).toBe('configured');
+
+  // And nothing configured is reported as nothing, not guessed at.
+  expect(resolveAuthDiscovery({}).source).toBe('none');
 });
 
 test('an unauthenticated agent is told where to authenticate, not just refused', async () => {
   const { handle } = await openDrive({
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
-    mcp: { authorizationServers: ['https://auth.example.com'] },
+    authServer: 'https://auth.example.com',
   });
   const r = await rpc(handle, 'tools/list', {});
   expect(r.status).toBe(401);
@@ -113,20 +155,19 @@ test('an unauthenticated agent is told where to authenticate, not just refused',
 test('a challenge with no authorization server configured says so in words', () => {
   // This is the state that looks configured and cannot work: auth is required, and
   // there is nowhere to send the agent. A bare 401 would leave the operator guessing.
-  const req = new Request(`${ORIGIN}/mcp`);
-  const h = challengeHeaders(req, { path: '/mcp' });
-  expect(h["www-authenticate"]).toMatch(/TROVE_MCP_AUTH_SERVER/);
+  const h = challengeHeaders(`${ORIGIN}/mcp`, {});
+  expect(h['www-authenticate']).toMatch(/TROVE_AUTH_SERVER/);
   expect(h['www-authenticate']).toContain('resource_metadata=');
   // And the document omits the field rather than publishing an empty list, which would
   // read to a client as "there are none" instead of "not configured".
-  expect('authorization_servers' in protectedResourceMetadata(req, {})).toBe(false);
+  expect('authorization_servers' in protectedResourceMetadata(`${ORIGIN}/mcp`, {})).toBe(false);
 });
 
 test('a challenge stays a valid header even when the message is written for a person', () => {
   // Header values are bytes. A curly quote or an em dash — exactly what shows up when
   // someone writes an error message meant to be read — makes Response() throw, and the
   // helpful 401 becomes a 500 with no challenge at all.
-  const h = challengeHeaders(new Request(`${ORIGIN}/mcp`), {}, {
+  const h = challengeHeaders(`${ORIGIN}/mcp`, {}, {
     description: 'The token’s audience didn—t match “this drive”…',
   });
   expect(() => new Response(null, { status: 401, headers: h })).not.toThrow();
@@ -138,7 +179,7 @@ test('a challenge stays a valid header even when the message is written for a pe
 test('an expired or forged token gets the same directions as no token at all', async () => {
   const { handle } = await openDrive({
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
-    mcp: { authorizationServers: ['https://auth.example.com'] },
+    authServer: 'https://auth.example.com',
   });
   const r = await rpc(handle, 'tools/list', {}, { token: 'not.a.jwt' });
   expect(r.status).toBe(401);
@@ -278,7 +319,7 @@ test('an agent is exactly as privileged as the person whose token it holds', asy
     rebuildIndexOnStart: false,
     collections,
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
-    mcp: { authorizationServers: ['https://auth.example.com'] },
+    authServer: 'https://auth.example.com',
   });
   const { handle, vfs } = server;
   const admin = { id: 'admin@example.com', email: 'admin@example.com', roles: [] };
@@ -330,53 +371,60 @@ test('an operator can require auth on an open drive, and is then told what is mi
   const { handle } = await openDrive({ mcp: { requireAuth: true } });
   const r = await rpc(handle, 'tools/list', {});
   expect(r.status).toBe(401);
-  expect(r.headers.get('www-authenticate')).toMatch(/No MCP authorization server is configured/);
+  expect(r.headers.get('www-authenticate')).toMatch(/No authorization server is configured/);
 });
 
 // --- configuration -----------------------------------------------------------
 
-test('the endpoint and its gaps are reported over the API', async () => {
+test('the endpoint and its gaps are reported on capabilities, not as an editable setting', async () => {
+  // Pointing the drive at a different authorization server changes who can reach every
+  // file in it. That is a deploy-time decision — env, or a field the library caller
+  // passed — so it is REPORTED here and set nowhere else.
   const { handle } = await openDrive({ mcp: { requireAuth: true } });
-  const res = await handle(new Request(`${ORIGIN}/api/mcp`));
-  const info = await res.json();
-  expect(info.enabled).toBe(true);
-  expect(info.endpoint).toBe(`${ORIGIN}/mcp`);
-  expect(info.metadataUrl).toBe(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`);
+  const caps = await (await handle(new Request(`${ORIGIN}/api/capabilities`))).json();
+  expect(caps.mcp.enabled).toBe(true);
+  expect(caps.mcp.endpoint).toBe(`${ORIGIN}/mcp`);
+  expect(caps.mcp.metadataUrl).toBe(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`);
+  expect(caps.mcp.requiresAuth).toBe(true);
   // The state that looks fine and cannot work, named outright.
-  expect(info.needsAuthorizationServer).toBe(true);
+  expect(caps.mcp.needsAuthorizationServer).toBe(true);
+  expect(caps.auth.authorizationServers).toEqual([]);
+  expect(caps.auth.source).toBe('none');
+  // And the drive's own discovery document, for a client that never touches MCP.
+  expect(caps.auth.metadataUrl).toBe(`${ORIGIN}/.well-known/oauth-protected-resource`);
 });
 
-test('an admin can point the drive at an authorization server without a redeploy', async () => {
-  // For someone running this on a NAS, "configurable" that requires editing env and
-  // restarting is not configurable.
-  const { handle } = await openDrive({ mcp: { requireAuth: true } });
-  const put = await handle(new Request(`${ORIGIN}/api/mcp`, {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorizationServers: ['https://auth.example.com/'] }),
-  }));
-  expect(put.status).toBe(200);
-
-  const doc = await (await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`))).json();
-  expect(doc.authorization_servers).toEqual(['https://auth.example.com']); // trailing slash normalized
-  const info = await (await handle(new Request(`${ORIGIN}/api/mcp`))).json();
-  expect(info.needsAuthorizationServer).toBe(false);
-});
-
-test('a plaintext authorization server is refused', async () => {
-  // An agent will hand a bearer token to whatever this names, so http:// is either a
-  // typo or a downgrade. Localhost is allowed, because that is where people develop.
+test('there is no way to change the authorization server over the API', async () => {
+  // It used to be an admin-editable setting. It should not be: an HTTP call that
+  // redirects every future sign-in is a bigger lever than a settings field looks like,
+  // and the value belongs with the rest of the deployment's configuration.
   const { handle } = await openDrive();
-  const bad = await handle(new Request(`${ORIGIN}/api/mcp`, {
+  const res = await handle(new Request(`${ORIGIN}/api/mcp`, {
     method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorizationServers: ['http://auth.example.com'] }),
+    body: JSON.stringify({ authorizationServers: ['https://evil.example.com'] }),
   }));
-  expect(bad.status).toBe(400);
+  expect(res.status).toBe(404);
+  // And the document is unmoved by having been asked.
+  const doc = await (await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource`))).json();
+  expect(doc.authorization_servers).toBeUndefined();
+});
 
-  const local = await handle(new Request(`${ORIGIN}/api/mcp`, {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorizationServers: ['http://localhost:9000'] }),
-  }));
-  expect(local.status).toBe(200);
+test('one setting serves both surfaces, so they cannot disagree', async () => {
+  // The whole point of moving this out of MCP: configure the drive once, and the API's
+  // 401 and the agent's discovery document name the same place.
+  const { handle } = await openDrive({
+    identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true, issuer: 'https://login.example.com' } },
+  });
+  const apiChallenge = (await handle(new Request(`${ORIGIN}/api/items`))).headers.get('www-authenticate');
+  const mcpChallenge = (await rpc(handle, 'tools/list', {})).headers.get('www-authenticate');
+  expect(apiChallenge).toContain('resource_metadata=');
+  expect(mcpChallenge).toContain('resource_metadata=');
+
+  const driveDoc = await (await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource`))).json();
+  const mcpDoc = await (await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`))).json();
+  // Inferred from the issuer, and identical on both.
+  expect(driveDoc.authorization_servers).toEqual(['https://login.example.com']);
+  expect(mcpDoc.authorization_servers).toEqual(driveDoc.authorization_servers);
 });
 
 test('MCP can be switched off entirely, and then the endpoint is simply not there', async () => {
@@ -386,6 +434,8 @@ test('MCP can be switched off entirely, and then the endpoint is simply not ther
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   }));
   expect(res.status).toBe(404);
-  const info = await (await handle(new Request(`${ORIGIN}/api/mcp`))).json();
-  expect(info.enabled).toBe(false);
+  const caps = await (await handle(new Request(`${ORIGIN}/api/capabilities`))).json();
+  expect(caps.mcp.enabled).toBe(false);
+  // The drive still says where to sign in — that was never MCP's to own.
+  expect((await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource`))).status).toBe(200);
 });

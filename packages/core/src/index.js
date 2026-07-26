@@ -52,6 +52,11 @@ export {
   AnonymousIdentityProvider, principalFromClaims,
 } from './identity/index.js';
 export { verifyJwt, decodeJwt, JwksClient, StaticJwks } from './identity/jwt.js';
+// Where an unauthenticated client is told to go — one answer for the whole drive.
+export {
+  protectedResourceMetadata, challengeHeaders, metadataUrl, publicOrigin,
+  normalizeServers, resolveAuthDiscovery, headerSafe,
+} from './identity/discovery.js';
 
 // Sidecar documents: conversations, tags, indexer facets (CRDT, cold-in-S3).
 export { SidecarService, SidecarStore, SidecarManager } from './sidecar/index.js';

@@ -4,25 +4,23 @@
 // for a server with no server-initiated messages: POST carries a request and gets a
 // single JSON response back. The GET-for-SSE half exists in the spec so a server can
 // push notifications, and Trove has none to push — so it says 405 rather than holding a
-// stream open that will never carry anything. A client that needs streaming will fall
-// back to plain POST, which is what it would end up using anyway.
+// stream open that will never carry anything. A client that needs streaming falls back
+// to plain POST, which is what it would end up using anyway.
 //
-// Authentication reuses the drive's IdentityProvider verbatim. That is the point of the
-// exercise: an agent presents the same JWT the browser does, subject to the same
-// verification and the same collection permissions, so granting an agent access is not a
-// second access-control system to keep in sync with the first.
+// Authentication reuses the drive's IdentityProvider verbatim, and its authorization
+// server comes from the drive's config rather than from anything MCP-specific. That is
+// the point of the exercise: an agent presents the same JWT the browser does, from the
+// same place, subject to the same verification and the same collection permissions. It
+// is not a second access-control system to keep in sync with the first.
 
-import { TroveError } from '@trove/core';
+import { TroveError, challengeHeaders, protectedResourceMetadata } from '@trove/core';
 import { McpServer, rpcError, JSONRPC_ERRORS } from './protocol.js';
 import { registerTroveTools } from './tools.js';
-import {
-  challengeHeaders, protectedResourceMetadata, resourceUri, metadataUrl,
-  McpConfigStore, mcpConfigFromEnv,
-} from './auth.js';
+import { mcpConfigFromEnv, mcpResourceUri } from './auth.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
-export { McpServer, McpConfigStore, mcpConfigFromEnv, protectedResourceMetadata, challengeHeaders, resourceUri, metadataUrl };
+export { McpServer, mcpConfigFromEnv, mcpResourceUri };
 
 export function createMcpServer({ name = 'trove', version = '0.0.1' } = {}) {
   return registerTroveTools(new McpServer({ name, version }));
@@ -57,36 +55,33 @@ function authRequired(cfg, identity) {
  *
  * Returns null when MCP is switched off, so the caller can skip the routes entirely
  * rather than serving an endpoint that 404s in a way indistinguishable from a typo.
+ *
+ * @param {object} deps
+ * @param {object} deps.auth the drive's resolved auth discovery (see resolveAuthDiscovery)
  */
-export function createMcpHandler({ vfs, collections, identity, config = {}, kv, version } = {}) {
-  const defaults = { path: '/mcp', enabled: true, ...mcpConfigFromEnv(config.env || {}), ...(config.mcp || {}) };
-  if (defaults.enabled === false) return null;
-  const store = new McpConfigStore({ kv, defaults });
+export function createMcpHandler({ vfs, collections, identity, config = {}, auth = {}, version } = {}) {
+  const cfg = { path: '/mcp', enabled: true, ...mcpConfigFromEnv(config.env || {}), ...(config.mcp || {}) };
+  if (cfg.enabled === false) return null;
   const server = createMcpServer({ version });
+  const path = cfg.path || '/mcp';
 
   /** The 401 an agent uses to discover where to sign in. */
-  const unauthorized = async (req, description) => {
-    const cfg = await store.get();
-    return jsonResponse(
-      // A JSON-RPC error body as well as the header, because a client that reads the
-      // body before the status still gets told what happened.
-      rpcError(null, JSONRPC_ERRORS.INVALID_REQUEST, description || 'Authentication required'),
-      401,
-      challengeHeaders(req, cfg, { description }),
-    );
-  };
+  const unauthorized = (req, description) => jsonResponse(
+    // A JSON-RPC error body as well as the header, because a client that reads the body
+    // before the status still gets told what happened.
+    rpcError(null, JSONRPC_ERRORS.INVALID_REQUEST, description || 'Authentication required'),
+    401,
+    challengeHeaders(mcpResourceUri(req, cfg), auth, { description }),
+  );
 
   async function handle(req, url) {
-    const cfg = await store.get();
-    const path = cfg.path || '/mcp';
-
-    // --- discovery: RFC 9728 --------------------------------------------------
-    // Served whether or not auth is on, and always unauthenticated — a document whose
-    // entire job is to tell you how to authenticate cannot itself require a token.
-    if (url.pathname === '/.well-known/oauth-protected-resource'
-      || url.pathname === `/.well-known/oauth-protected-resource${path}`) {
-      return jsonResponse(protectedResourceMetadata(req, cfg), 200, {
-        // Public and stable; agents fetch it on every cold connection.
+    // --- discovery: RFC 9728 for THIS endpoint --------------------------------
+    // The drive's own document is served by the caller at the bare well-known path;
+    // this is the /mcp-suffixed one, which names the MCP endpoint as the resource.
+    // Always unauthenticated — a document whose whole job is to say how to authenticate
+    // cannot itself require a token.
+    if (url.pathname === `/.well-known/oauth-protected-resource${path}`) {
+      return jsonResponse(protectedResourceMetadata(mcpResourceUri(req, cfg), auth), 200, {
         'cache-control': 'public, max-age=3600',
         'access-control-allow-origin': '*',
       });
@@ -172,5 +167,13 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, kv, 
     return jsonResponse(reply);
   }
 
-  return { handle, server, store, path: () => (store._cache?.path || defaults.path || '/mcp'), authRequired: (cfg) => authRequired(cfg, identity) };
+  return {
+    handle,
+    server,
+    path,
+    config: cfg,
+    /** What to paste into an agent, for a given request's public origin. */
+    endpoint: (req) => mcpResourceUri(req, cfg),
+    requiresAuth: () => authRequired(cfg, identity),
+  };
 }
