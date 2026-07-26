@@ -79,7 +79,10 @@ export class UploadManager {
     if (this.maxBytes && req.size > this.maxBytes) {
       // Deterministic per-file limit — retrying can't help, so it's non-retryable
       // (capacity/rate quotas stay retryable via the default).
-      throw new TroveError(ErrorCode.QUOTA, `File exceeds the maximum upload size of ${this.maxBytes} bytes`, { retryable: false, details: { maxBytes: this.maxBytes, size: req.size } });
+      // TOO_LARGE (413), not QUOTA: the store has plenty of room, this file is simply
+      // bigger than this deployment permits. Reporting it as a capacity problem would
+      // send the user looking for space to free that would not help.
+      throw TroveError.tooLarge(`File exceeds the maximum upload size of ${this.maxBytes} bytes`, { details: { maxBytes: this.maxBytes, size: req.size } });
     }
     const collectionId = req.collectionId || 'default';
     const storage = await this.#storage(collectionId);

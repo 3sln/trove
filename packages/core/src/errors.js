@@ -14,7 +14,8 @@ export const ErrorCode = Object.freeze({
   UNAUTHORIZED: 'unauthorized',
   FORBIDDEN: 'forbidden',
   UNSUPPORTED: 'unsupported', // backend can't do this (e.g. presign on fs)
-  QUOTA: 'quota', // out of space / rate limited by capacity
+  QUOTA: 'quota', // out of space (507) / rate limited by capacity (429) — see below
+  TOO_LARGE: 'too_large', // this request is bigger than a configured limit allows
   TRANSIENT: 'transient', // network blip, 5xx, throttle — safe to retry
   TIMEOUT: 'timeout',
   ABORTED: 'aborted', // caller cancelled (AbortSignal)
@@ -34,6 +35,7 @@ const HTTP_STATUS = {
   [ErrorCode.FORBIDDEN]: 403,
   [ErrorCode.UNSUPPORTED]: 501,
   [ErrorCode.QUOTA]: 429,
+  [ErrorCode.TOO_LARGE]: 413,
   [ErrorCode.TRANSIENT]: 503,
   [ErrorCode.TIMEOUT]: 504,
   [ErrorCode.ABORTED]: 499,
@@ -54,10 +56,13 @@ export class TroveError extends Error {
     this.retryable = opts.retryable ?? RETRYABLE.has(this.code);
     this.details = opts.details ?? null;
     this.status = HTTP_STATUS[this.code] ?? 500;
-    // QUOTA covers two different failures and they deserve different statuses. A rate
-    // limit is 429 — back off and try again. Being out of DISK is 507: retrying changes
-    // nothing, and telling a client to retry sends it into a loop against a condition
-    // only a human can clear. `retryable` is what tells them apart.
+    // QUOTA covers two failures that deserve different statuses. A rate limit is 429 —
+    // back off and try again. Being out of DISK is 507: retrying changes nothing, and
+    // telling a client to retry sends it into a loop against a condition only a human
+    // can clear. `retryable` is what tells them apart.
+    //
+    // "Your file is bigger than we allow" is neither, and has its own code (TOO_LARGE,
+    // 413): the store is not full, and nothing about waiting or freeing space helps.
     if (this.code === ErrorCode.QUOTA && !this.retryable) this.status = 507;
   }
 
@@ -100,6 +105,9 @@ export class TroveError extends Error {
   }
   static unauthorized(message = 'Unauthorized', opts) {
     return new TroveError(ErrorCode.UNAUTHORIZED, message, opts);
+  }
+  static tooLarge(message = 'Too large', opts) {
+    return new TroveError(ErrorCode.TOO_LARGE, message, { retryable: false, ...opts });
   }
   static forbidden(message = 'Forbidden', opts) {
     return new TroveError(ErrorCode.FORBIDDEN, message, opts);

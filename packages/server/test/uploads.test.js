@@ -73,7 +73,7 @@ test('per-file quota is enforced at create time', async () => {
   const ok = await jsonReq(handle, 'POST', '/api/uploads', { name: 'small', size: 512 });
   expect(ok.status).toBe(200);
   const tooBig = await jsonReq(handle, 'POST', '/api/uploads', { name: 'huge', size: 4096 });
-  expect(tooBig.status).toBe(429); // QUOTA
-  expect(tooBig.json.error.code).toBe('quota');
+  expect(tooBig.status).toBe(413); // TOO_LARGE — the store isn't full, the file is too big
+  expect(tooBig.json.error.code).toBe('too_large');
   expect(tooBig.json.error.details.maxBytes).toBe(1024);
 });
