@@ -94,11 +94,15 @@ activate(async (ctx) => {
   if (ctx.capabilities.includes('network')) {
     ctx.commands.handle('net', async () => {
       const netcap = (ctx.manifest.capabilities || {}).network;
-      const base = (netcap && netcap.endpoints && netcap.endpoints[0]) || '';
-      const r = await ctx.net.fetch(base + 'api/capabilities');
+      const ends = (netcap && netcap.endpoints) || [];
+      const r = await ctx.net.fetch(ends[0] + 'thing');
       let blocked = 'NOT-BLOCKED';
       try { await ctx.net.fetch('https://evil.example.com/x'); } catch (e) { blocked = 'BLOCKED'; }
-      return { status: r.status, ok: r.ok, blocked };
+      // The drive is declared too (endpoints[1]) — declaring it must not make it
+      // reachable, or network would silently confer every other capability.
+      let drive = 'NOT-BLOCKED';
+      try { await ctx.net.fetch(ends[1] + 'api/capabilities'); } catch (e) { drive = 'BLOCKED'; }
+      return { status: r.status, ok: r.ok, blocked, drive };
     });
   }
 });

@@ -283,7 +283,11 @@ export async function createServer(config = {}) {
   issues.handle('reindex-all', () => startReindex({ reason: 'Retrying after a failed scan' }));
   // Reconcile a collection against what its store actually holds. Same three callers as
   // the reindex — scheduled, manual, and issue retry — through one verb.
-  const startScan = (collectionId = 'default', { reason } = {}) => tasks.run(
+  // Where a scan that ran out of time left off. Persisted, because the whole point is
+  // that the next invocation — possibly in a different isolate, minutes later — picks
+  // the bucket up rather than starting again.
+  const SCAN_NS = 'scan-cursor';
+  const startScan = (collectionId = 'default', { reason, deadlineMs = null } = {}) => tasks.run(
     {
       kind: 'scan',
       title: `Scanning “${collectionId}” for outside changes`,
@@ -292,15 +296,27 @@ export async function createServer(config = {}) {
       collectionId,
       cancellable: true,
     },
-    async (task) => vfs.scanCollection(collectionId, {
-      shouldStop: () => closing || task.cancelled,
-      // The store can't say how many objects it holds without listing them, so this is
-      // honestly indeterminate: a count that rises, with no total to divide it by.
-      onProgress: ({ scanned, adopted, refreshed }) => task.progress({
-        done: scanned,
-        detail: adopted || refreshed ? `${adopted} new, ${refreshed} changed` : null,
-      }),
-    }),
+    async (task) => {
+      // A budget, when the caller has one. On Workers a request has a CPU ceiling
+      // measured in seconds and a bucket has none at all, so "run until done" is not a
+      // thing that can be promised — this runs a slice and remembers where it got to.
+      const until = deadlineMs ? Date.now() + deadlineMs : null;
+      const cursor = (await kv.get(SCAN_NS, collectionId))?.cursor || null;
+      const result = await vfs.scanCollection(collectionId, {
+        cursor,
+        shouldStop: () => closing || task.cancelled || (until != null && Date.now() > until),
+        // The store can't say how many objects it holds without listing them, so this is
+        // honestly indeterminate: a count that rises, with no total to divide it by.
+        onProgress: ({ scanned, adopted, refreshed }) => task.progress({
+          done: scanned,
+          detail: adopted || refreshed ? `${adopted} new, ${refreshed} changed` : null,
+        }),
+      });
+      // Remember the resume point, or clear it once a pass completes.
+      if (result.nextCursor) await kv.set(SCAN_NS, collectionId, { cursor: result.nextCursor, at: Date.now() });
+      else await kv.delete(SCAN_NS, collectionId).catch(() => {});
+      return result;
+    },
   );
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
 
@@ -478,7 +494,38 @@ export async function createServer(config = {}) {
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, mcp, auth, close };
+  /**
+   * One slice of the periodic work, for a runtime with no timers.
+   *
+   * `setInterval` is how a long-lived process does this, and it is exactly wrong on
+   * Cloudflare Workers: a timer registered inside a request does not survive the
+   * request, so the maintenance and scan intervals below simply never fire there.
+   * A Worker's answer is a Cron Trigger calling this, awaited inside the `scheduled`
+   * handler so the runtime keeps the isolate alive until it settles.
+   *
+   * `budgetMs` bounds the scan slice — a bucket has no size limit and an invocation
+   * does, so it does as much as it can and stores where it got to.
+   */
+  async function runMaintenance({ budgetMs = 20_000, scan = true } = {}) {
+    const out = { swept: false, purged: 0, scans: [] };
+    await vfs.uploads.sweepExpired(Date.now());
+    await sidecar.sweep();
+    const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
+    if (trashMs > 0) out.purged = (await vfs.purgeTrash({ before: Date.now() - trashMs }))?.purged || 0;
+    out.swept = true;
+    if (!scan) return out;
+    const list = collections ? await collections.list(null).catch(() => []) : [];
+    const targets = list.length ? list : [{ id: 'default' }];
+    // Share the budget across collections so one huge bucket can't starve the rest.
+    const each = Math.max(1000, Math.floor(budgetMs / targets.length));
+    for (const c of targets) {
+      const r = await startScan(c.id, { reason: 'Scheduled', deadlineMs: each }).catch((e) => ({ error: e.message }));
+      out.scans.push({ collectionId: c.id, ...r });
+    }
+    return out;
+  }
+
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, startReindex, runMaintenance, mcp, auth, close };
 }
 
 /**

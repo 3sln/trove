@@ -65,7 +65,14 @@ export class CollectionScanner {
    * @param {number}  [opts.pageSize]
    * @param {(p: object) => void} [opts.onProgress]
    * @param {() => boolean} [opts.shouldStop]
-   * @returns {Promise<{scanned, adopted, refreshed, orphaned, skipped, failed, stopped}>}
+   * @param {string|null} [opts.cursor] resume a scan that stopped early (see below)
+   * @returns {Promise<{scanned, adopted, refreshed, orphaned, skipped, failed, stopped, nextCursor}>}
+   *
+   * A scan that stops early returns the `nextCursor` it had reached, so the next call
+   * can pick the bucket up where this one left off. That is what makes this usable on a
+   * runtime with a hard execution budget — Cloudflare Workers, where a request has a CPU
+   * ceiling measured in seconds and a bucket has no ceiling at all. Without it the only
+   * options were "finishes" and "starts from the beginning again forever".
    */
   async scan(collectionId = 'default', opts = {}) {
     const { adopt = true, refresh = true, pageSize = 500, onProgress, shouldStop } = opts;
@@ -89,15 +96,21 @@ export class CollectionScanner {
     // copy's bytes, leaving an item that lists, opens, and 404s forever.
     const trashedKeys = await this.vfs.metadata.trashedStorageKeys?.(collectionId) ?? new Set();
 
-    const result = { scanned: 0, adopted: 0, refreshed: 0, orphaned: 0, skipped: 0, failed: 0, stopped: false, unaddressable: 0 };
+    const result = {
+      scanned: 0, adopted: 0, refreshed: 0, orphaned: 0, skipped: 0, failed: 0,
+      stopped: false, unaddressable: 0, nextCursor: null, resumed: !!opts.cursor,
+    };
     const seen = new Set();
-    let cursor = null;
+    let cursor = opts.cursor || null;
 
     outer: for (;;) {
       const page = await storage.list({ cursor, limit: pageSize });
       result.unaddressable += page.unaddressable || 0;
       for (const object of page.objects) {
-        if (shouldStop?.()) { result.stopped = true; break outer; }
+        // Stop at a PAGE boundary when we can, so the cursor we hand back is one the
+        // store will honour. Mid-page there is no cursor to express "and 37 objects in",
+        // so those are re-examined next time — which is cheap and idempotent.
+        if (shouldStop?.()) { result.stopped = true; result.nextCursor = cursor; break outer; }
         result.scanned++;
         if (this.#reserved(object.key)) { result.skipped++; continue; }
         seen.add(object.key);
@@ -125,12 +138,16 @@ export class CollectionScanner {
       onProgress?.({ ...result });
       cursor = page.nextCursor;
       if (!cursor) break;
+      // Between pages is the cheapest place to give up, and the only place a resume is
+      // exact.
+      if (shouldStop?.()) { result.stopped = true; result.nextCursor = cursor; break; }
     }
 
-    // Orphans are only meaningful after a COMPLETE pass. A scan cut short by a cancel
-    // or a shutdown has simply not looked at the rest of the bucket, and calling those
-    // items orphaned would be a false alarm about data loss — the worst kind.
-    if (!result.stopped) {
+    // Orphans are only meaningful after a COMPLETE pass — and "complete" now means this
+    // call reached the end of the bucket having STARTED at the beginning. A scan that was
+    // cut short, or one resuming from a cursor, has not seen the whole store, and calling
+    // the items it didn't reach orphaned would be a false alarm about data loss.
+    if (!result.stopped && !result.resumed) {
       for (const [key, node] of byKey) {
         if (!seen.has(key) && !this.#reserved(key)) result.orphaned++;
       }

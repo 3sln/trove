@@ -266,6 +266,44 @@ create databases on demand and a scope key contains the user's id, so per-scope
 databases are not expressible here. Their tables sit side by side, which is weaker
 isolation than the file-per-scope a self-hosted run gets.
 
+#### Work that outlives a request
+
+A Worker isolate is not a server: it may be discarded as soon as the response resolves,
+so a promise nobody declared is simply cancelled part-way through. That matters here
+because the drive has work that intentionally outlives the request that started it — a
+scan or a reindex takes minutes, and `POST /api/collections/:id/scan` returns a task
+record immediately rather than holding the connection open for it. On Node and Bun the
+process keeps that promise alive. On Workers, without help, you would get a scan that
+did a third of the bucket and reported success.
+
+Two mechanisms cover it, and the second one needs a line in your config:
+
+* **`ctx.waitUntil`** — the adapter hands the runtime every task still running when the
+  response is ready, so the isolate stays alive until they finish. This is automatic.
+* **Cron Triggers** — `setInterval` does not survive the request it was registered in,
+  so `TROVE_SCAN_INTERVAL_MS` and `TROVE_MAINTENANCE_INTERVAL_MS` do nothing here; they
+  are Node/Bun only. Periodic work runs from the `scheduled` handler instead:
+
+```toml
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+TROVE_CRON_BUDGET_MS = "20000"   # wall-clock a firing may spend; default 20s
+```
+
+Each firing sweeps abandoned uploads and unflushed sidecars, applies trash retention,
+then scans — splitting whatever budget is left across your collections. A scan that
+runs out of budget **stores the cursor it reached** and stops, so the next firing
+continues from there rather than restarting; a bucket too large to walk in one firing
+still gets walked, just across several. Keep the budget under your Worker's CPU limit
+(30 s by default) with room to spare.
+
+One consequence worth knowing: the task list is per-isolate and in-memory (by design —
+see `packages/core/src/tasks.js`). A client polling `/api/tasks` may be routed to an
+isolate that never saw the scan and so shows nothing running. The work is unaffected,
+and anything that goes *wrong* is recorded as an Issue, which is durable.
+
 ### Making yourself an admin
 
 An admin can install plugins that ship server code, create collections, and rebuild the
@@ -346,8 +384,9 @@ the same values as config fields instead.
 | `TROVE_MCP_PATH` / `_RESOURCE` / `_REQUIRE_AUTH` | `/mcp` | see [Connecting an AI agent](#connecting-an-ai-agent-mcp) |
 | **housekeeping** | | |
 | `TROVE_TRASH_DAYS` | `30` | `0` keeps the trash forever |
-| `TROVE_SCAN_INTERVAL_MS` | off | reconcile with the store on a timer |
-| `TROVE_MAINTENANCE_INTERVAL_MS` | `300000` | sweep stale uploads and sidecars |
+| `TROVE_SCAN_INTERVAL_MS` | off | reconcile with the store on a timer (not Workers) |
+| `TROVE_MAINTENANCE_INTERVAL_MS` | `300000` | sweep stale uploads and sidecars (not Workers) |
+| `TROVE_CRON_BUDGET_MS` | `20000` | Workers only: wall-clock one cron firing may spend |
 | `TROVE_MENTION_FLUSH_MS` | — | how often mention notifications batch out |
 | `TROVE_VAPID_PUBLIC_KEY` / `_PRIVATE_KEY` / `_SUBJECT` | — | Web Push for @mentions |
 | **limits + serving** | | |
@@ -585,7 +624,9 @@ curl -X POST http://localhost:8787/api/collections/default/scan
 
 Set `TROVE_SCAN_INTERVAL_MS` to scan on a timer. Off by default: a scan lists every
 object in the bucket, which costs API calls on S3 and load on a NAS. Turn it on when
-something other than Trove writes to the same bucket.
+something other than Trove writes to the same bucket. On Workers a timer cannot outlive
+a request — use a Cron Trigger instead, see
+[Work that outlives a request](#work-that-outlives-a-request).
 
 ### Reindexing
 

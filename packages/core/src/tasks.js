@@ -31,6 +31,7 @@ export class TaskRegistry {
     this.now = now;
     this.tasks = new Map(); // id -> task record
     this._controllers = new Map(); // id -> AbortController
+    this._inFlight = new Set(); // promises for tasks still running — see pending()
   }
 
   /**
@@ -79,14 +80,38 @@ export class TaskRegistry {
    */
   async run(spec, fn) {
     const handle = this.start(spec);
-    try {
-      const result = await fn(handle);
-      handle.succeed(result);
-      return result;
-    } catch (err) {
-      handle.fail(err);
-      throw err;
-    }
+    const promise = (async () => {
+      try {
+        const result = await fn(handle);
+        handle.succeed(result);
+        return result;
+      } catch (err) {
+        handle.fail(err);
+        throw err;
+      }
+    })();
+    // Track it so `pending()` can hand the whole set to a runtime that needs to be told
+    // the work exists — see below.
+    this._inFlight.add(promise);
+    promise.catch(() => {}).finally(() => this._inFlight.delete(promise));
+    return promise;
+  }
+
+  /**
+   * Every task still running, as one promise — or null when nothing is.
+   *
+   * A route starts a task and returns immediately, because the work takes minutes and
+   * holding the request open for it would just time out. On a long-lived process that
+   * is enough: the promise keeps running because the process does.
+   *
+   * On Cloudflare Workers it is not. The isolate may be discarded as soon as the
+   * response resolves, and a promise nobody declared is simply cancelled part-way — a
+   * scan that silently did a third of the bucket. `ctx.waitUntil` is how a Worker says
+   * "the response is done but I am not", and it needs something to wait on. This is it.
+   */
+  pending() {
+    if (!this._inFlight.size) return null;
+    return Promise.allSettled([...this._inFlight]);
   }
 
   #handle(task, controller) {

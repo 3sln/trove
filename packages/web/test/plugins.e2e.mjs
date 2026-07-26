@@ -51,6 +51,17 @@ async function main() {
   const server = http.createServer(async (req, res) => { const wr = await srv.handle(await toWeb(req)); res.statusCode = wr.status; wr.headers.forEach((v, k) => res.setHeader(k, v)); if (wr.body) Readable.fromWeb(wr.body).pipe(res); else res.end(); });
   await new Promise((r) => server.listen(0, r));
   const base = `http://localhost:${server.address().port}`;
+  // A third-party service, on its own origin. The broker refuses to call the drive
+  // itself, so "a declared endpoint works" has to be demonstrated against something
+  // that is genuinely somewhere else — which is also the only shape a real plugin's
+  // `network` capability has.
+  const elsewhere = http.createServer((req, res) => {
+    res.setHeader('access-control-allow-origin', '*');
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ hello: 'from elsewhere' }));
+  });
+  await new Promise((r) => elsewhere.listen(0, r));
+  const partner = `http://127.0.0.1:${elsewhere.address().port}`;
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
   const page = await browser.newPage();
   const errors = [];
@@ -60,15 +71,15 @@ async function main() {
   await page.waitForSelector('.shell');
 
   // Install the demo plugin package (zip bytes) and wait for its live manifest.
-  // Declare this origin as the plugin's one allowed network endpoint so the
-  // brokered-fetch enforcement can be exercised below.
+  // It declares the partner service as its one allowed endpoint — and the drive's own
+  // origin as a second, to prove that declaring it buys nothing.
   const { zip } = await buildPackage({
     manifest: {
       capabilities: {
         storage: true, ui: true, opener: true, media: true, dock: true,
         // Scoped: exactly one host command is executable (plus the plugin's own).
         commands: { execute: ['workbench.view.home'] },
-        network: { endpoints: [base + '/'] },
+        network: { endpoints: [partner + '/', base + '/'] },
       },
     },
   });
@@ -172,6 +183,7 @@ async function main() {
   const net = await exec(page, demoUri('net'));
   check('brokered fetch to a declared endpoint succeeds', net?.ok === true && net?.status === 200, JSON.stringify(net));
   check('fetch to an undeclared endpoint is blocked', net?.blocked === 'BLOCKED', JSON.stringify(net));
+  check('the drive\'s own API is blocked even when declared', net?.drive === 'BLOCKED', JSON.stringify(net));
 
   // Plugin storage: the demo wrote to its private server-side SQLite db on activate;
   // read it back through a command to prove the round-trip.
@@ -332,6 +344,7 @@ async function main() {
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();
   server.close();
+  elsewhere.close();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
   process.exit(failed.length ? 1 : 0);

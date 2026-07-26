@@ -60,11 +60,48 @@ async function getServer(env, buildVfs) {
   return cached;
 }
 
-/** Default export usable directly as a Worker module. */
+/**
+ * Default export usable directly as a Worker module.
+ *
+ * Two things here are Workers-specific and neither is optional.
+ *
+ * `ctx.waitUntil` — a Worker's isolate may be torn down the moment the response
+ * resolves. Work that was started and not awaited (a scan, a reindex) is not merely
+ * slow after that, it is CANCELLED, at whatever point it had reached. `waitUntil` is
+ * the only way to say "this response is done but I am not", so anything the request
+ * kicked off is handed to it.
+ *
+ * `scheduled` — a Cron Trigger. `setInterval` is how a long-lived process does periodic
+ * work and it does not work here at all: a timer registered inside a request does not
+ * outlive the request, so the maintenance and scan intervals never fire on Workers.
+ * Point a cron at the Worker and this runs one bounded slice per firing.
+ *
+ *   [triggers]
+ *   crons = ["*​/5 * * * *"]
+ */
 export default {
   async fetch(request, env, ctx) {
-    const { handle } = await getServer(env);
-    return handle(request);
+    const server = await getServer(env);
+    const res = await server.handle(request);
+    // Anything the request started but did not await — see `pendingWork` below.
+    const pending = server.tasks.pending?.();
+    if (pending && ctx?.waitUntil) ctx.waitUntil(pending);
+    return res;
+  },
+
+  /**
+   * Cron Trigger. Sweeps expired uploads and idle sidecars, applies trash retention,
+   * and advances each collection's scan by one time-boxed slice — the scanner stores
+   * the cursor it reached, so the next firing continues rather than starting over.
+   */
+  async scheduled(event, env, ctx) {
+    const server = await getServer(env);
+    // AWAITED, not fire-and-forget: `scheduled` gets its own budget, and the runtime
+    // keeps the isolate alive exactly as long as this promise is pending.
+    const work = server.runMaintenance({ budgetMs: Number(env.TROVE_CRON_BUDGET_MS || 20_000) })
+      .catch((e) => console.error('[trove] scheduled maintenance failed', e));
+    if (ctx?.waitUntil) ctx.waitUntil(work);
+    await work;
   },
 };
 
