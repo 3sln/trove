@@ -197,7 +197,7 @@ export class MemoryStore extends MetadataStore {
     const q = opts.q ? opts.q.toLowerCase() : null;
     const out = [];
     for (const node of this.#live()) {
-      if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
+      if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
       if (q && !node.name.toLowerCase().includes(q)) continue;
       if (matchTags(node, filters)) out.push(node);
     }
@@ -210,7 +210,7 @@ export class MemoryStore extends MetadataStore {
     const want = new Set(uris);
     const out = [];
     for (const node of this.#live()) {
-      if (opts.collectionIds?.length && !opts.collectionIds.includes(node.collectionId)) continue;
+      if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
       const links = node.facets?.[LINKS_CONTRIBUTOR]?.metadata?.[LINKS_KEY];
       if (Array.isArray(links) && links.some((l) => want.has(l))) out.push(node);
     }

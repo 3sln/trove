@@ -19,10 +19,12 @@ export class SidecarService {
    * @param {import('../storage/interface.js').StorageBackend} deps.storage
    * @param {(mentions: Array) => void} [deps.onMentions]  batch-notify sink
    * @param {SidecarManager} [deps.manager]
+   * @param {import('../issues.js').IssueRegistry} [deps.issues] so a write-back that
+   *   keeps failing becomes a standing problem rather than a console line
    */
-  constructor({ storage, onMentions, manager } = {}) {
+  constructor({ storage, onMentions, manager, issues } = {}) {
     this.store = new SidecarStore({ storage });
-    this.manager = manager ?? new SidecarManager({ store: this.store });
+    this.manager = manager ?? new SidecarManager({ store: this.store, issues });
     this.onMentions = onMentions ?? (() => {});
   }
 

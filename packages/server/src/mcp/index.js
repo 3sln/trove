@@ -20,6 +20,14 @@ import { mcpConfigFromEnv, mcpResourceUri } from './auth.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
+/** The CORS origin to echo, or null for "no cross-origin access" — same rule as the API. */
+function allowedOrigin(configured, reqOrigin) {
+  if (!configured) return null;
+  if (configured === '*') return '*';
+  const allowed = String(configured).split(',').map((s) => s.trim()).filter(Boolean);
+  return reqOrigin && allowed.includes(reqOrigin) ? reqOrigin : null;
+}
+
 export { McpServer, mcpConfigFromEnv, mcpResourceUri };
 
 export function createMcpServer({ name = 'trove', version = '0.0.1' } = {}) {
@@ -90,10 +98,19 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, auth
     if (url.pathname !== path) return null;
 
     if (req.method === 'OPTIONS') {
+      // Echoing the request's own Origin approves EVERY site. On the zero-config
+      // deployment MCP needs no token, so that let any page the user happened to be
+      // visiting call write_file and delete_file on their drive — the reply is
+      // unreadable to the attacker, but the deletions still happen. Agents are not
+      // browsers and do not need CORS at all, so this follows the same
+      // TROVE_CORS_ORIGIN allowlist the JSON API does, and stays off by default.
+      const origin = allowedOrigin(config?.corsOrigin, req.headers.get('origin'));
+      if (!origin) return new Response(null, { status: 204 });
       return new Response(null, {
         status: 204,
         headers: {
-          'access-control-allow-origin': req.headers.get('origin') || '*',
+          'access-control-allow-origin': origin,
+          ...(origin === '*' ? {} : { vary: 'Origin' }),
           'access-control-allow-methods': 'POST, GET, DELETE, OPTIONS',
           'access-control-allow-headers': 'content-type, authorization, mcp-protocol-version, mcp-session-id',
           'access-control-expose-headers': 'www-authenticate, mcp-session-id',

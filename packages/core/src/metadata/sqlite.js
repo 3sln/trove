@@ -283,9 +283,17 @@ export class SqliteStore extends MetadataStore {
       }
     }
     if (opts.q) { where.push(`name LIKE ? ESCAPE '\\' COLLATE NOCASE`); params.push('%' + escapeLike(opts.q) + '%'); }
-    if (opts.collectionIds?.length) {
-      where.push(`collectionId IN (${opts.collectionIds.map(() => '?').join(',')})`);
-      params.push(...opts.collectionIds);
+    // `?.length` here was a whole-drive read: the server passes [] to mean "you may see
+    // NOTHING" (a collection you can't read, or one that doesn't exist), and a falsy
+    // length turned that into "don't scope at all". Undefined means unscoped; an array
+    // — empty or not — is the exact set allowed.
+    if (opts.collectionIds) {
+      // `IN ()` is a syntax error in SQLite, so the empty case is spelled out.
+      if (!opts.collectionIds.length) where.push('1 = 0');
+      else {
+        where.push(`collectionId IN (${opts.collectionIds.map(() => '?').join(',')})`);
+        params.push(...opts.collectionIds);
+      }
     }
     params.push(opts.limit ?? 100);
     const rows = await this.db.all(`SELECT * FROM nodes WHERE ${where.join(' AND ')} ORDER BY updatedAt DESC LIMIT ?`, ...params);
@@ -305,9 +313,12 @@ export class SqliteStore extends MetadataStore {
       `EXISTS (SELECT 1 FROM json_each(json_extract(facets, ?)) WHERE json_each.value IN (${uris.map(() => '?').join(',')}))`,
     ];
     const params = [linksPath, ...uris];
-    if (opts.collectionIds?.length) {
-      where.push(`collectionId IN (${opts.collectionIds.map(() => '?').join(',')})`);
-      params.push(...opts.collectionIds);
+    if (opts.collectionIds) { // empty array = nothing readable; see findByTags
+      if (!opts.collectionIds.length) where.push('1 = 0');
+      else {
+        where.push(`collectionId IN (${opts.collectionIds.map(() => '?').join(',')})`);
+        params.push(...opts.collectionIds);
+      }
     }
     params.push(opts.limit ?? 100);
     const rows = await this.db.all(

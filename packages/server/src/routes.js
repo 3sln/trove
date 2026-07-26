@@ -743,6 +743,20 @@ export function createRouter() {
       ? `pstore:${principal.id}:dom:${domain}`
       : `pstore:${principal.id}:plg:${pluginId}`;
 
+  /**
+   * A plugin may only open the DOMAIN store of its own domain.
+   *
+   * A plugin id is `<domain>/<name>`, so the domain it is entitled to is not something
+   * the caller needs to tell us — and letting them tell us meant naming any domain and
+   * reading another vendor's shared store outright.
+   */
+  const assertOwnDomain = (pluginId, domain) => {
+    const own = String(pluginId || '').split('/')[0];
+    if (!own || own !== domain) {
+      throw TroveError.forbidden(`"${pluginId}" may only use the domain store for "${own || '(none)'}"`);
+    }
+  };
+
   r.post('/api/plugins/:pluginId/sql', async ({ sqlite, plugins, principal, params, req }) => {
     requirePluginStore(sqlite, principal);
     // Authoritative capability check when the plugin is server-installed (transitional:
@@ -752,14 +766,19 @@ export function createRouter() {
     if (!PLUGIN_SQL_OPS.has(op)) throw TroveError.invalid(`Unknown storage op "${op}"`);
     if (scope !== 'plugin' && scope !== 'domain') throw TroveError.invalid(`Unknown storage scope "${scope}"`);
     if (scope === 'domain' && !domain) throw TroveError.invalid('domain scope requires a domain');
+    if (scope === 'domain') assertOwnDomain(params.pluginId, domain);
     const db = await sqlite.obtain({ key: storeKey(principal, params.pluginId, scope, domain) });
     return { result: await runPluginSql(db, op, { sql, args, statements }) };
   });
 
   // Uninstall cleanup: wipe the plugin-private scope. The domain scope is shared
   // across a vendor's plugins and deliberately outlives any single uninstall.
-  r.delete('/api/plugins/:pluginId/data', async ({ sqlite, principal, params }) => {
+  r.delete('/api/plugins/:pluginId/data', async ({ sqlite, plugins, principal, params }) => {
     requirePluginStore(sqlite, principal);
+    // Same gate as the /sql route. Without it this was destroy-any-plugin's-data for
+    // anyone who could reach the app origin — the one route in the pair that checked
+    // nothing at all.
+    if (plugins) await plugins.assertCapability(principal, params.pluginId, 'storage');
     await sqlite.drop({ key: storeKey(principal, params.pluginId, 'plugin') });
     return { ok: true };
   });

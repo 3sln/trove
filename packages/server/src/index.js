@@ -203,8 +203,12 @@ export async function createServer(config = {}) {
   // Sidecar conversations/tags/facets; mentions are piped to the batcher.
   const sidecar = resolve(config.sidecar, SidecarService, () => new SidecarService({
     storage,
+    issues,
     onMentions: (mentions) => notifications.enqueue(mentions).catch((e) => console.error('enqueue mentions failed', e)),
   }));
+  // Retrying a stuck write-back is the same verb the schedule uses, so a user pressing
+  // "Retry" on the issue does exactly what the background retry would have.
+  issues.handle('sidecar-flush', () => sidecar.manager.retryPending());
 
   // Collections — the ownership + permission boundary; each is a store config.
   // Disable with config.collections === false (single open storage, no ACLs).
@@ -339,7 +343,7 @@ export async function createServer(config = {}) {
     // it removed. 30 days is the same grace period the drives people are used to give.
     const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     maintenance = setInterval(() => {
-      Promise.resolve(vfs.uploads.sessions.sweep?.(Date.now()))
+      Promise.resolve(vfs.uploads.sweepExpired(Date.now()))
         .then(() => sidecar.sweep?.())
         .then(() => (trashMs > 0 ? vfs.purgeTrash({ before: Date.now() - trashMs }) : null))
         .then((r) => { if (r?.purged) console.log(`[trove] purged ${r.purged} item(s) from the trash after ${config.trashRetentionDays ?? 30} days`); })

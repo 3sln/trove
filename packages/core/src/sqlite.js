@@ -31,7 +31,13 @@ export class SqliteDatabase {
 // isolation escape (and `DETACH` its pair). Strip comments + string/identifier
 // literals first so the keyword can't hide inside a value, then reject.
 
-const DANGEROUS_SQL = /\b(ATTACH|DETACH)\b/i;
+// ATTACH/DETACH would reach a sibling scope's file. VACUUM INTO is worse and less
+// obvious: it writes a complete SQLite database to any path the server process can
+// create, whose pages contain rows the caller chose — attacker-chosen bytes at an
+// attacker-chosen path (a cron file, a webroot, authorized_keys). PRAGMA is refused
+// because several of them (database_list, temp_store_directory) either disclose host
+// paths or move where files land.
+const DANGEROUS_SQL = /\b(ATTACH|DETACH|VACUUM|PRAGMA)\b/i;
 
 /** Blank out --/**-comments and '..'/".."/`..`/[..] literals, preserving length-ish. */
 export function stripSqlLiterals(sql) {
@@ -59,7 +65,7 @@ export function stripSqlLiterals(sql) {
 export function assertSafePluginSql(sql) {
   if (typeof sql !== 'string' || !sql) throw TroveError.invalid('SQL statement is required');
   if (DANGEROUS_SQL.test(stripSqlLiterals(sql))) {
-    throw TroveError.invalid('ATTACH/DETACH are not permitted in plugin storage');
+    throw TroveError.invalid('ATTACH, DETACH, VACUUM and PRAGMA are not permitted in plugin storage');
   }
 }
 

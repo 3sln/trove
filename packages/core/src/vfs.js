@@ -255,19 +255,58 @@ export class Vfs {
       if (trashed) {
         // Out of the index, but NOT out of storage. Everything here is derived and is
         // rebuilt on restore; the bytes are the one thing that can't be.
-        await this.search?.removeNode(node.id);
+        //
+        // The soft delete has already committed, so a failure here must not undo it or
+        // throw the whole call away — the item IS in the trash. A stale index entry is
+        // caught by searchQuery, which skips trashed nodes precisely because this can
+        // fail. Noted AFTER the clear below, under its own kind: `index` means "this
+        // item failed to index", which is meaningless once it's deleted and is cleared
+        // on the next line — raising into that kind would erase the note immediately.
+        const err = await this.#tryRemoveFromIndex(node.id);
         await this.issues?.clear('index', node.id).catch(() => {});
+        if (err) await this.#note('search-cleanup', node.id, 'Removing a trashed item from the search index failed', err);
         return { ok: true, trashed: true, id: node.id };
       }
     }
-    if (node.storageKey) (await this.storageFor(node.collectionId)).delete(node.storageKey).catch(() => {});
-    await this.search?.removeNode(node.id);
-    // A deleted item can't be "failing to index" any more — leaving the issue behind
-    // would leave an un-fixable row pointing at nothing.
-    await this.issues?.clear('index', node.id).catch(() => {});
+    // ORDER MATTERS, and it is the opposite of the obvious one. Losing the record while
+    // the bytes survive is an orphan blob: wasted space nobody sees. Losing the bytes
+    // while the record survives is an item that lists, opens, and 404s forever — with no
+    // way back. So everything derived goes first, the authoritative record next, and the
+    // bytes last, where a failure is a leak instead of a corpse.
+    const searchErr = await this.#tryRemoveFromIndex(node.id);
     await this.sidecar?.remove(node.id).catch(() => {});
+    // A deleted item can't be "failing to index" any more — leaving the issue behind
+    // would leave an un-fixable row pointing at nothing. This clear is also why the
+    // failure above is noted under a different kind, and only once this has run.
+    await this.issues?.clear('index', node.id).catch(() => {});
+    if (searchErr) await this.#note('search-cleanup', node.id, 'Removing a deleted item from the search index failed', searchErr);
     await this.metadata.remove(node.id);
+    if (node.storageKey) {
+      await (await this.storageFor(node.collectionId)).delete(node.storageKey).catch((err) => this.#note(
+        'orphan-bytes', node.storageKey,
+        `Deleted "${node.name}" but its stored bytes could not be removed`, err));
+    }
     return { ok: true, trashed: false, id: node.id };
+  }
+
+  /** Drop a node from the search index, returning the error instead of throwing it. */
+  async #tryRemoveFromIndex(nodeId) {
+    try {
+      await this.search?.removeNode(nodeId);
+      return null;
+    } catch (err) {
+      return err;
+    }
+  }
+
+  /** Record a background failure as a standing problem, never throwing from the attempt. */
+  async #note(kind, subject, title, err) {
+    try {
+      await this.issues?.raise({
+        kind, subject, severity: 'warning', title,
+        detail: err?.message || String(err), retryable: false,
+      });
+    } catch { /* the issue registry is itself best-effort here */ }
   }
 
   /** What's in the trash, newest first. */
@@ -467,6 +506,12 @@ export class Vfs {
     for (const r of results) {
       const node = await this.metadata.getById(r.nodeId);
       if (!node) continue;
+      // A trashed item must never surface in search. Deleting removes it from the index,
+      // but that removal can fail — and when it does, the alternative to this check is a
+      // result the user clicks and gets a 404 for, on a file they deliberately deleted.
+      // getById deliberately does NOT filter (restore and purge both need to see it),
+      // so the filtering belongs here.
+      if (node.deletedAt) continue;
       // Scope to the requested collections (permission-filtered by the server).
       if (opts.collectionIds && !opts.collectionIds.includes(node.collectionId)) continue;
       out.push({ ...r, node });

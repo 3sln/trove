@@ -263,7 +263,14 @@ export function registerTroveTools(server) {
       const node = await ctx.vfs.find(file, collection);
       if (!node) throw TroveError.notFound(`No file called "${file}"`);
       await assertCap(ctx, node.collectionId, 'read');
-      const backlinks = await ctx.vfs.backlinks(node.id, { limit: 20 }).catch(() => []);
+      // Scoped, exactly like the HTTP route. Backlinks reach ACROSS collections by
+      // design — that is what makes them useful — so an unscoped query hands back the
+      // names, ids and trove: URIs of files inside collections the caller cannot read.
+      const collectionIds = await readable(ctx);
+      const backlinks = await ctx.vfs.backlinks(node.id, { limit: 20, collectionIds })
+        // Distinguishable from "nothing links here", which in a drive with no folders is
+        // a load-bearing fact an agent will reason from.
+        .catch((err) => { throw TroveError.transient(`Could not read backlinks: ${err.message}`); });
       const info = {
         ...describeNode(node),
         backlinks: (backlinks || []).map((n) => ({ id: n.id, name: n.name, uri: troveUri(n) })),

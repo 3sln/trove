@@ -34,8 +34,17 @@ class MemorySessionStore {
   async delete(id) {
     this.map.delete(id);
   }
-  async sweep(now) {
-    for (const [id, s] of this.map) if (now - s.createdAt > SESSION_TTL_MS) this.map.delete(id);
+  /**
+   * Which sessions have expired — WITHOUT deleting them.
+   *
+   * Deleting the record here is what leaked: the session holds the S3 `uploadId`, and
+   * that is the only handle that can abort the multipart. Drop it and the parts stay in
+   * the bucket, billed, with nothing left that could ever reclaim them (the collection
+   * scanner deliberately refuses to touch `obj_*` keys). Expiry has to go through
+   * UploadManager.sweepExpired, which aborts first and deletes after.
+   */
+  async expired(now) {
+    return [...this.map.entries()].filter(([, s]) => now - s.createdAt > SESSION_TTL_MS).map(([id]) => id);
   }
 }
 
@@ -225,6 +234,34 @@ export class UploadManager {
       name: s.name,
       overwrite: !!s.overwrite,
     };
+  }
+
+  /**
+   * Reclaim uploads the client started and never finished.
+   *
+   * A dropped connection, a closed tab, a crash — all leave a live multipart upload
+   * whose parts are stored and billed until something aborts them. That something is
+   * this: it goes through `abort`, which tells the backend to let the parts go before
+   * the session record (and with it the uploadId) is discarded.
+   *
+   * @returns {Promise<{aborted: number, failed: number}>}
+   */
+  async sweepExpired(now = Date.now()) {
+    const ids = (await this.sessions.expired?.(now)) || [];
+    let aborted = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await this.abort(id);
+        aborted++;
+      } catch (err) {
+        // Leave the session in place so the next sweep tries again — dropping it is
+        // exactly how the bytes became unreclaimable in the first place.
+        failed++;
+        console.error(`[trove] could not reclaim abandoned upload ${id}:`, err?.message || err);
+      }
+    }
+    return { aborted, failed };
   }
 
   async abort(uploadId) {

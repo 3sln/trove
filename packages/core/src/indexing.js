@@ -59,10 +59,20 @@ export class IndexingCoordinator {
    */
   async #applyContribution(nodeId, contributorId, contribution) {
     const { semanticTexts, tags, metadata } = normalizeContribution(clampContribution(contribution, this.caps));
-    if (this.search && semanticTexts.length) await this.search.indexDocuments(nodeId, contributorId, semanticTexts);
+    // ALWAYS write the search half, including when it is empty. `indexDocuments` clears
+    // this (node, contributor)'s prior docs before it writes, so passing [] is how you
+    // say "this contributor has nothing to say about this node any more". Skipping the
+    // call when the list is empty meant overwriting a document with blank content left
+    // its old chunks in the index for good — search kept returning the file, with a
+    // snippet of text that was no longer in it.
+    if (this.search) await this.search.indexDocuments(nodeId, contributorId, semanticTexts);
     // Indexer contributions live in the queryable metadata store (not the sidecar),
-    // so they show up in list/stat and drive tag filtering.
+    // so they show up in list/stat and drive tag filtering. Tags MERGE within a
+    // contributor's namespace by design (see applyContribution) — but a contribution
+    // with no scopes at all is that contributor withdrawing, so its facets go too,
+    // rather than leaving an excerpt describing content that no longer exists.
     if (tags || metadata) await this.metadata.setContribution(nodeId, contributorId, { tags, metadata });
+    else if (!semanticTexts.length) await this.metadata.clearContribution?.(nodeId, contributorId);
   }
 
   /** Clear this contributor's search entries for a node (an empty re-index). */
