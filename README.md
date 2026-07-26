@@ -389,6 +389,81 @@ It returns a task rather than blocking. Drive-wide, so it requires either a
 `TROVE_ADMINS` admin or someone who can already read and write every collection —
 which the default single-user self-host is.
 
+## Connecting an AI agent (MCP)
+
+Trove speaks the [Model Context Protocol](https://modelcontextprotocol.io) at `/mcp`.
+Point an assistant at that URL and it can search the drive, read and write files, and
+follow the `trove:` links between them. The tools go through the same permission checks
+the web app does, so an agent sees exactly what the person whose token it holds sees —
+there is no service account and no MCP-shaped path around the collection ACL.
+
+```sh
+# What to paste into an assistant, and whether it needs a token:
+curl http://localhost:8787/api/mcp
+```
+
+On an open drive (the zero-config default) an agent just connects. Demanding a bearer
+token from an agent for a drive that demands none from a browser would protect nothing.
+
+### Authentication
+
+When the drive has a real identity provider, MCP requires the **same JWT** the browser
+presents. An agent that hasn't got one discovers where to get it, per
+[RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html), which is what the MCP
+authorization spec builds on:
+
+```
+$ curl -i -X POST http://localhost:8787/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="Trove", error="invalid_token",
+  error_description="...",
+  resource_metadata="http://localhost:8787/.well-known/oauth-protected-resource/mcp"
+
+$ curl http://localhost:8787/.well-known/oauth-protected-resource/mcp
+{"resource":"http://localhost:8787/mcp",
+ "authorization_servers":["https://auth.example.com"],
+ "scopes_supported":["trove:read","trove:write"],
+ "bearer_methods_supported":["header"]}
+```
+
+The agent reads that, runs the OAuth flow at your authorization server, and comes back
+with a token. Trove never runs the login itself — it verifies what your IdP issued.
+
+**The one thing you have to supply is the authorization server**, because only you know
+which IdP sits in front of your drive. Without it an agent gets a 401 and has nowhere to
+go, which is the failure that looks like a working configuration. Trove says so out loud
+in the challenge, and in Settings → *AI agents (MCP)*.
+
+| variable | what it does |
+| --- | --- |
+| `TROVE_MCP` | `off` to disable the endpoint entirely |
+| `TROVE_MCP_AUTH_SERVER` | issuer URL(s) of your IdP, comma-separated |
+| `TROVE_MCP_RESOURCE` | the canonical public URL, when a proxy rewrites the Host |
+| `TROVE_MCP_PATH` | serve it somewhere other than `/mcp` |
+| `TROVE_MCP_REQUIRE_AUTH` | force auth on or off, rather than following the drive |
+
+An admin can also set the authorization server from Settings without a redeploy — it is
+stored in KV and overrides the environment. Only `https` (or localhost) is accepted: an
+agent hands a bearer token to whatever that URL names.
+
+### Tools
+
+| tool | |
+| --- | --- |
+| `search_files` | semantic + keyword search, `#tag` filters, across everything readable |
+| `list_files` | page through a collection |
+| `read_file` | text by id, name, or `trove:` URI |
+| `write_file` | create or replace (needs write) |
+| `delete_file` | to the trash, recoverable (needs delete) |
+| `list_collections` | what you can see, and what you may do in each |
+| `get_file_info` | type, size, tags, and backlinks |
+
+Files are also exposed as MCP **resources** under their `trove:` URIs, for clients that
+attach context rather than calling tools.
+
+The server tells the model up front that this drive has no folders — otherwise every
+assistant spends its first few turns constructing paths that don't exist.
+
 ## Using the core as a library
 
 Every backend is a provider you inject into the server (or `createVfs`) — pass a

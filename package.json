@@ -22,6 +22,7 @@
   "license": "MIT",
   "author": "Ray Stubbs",
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "aws4": "^1.13.2",
     "playwright-core": "^1.61.1",
     "s3rver": "^3.7.1"

@@ -64,6 +64,11 @@ export class SettingsService {
   grouped() {
     const groups = new Map();
     for (const s of [...this.schema.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+      // `hidden` settings are state the app keeps under the settings key, not choices a
+      // person makes — the opener associations, for one, which are edited through the
+      // opener chooser and have their own section below. Rendering them anyway put a row
+      // reading "[object Object]" at the top of Settings.
+      if (s.hidden) continue;
       const cat = s.category || 'General';
       if (!groups.has(cat)) groups.set(cat, []);
       groups.get(cat).push({ ...s, value: this.get(s.key) });

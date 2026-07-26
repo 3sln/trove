@@ -25,6 +25,7 @@ import {
   TroveError,
 } from '@trove/core';
 import { createRouter } from './routes.js';
+import { createMcpHandler } from './mcp/index.js';
 
 // Every backend is pluggable. Each field of `config` accepts EITHER a ready
 // provider instance (pass your own class) OR a `{ driver, ... }` config object
@@ -361,8 +362,21 @@ export async function createServer(config = {}) {
 
   const router = createRouter();
 
+  // MCP: the same drive, the same identity, spoken to by an agent instead of a browser.
+  // Null when switched off, and then nothing below routes to it.
+  const mcp = createMcpHandler({
+    vfs, collections, identity, config, kv,
+    version: config.version || '0.0.1',
+  });
+
   async function handle(req) {
     const url = new URL(req.url);
+    // Before the API check: the MCP endpoint and its discovery document live outside
+    // /api/ because an agent is given ONE URL and everything it needs must hang off it.
+    if (mcp) {
+      const res = await mcp.handle(req, url);
+      if (res) return res;
+    }
     if (url.pathname.startsWith('/api/')) {
       // Authenticate every API request; a bad token is a clean 401, missing is
       // anonymous-or-401 per the provider's policy.
@@ -373,7 +387,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } });
       }
-      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan });
+      return router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan, mcp });
     }
     if (config.assets) {
       const asset = await config.assets(req);
@@ -396,7 +410,7 @@ export async function createServer(config = {}) {
     await sqliteProvider?.close();
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, mcp, close };
 }
 
 /**

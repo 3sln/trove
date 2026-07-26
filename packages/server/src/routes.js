@@ -5,6 +5,7 @@
 import { Router, json, parseRange } from './router.js';
 import { TroveError, assertSafePluginSql, concatBytes } from '@trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@trove/core/plugins/identity.js';
+import { resourceUri as mcpResourceUri, metadataUrl as mcpMetadataUrl } from './mcp/auth.js';
 
 const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
 // Cap JSON request bodies so a giant payload can't exhaust server memory. Uploads
@@ -137,6 +138,52 @@ export function createRouter() {
       searchPrompt: vfs.searchTransformer?.describe?.() || null,
       ...(config?.clientConfig || {}),
     };
+  });
+
+  // --- MCP ------------------------------------------------------------------
+  // Where an agent connects, and whether this deployment can actually tell one how to
+  // authenticate. Readable by anyone who can reach the drive: it is the same information
+  // an agent gets from the discovery document, and hiding it from the person who has to
+  // paste the URL into their client helps nobody.
+  r.get('/api/mcp', async (ctx) => {
+    if (!ctx.mcp) return { enabled: false };
+    const cfg = await ctx.mcp.store.get();
+    const resource = mcpResourceUri(ctx.req, cfg);
+    return {
+      enabled: true,
+      endpoint: resource,
+      metadataUrl: mcpMetadataUrl(resource),
+      authorizationServers: cfg.authorizationServers || [],
+      requireAuth: ctx.mcp.authRequired(cfg),
+      // The one thing that makes an MCP endpoint unusable while looking configured: auth
+      // is on, but there is nowhere for an agent to go and get a token. Named as a
+      // problem rather than left for someone to infer from an empty array.
+      needsAuthorizationServer: ctx.mcp.authRequired(cfg) && !(cfg.authorizationServers || []).length,
+      canEdit: await canWholeDrive(ctx),
+    };
+  });
+
+  r.put('/api/mcp', async (ctx) => {
+    if (!ctx.mcp) throw TroveError.unsupported('MCP is disabled on this server');
+    // Pointing the drive at a different authorization server changes who can reach every
+    // file in it, so it sits behind the same gate as rebuilding the index.
+    await requireWholeDrive(ctx, 'change the MCP configuration');
+    const b = await body(ctx.req);
+    if (b.authorizationServers != null) {
+      const list = Array.isArray(b.authorizationServers) ? b.authorizationServers : String(b.authorizationServers).split(',');
+      for (const s of list.map((x) => String(x).trim()).filter(Boolean)) {
+        // An issuer that isn't https is either a typo or a downgrade, and an agent will
+        // hand a bearer token to whatever this names.
+        let u;
+        try { u = new URL(s); } catch { throw TroveError.invalid(`"${s}" is not a URL`); }
+        if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+          throw TroveError.invalid(`Authorization servers must be https (got ${s})`);
+        }
+      }
+    }
+    const next = await ctx.mcp.store.set(b);
+    const resource = mcpResourceUri(ctx.req, next);
+    return { ok: true, endpoint: resource, authorizationServers: next.authorizationServers || [] };
   });
 
   // --- collections -----------------------------------------------------------

@@ -141,6 +141,13 @@ export class TroveApiClient {
   // Tasks are in-flight and ephemeral; issues are what a failure left behind and are
   // durable. Ids can contain anything (an issue id embeds a node id), so every one of
   // these encodes before it becomes a path segment.
+  /** Where an agent connects, and whether this drive can tell one how to authenticate. */
+  mcp() {
+    return this.request('GET', '/api/mcp');
+  }
+  setMcp(patch) {
+    return this.request('PUT', '/api/mcp', { body: patch });
+  }
   tasks() {
     return this.request('GET', '/api/tasks');
   }
