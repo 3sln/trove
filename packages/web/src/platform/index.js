@@ -15,6 +15,7 @@ import { NotificationService } from './notifications.js';
 import { TroveApiClient } from './api.js';
 import { PluginHost } from './pluginHost.js';
 import { WorkbenchService } from './workbench.js';
+import { ViewportService } from './viewport.js';
 
 /**
  * The bearer token for this browser, if any.
@@ -49,10 +50,13 @@ export function createPlatform({ baseUrl = '' } = {}) {
   // reading it here — once, from one place — keeps that out of every call site.
   const api = new TroveApiClient({ baseUrl, token: () => readToken() });
   const workbench = new WorkbenchService(context);
+  // Which shell to render — phone, desktop, or TV. Constructed before the defaults are
+  // registered, so it reads the setting through `settings.get` once that exists.
+  const viewport = new ViewportService({ settings, context });
 
   const platform = {
     reactive,
-    contributions, context, commands, keybindings, settings, notifications, api, workbench,
+    contributions, context, commands, keybindings, settings, notifications, api, workbench, viewport,
     capabilities: null,
     openPluginPanel: null, // set by the workbench UI
   };
@@ -62,6 +66,9 @@ export function createPlatform({ baseUrl = '' } = {}) {
   commands.availability = (cmd) => platform.plugins.isAvailable(cmd);
 
   registerDefaults(platform);
+  // Defaults are in place now, so re-measure: `workbench.layout` was unreadable a moment
+  // ago and a forced layout must not need a resize to take effect.
+  viewport.refresh();
   return platform;
 }
 
@@ -70,6 +77,13 @@ function registerDefaults(p) {
   p.settings.register([
     { key: 'workbench.theme', type: 'enum', enum: ['dark', 'light', 'midnight'], enumLabels: ['Dark', 'Light', 'Midnight'], default: 'dark', title: 'Color theme', category: 'Appearance', order: 1 },
     { key: 'workbench.density', type: 'enum', enum: ['comfortable', 'compact'], default: 'comfortable', title: 'List density', category: 'Appearance', order: 2 },
+    // Auto gets it right for phones and desktops. TVs are the reason this is a setting:
+    // a browser on a set-top box usually looks like a large desktop, so someone using
+    // one with a remote needs a way to say so.
+    { key: 'workbench.layout', type: 'enum', enum: ['auto', 'desktop', 'phone', 'tv'],
+      enumLabels: ['Automatic', 'Desktop', 'Phone', 'TV / remote'], default: 'auto',
+      title: 'Layout', description: 'Automatic follows the screen size. Choose TV for d-pad remote navigation.',
+      category: 'Appearance', order: 3 },
     { key: 'explorer.sort', type: 'enum', enum: ['name', 'size', 'updatedAt'], enumLabels: ['Name', 'Size', 'Modified'], default: 'name', title: 'Sort files by', category: 'Explorer', order: 1 },
     { key: 'explorer.sortOrder', type: 'enum', enum: ['asc', 'desc'], default: 'asc', title: 'Sort order', category: 'Explorer', order: 2 },
     { key: 'explorer.confirmDelete', type: 'boolean', default: true, title: 'Confirm before deleting', category: 'Explorer', order: 3 },

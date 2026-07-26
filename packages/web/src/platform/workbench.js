@@ -22,6 +22,10 @@ export class WorkbenchService {
       launch: { query: '', index: 0 }, // the launcher's query
       searchModal: false, // the double-shift modal search overlay
       infoPanel: false,
+      // Phone chrome: which bottom sheet is up, if any ('status' | 'more'). A phone has
+      // no room for a permanent status bar or a left rail, so both fold into a sheet
+      // that is pulled up on demand.
+      sheet: null,
     };
     this.subject = new ObservableSubject(this.state);
   }
@@ -103,6 +107,16 @@ export class WorkbenchService {
     this.#set({ activity: 'home', searchModal: false });
     this.nav.openFile(node, openerId, opts);
   }
+  /** Raise (or swap, or drop) the phone bottom sheet. Tapping the open one closes it. */
+  openSheet(name) {
+    this.#set({ sheet: this.state.sheet === name ? null : name });
+    this.context.set('sheet.open', this.state.sheet || '');
+  }
+  closeSheet() {
+    if (!this.state.sheet) return;
+    this.#set({ sheet: null });
+    this.context.set('sheet.open', '');
+  }
   toggleInfoPanel(force) {
     this.#set({ infoPanel: force ?? !this.state.infoPanel });
     this.context.set('infoPanel.open', this.state.infoPanel);
@@ -114,6 +128,7 @@ export class WorkbenchService {
     const o = this.overlay.state;
     if (o.contextMenu) return this.overlay.closeContextMenu(), true;
     if (o.dialog) return this.overlay.closeDialog(), true;
+    if (this.state.sheet) return this.closeSheet(), true;
     if (this.state.searchModal) return this.closeSearchModal(), true;
     if (o.palette) return this.overlay.closePalette(), true;
     if (o.pluginPanel) return this.overlay.closePluginPanel(), true;

@@ -39,6 +39,11 @@ function applyTheme() {
 applyTheme();
 platform.settings.observe().subscribe(() => applyTheme());
 
+// --- form factor ------------------------------------------------------------
+// Watch the window so rotating a phone, or dragging a desktop window narrow, re-picks
+// the shell. Also stamps data-layout on <html> for the CSS half of the same decision.
+platform.viewport.install();
+
 // --- keybindings ------------------------------------------------------------
 platform.keybindings.install(window);
 

@@ -32,7 +32,7 @@ function statusSlot(item, ui) {
  * it stays until the problem is actually fixed, because that is the whole point of an
  * issue as against a toast that scrolls away.
  */
-function activityChips(state, ui) {
+export function activityChips(state, ui) {
   const act = state.act || { tasks: [], issues: [] };
   const running = act.tasks.filter((t) => t.status === 'running');
   const open = () => ui.app.activity.togglePanel(true);
@@ -71,7 +71,7 @@ function activityChips(state, ui) {
  * meter that means nothing. The bar turns amber under 10% free and red under 5%, which
  * is early enough to act on.
  */
-function usageChip(ex) {
+export function usageChip(ex) {
   const u = ex.usage;
   if (!u?.total) return null;
   const freeRatio = u.available / u.total;
@@ -85,16 +85,41 @@ function usageChip(ex) {
   span(`${bytes(u.available)} free`));
 }
 
+/**
+ * Everything the status bar reports, derived once.
+ *
+ * Two shells render these: the desktop as a row of segments along the bottom, the phone
+ * as rows in a sheet behind a single icon. Deriving them in one place is what stops the
+ * two from quietly telling the user different things about the same drive.
+ */
+export function statusFacts(state, ui) {
+  const ex = state.ex;
+  const items = ex.items || [];
+  const act = state.act || { tasks: [], issues: [] };
+  return {
+    collectionId: ex.collectionId || 'default',
+    // The COLLECTION's totals when the server could give them, not the page's. Summing
+    // what happens to be loaded reports a 3,000-file drive as 500 files — a wrong number,
+    // not a rounded one. Falls back to the page only when the server didn't say.
+    totalItems: ex.stats?.items ?? items.length,
+    totalBytes: ex.stats?.bytes ?? items.reduce((n, i) => n + (i.size || 0), 0),
+    shown: items.length,
+    partial: !!ex.nextCursor,
+    usage: ex.usage,
+    uploading: state.tr.items.filter((t) => t.status === 'active'),
+    running: act.tasks.filter((t) => t.status === 'running'),
+    issues: act.issues,
+    off: state.off || { online: true, pins: [], queued: 0, syncing: false },
+    caps: ui.platform.capabilities,
+  };
+}
+
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
-  // The COLLECTION's totals when the server could give them, not the page's. Summing
-  // what happens to be loaded reports a 3,000-file drive as 500 files — a wrong number,
-  // not a rounded one. Falls back to the page only when the server didn't say.
-  const totalItems = ex.stats?.items ?? items.length;
-  const totalBytes = ex.stats?.bytes ?? items.reduce((n, i) => n + (i.size || 0), 0);
-  const active = state.tr.items.filter((t) => t.status === 'active');
-  const caps = ui.platform.capabilities;
+  const f = statusFacts(state, ui);
+  const { totalItems, totalBytes, caps } = f;
+  const active = f.uploading;
 
   // Plugin-contributed status slots, ordered by their declared `order` then name.
   const slots = [...(state.statusItems || [])]
@@ -102,7 +127,7 @@ export default function statusBar(state, ui) {
   const left = slots.filter((s) => s.slot === 'left').map((s) => statusSlot(s, ui));
   const right = slots.filter((s) => s.slot !== 'left').map((s) => statusSlot(s, ui));
 
-  const off = state.off || { online: true, pins: [], queued: 0, syncing: false };
+  const off = f.off;
   return div({ className: 'statusbar' },
     !off.online
       ? span({ className: 'seg offline-badge', title: 'You are offline — pinned files and cached data are available' }, icon('info', { size: 12 }), span('Offline'))

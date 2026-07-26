@@ -45,7 +45,7 @@ async function toWeb(nodeReq) {
   return new Request(`http://localhost${nodeReq.url}`, { method: nodeReq.method, headers, body: hasBody ? Readable.toWeb(nodeReq) : undefined, duplex: 'half' });
 }
 
-export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000 } = {}) {
+export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000, page: pageOpts = {} } = {}) {
   const { handle, vfs, ...rest } = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), ...serverConfig, assets: staticAssets });
   if (seed) await seed(vfs);
 
@@ -75,7 +75,10 @@ export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000 } = {}
   const base = `http://localhost:${server.address().port}`;
 
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  // A desktop window by default; a probe that is testing the phone or TV shell passes
+  // its own viewport (and hasTouch/isMobile) so the app makes the same call a real
+  // device would.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, ...pageOpts });
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console.error: ' + m.text()); });

@@ -629,7 +629,10 @@ kbd {
   .audiobook { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .audiobook .cover-pane { border-right: 0; border-bottom: 1px solid var(--border); }
   .editor-split { grid-template-columns: 1fr; }
-  .infopanel { display: none; }
+  /* Only when it is a SPLIT does the details rail have to go — there is no room for
+     both. The phone shell gives it the whole panel instead, and hiding it there would
+     make "Details & conversation" a menu entry that silently does nothing. */
+  .editor-split .infopanel { display: none; }
 }
 
 /* --- Launcher (search-first main panel; replaces the explorer sidebar) ------ */
@@ -788,3 +791,131 @@ kbd {
 .sb-usage.low { color: var(--warn); }
 .sb-usage.critical .usage-fill { background: var(--danger); }
 .sb-usage.critical { color: var(--danger); }
+
+/* --- Phone shell ------------------------------------------------------------
+   A thin top bar (title + one status icon), the panel, and a bottom tab bar. Both
+   bars respect the safe-area insets so the tab row clears the home indicator and the
+   title clears the notch — without that the primary navigation sits under the OS. */
+:root {
+  --phonebar-h: 46px;
+  --phonetabs-h: 56px;
+}
+.shell.phone {
+  grid-template-rows: calc(var(--phonebar-h) + env(safe-area-inset-top)) 1fr
+                      calc(var(--phonetabs-h) + env(safe-area-inset-bottom));
+}
+.shell.phone .body { grid-template-columns: 1fr; }
+
+.phonebar {
+  display: flex; align-items: center; background: var(--bg-activity);
+  color: var(--text-dim);
+}
+.phonebar.top {
+  gap: 8px; padding: env(safe-area-inset-top) 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.pb-brand {
+  width: 34px; height: 34px; flex: none; border: 0; background: transparent;
+  border-radius: 9px; display: grid; place-items: center;
+}
+.pb-brand img { width: 21px; height: 21px; }
+.pb-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 15px; font-weight: 600; color: var(--text);
+}
+.pb-status {
+  position: relative; width: 38px; height: 38px; flex: none; border: 0; background: transparent;
+  border-radius: 10px; display: grid; place-items: center; color: var(--text-dim);
+}
+.pb-status:active { background: var(--bg-hover); }
+.pb-status.warn { color: var(--warn); }
+.pb-status.danger { color: var(--danger); }
+.pb-badge {
+  position: absolute; top: 2px; right: 2px; min-width: 15px; height: 15px; padding: 0 3px;
+  background: var(--danger); color: #fff; border-radius: 8px;
+  font-size: 9.5px; font-weight: 700; display: grid; place-items: center;
+}
+
+.phonebar.bottom {
+  justify-content: space-around; padding: 0 4px env(safe-area-inset-bottom);
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-activity));
+}
+.pb-tab {
+  position: relative; flex: 1; height: var(--phonetabs-h); border: 0; background: transparent;
+  color: var(--text-faint); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 3px; border-radius: 10px;
+}
+.pb-tab .pb-label { font-size: 10.5px; font-weight: 550; }
+.pb-tab.active { color: var(--accent); }
+.pb-tab:active { background: var(--bg-hover); }
+.pb-tab .pb-badge { top: 6px; right: 22%; background: var(--accent); color: var(--accent-text); }
+
+/* --- Bottom sheet (status + overflow) --------------------------------------- */
+.sheet-wrap { position: fixed; inset: 0; z-index: 58; }
+/* The shared .scrim carries z-index 40, so the sheet has to clear it explicitly —
+   otherwise the backdrop sits ON TOP of the sheet and swallows every tap. */
+.sheet-wrap .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.5); z-index: 0; }
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 41;
+  max-height: 82vh; overflow-y: auto;
+  background: var(--bg-elevated); border-top: 1px solid var(--border-strong);
+  border-radius: 16px 16px 0 0; box-shadow: var(--shadow);
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  animation: sheet-up .18s var(--ease);
+}
+@keyframes sheet-up { from { transform: translateY(18px); opacity: .4; } to { transform: none; opacity: 1; } }
+.sheet-grip {
+  height: 22px; display: grid; place-items: center; border: 0; background: transparent; width: 100%;
+}
+.sheet-grip::before { content: ''; width: 38px; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.sheet-body { padding: 2px 10px 6px; display: flex; flex-direction: column; }
+.sheet-title {
+  padding: 4px 8px 10px; font-size: 12px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+.sheet-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 46px; padding: 0 8px;
+  border: 0; background: transparent; color: var(--text); font-size: 14.5px; text-align: left;
+  border-radius: 10px;
+}
+.sheet-row:active { background: var(--bg-hover); }
+.sheet-row.static { color: var(--text-dim); }
+.sheet-row.danger { color: var(--danger); }
+.sheet-row svg { flex: none; color: var(--text-dim); }
+.sheet-row.danger svg { color: var(--danger); }
+.sheet-row .sr-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-row .sr-value { color: var(--text-dim); font-size: 13px; }
+.sheet-row .sr-go { color: var(--text-faint); }
+.sheet-row .sb-usage { padding: 0; }
+.sheet-actions { display: flex; gap: 8px; padding: 12px 8px 4px; border-top: 1px solid var(--border); margin-top: 8px; }
+.sheet-actions .btn { flex: 1; justify-content: center; }
+.sheet-me { display: flex; align-items: center; gap: 10px; padding: 4px 8px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.sheet-me .avatar-img, .sheet-me .avatar-txt {
+  width: 36px; height: 36px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent)); color: #fff; font-weight: 700;
+}
+.sheet-me .sm-name { font-size: 14.5px; font-weight: 600; color: var(--text); }
+.sheet-me .sm-sub { font-size: 12px; color: var(--text-faint); }
+
+/* Panels that assume a wide window need to give it up on a phone. */
+.shell.phone .editor-split { grid-template-columns: 1fr; }
+.shell.phone .infopanel { border-left: 0; }
+.shell.phone .launcher { padding: 0 12px; }
+.shell.phone .launch-box { margin-top: 14px; padding: 10px 12px; }
+/* 16px or larger, or iOS zooms the page on focus and the layout is never the same again. */
+.shell.phone .launch-input { font-size: 16px; }
+.shell.phone .search-modal-panel { top: 0; width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; }
+/* Both of these are anchored to desktop chrome that isn't here: the activity panel sits
+   above a 24px status bar, the inbox beside a left rail. Re-anchor them to the tab bar. */
+.shell.phone .activity-panel {
+  left: 8px; right: 8px; width: auto;
+  bottom: calc(var(--phonetabs-h) + env(safe-area-inset-bottom) + 8px);
+  max-height: 68vh;
+}
+.shell.phone .inbox,
+.shell.phone .toasts,
+.shell.phone .tray {
+  left: 8px; right: 8px; width: auto;
+  bottom: calc(var(--phonetabs-h) + env(safe-area-inset-bottom) + 8px);
+}
