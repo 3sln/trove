@@ -11,6 +11,10 @@
   --sidebar-w: 280px;
   --statusbar-h: 24px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  /* Focus is one colour and one halo everywhere, so a keyboard user learns a single
+     cue rather than a different one per component. */
+  --focus: var(--accent);
+  --focus-halo: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 :root, :root[data-theme='dark'] {
@@ -99,12 +103,104 @@ button { font: inherit; color: inherit; cursor: pointer; }
 input, select, textarea { font: inherit; color: inherit; }
 ::selection { background: var(--accent); color: var(--accent-text); }
 
-/* Keyboard focus only (never on mouse click): a consistent, visible ring so the
-   app is navigable without a pointer. Components with their own :focus styles
-   (inputs) keep them; this covers buttons and other interactive elements. */
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-button:focus-visible, .launch-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* ---- Keyboard focus -------------------------------------------------------
+   Keyboard only, never on a mouse click. Two rules govern everything below.
+
+   A focus style may not change an element's SHAPE. The old base rule set
+   `border-radius: 3px`, which snapped every pill button and rounded row to near-square
+   the moment it was focused — a jolt that reads as breakage rather than as a cursor.
+
+   And a ring is the FALLBACK, not the goal. Where an element can show focus in its own
+   vocabulary — a field that lights up, a row that gets the same accent bar as the
+   selected one — that reads better and is never removed without a replacement. Anything
+   not named below still gets the ring, which is the point of keeping it. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  /* deliberately no border-radius: outline already follows the element's own */
+}
 :focus:not(:focus-visible) { outline: none; }
+
+/* Buttons: the border becomes the indicator, with a soft halo around it. Hugs whatever
+   radius the button already has, because a box-shadow ring always does. */
+.btn:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-halo);
+}
+.btn.primary:focus-visible { box-shadow: 0 0 0 3px var(--focus-halo); }
+
+/* Icon-only buttons have no border to light up, so the halo does the work. */
+.iconbtn:focus-visible, .act-action:focus-visible, .launch-clear:focus-visible,
+.pb-status:focus-visible, .pb-brand:focus-visible, .vn-back:focus-visible,
+.c-link:focus-visible, .react:focus-visible {
+  outline: none;
+  color: var(--text);
+  background: var(--bg-active);
+  box-shadow: 0 0 0 2px var(--focus-halo);
+}
+
+/* The search field. The input itself is borderless — the BOX around it is the control,
+   so that is what lights up. Without this, tabbing into the drive's primary input
+   showed nothing at all: the input suppressed its own outline and nothing replaced it. */
+.launch-box:focus-within {
+  border-color: var(--focus);
+  box-shadow: var(--shadow), 0 0 0 3px var(--focus-halo);
+}
+.launch-input:focus-visible { outline: none; }
+
+/* A file row. It already has a vocabulary for "this one" — the selected background —
+   so focus uses it plus an accent edge, which distinguishes keyboard focus from the
+   launcher's own highlighted index without adding a second visual language. */
+.launch-item:focus-visible, .sheet-row:focus-visible, .inbox-item:focus-visible {
+  outline: none;
+  background: var(--bg-selected);
+  box-shadow: inset 3px 0 0 0 var(--focus), 0 0 0 1px var(--focus-halo);
+}
+
+/* Rail items already draw an accent bar when active; focus borrows it. */
+.activitybar .item:focus-visible {
+  outline: none;
+  color: var(--text);
+  background: var(--bg-active);
+  /* The halo is what makes focus legible on the item that is ALREADY active — without
+     it, focusing the current destination changed nothing at all. */
+  box-shadow: 0 0 0 2px var(--focus-halo);
+}
+.activitybar .item:focus-visible::before {
+  content: ''; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: linear-gradient(var(--accent), var(--accent-2));
+}
+.activitybar .brand-mark:focus-visible { outline: none; background: var(--bg-active); box-shadow: 0 0 0 2px var(--focus-halo); }
+
+/* Phone tabs: a bar above the icon, matching where the eye already looks for "current". */
+.pb-tab:focus-visible {
+  outline: none;
+  color: var(--accent);
+  box-shadow: inset 0 3px 0 0 var(--focus);
+}
+
+/* Status-bar segments are short and inline; a filled background reads better than a
+   ring squeezed between neighbours. */
+.statusbar .seg:focus-visible {
+  outline: none;
+  background: var(--bg-active);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 0 var(--focus);
+}
+
+/* Text inside prose keeps a ring — there is no box to light up — but offset so it
+   clears the descenders instead of cutting through them. */
+.md a:focus-visible, .link:focus-visible, .launch-up:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.lh-example:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-halo);
+}
 
 ::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
@@ -302,6 +398,13 @@ kbd {
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch .track { position: absolute; inset: 0; background: var(--border-strong); border-radius: 22px; transition: background .15s var(--ease); }
 .switch .track::before { content: ''; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform .16s var(--ease); }
+/* The real checkbox is visually hidden, so focusing it showed nothing whatsoever — a
+   keyboard user tabbing through Settings could not tell which toggle they were on. The
+   track is the visible control, so the track carries the focus. */
+.switch input:focus-visible + .track {
+  box-shadow: 0 0 0 3px var(--focus-halo);
+  outline: 1px solid var(--focus);
+}
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::before { transform: translateX(16px); }
 
@@ -655,8 +758,16 @@ kbd {
 .launch-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--text); }
 .launch-item svg { color: var(--text-dim); flex: none; }
 .launch-item .name { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.launch-item.active, .launch-item:hover { background: var(--bg-hover); }
-.launch-item.active { outline: 1px solid var(--border-strong); }
+.launch-item:hover { background: var(--bg-hover); }
+/* The keyboard selection — the row Enter will open. It used to be `bg-hover` plus a
+   1px border, which is what a MOUSE HOVER looks like, so arrowing down produced a
+   highlight indistinguishable from wherever the pointer happened to be resting. It gets
+   the same accent edge focus uses elsewhere, so "the app is pointing at this" reads the
+   same way everywhere. */
+.launch-item.active {
+  background: var(--bg-selected);
+  box-shadow: inset 3px 0 0 0 var(--focus);
+}
 .launch-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 12.5px; }
 .launch-kind { flex: none; color: var(--text-faint); font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px; }
 .launch-up { display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; padding: 2px 4px; border-radius: 5px; }
