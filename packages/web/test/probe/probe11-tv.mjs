@@ -156,6 +156,17 @@ const ring = await page.evaluate(() => {
 check('the focused item wears a thick outline', parseFloat(ring.width) >= 3 && ring.style !== 'none',
   JSON.stringify(ring));
 
+// …and it is the ONLY thing wearing one. Two rows ringed identically — the remote's
+// focus on one, the launcher's standing selection on another — reads as two equally
+// chosen rows when only one of them will open.
+const ringed = await page.evaluate(() => [...document.querySelectorAll('.launch-item')]
+  .filter((el) => {
+    const s = getComputedStyle(el);
+    return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 3;
+  })
+  .map((el) => el.innerText.split('\n')[0]));
+check('and it is the only row wearing one', ringed.length === 1, ringed.join(', ') || 'nothing ringed');
+
 // Overscan: the outer few percent of a TV picture is cropped on plenty of sets, so the
 // rail must not begin at x=0.
 const railBox = await page.locator('.activitybar').boundingBox();

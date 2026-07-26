@@ -1126,6 +1126,13 @@ kbd {
   outline-offset: 3px;
   background: var(--bg-selected);
 }
+/* …but only while the search box still holds focus. Once the remote has moved INTO the
+   list, the focused row IS the cursor, and the standing selection drawing an identical
+   ring somewhere else means two rows look equally chosen while only one will open. */
+.shell.tv .launch-body:focus-within .launch-item.active:not(:focus) {
+  outline: none;
+  background: var(--bg-hover);
+}
 /* A focus ring clipped by an ancestor's overflow is a selection that vanishes mid-list. */
 .shell.tv .launch-body { overflow-x: visible; }
 

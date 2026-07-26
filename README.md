@@ -345,6 +345,15 @@ warning). Before putting it on a network:
   A shell **CSP** is opt-in via `TROVE_CSP` (see `SAMPLE_CSP`); it's off by
   default because sandboxed plugin iframes can't satisfy a strict one. The API
   still forces attachment downloads + `nosniff` to neutralize uploaded HTML/SVG.
+- **Cross-site writes are refused**, independently of CORS. An allowlist only decides
+  who may *read* a reply, and only for requests a browser preflights — a `POST` with
+  `content-type: text/plain` is a CORS *simple* request, so it is sent without one and
+  the deletion happens whether or not anyone can read the answer. So every
+  state-changing request (JSON API and MCP alike) is checked against `Sec-Fetch-Site`
+  and `Origin`, and a cross-site one gets a 403. Non-browser clients — curl, an agent,
+  a script — send neither header and are unaffected; they carry no ambient credential
+  for another site to borrow, which is the whole basis of the attack. Setting
+  `TROVE_CORS_ORIGIN` to a specific origin permits that origin to write, too.
 
 ### Naming the keys you trust
 
