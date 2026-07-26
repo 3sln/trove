@@ -139,6 +139,14 @@ export class MemoryStore extends MetadataStore {
       .map(clone);
   }
 
+  async trashedStorageKeys(collectionId) {
+    const keys = new Set();
+    for (const n of this.nodes.values()) {
+      if (n.deletedAt && n.storageKey && (!collectionId || n.collectionId === collectionId)) keys.add(n.storageKey);
+    }
+    return keys;
+  }
+
   async trashedBefore(cutoff, limit = 500) {
     return [...this.nodes.values()]
       .filter((n) => n.deletedAt && n.deletedAt < cutoff)

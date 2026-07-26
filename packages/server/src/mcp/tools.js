@@ -120,8 +120,9 @@ export function registerTroveTools(server) {
     title: 'List a collection',
     readOnly: true,
     description:
-      'List what is in a collection, newest first. Use this to see what exists; use search_files '
-      + 'to find something specific. Large collections are paged — pass the returned cursor to continue.',
+      'List what is in a collection, most recently changed first. Use this to see what exists; use '
+      + 'search_files to find something specific. Large collections are paged — pass the returned '
+      + 'cursor to continue.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,8 +133,12 @@ export function registerTroveTools(server) {
     },
     async run({ collection = 'default', cursor, limit }, ctx) {
       await assertCap(ctx, collection, 'read');
+      // The description promises recency and `vfs.list` defaults to alphabetical, so it
+      // has to be asked for. An agent answering "what did I add recently?" off the top
+      // of an alphabetical list is confidently wrong in a way nothing surfaces.
       const page = await ctx.vfs.list(collection, {
-        cursor, limit: Math.min(Math.max(1, limit || 25), MAX_RESULTS),
+        cursor, sort: 'updatedAt', order: 'desc',
+        limit: Math.min(Math.max(1, limit || 25), MAX_RESULTS),
       });
       const items = (page.items || []).map(describeNode);
       return toolText(JSON.stringify({

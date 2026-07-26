@@ -77,7 +77,18 @@ export class Router {
       let ok = true;
       for (let i = 0; i < route.segs.length; i++) {
         const s = route.segs[i];
-        if (s.startsWith(':')) params[s.slice(1)] = decodeURIComponent(parts[i]);
+        // A malformed percent-escape (`/api/uploads/%ZZ/status`) makes
+        // decodeURIComponent throw a URIError — and #match runs OUTSIDE the try below,
+        // so it escaped the error funnel entirely and rejected the whole handle() call.
+        // A bad escape names nothing, which is a 404, not a 500.
+        if (s.startsWith(':')) {
+          try {
+            params[s.slice(1)] = decodeURIComponent(parts[i]);
+          } catch {
+            ok = false;
+            break;
+          }
+        }
         else if (s !== parts[i]) { ok = false; break; }
       }
       if (ok) return { route, params };

@@ -15,8 +15,39 @@ import { StorageBackend, resolveRange } from './interface.js';
 import { TroveError, wrapError } from '../errors.js';
 import { newId } from '../util.js';
 
+// A key becomes a filename, so anything a filename can't hold has to be encoded —
+// REVERSIBLY. Replacing every disallowed character with `_` was not: `list()` could only
+// ever report the mangled name back, so a collection using bucket-and-prefix over a
+// filesystem (keys like `team-a/obj_9f…`) listed nothing at all, adopt and refresh
+// silently never ran, and every one of its items came back as an orphan — a durable
+// "your files are gone" warning on a drive where nothing was wrong.
+//
+// `~XX` over UTF-8 bytes, with `~` itself encoded, so decoding is exact. Keys made only
+// of safe characters — which is every key Trove mints (`obj_<hex>`) — encode to
+// themselves, so this changes no existing filename.
+function encodeKey(key) {
+  let out = '';
+  for (const byte of new TextEncoder().encode(key)) {
+    const c = String.fromCharCode(byte);
+    out += /[a-zA-Z0-9._-]/.test(c) ? c : '~' + byte.toString(16).padStart(2, '0');
+  }
+  return out;
+}
+function decodeKey(name) {
+  const bytes = [];
+  for (let i = 0; i < name.length; i++) {
+    if (name[i] === '~' && /^[0-9a-f]{2}$/i.test(name.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(name.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      bytes.push(name.charCodeAt(i) & 0xff);
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
 function shardPath(root, key) {
-  const safe = key.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const safe = encodeKey(key);
   const a = (safe.slice(0, 2) || '__').padEnd(2, '_');
   const b = (safe.slice(2, 4) || '__').padEnd(2, '_');
   return path.join(root, 'objects', a, b, safe);
@@ -110,10 +141,14 @@ export class FilesystemStorage extends StorageBackend {
     for (const d of found) {
       if (!d.isFile()) continue;
       const full = path.join(d.parentPath || d.path, d.name);
-      // The name IS the key only when it round-trips through the shard mapping.
-      if (shardPath(this.root, d.name) !== full) { unaddressable++; continue; }
-      if (prefix && !d.name.startsWith(prefix)) continue;
-      entries.push({ key: d.name, full });
+      // Decode back to the real key first — the filename is an encoding of it, and the
+      // prefix a caller filters on is expressed in key space, not filename space.
+      const key = decodeKey(d.name);
+      // It is addressable only if it round-trips: a file dropped into the shard tree by
+      // hand, or left by an older layout, doesn't map back to a key we can serve.
+      if (shardPath(this.root, key) !== full) { unaddressable++; continue; }
+      if (prefix && !key.startsWith(prefix)) continue;
+      entries.push({ key, full });
     }
     entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const start = cursor ? entries.findIndex((e) => e.key > cursor) : 0;

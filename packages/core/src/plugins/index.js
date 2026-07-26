@@ -81,7 +81,16 @@ export class PluginService {
     }
 
     const version = pkg.manifest.version || '0';
-    const ref = `${encodeURIComponent(account)}/${encodeURIComponent(pkg.pluginId)}/${encodeURIComponent(version)}.zip`;
+    // CONTENT-addressed. The ref used to be `<account>/<pluginId>/<version>.zip`, written
+    // only when absent — so re-installing at the same version (the ordinary way to
+    // iterate on a plugin) stored the new digest, the new grants and the new indexer
+    // specs against the OLD bytes, and every device that synced the package got the old
+    // code forever. Worse for a server indexer, whose entry modules are loaded from the
+    // ref while the record advertises the new manifest's. Bumping the version instead
+    // just leaked the previous blob.
+    const prev = await this.installs.get(account, pkg.pluginId);
+    const digestPart = String(pkg.digest).replace(/^sha256:/, '').slice(0, 32);
+    const ref = `${encodeURIComponent(account)}/${encodeURIComponent(pkg.pluginId)}/${digestPart}.zip`;
     if (!(await this.packages.has(ref))) await this.packages.put(ref, bytes);
 
     const record = {
@@ -92,6 +101,12 @@ export class PluginService {
       packageRef: ref, digest: pkg.digest, createdAt: Date.now(), updatedAt: Date.now(),
     };
     await this.installs.put(record);
+    // The bytes the previous install pointed at are now unreferenced — unless another
+    // account installed the identical package, which is what countByDigest answers.
+    if (prev?.packageRef && prev.packageRef !== ref && prev.digest
+        && (await this.installs.countByDigest(prev.digest)) === 0) {
+      await this.packages.delete(prev.packageRef).catch(() => {});
+    }
     // Register + backfill any server indexers this package ships.
     if (this.indexers && pkg.indexers.length) {
       try { await this.indexers.activate(record); }

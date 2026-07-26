@@ -132,6 +132,17 @@ export class UploadManager {
       session.strategy = caps.presignUpload ? 'presign' : 'direct';
       session.uploadId = await storage.createMultipart(storageKey, { contentType });
       const partCount = Math.max(1, Math.ceil(req.size / this.partSize));
+      // `#limits()` advertises maxParts in the very same response, and nothing enforced
+      // it: a 150 GiB file planned 19,200 parts against a ceiling of 10,000, which S3
+      // rejects at part 10,001 — after the client has transferred 80 GiB. On a presign
+      // backend it also signed every part up front, so the plan itself came back as a
+      // 1.9 MB JSON document. Refuse at negotiation, where it costs nothing.
+      if (partCount > MAX_PARTS) {
+        throw TroveError.tooLarge(
+          `This file needs ${partCount.toLocaleString()} parts of ${this.partSize} bytes, over the ${MAX_PARTS.toLocaleString()}-part limit`,
+          { details: { maxParts: MAX_PARTS, partCount, partSize: this.partSize, size: req.size } },
+        );
+      }
       session.partCount = partCount;
       await this.sessions.put(session);
       const parts = [];
@@ -247,9 +258,18 @@ export class UploadManager {
     try {
       const info = await storage.head(s.storageKey);
       if (Number.isFinite(info?.size)) size = info.size;
-    } catch {
-      // A backend that can't answer leaves the declared size in place; better an
-      // approximate record than refusing an upload that succeeded.
+    } catch (err) {
+      // NOT_FOUND is the one error that means something specific: no bytes were ever
+      // stored. Swallowing it committed an item for an object that does not exist — the
+      // drive listing a file whose size is a number the client invented, whose download
+      // redirects to a 404, and which every indexer then raises a standing issue about.
+      // Reachable whenever a presigned PUT fails but `complete` still runs.
+      if (err?.code === ErrorCode.NOT_FOUND) {
+        await this.sessions.delete(uploadId);
+        throw TroveError.invalid('The upload was never written — no object exists for this session');
+      }
+      // Any other failure (a backend that can't answer a HEAD) leaves the declared size
+      // in place; better an approximate record than refusing an upload that succeeded.
     }
     if (this.maxBytes && size > this.maxBytes) {
       // It is already in the store, so let it go rather than leaving an orphan that

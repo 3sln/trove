@@ -53,6 +53,10 @@ export class SidecarManager {
     const e = await this.#entry(nodeId);
     const result = await fn(e.doc);
     e.dirty = true;
+    // Stamp the change. A flush that is already awaiting `store.save()` computed its
+    // merged document BEFORE this ran, so it must not adopt that result wholesale or
+    // mark the entry clean — see #flushOnce.
+    e.gen = (e.gen || 0) + 1;
     this.#schedule(nodeId, e);
     return result;
   }
@@ -115,15 +119,43 @@ export class SidecarManager {
     return { flushed: pending.length };
   }
 
-  /** Write the live doc back, merging with the cold copy first. */
-  async flush(nodeId) {
+  /**
+   * Write the live doc back, merging with the cold copy first.
+   *
+   * Serialized per document. Two flushes of the same sidecar overlapping is how one of
+   * them computes a merge from a document the other is about to replace — and the
+   * replacement wins, silently, after the API has already replied 200.
+   */
+  flush(nodeId) {
     const e = this.hot.get(nodeId);
-    if (!e || !e.doc) return;
+    if (!e || !e.doc) return Promise.resolve();
+    const run = () => this.#flushOnce(nodeId, e);
+    const next = (e.chain || Promise.resolve()).then(run, run);
+    // The chain itself must never stay rejected, or one failure poisons every later
+    // flush of this document. Callers still see their own rejection through `next`.
+    e.chain = next.catch(() => {});
+    return next;
+  }
+
+  async #flushOnce(nodeId, e) {
     if (e.loading) await e.loading;
-    if (!e.dirty) return;
+    if (!e.dirty || !e.doc) return;
+    // The generation this write covers. `store.load` and `store.save` are object-store
+    // round trips — hundreds of milliseconds — and `mutate` applies its change in place
+    // on `e.doc` throughout. So a comment accepted during the save lands in `e.doc`,
+    // is NOT in `merged` (computed before it), and used to be erased by `e.doc = merged`
+    // and then guaranteed never to be retried by `e.dirty = false`.
+    const gen = e.gen || 0;
     const cold = await this.store.load(nodeId);
     const merged = cold ? mergeDoc(cold, e.doc) : e.doc;
     await this.store.save(nodeId, merged);
+    if ((e.gen || 0) !== gen) {
+      // Something arrived while we were saving. Fold what we just persisted back INTO
+      // the live document rather than over it, and leave the entry dirty so the next
+      // flush carries the newcomer.
+      e.doc = merged === e.doc ? e.doc : mergeDoc(merged, e.doc);
+      return;
+    }
     e.doc = merged;
     e.dirty = false;
   }

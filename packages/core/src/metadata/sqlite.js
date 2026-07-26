@@ -192,6 +192,14 @@ export class SqliteStore extends MetadataStore {
     return rows.map(row);
   }
   /** Items trashed before `cutoff` — what the purge sweep collects. */
+  async trashedStorageKeys(collectionId) {
+    const rows = await this.db.all(
+      'SELECT storageKey FROM nodes WHERE collectionId = ? AND deletedAt IS NOT NULL AND storageKey IS NOT NULL',
+      collectionId,
+    );
+    return new Set(rows.map((r) => r.storageKey));
+  }
+
   async trashedBefore(cutoff, limit = 500) {
     const rows = await this.db.all(
       'SELECT * FROM nodes WHERE deletedAt IS NOT NULL AND deletedAt < ? ORDER BY deletedAt ASC LIMIT ?',

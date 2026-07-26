@@ -164,7 +164,15 @@ export class PluginRpcRouter {
       // Media session — the host owns navigator.mediaSession; the calling frame
       // (a viewer) surfaces its playback so the OS shows transport controls. Actions
       // fire back over that same frame's RPC channel.
-      case 'media:metadata': cap('media'); return this.media.apply(frame, 'metadata', params);
+      // Artwork is a URL the BROWSER fetches on the plugin's behalf, so it is egress
+      // and belongs under the same allowlist the broker enforces. Left open, `media`
+      // alone bought an outbound GET to any URL the plugin chose — the exfiltration
+      // channel `connect-src 'none'` and the broker exist to close.
+      case 'media:metadata': {
+        cap('media');
+        const artwork = (params.artwork || []).filter((a) => this.#artworkAllowed(record, a?.src));
+        return this.media.apply(frame, 'metadata', { ...params, artwork });
+      }
       case 'media:playbackState': cap('media'); return this.media.apply(frame, 'playbackState', params);
       case 'media:position': cap('media'); return this.media.apply(frame, 'position', params);
       case 'media:action': cap('media'); return this.media.apply(frame, 'action', params);
@@ -235,8 +243,28 @@ export class PluginRpcRouter {
    * credentials omitted (no ambient cookies/auth), and any redirect that lands
    * off the allowlist is rejected.
    */
+  /** blob:/data: carry their own bytes; anything else must be a declared endpoint. */
+  #artworkAllowed(record, src) {
+    if (!src) return false;
+    if (/^(blob:|data:image\/)/i.test(src)) return true;
+    return isAllowedUrl(networkEndpoints(record.manifest), src);
+  }
+
   async #brokerFetch(record, { url, method = 'GET', headers, body }) {
     const allow = networkEndpoints(record.manifest);
+    // The drive itself is never a "network endpoint".
+    //
+    // The broker runs in the HOST page, which is same-origin with the API. A manifest
+    // declaring `network: ["https://*.com/"]` matches essentially any drive host, so a
+    // plugin approved only for "connect to the internet" could call /api/items,
+    // /api/items/delete, and other plugins' /api/plugins/:id/sql directly — collecting
+    // the whole `files` capability, the per-command grant system, and every other
+    // plugin's server-side store in one hop, none of which the user approved. Those
+    // routes have a legitimate caller: the host, through the capability-gated methods
+    // above.
+    if (sameOrigin(url, this.platform.api?.baseUrl)) {
+      throw new Error('Blocked: a plugin may not call the drive\'s own API through the network broker');
+    }
     if (!isAllowedUrl(allow, url)) {
       throw new Error(`Blocked: "${url}" is not one of this plugin's declared network endpoints`);
     }
@@ -245,9 +273,15 @@ export class PluginRpcRouter {
       init.body = body instanceof ArrayBuffer ? new Uint8Array(body) : body;
     }
     const res = await fetch(url, init);
-    // A redirect chain must not escape the declared endpoints.
-    if (res.url && res.url !== url && !isAllowedUrl(allow, res.url)) {
-      throw new Error(`Blocked: request redirected off this plugin's declared endpoints (${res.url})`);
+    // A redirect chain must not escape the declared endpoints — nor land back on the
+    // drive, which a declared endpoint is free to redirect to.
+    if (res.url && res.url !== url) {
+      if (sameOrigin(res.url, this.platform.api?.baseUrl)) {
+        throw new Error('Blocked: request redirected onto the drive\'s own API');
+      }
+      if (!isAllowedUrl(allow, res.url)) {
+        throw new Error(`Blocked: request redirected off this plugin's declared endpoints (${res.url})`);
+      }
     }
     const buf = await readCappedBody(res, MAX_FETCH_BYTES);
     const outHeaders = {};
@@ -283,6 +317,23 @@ export class PluginRpcRouter {
     const body = { scope, op, sql, params, statements, domain: scope === 'domain' ? record.manifest.domain : undefined };
     const res = await this.platform.api.request('POST', `/api/plugins/${encodeURIComponent(record.id)}/sql`, { body });
     return res.result;
+  }
+}
+
+/**
+ * Is `url` on the drive's own origin?
+ *
+ * `baseUrl` is '' in the shipped app (the API is served from the same origin as the
+ * page), so the comparison is against `location.origin`; a library caller pointing the
+ * client at another host gets that one. A redirect is checked separately, on the way
+ * back, since a declared endpoint could redirect here.
+ */
+function sameOrigin(url, baseUrl) {
+  try {
+    const here = new URL(baseUrl || '', globalThis.location?.href || 'http://localhost/');
+    return new URL(url, here).origin === here.origin;
+  } catch {
+    return false;
   }
 }
 

@@ -149,6 +149,22 @@ export class MetadataStore {
   async trashedBefore(cutoff, limit) {
     throw TroveError.unsupported('trashedBefore not implemented');
   }
+  /**
+   * The storage keys of TRASHED items in a collection.
+   *
+   * The scanner needs these and cannot get them from `listItems`, which is live-only by
+   * design. Without them a trashed file's object looks like one that arrived from
+   * outside, so a scan adopts it a second time — resurrecting the deleted file under a
+   * new id that shares the original's storage key, at which point emptying the trash
+   * deletes the live copy's bytes.
+   *
+   * Keys rather than rows because that is all the caller needs, and a collection's whole
+   * trash as full records is a lot of memory for a set membership test.
+   * @returns {Promise<Set<string>>}
+   */
+  async trashedStorageKeys(collectionId) {
+    throw TroveError.unsupported('trashedStorageKeys not implemented');
+  }
   /** Rename an item. Rejects ALREADY_EXISTS if the name is taken in its collection. */
   async rename(id, newName) {
     throw TroveError.unsupported('rename not implemented');

@@ -34,6 +34,39 @@ export function usesSharedStorage(manifest) {
   return !!(opt && typeof opt === 'object' && opt.domain);
 }
 
+// A package's COMPRESSED size is capped at the route; its INFLATED size was not, and a
+// zip will happily turn 1 MB into 1 GB. `unzipSync` is synchronous, so that is a
+// gigabyte of RSS and thirteen seconds of blocked event loop for one request — from an
+// unauthenticated caller on the zero-config drive, since the install route only asks for
+// a principal and the shared anonymous one satisfies it.
+//
+// fflate's `filter` runs against the central directory BEFORE any entry is inflated, so
+// the declared sizes are the cheapest possible place to refuse. 64 MiB and 2,000 files
+// are far beyond any real plugin (the largest thing in one is a wasm blob) and far below
+// what hurts.
+const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
+const MAX_ENTRIES = 2000;
+
+export function boundedUnzip(bytes) {
+  let total = 0;
+  let count = 0;
+  try {
+    return unzipSync(bytes, {
+      filter(file) {
+        if (++count > MAX_ENTRIES) throw TroveError.tooLarge(`Package has more than ${MAX_ENTRIES} files`);
+        total += file.originalSize || 0;
+        if (total > MAX_INFLATED_BYTES) {
+          throw TroveError.tooLarge(`Package expands to more than ${Math.round(MAX_INFLATED_BYTES / 1024 / 1024)} MB`);
+        }
+        return true;
+      },
+    });
+  } catch (err) {
+    if (err instanceof TroveError) throw err;
+    throw TroveError.invalid('Package is not a valid zip', { cause: err });
+  }
+}
+
 /**
  * Parse an uploaded package zip. Returns { manifest, pluginId, files, capabilities,
  * contributions, indexers, openers, digest }. Throws INVALID on a missing/malformed
@@ -41,12 +74,7 @@ export function usesSharedStorage(manifest) {
  * @param {Uint8Array} bytes
  */
 export async function parsePluginPackage(bytes) {
-  let files;
-  try {
-    files = unzipSync(bytes);
-  } catch (err) {
-    throw TroveError.invalid('Package is not a valid zip', { cause: err });
-  }
+  const files = boundedUnzip(bytes);
   const manifestRaw = files['manifest.json'];
   if (!manifestRaw) throw TroveError.invalid('Package is missing manifest.json');
   let manifest;

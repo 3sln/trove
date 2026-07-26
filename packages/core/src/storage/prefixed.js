@@ -21,6 +21,17 @@ export class PrefixedStorage extends StorageBackend {
   get capabilities() {
     return this.inner.capabilities;
   }
+  /**
+   * Free space is a property of the VOLUME, not the prefix, so it passes straight
+   * through. Forwarding `capabilities.usage: true` without forwarding this left the
+   * client told the backend could answer and then handed `null` every time — so the
+   * status bar's meter never appeared and the "running out of storage" issue, whose
+   * whole point is to warn before writes start failing, could never be raised for a
+   * prefixed collection.
+   */
+  usage(opts) {
+    return this.inner.usage(opts);
+  }
   async list(opts = {}) {
     // The prefix is this wrapper's whole job, so listing has to add it on the way in
     // and strip it on the way out — a caller must never see the wrapper's own prefix

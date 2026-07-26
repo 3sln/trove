@@ -32,6 +32,22 @@ export class SidecarService {
     return viewDoc(await this.manager.get(nodeId));
   }
 
+  /**
+   * Flush and evict idle documents — the maintenance timer's entry point.
+   *
+   * It called `sidecar.sweep?.()`, which did not exist here; the optional call swallowed
+   * it, so nothing ever evicted and every sidecar ever loaded (one per file opened,
+   * commented on, or tagged) stayed resident for the life of the process. Delegating
+   * makes the name the caller already uses the real one.
+   */
+  sweep() {
+    return this.manager.sweep();
+  }
+  /** Write back everything still holding unsaved changes (shutdown). */
+  flushAll() {
+    return this.manager.flushAll();
+  }
+
   // --- conversation ----------------------------------------------------------
 
   /**

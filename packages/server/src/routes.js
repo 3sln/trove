@@ -47,13 +47,30 @@ async function readCapped(req, max) {
   }
   return new TextDecoder().decode(concatBytes(chunks));
 }
-// Read a raw binary body (e.g. an uploaded plugin package), capped like readCapped.
+// Read a raw binary body (e.g. an uploaded plugin package), capped like readCapped —
+// which means enforcing WHILE streaming, not after. Checking `.byteLength` on the result
+// of `arrayBuffer()` is a check that happens once the whole body is already resident, so
+// a chunked upload with no Content-Length could park 400 MB in the heap and only then be
+// told it was too large.
 async function readBytesCapped(req, max) {
   const declared = Number(req.headers.get('content-length') || 0);
   if (declared && declared > max) throw TroveError.invalid('Request body too large');
-  const buf = new Uint8Array(await req.arrayBuffer());
-  if (buf.byteLength > max) throw TroveError.invalid('Request body too large');
-  return buf;
+  const reader = req.body?.getReader?.();
+  if (!reader) {
+    const buf = new Uint8Array(await req.arrayBuffer());
+    if (buf.byteLength > max) throw TroveError.invalid('Request body too large');
+    return buf;
+  }
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel().catch(() => {}); throw TroveError.invalid('Request body too large'); }
+    chunks.push(value);
+  }
+  return concatBytes(chunks);
 }
 function clampLimit(value, dflt) {
   const n = Number(value);

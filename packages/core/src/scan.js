@@ -65,6 +65,13 @@ export class CollectionScanner {
     for (const node of await this.#allItems(collectionId)) {
       if (node.storageKey) byKey.set(node.storageKey, node);
     }
+    // The trash holds rows too, and their bytes are deliberately still in the store —
+    // that is what makes a delete undoable. `listItems` is live-only by design, so
+    // without this a trashed file's object looks exactly like one that arrived from
+    // outside: the scan adopts it AGAIN, resurrecting the deleted file under a new id
+    // that shares the original's storage key. Emptying the trash then deletes the live
+    // copy's bytes, leaving an item that lists, opens, and 404s forever.
+    const trashedKeys = await this.vfs.metadata.trashedStorageKeys?.(collectionId) ?? new Set();
 
     const result = { scanned: 0, adopted: 0, refreshed: 0, orphaned: 0, skipped: 0, failed: 0, stopped: false, unaddressable: 0 };
     const seen = new Set();
@@ -78,6 +85,9 @@ export class CollectionScanner {
         result.scanned++;
         if (this.#reserved(object.key)) { result.skipped++; continue; }
         seen.add(object.key);
+        // Bytes belonging to something in the trash are accounted for. Not adopted (it
+        // is already ours), and not orphaned (`seen` covers that below).
+        if (trashedKeys.has(object.key)) { result.skipped++; continue; }
         const node = byKey.get(object.key);
         try {
           if (!node) {

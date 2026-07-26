@@ -344,7 +344,10 @@ export async function createServer(config = {}) {
     const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     maintenance = setInterval(() => {
       Promise.resolve(vfs.uploads.sweepExpired(Date.now()))
-        .then(() => sidecar.sweep?.())
+        // NOT `sidecar.sweep?.()` — that name did not exist on SidecarService, and the
+        // optional call turned "evict idle documents" into a no-op for the process's
+        // whole lifetime. It exists now, and the `?.` is gone so a rename shows up.
+        .then(() => sidecar.sweep())
         .then(() => (trashMs > 0 ? vfs.purgeTrash({ before: Date.now() - trashMs }) : null))
         .then((r) => { if (r?.purged) console.log(`[trove] purged ${r.purged} item(s) from the trash after ${config.trashRetentionDays ?? 30} days`); })
         .catch((e) => console.error('maintenance sweep failed', e));
@@ -765,6 +768,14 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // App-shell CSP is opt-in (see SAMPLE_CSP) — provide a full policy string to
   // enable it. Off by default because sandboxed plugin iframes can't satisfy one.
   if (env.TROVE_CSP && env.TROVE_CSP !== 'off') config.csp = env.TROVE_CSP;
+
+  // The MCP endpoint reads its own settings out of here (mcpConfigFromEnv), and this
+  // was never populated — so `TROVE_MCP=off`, `TROVE_MCP_REQUIRE_AUTH=true`,
+  // `TROVE_MCP_PATH` and `TROVE_MCP_RESOURCE` were all silently dead. An operator who
+  // used the documented way to lock down or remove the agent endpoint still had it
+  // live at /mcp, unauthenticated on a zero-config drive, with write_file and
+  // delete_file on it. Carrying the environment forward is what makes those real.
+  config.env = env;
 
   return config;
 }
