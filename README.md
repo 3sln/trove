@@ -239,6 +239,8 @@ TROVE_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
 TROVE_AUTH = "cloudflare-access"
 TROVE_CF_ACCESS_TEAM = "acme"
 TROVE_CF_ACCESS_AUD = "<aud-tag>"
+TROVE_ADMINS = "you@example.com"  # see "Making yourself an admin" below
+TROVE_DEFAULT_OPEN = "false"      # otherwise every Access user gets the default collection
 ```
 
 ```sh
@@ -259,7 +261,50 @@ artifact and cannot load, so semantic search *needs* Vectorize; and plugin scope
 want their own D1 database, since D1 cannot create one on demand and co-locating them
 would put a plugin's tables next to the drive's metadata. Bind `PLUGIN_DB` if you use
 server-side plugin storage — without it, that one feature reports a clear error and the
-rest of the drive is unaffected.
+rest of the drive is unaffected. One D1 database holds every plugin scope: D1 cannot
+create databases on demand and a scope key contains the user's id, so per-scope
+databases are not expressible here. Their tables sit side by side, which is weaker
+isolation than the file-per-scope a self-hosted run gets.
+
+### Making yourself an admin
+
+An admin can install plugins that ship server code, create collections, and rebuild the
+search index — the operations that are drive-wide rather than per-collection.
+
+```toml
+[vars]
+TROVE_ADMINS = "you@example.com,ops@example.com"
+```
+
+The list is matched against each request's principal **by email or by id**, so the
+address you sign in to Access with is the thing to write down. This matters more than it
+sounds: Cloudflare Access puts an internal user UUID in the token's `sub` claim, which
+is what becomes `principal.id` — so an admin list of ids would mean pasting
+`8f2a1c04-6d3e-…` and having no way to find it short of decoding a JWT.
+
+Check it worked. `admin` is the whole answer:
+
+```sh
+curl -s https://drive.example.com/api/me | jq
+# { "principal": { "id": "8f2a1c04-…", "email": "you@example.com", … },
+#   "authenticated": true, "admin": true }
+```
+
+`authenticated: false` means Access isn't reaching the origin — the Worker is being
+called directly, or the Access application doesn't cover this hostname. `admin: false`
+with the right email means the address in `TROVE_ADMINS` doesn't match the one in the
+token; `/api/me` shows you both.
+
+Two things worth doing at the same time:
+
+- **`TROVE_DEFAULT_OPEN=false`.** The default collection is open to anyone who reaches
+  it, which is right for a single-user drive and wrong the moment Access lets a team in.
+  With it off, access comes only from an explicit grant — and the admin list is one.
+- **Share by email too.** A per-collection grant (`{ type: "user", subject: … }`) matches
+  the same way, so an ACL written by a human names people the way humans do.
+
+The whole Access setup, including what to put in the Zero Trust dashboard, is in
+[Cloudflare Access (Zero Trust)](#cloudflare-access-zero-trust).
 
 ### Every setting
 
@@ -643,6 +688,25 @@ under managed OAuth is **opaque**, not a JWT, and it travels in `Authorization: 
 The real signed JWT is the assertion header. Trove reads the assertion header *first* for
 that reason — and because it is the one the edge vouched for, rather than the one the
 caller typed.
+
+#### Who your users are, to Trove
+
+Access mints a token whose `sub` is an **internal user UUID**, not an address. That UUID
+becomes `principal.id`; the address lands in the `email` claim. So anywhere you write a
+person down — `TROVE_ADMINS`, a collection's `user` grant — **either works**, and the
+email is the one to reach for.
+
+```sh
+curl -s https://drive.example.com/api/me | jq
+# { "principal": { "id": "8f2a1c04-…",     # Access user UUID  (the `sub` claim)
+#                  "email": "you@example.com",
+#                  "roles": [] },
+#   "authenticated": true, "admin": true }
+```
+
+`roles` comes from a `roles` or `groups` claim. Access does not send one by default —
+add it to the application's OIDC claims if you want `TROVE_COLLECTION_CREATOR_ROLES` or
+role-based grants to have anything to match.
 
 ## Connecting an AI agent (MCP)
 

@@ -99,11 +99,38 @@ export class CollectionService {
 
   // --- permissions -----------------------------------------------------------
 
+  /**
+   * Does `subject` — a string an operator or an ACL wrote down — name this principal?
+   *
+   * By id, or by email. The id is whatever the IdP put in `sub`, and for Cloudflare
+   * Access that is an internal user UUID, not an address: `TROVE_ADMINS=you@example.com`
+   * matched nothing and there was no way to discover the UUID short of decoding a JWT.
+   * A drive that looks administered and isn't is the worst version of this to ship, so
+   * the address people actually think of as their identity works too.
+   *
+   * Email compares case-insensitively, which is how mailboxes behave and how every IdP
+   * hands them over.
+   */
+  #names(subject, principal) {
+    if (!subject || !principal) return false;
+    if (subject === principal.id) return true;
+    const email = principal.email;
+    return !!email && String(subject).toLowerCase() === String(email).toLowerCase();
+  }
+
+  /** Is this principal on the global admin list (by id or by email)? */
+  #isNamedAdmin(principal) {
+    if (!principal) return false;
+    if (this.admins.has(principal.id)) return true;
+    for (const a of this.admins) if (this.#names(a, principal)) return true;
+    return false;
+  }
+
   /** The set of capabilities `principal` holds on a collection record/id. */
   capabilities(principal, collectionOrId) {
     const c = typeof collectionOrId === 'string' ? null : collectionOrId;
     if (!c) return new Set(); // callers pass the record; unknown → none
-    if (principal && this.admins.has(principal.id)) return expand(['admin']);
+    if (this.#isNamedAdmin(principal)) return expand(['admin']);
     const roles = new Set(principal?.roles || []);
     // Note: a creator role grants the ability to CREATE collections, not blanket
     // access to every collection — per-collection access comes only from the ACL below.
@@ -111,7 +138,9 @@ export class CollectionService {
     for (const g of c.acl?.grants || []) {
       const match =
         g.type === 'anyone' ||
-        (g.type === 'user' && principal && g.subject === principal.id) ||
+        // Same for a per-collection grant: sharing with someone by the address you know
+        // them by has to work, or an ACL written by a human never matches.
+        (g.type === 'user' && this.#names(g.subject, principal)) ||
         (g.type === 'role' && roles.has(g.subject));
       if (match) for (const cap of g.capabilities || []) granted.add(cap);
     }
@@ -153,13 +182,13 @@ export class CollectionService {
 
   /** Global admin (can do anything, incl. grant admin-only plugin capabilities). */
   isAdmin(principal) {
-    return !!principal && this.admins.has(principal.id);
+    return this.#isNamedAdmin(principal);
   }
 
   /** Global capability to create new collections. */
   canCreate(principal) {
     if (!principal) return false;
-    if (this.admins.has(principal.id)) return true;
+    if (this.#isNamedAdmin(principal)) return true;
     return (principal.roles || []).some((r) => this.creatorRoles.has(r));
   }
 

@@ -167,3 +167,38 @@ test('an abort that the backend refuses does not discard the session', async () 
   await expect(vfs.abortUpload(plan.uploadId)).rejects.toThrow(/S3 said no/);
   expect(await vfs.uploadStatus(plan.uploadId)).toBeTruthy();
 });
+
+// --- who is an admin ------------------------------------------------------------
+
+test('an admin can be named by email, not only by the IdP\'s internal id', async () => {
+  const { CollectionService, MemoryKV, MemoryStorage: MS } = await import('../src/index.js');
+  const svc = (admins) => new CollectionService({ kv: new MemoryKV(), storageFactory: () => new MS(), admins });
+  // Cloudflare Access puts an internal user UUID in `sub`, so that is `principal.id`;
+  // the address the operator thinks of as the user is a separate claim. Matching only
+  // on id meant `TROVE_ADMINS=you@example.com` silently granted nothing, with no way to
+  // find the UUID short of decoding a JWT — a drive that looks administered and isn't.
+  const principal = { id: '8f2a1c04-6d3e-4b18-9a77-0c5e2b1d9f30', email: 'Ray@Example.com', roles: [] };
+  const byEmail = svc(['ray@example.com']);
+  const byId = svc([principal.id]);
+  const neither = svc(['someone@else.com']);
+
+  expect(byEmail.isAdmin(principal)).toBe(true); // and case-insensitively
+  expect(byId.isAdmin(principal)).toBe(true);
+  expect(neither.isAdmin(principal)).toBe(false);
+  expect(neither.isAdmin(null)).toBe(false);
+});
+
+test('a collection shared with a user by email reaches them', async () => {
+  const { CollectionService, MemoryKV, MemoryStorage: MS } = await import('../src/index.js');
+  const svc = new CollectionService({ kv: new MemoryKV(), storageFactory: () => new MS(), admins: ['boss@example.com'] });
+  await svc.init();
+  const c = await svc.create(
+    { name: 'Team', store: { driver: 'memory' }, acl: { grants: [{ type: 'user', subject: 'ray@example.com', capabilities: ['read'] }] } },
+    { id: 'boss-uuid', email: 'boss@example.com', roles: [] },
+  );
+  const record = await svc.get(c.id);
+  // An ACL a human wrote names people the way humans do.
+  expect(svc.can({ id: 'ray-uuid', email: 'ray@example.com', roles: [] }, record, 'read')).toBe(true);
+  expect(svc.can({ id: 'other-uuid', email: 'other@example.com', roles: [] }, record, 'read')).toBe(false);
+  expect(c.id).toStartWith('col_');
+});
