@@ -88,3 +88,38 @@ export async function readAll(stream) {
   return concatBytes(chunks);
 }
 
+
+/**
+ * Refuse a URL that would make the server fetch something on its own network.
+ *
+ * Anywhere a caller supplies a URL the SERVER will later request, this is the gate. The
+ * dangerous targets are not exotic: `169.254.169.254` is cloud instance metadata (and
+ * with it, credentials), `127.0.0.1` and private ranges are whatever else the box is
+ * running, and `.internal`/`.local` are the names those things usually have.
+ *
+ * DNS names that resolve to private addresses are a residual risk — rebinding cannot be
+ * settled at this layer — so a deployment that cares should egress-filter too.
+ *
+ * @param {string} url
+ * @param {string} what named in the error, so the message says which field was wrong
+ */
+export function assertPublicUrl(url, what = 'URL') {
+  let u;
+  try { u = new URL(String(url)); } catch { throw TroveError.invalid(`${what} is not a valid URL`); }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+    throw TroveError.invalid(`${what} must be http(s)`);
+  }
+  const h = u.hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) {
+    throw TroveError.invalid(`${what} points at an internal host`);
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) {
+    const [a, b] = h.split('.').map(Number);
+    if (a === 10 || a === 127 || a === 0 || (a === 192 && b === 168)
+      || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254) || a >= 224) {
+      throw TroveError.invalid(`${what} points at a private address`);
+    }
+  }
+  if (h.includes(':') || h.startsWith('[')) throw TroveError.invalid(`${what} may not be an IP literal`);
+  return u;
+}

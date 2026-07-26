@@ -9,6 +9,8 @@
 // push service — the client fetches /api/notifications over its authenticated
 // channel instead.
 
+import { assertPublicUrl } from '../util.js';
+
 const NS_SUBS = 'push-subs'; // userId -> [subscription]
 const NS_PENDING = 'mentions-pending'; // userId -> [mention]
 const NS_INBOX = 'notifications-inbox'; // userId -> [notification]
@@ -17,6 +19,7 @@ export class NotificationCenter {
   /**
    * @param {object} deps
    * @param {import('../kv.js').KeyValueStore} deps.kv
+import { assertPublicUrl } from '../util.js';
    * @param {import('./webpush.js').WebPushService} [deps.push]
    * @param {number} [deps.flushIntervalMs] default 30s
    * @param {number} [deps.inboxCap] keep at most N per user (default 200)
@@ -92,6 +95,11 @@ export class NotificationCenter {
 
   async subscribePush(userId, subscription) {
     if (!subscription?.endpoint) throw new Error('Invalid push subscription');
+    // The server POSTs to this endpoint, from inside its own network, on every flush.
+    // Left unchecked it is a request forgery primitive any user can register — cloud
+    // instance metadata being the obvious target. A real push service is on the public
+    // internet, so nothing legitimate is lost by refusing the rest.
+    assertPublicUrl(subscription.endpoint, 'Push endpoint');
     const subs = (await this.kv.get(NS_SUBS, userId)) || [];
     if (!subs.some((s) => s.endpoint === subscription.endpoint)) {
       subs.push(subscription);

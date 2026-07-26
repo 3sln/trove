@@ -71,14 +71,22 @@ test('the metadata URL inserts the well-known segment, it does not append it', (
   expect(metadataUrl('https://d.example/a/b')).toBe('https://d.example/.well-known/oauth-protected-resource/a/b');
 });
 
-test('the resource URI follows the proxy headers, because the drive is usually behind one', () => {
-  // Guessing from the socket gives http://internal:8080 — an identifier no token issued
-  // for the public name will ever match.
+test('the resource URI trusts proxy headers only when told to', () => {
+  // X-Forwarded-* is set by a proxy — and by anyone else who feels like it. This URI
+  // goes into the WWW-Authenticate challenge and the discovery document, so honouring a
+  // spoofed one hands a client a sign-in URL on somebody else's host. Behind a real
+  // proxy the socket says http://internal:8080, which is equally useless, so the answer
+  // is an opt-in rather than a default either way.
   const req = new Request('http://10.0.0.4:8080/mcp', {
-    headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'drive.example.com' },
+    headers: { host: '10.0.0.4:8080', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'evil.example' },
   });
-  expect(mcpResourceUri(req, { path: '/mcp' })).toBe('https://drive.example.com/mcp');
-  // And an explicit setting beats every guess.
+  expect(mcpResourceUri(req, { path: '/mcp' })).toBe('http://10.0.0.4:8080/mcp');
+  expect(mcpResourceUri(req, { path: '/mcp' }, { trustProxy: true })).toBe('https://evil.example/mcp');
+
+  // The form that needs no trust at all: say what the public URL is.
+  expect(mcpResourceUri(req, { path: '/mcp' }, { publicUrl: 'https://drive.example.com' }))
+    .toBe('https://drive.example.com/mcp');
+  // And an explicit MCP resource beats every guess.
   expect(mcpResourceUri(req, { resource: 'https://pinned.example/mcp/' })).toBe('https://pinned.example/mcp');
 });
 

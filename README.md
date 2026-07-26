@@ -310,7 +310,9 @@ the same values as config fields instead.
 | `TROVE_MAX_PAGE` | `1000` | ceiling on any client-supplied `limit` |
 | `TROVE_PORT` / `TROVE_HOST` | `8787` / `0.0.0.0` | |
 | `TROVE_WEB_DIST` | `packages/web/dist` | built web app to serve |
-| `TROVE_CORS_ORIGIN` | off | `*` or an allowlist; the app is same-origin |
+| `TROVE_CORS_ORIGIN` | off | `*` or an allowlist; the app is same-origin (MCP follows it too) |
+| `TROVE_PUBLIC_URL` | detected | the drive's public origin, for sign-in discovery |
+| `TROVE_TRUST_PROXY` | `false` | honour `X-Forwarded-Proto/Host` — only behind a real proxy |
 | `TROVE_CSP` | off | opt-in shell CSP (see `SAMPLE_CSP`) |
 | **plugins** | | |
 | `TROVE_SERVER_INDEXERS` | on | `false` disables server-side plugin indexers |
@@ -334,6 +336,11 @@ warning). Before putting it on a network:
   the server caps JSON bodies (`TROVE_MAX_JSON_BYTES`) but streams file-upload
   parts straight to storage, so bound raw upload size at the proxy (and/or set
   disk/bucket quotas) to prevent a write-capable user from filling the store.
+- **Set `TROVE_PUBLIC_URL`** to the address people actually reach the drive at. It is
+  what the sign-in challenge and the agent discovery document advertise. Trove will
+  otherwise read it off the request, and `X-Forwarded-Host` is set by whoever is talking
+  to it — so that header is honoured only with `TROVE_TRUST_PROXY=true`, which is safe
+  exactly when a proxy is guaranteed to be in front.
 - **CORS stays off** unless you set `TROVE_CORS_ORIGIN` (the app is same-origin).
   A shell **CSP** is opt-in via `TROVE_CSP` (see `SAMPLE_CSP`); it's off by
   default because sandboxed plugin iframes can't satisfy a strict one. The API

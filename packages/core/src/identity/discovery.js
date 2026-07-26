@@ -35,11 +35,24 @@ export function normalizeServers(value) {
  * identifier any token was ever issued for. The forwarded headers say what the client
  * actually asked for.
  */
-export function publicOrigin(req) {
+export function publicOrigin(req, cfg = {}) {
+  // An explicit public URL wins, and is the only form that is safe without a trusted
+  // proxy in front — see below.
+  if (cfg.publicUrl) {
+    try { return new URL(cfg.publicUrl).origin; } catch { /* fall through to detection */ }
+  }
   const url = new URL(req.url);
-  const proto = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
-  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || url.host;
-  return `${proto}://${host}`;
+  // X-Forwarded-* is set by a proxy — and by anyone else who feels like it. This origin
+  // ends up in the WWW-Authenticate challenge and the discovery document, so trusting a
+  // spoofed one hands a client a sign-in URL on somebody else's host. Only honoured when
+  // the deployment says it IS behind a proxy (TROVE_TRUST_PROXY), which is the same
+  // thing every other server makes you opt into.
+  if (cfg.trustProxy) {
+    const proto = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
+    const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || url.host;
+    return `${proto}://${host}`;
+  }
+  return `${url.protocol.replace(':', '')}://${req.headers.get('host') || url.host}`;
 }
 
 /**

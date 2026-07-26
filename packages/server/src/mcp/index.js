@@ -79,7 +79,7 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, auth
     // before the status still gets told what happened.
     rpcError(null, JSONRPC_ERRORS.INVALID_REQUEST, description || 'Authentication required'),
     401,
-    challengeHeaders(mcpResourceUri(req, cfg), auth, { description }),
+    challengeHeaders(mcpResourceUri(req, cfg, config), auth, { description }),
   );
 
   async function handle(req, url) {
@@ -89,7 +89,7 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, auth
     // Always unauthenticated — a document whose whole job is to say how to authenticate
     // cannot itself require a token.
     if (url.pathname === `/.well-known/oauth-protected-resource${path}`) {
-      return jsonResponse(protectedResourceMetadata(mcpResourceUri(req, cfg), auth), 200, {
+      return jsonResponse(protectedResourceMetadata(mcpResourceUri(req, cfg, config), auth), 200, {
         'cache-control': 'public, max-age=3600',
         'access-control-allow-origin': '*',
       });
@@ -190,7 +190,7 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, auth
     path,
     config: cfg,
     /** What to paste into an agent, for a given request's public origin. */
-    endpoint: (req) => mcpResourceUri(req, cfg),
+    endpoint: (req) => mcpResourceUri(req, cfg, config),
     requiresAuth: () => authRequired(cfg, identity),
   };
 }

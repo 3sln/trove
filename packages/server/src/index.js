@@ -398,7 +398,7 @@ export async function createServer(config = {}) {
     // answer here and a client that found the drive should not have to know that MCP
     // exists to get it. Unauthenticated, necessarily: it is the way in.
     if (url.pathname === '/.well-known/oauth-protected-resource') {
-      return new Response(JSON.stringify(protectedResourceMetadata(publicOrigin(req), auth)), {
+      return new Response(JSON.stringify(protectedResourceMetadata(publicOrigin(req, config), auth)), {
         status: 200,
         headers: {
           'content-type': 'application/json',
@@ -442,7 +442,7 @@ export async function createServer(config = {}) {
   /** Attach the sign-in directions to a 401 that doesn't already carry them. */
   function withChallenge(res, req) {
     if (res.status !== 401 || res.headers.has('www-authenticate')) return res;
-    const headers = challengeHeaders(publicOrigin(req), auth);
+    const headers = challengeHeaders(publicOrigin(req, config), auth);
     for (const [k, v] of Object.entries(headers)) res.headers.set(k, v);
     // Without this a browser can't read the header cross-origin, which is exactly the
     // case where a client most needs it.
@@ -641,6 +641,11 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // falls back to TROVE_JWT_ISSUER below, which for essentially every OIDC provider is
   // the same URL; set it when they genuinely differ.
   if (env.TROVE_AUTH_SERVER) config.authServer = env.TROVE_AUTH_SERVER;
+  // The drive's own public URL. Behind a proxy the socket says http://internal:8787,
+  // which is no use in a discovery document — but X-Forwarded-* is set by whoever is
+  // talking to us unless a proxy is guaranteed to be in front, so honouring it is opt-in.
+  if (env.TROVE_PUBLIC_URL) config.publicUrl = env.TROVE_PUBLIC_URL;
+  if (env.TROVE_TRUST_PROXY != null) config.trustProxy = !/^(0|off|false|no)$/i.test(String(env.TROVE_TRUST_PROXY));
 
   // Identity: default anonymous; 'jwt' for a generic IdP, 'cloudflare-access' for Zero
   // Trust (which only needs the team name).

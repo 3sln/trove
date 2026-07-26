@@ -127,3 +127,24 @@ test('the MCP endpoint does not approve every origin', async () => {
   }));
   expect(nope.headers.get('access-control-allow-origin')).toBe(null);
 });
+
+test('a push subscription cannot point the server at its own network', async () => {
+  // The server POSTs to this endpoint on every notification flush, from inside its
+  // network. Any user could register one, which makes it a request-forgery primitive
+  // aimed at whatever else the box can reach — cloud instance metadata first.
+  const { handle, mallory } = await drive();
+  for (const endpoint of [
+    'http://169.254.169.254/latest/meta-data/',   // instance metadata + credentials
+    'http://127.0.0.1:8787/api/collections',
+    'http://10.0.0.5/internal',
+    'http://db.internal/',
+    'file:///etc/passwd',
+  ]) {
+    const res = await post(handle, '/api/push/subscribe', { subscription: { endpoint } }, mallory);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  }
+  // A real push service still works.
+  const ok = await post(handle, '/api/push/subscribe',
+    { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/abc123', keys: { p256dh: 'x', auth: 'y' } } }, mallory);
+  expect(ok.status).toBe(200);
+});

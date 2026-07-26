@@ -149,7 +149,7 @@ export function createRouter() {
         // "We inferred this from your issuer" is a different fact from "you set this",
         // and someone debugging a mismatch needs to know which.
         source: auth?.source || 'none',
-        metadataUrl: metadataUrl(publicOrigin(ctx.req)),
+        metadataUrl: metadataUrl(publicOrigin(ctx.req, config)),
       },
       mcp: mcp ? {
         enabled: true,

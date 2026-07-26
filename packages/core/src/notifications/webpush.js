@@ -190,7 +190,9 @@ export class WebPushService {
       async () => {
         let res;
         try {
-          res = await fetch(endpoint, { method: 'POST', headers, body: '', signal });
+          // `redirect: 'error'` because a push service that 302s us somewhere is either
+          // broken or walking us onto an internal host the subscribe-time check refused.
+          res = await fetch(endpoint, { method: 'POST', headers, body: '', signal, redirect: 'error' });
         } catch (e) {
           // Network failure — let withRetry classify it (wrapError → transient).
           throw e;

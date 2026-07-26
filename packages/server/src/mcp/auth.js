@@ -34,7 +34,7 @@ export function mcpConfigFromEnv(env = {}) {
  * that rewrites the Host in a way the forwarded headers don't capture, where guessing
  * would produce an identifier no token will ever match.
  */
-export function mcpResourceUri(req, cfg = {}) {
+export function mcpResourceUri(req, cfg = {}, serverConfig = {}) {
   if (cfg.resource) return String(cfg.resource).replace(/\/+$/, '');
-  return `${publicOrigin(req)}${cfg.path || '/mcp'}`;
+  return `${publicOrigin(req, serverConfig)}${cfg.path || '/mcp'}`;
 }
