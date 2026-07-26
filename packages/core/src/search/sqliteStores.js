@@ -212,7 +212,6 @@ export class SqliteKeywordStore extends KeywordStore {
   constructor(db) {
     super();
     this.db = db;
-    this._nextRowid = 1;
   }
 
   async init() {
@@ -249,12 +248,6 @@ export class SqliteKeywordStore extends KeywordStore {
       CREATE INDEX IF NOT EXISTS idx_kw_meta_indexer ON kw_meta(indexerId);
       CREATE INDEX IF NOT EXISTS idx_kw_meta_node_indexer ON kw_meta(nodeId, indexerId);
     `);
-    // Rowids are assigned here rather than by SQLite so a batched insert doesn't have to
-    // read last_insert_rowid() back between statements. Seeded from what's on disk, so
-    // reopening an existing index continues rather than colliding.
-    const max = await this.db.get('SELECT MAX(rid) AS m FROM kw_meta');
-    this._nextRowid = (max?.m ?? 0) + 1;
-
     // An index written before kw_meta existed has rows the sidecar doesn't know about.
     // Backfill it once rather than silently leaking those rows forever — they would
     // never be deleted, so a re-index would double-count every document.
@@ -274,8 +267,6 @@ export class SqliteKeywordStore extends KeywordStore {
       sql: 'INSERT INTO kw_meta(doc_id, rid, nodeId, indexerId) VALUES (?,?,?,?) ON CONFLICT(doc_id) DO UPDATE SET rid = excluded.rid',
       params: [r.doc_id, r.rid, r.nodeId, r.indexerId],
     })));
-    const max = await this.db.get('SELECT MAX(rid) AS m FROM kw_meta');
-    this._nextRowid = (max?.m ?? 0) + 1;
     console.warn(`[trove] adopted ${rows.length} pre-existing keyword rows into the delete index`);
   }
 
@@ -288,26 +279,32 @@ export class SqliteKeywordStore extends KeywordStore {
       `SELECT doc_id, rid FROM kw_meta WHERE doc_id IN (${ids.map(() => '?').join(',')})`,
       ...ids,
     );
-    const statements = [];
-    for (const row of existing) statements.push({ sql: 'DELETE FROM kw_docs WHERE rowid = ?', params: [row.rid] });
+    if (existing.length) {
+      await this.db.batch(existing.map((row) => ({ sql: 'DELETE FROM kw_docs WHERE rowid = ?', params: [row.rid] })));
+    }
     for (const d of docs) {
       const body = d.text || '';
       // `content` is what gets INDEXED — the text plus the field values, so a search
       // for a filename finds the chunk. `body` is what gets SHOWN, kept separate so a
       // snippet is the document's prose and not prose with metadata glued on.
       const content = [body, ...Object.values(d.fields || {})].join(' ');
-      const rid = this._nextRowid++;
-      statements.push({
-        sql: 'INSERT INTO kw_docs(rowid, content, body, doc_id, nodeId, indexerId, fields) VALUES (?,?,?,?,?,?,?)',
-        params: [rid, content, body, d.id, d.nodeId, d.indexerId, JSON.stringify(d.fields || {})],
-      });
-      statements.push({
-        sql: 'INSERT INTO kw_meta(doc_id, rid, nodeId, indexerId) VALUES (?,?,?,?) '
-          + 'ON CONFLICT(doc_id) DO UPDATE SET rid = excluded.rid, nodeId = excluded.nodeId, indexerId = excluded.indexerId',
-        params: [d.id, rid, d.nodeId, d.indexerId],
-      });
+      // SQLite assigns the rowid; we read it back. An in-process counter would be
+      // faster to write in a batch, and was — until two Trove processes opened the same
+      // database, both started counting at 1, and every insert failed on the primary
+      // key. There is no coordination between processes to have, so the only correct
+      // answer is to let the database allocate. The read-back is a same-connection call
+      // and costs nothing measurable next to the FTS insert itself.
+      await this.db.run(
+        'INSERT INTO kw_docs(content, body, doc_id, nodeId, indexerId, fields) VALUES (?,?,?,?,?,?)',
+        content, body, d.id, d.nodeId, d.indexerId, JSON.stringify(d.fields || {}),
+      );
+      const rid = (await this.db.get('SELECT last_insert_rowid() AS rid'))?.rid;
+      await this.db.run(
+        'INSERT INTO kw_meta(doc_id, rid, nodeId, indexerId) VALUES (?,?,?,?) '
+        + 'ON CONFLICT(doc_id) DO UPDATE SET rid = excluded.rid, nodeId = excluded.nodeId, indexerId = excluded.indexerId',
+        d.id, rid, d.nodeId, d.indexerId,
+      );
     }
-    await this.db.batch(statements);
   }
 
   async removeByNode(nodeId) {

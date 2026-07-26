@@ -300,3 +300,36 @@ test('an index written before the sidecar existed is adopted, not leaked', async
     await t.cleanup();
   }
 });
+
+test('two processes can share one index without breaking it', async () => {
+  // SQLite in WAL mode genuinely supports several processes, so someone WILL point two
+  // Trove instances at one data directory. An in-process rowid counter made both start
+  // at 1 and every insert fail on the primary key — indexing broken outright for the
+  // second one. There is no coordination between processes to have, so the database
+  // allocates rowids and we read them back.
+  const t = await tempProvider();
+  try {
+    const second = new LocalSqliteProvider({ path: join(t.dir, 'trove.db') });
+    const a = await SqliteKeywordStore.open({ provider: t.provider });
+    const b = await SqliteKeywordStore.open({ provider: second });
+
+    await a.add([{ id: 'a1', nodeId: 'n1', indexerId: 'ix', text: 'alpha from A', fields: {} }]);
+    await b.add([{ id: 'b1', nodeId: 'n2', indexerId: 'ix', text: 'beta from B', fields: {} }]);
+    await a.add([{ id: 'a2', nodeId: 'n3', indexerId: 'ix', text: 'gamma from A', fields: {} }]);
+    expect(await a.count()).toBe(3);
+    expect((await b.search('alpha')).length).toBe(1); // each sees the other's writes
+    expect((await a.search('beta')).length).toBe(1);
+
+    // Re-indexing the same document from the other process replaces rather than duplicates.
+    await a.add([{ id: 'shared', nodeId: 'ns', indexerId: 'ix', text: 'first version', fields: {} }]);
+    await b.add([{ id: 'shared', nodeId: 'ns', indexerId: 'ix', text: 'second version', fields: {} }]);
+    expect(await a.count()).toBe(4);
+    // …and a delete from one is honoured by the other.
+    await b.removeByNode('n1');
+    expect((await a.search('alpha')).length).toBe(0);
+    expect(await a.count()).toBe(3);
+    await second.close();
+  } finally {
+    await t.cleanup();
+  }
+});
