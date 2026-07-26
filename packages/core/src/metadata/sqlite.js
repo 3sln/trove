@@ -12,6 +12,7 @@ import {
 } from './interface.js';
 import { TroveError, wrapError } from '../errors.js';
 import { newId } from '../util.js';
+import { decodeCursor, encodeCursor } from './cursor.js';
 
 export class SqliteStore extends MetadataStore {
   /**
@@ -90,16 +91,29 @@ export class SqliteStore extends MetadataStore {
   async listItems(collectionId = 'default', opts = {}) {
     const sortCol = { name: 'name', size: 'size', updatedAt: 'updatedAt' }[opts.sort] || 'name';
     const dir = opts.order === 'desc' ? 'DESC' : 'ASC';
+    const cmp = dir === 'DESC' ? '<' : '>';
+    // NOCASE is a text collation and a no-op on the numeric columns, so one expression
+    // serves all three — and it has to be the SAME expression in ORDER BY and in the
+    // keyset comparison, or the page boundary won't line up with the ordering.
+    const key = sortCol === 'name' ? `${sortCol} COLLATE NOCASE` : sortCol;
     const limit = opts.limit ?? 500;
-    const offset = opts.cursor ? Number(opts.cursor) : 0;
+    const at = decodeCursor(opts.sort ?? 'name', opts.cursor);
+    // Keyset, not OFFSET: resume from the last row of the previous page, so an insert
+    // or delete before the cut can't shift a row past it unseen. `id` breaks ties.
+    const where = at ? `AND (${key} ${cmp} ? OR (${key} = ? AND id ${cmp} ?))` : '';
+    const args = at ? [at.value, at.value, at.id] : [];
     const rows = await this.db.all(
-      `SELECT * FROM nodes WHERE collectionId = ? AND deletedAt IS NULL
-       ORDER BY ${sortCol} COLLATE NOCASE ${dir}
-       LIMIT ? OFFSET ?`,
-      collectionId, limit + 1, offset,
+      `SELECT * FROM nodes WHERE collectionId = ? AND deletedAt IS NULL ${where}
+       ORDER BY ${key} ${dir}, id ${dir}
+       LIMIT ?`,
+      collectionId, ...args, limit + 1,
     );
     const hasMore = rows.length > limit;
-    return { items: rows.slice(0, limit).map(row), nextCursor: hasMore ? String(offset + limit) : null };
+    const page = rows.slice(0, limit).map(row);
+    return {
+      items: page,
+      nextCursor: hasMore ? encodeCursor(opts.sort ?? 'name', page[page.length - 1]) : null,
+    };
   }
 
   async create(node) {

@@ -137,6 +137,23 @@ export class PluginService {
    * install record we allow (device-installed plugins predate this and haven't
    * migrated); once the client account-install flow lands this becomes deny-by-default.
    */
+  /**
+   * Is this plugin installed on this account at all?
+   *
+   * Deliberately separate from `assertCapability`, because the two questions are not
+   * the same and only one of them is transitional. Whether a plugin holds a GRANT can
+   * fall back to allow while device-installed plugins migrate. Whether a caller may act
+   * AS a plugin cannot: writing under `trove+contrib:vendor.com/plugin/…`, or opening a
+   * vendor's shared domain store, is a claim on somebody else's identity, and index
+   * contributions carry into search results and tag mirrors that other people in the
+   * collection see. No record, no identity — in strict mode and out of it.
+   */
+  async assertInstalled(principal, pluginId) {
+    const r = await this.installs.get(accountOf(principal), pluginId);
+    if (!r) throw TroveError.forbidden(`Plugin "${pluginId}" is not installed on this account`);
+    return r;
+  }
+
   async assertCapability(principal, pluginId, cap) {
     const r = await this.installs.get(accountOf(principal), pluginId);
     if (!r) {

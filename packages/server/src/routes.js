@@ -788,7 +788,15 @@ export function createRouter() {
     if (!PLUGIN_SQL_OPS.has(op)) throw TroveError.invalid(`Unknown storage op "${op}"`);
     if (scope !== 'plugin' && scope !== 'domain') throw TroveError.invalid(`Unknown storage scope "${scope}"`);
     if (scope === 'domain' && !domain) throw TroveError.invalid('domain scope requires a domain');
-    if (scope === 'domain') assertOwnDomain(params.pluginId, domain);
+    // The domain store is SHARED across a vendor's plugins, so opening it is a claim to
+    // be one of them — and `pluginId` comes from the caller. `assertOwnDomain` ties the
+    // two together but both are the caller's words; the install record is what makes
+    // either mean anything. (The plugin-private scope needs no such check: its key is
+    // already scoped to this principal, so the worst it reaches is their own data.)
+    if (scope === 'domain') {
+      assertOwnDomain(params.pluginId, domain);
+      if (plugins) await plugins.assertInstalled(principal, params.pluginId);
+    }
     const db = await sqlite.obtain({ key: storeKey(principal, params.pluginId, scope, domain) });
     return { result: await runPluginSql(db, op, { sql, args, statements }) };
   });
@@ -883,6 +891,11 @@ async function assertContributorOwned(ctx, contributorId) {
     throw TroveError.forbidden(`"${contributorId}" is not a namespace you can contribute to`);
   }
   if (!ctx.plugins) return; // plugin service disabled → no install records to check against
+  // The namespace is only unforgeable if we check that the plugin is actually installed.
+  // `assertCapability` alone allows when there is no install record (transitional, for
+  // device-installed plugins), which made "unforgeable" false in the shipped default:
+  // any authenticated caller could contribute under any vendor's name.
+  await ctx.plugins.assertInstalled(ctx.principal, parsed.pluginId);
   await ctx.plugins.assertCapability(ctx.principal, parsed.pluginId, 'indexer');
 }
 

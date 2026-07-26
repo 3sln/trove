@@ -48,7 +48,7 @@ export function phoneTopBar(state, ui) {
     button({ className: 'pb-brand', title: 'Trove — home' }, img({ src: '/icon.svg', alt: 'Trove' }))
       .on({ click: () => ui.exec('workbench.view.home') }),
     div({ className: 'pb-title' }, title),
-    button({ className: `pb-status ${g.tone}`, title: g.label, 'aria-label': g.label },
+    button({ className: `pb-status ${g.tone}`, title: g.label, $attrs: { 'aria-label': g.label } },
       g.spinner
         ? div({ className: 'spinner', $styling: { width: '15px', height: '15px' } })
         : icon(g.icon, { size: 18 }),
@@ -64,10 +64,10 @@ export function phoneBottomBar(state, ui) {
   return div({ className: 'phonebar bottom' },
     ...TABS.map((t) => button({
       className: `pb-tab ${!sheet && active === t.id ? 'active' : ''}`,
-      'aria-label': t.label,
+      $attrs: { 'aria-label': t.label },
     }, icon(t.icon, { size: 21 }), span({ className: 'pb-label' }, t.label))
       .on({ click: () => { ui.platform.workbench.closeSheet(); ui.exec(t.command); } })),
-    button({ className: `pb-tab ${sheet === 'more' ? 'active' : ''}`, 'aria-label': 'More' },
+    button({ className: `pb-tab ${sheet === 'more' ? 'active' : ''}`, $attrs: { 'aria-label': 'More' } },
       icon('dots', { size: 21 }),
       unread ? span({ className: 'pb-badge' }, String(unread > 9 ? '9+' : unread)) : null,
       span({ className: 'pb-label' }, 'More'),

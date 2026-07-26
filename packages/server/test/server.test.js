@@ -3,6 +3,7 @@
 // search — all in-memory, no network.
 
 import { test, expect } from 'bun:test';
+import { zipSync, strToU8 } from 'fflate';
 import { createServer } from '../src/index.js';
 
 async function jsonReq(handle, method, path, body) {
@@ -63,8 +64,23 @@ test('upload + download + range + search', async () => {
 });
 
 test('plugin indexer pushes namespaced docs', async () => {
-  const { handle, vfs } = await createServer();
+  // An indexer runs server-side, so installing one is admin-gated.
+  const { handle, vfs } = await createServer({ admins: ['anonymous'] });
   const file = await vfs.writeFile('photo.jpg', new Uint8Array([1, 2, 3]), { contentType: 'image/jpeg' });
+  // Contributing under a plugin's namespace is a claim to BE that plugin, so it has to
+  // actually be installed — otherwise the namespace is only as unforgeable as a string.
+  await handle(new Request('http://t/api/plugins/install?grants=indexer', {
+    method: 'POST',
+    body: zipSync({
+      'manifest.json': strToU8(JSON.stringify({
+        domain: 'vision.example', name: 'labeller', version: '1.0.0',
+        capabilities: { indexer: true },
+        entry: 'plugin.js',
+        contributes: { idx: { type: 'indexer', match: { mime: ['image/*'] } } },
+      })),
+      'plugin.js': strToU8('//'),
+    }),
+  }));
   // The namespace is the plugin's contribution URI — see plugin-install.test.js for
   // why a bare name is refused.
   const ns = encodeURIComponent('trove+contrib:vision.example/labeller/idx');

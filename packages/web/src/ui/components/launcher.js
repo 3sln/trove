@@ -60,10 +60,18 @@ export default function launcher(state, ui, opts = {}) {
     if (filters.length) runFilter(ui, filters, text); // drive-wide tag/property query
     else runSearch(ui, text);
   };
-  // Moving the highlight IS selecting, as far as the rest of the app is concerned.
-  // Without this, `explorer.selectedNodes()` was permanently empty and every command
-  // that works on "the selected item" — delete above all — silently did nothing.
-  const focusAt = (at) => { wb.setLaunchIndex(at); syncSelection(ui, flat[at]); };
+  // Moving the highlight with the KEYBOARD is selecting, as far as the rest of the app
+  // is concerned. Without this, `explorer.selectedNodes()` was permanently empty and
+  // every command that works on "the selected item" — delete above all — silently did
+  // nothing.
+  //
+  // Hovering deliberately does not select. It moves the highlight (so Enter opens what
+  // the pointer is over) but leaves the selection alone: a second state push per mouse
+  // move re-renders the list under the pointer, and a row replaced between mousedown and
+  // mouseup never receives its click. A pointer user acts through the row's own menu,
+  // which selects explicitly before it opens.
+  const hoverAt = (at) => wb.setLaunchIndex(at);
+  const selectAt = (at) => { wb.setLaunchIndex(at); syncSelection(ui, flat[at]); };
   const move = (delta) => {
     wb.moveLaunch(delta, flat.length);
     syncSelection(ui, flat[wb.state.launch.index]);
@@ -78,7 +86,8 @@ export default function launcher(state, ui, opts = {}) {
     // search box to reach it.
     else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
       const it = flat[idx];
-      if (it?.menu) { e.preventDefault(); openRowMenu(e.target, it, ui); }
+      // Arrowing here already selected the row, so the menu acts on the right thing.
+      if (it?.menu) { e.preventDefault(); openRowMenu(document.querySelector('.launch-item.active'), it, ui); }
     }
   };
 
@@ -115,7 +124,7 @@ export default function launcher(state, ui, opts = {}) {
         group.items.length
           ? div({ className: 'launch-list' }, ...group.items.map((it) => {
             const at = ++gi;
-            return itemRow(it, at === idx, () => focusAt(at), ui);
+            return itemRow(it, at === idx, { hover: () => hoverAt(at), select: () => selectAt(at) }, ui);
           }))
           : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
       )),
@@ -136,7 +145,7 @@ function resolvedBar(r) {
   );
 }
 
-function itemRow(it, active, focus, ui) {
+function itemRow(it, active, { hover, select }, ui) {
   const row = div({ className: `launch-item ${active ? 'active' : ''}` },
     icon(it.icon, { size: 15 }),
     span({ className: 'name' }, it.title),
@@ -146,23 +155,31 @@ function itemRow(it, active, focus, ui) {
     // delete were all commands with no way to reach them: the palette's versions act on
     // "the selection", and until the highlight became a selection there never was one.
     it.menu
-      ? button({ className: 'launch-more', title: 'Actions', 'aria-label': `Actions for ${it.title}` }, icon('dots', { size: 14 }))
-        .on({ click: (e) => { e.stopPropagation(); focus(); openRowMenu(e.currentTarget, it, ui); } })
+      ? button({ className: 'launch-more', title: `Actions for ${it.title}`, $attrs: { 'aria-label': `Actions for ${it.title}` } }, icon('dots', { size: 14 }))
+        .on({ click: (e) => { e.stopPropagation(); openRowMenu(e.currentTarget, it, ui, null, select); } })
       : null,
-  ).on({ click: it.run, mouseenter: focus });
-  if (it.menu) {
-    row.on({ contextmenu: (e) => { e.preventDefault(); focus(); openRowMenu(e.currentTarget, it, ui, e); } });
-  }
+  // One `.on()` call: a second replaces the handler map rather than merging into it,
+  // which is how adding `contextmenu` silently removed `click` and stopped every file
+  // in the drive from opening.
+  ).on({
+    click: it.run,
+    mouseenter: hover,
+    ...(it.menu ? { contextmenu: (e) => { e.preventDefault(); openRowMenu(e.currentTarget, it, ui, e, select); } } : {}),
+  });
   return row;
 }
 
 // Anchor the menu to the row (or the pointer, when there was one) rather than to a
 // remembered click position, so the keyboard route lands somewhere sensible too.
-function openRowMenu(anchor, it, ui, event) {
+function openRowMenu(anchor, it, ui, event, select) {
   const r = anchor?.getBoundingClientRect?.();
   const x = event?.clientX ?? (r ? r.right - 8 : 0);
   const y = event?.clientY ?? (r ? r.bottom : 0);
-  ui.platform.workbench.showContextMenu(x, y, it.menu(ui));
+  // Read the coordinates BEFORE selecting: selecting re-renders, and `anchor` is then
+  // a detached node whose rect is all zeroes.
+  const items = it.menu(ui);
+  select?.();
+  ui.platform.workbench.showContextMenu(x, y, items);
 }
 
 // Keep the drive's idea of "what is selected" in step with the highlighted row.

@@ -9,6 +9,7 @@ import {
 } from './interface.js';
 import { TroveError } from '../errors.js';
 import { newId } from '../util.js';
+import { decodeCursor, encodeCursor, afterCursor } from './cursor.js';
 
 export class MemoryStore extends MetadataStore {
   constructor() {
@@ -52,19 +53,26 @@ export class MemoryStore extends MetadataStore {
   }
 
   async listItems(collectionId = 'default', opts = {}) {
-    const items = this.#live().filter((n) => n.collectionId === collectionId);
     const sort = opts.sort ?? 'name';
-    const dir = opts.order === 'desc' ? -1 : 1;
+    const desc = opts.order === 'desc';
+    const dir = desc ? -1 : 1;
+    const items = this.#live().filter((n) => n.collectionId === collectionId);
+    // `id` breaks ties, so two files of the same size still have one stable order — the
+    // cursor below depends on the ordering being total.
     items.sort((a, b) => {
       const av = a[sort], bv = b[sort];
       if (av < bv) return -1 * dir;
       if (av > bv) return 1 * dir;
-      return 0;
+      return a.id < b.id ? -1 * dir : a.id > b.id ? dir : 0;
     });
     const limit = opts.limit ?? 500;
-    const offset = opts.cursor ? Number(opts.cursor) : 0;
-    const page = items.slice(offset, offset + limit);
-    return { items: page.map(clone), nextCursor: offset + limit < items.length ? String(offset + limit) : null };
+    const at = decodeCursor(sort, opts.cursor);
+    const rest = at ? items.filter((n) => afterCursor(n, sort, at, desc)) : items;
+    const page = rest.slice(0, limit);
+    return {
+      items: page.map(clone),
+      nextCursor: rest.length > limit ? encodeCursor(sort, page[page.length - 1]) : null,
+    };
   }
 
   async create(node) {

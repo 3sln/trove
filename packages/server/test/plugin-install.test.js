@@ -108,7 +108,12 @@ test('admin can install an admin-gated package', async () => {
 });
 
 test('a contributor namespace can only be written by the plugin that owns it', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs } = await createServer({ admins: ['anonymous'] });
+  // Installed, because the namespace is only unforgeable if being the plugin is a fact
+  // on the server rather than a string in the URL — see the ghost case below.
+  await req(handle, 'POST', '/api/plugins/install?grants=indexer', {
+    body: pkg({ domain: 'acme.com', name: 'p', version: '1.0.0', capabilities: { indexer: true }, entry: 'plugin.js', contributes: { idx: { type: 'indexer', match: { ext: ['.md'] } } } }),
+  });
   const target = await vfs.writeFile('target.md', 'x', { contentType: 'text/markdown' });
   const index = await vfs.writeFile('index.md', 'see [t](trove:default/target.md)', { contentType: 'text/markdown' });
   expect((await vfs.backlinks(target.id)).map((n) => n.name)).toEqual(['index.md']);
@@ -126,6 +131,11 @@ test('a contributor namespace can only be written by the plugin that owns it', a
   // A bare string names nothing verifiable.
   expect((await push('whatever', { nodeId: index.id, tags: { a: 1 } })).status).toBe(403);
   expect((await vfs.backlinks(target.id)).map((n) => n.name)).toEqual(['index.md']);
+
+  // A plugin that was never installed is not an identity, whatever the URI says. This
+  // is checked whether or not strict capability enforcement is on: the transitional
+  // allow covers a missing GRANT, not a missing plugin.
+  expect((await push('trove+contrib:ghost.example/p/idx', { nodeId: index.id, tags: { a: 1 } })).status).toBe(403);
 
   // A plugin's own contribution URI is fine — it's scoped to its verified identity.
   expect((await push('trove+contrib:acme.com/p/idx', { nodeId: index.id, tags: { a: 1 } })).status).toBe(200);
@@ -150,7 +160,10 @@ test('strict mode also requires the plugin to be installed with the indexer capa
 // payload too big to even parse, and the contribution caps bound what a payload that
 // DID parse may store. This exercises the second — the first is covered in hardening.
 test('a contribution is clamped wherever it came from, including the API push', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs } = await createServer({ admins: ['anonymous'] });
+  await req(handle, 'POST', '/api/plugins/install?grants=indexer', {
+    body: pkg({ domain: 'acme.com', name: 'p', version: '1.0.0', capabilities: { indexer: true }, entry: 'plugin.js', contributes: { idx: { type: 'indexer', match: { ext: ['.md'] } } } }),
+  });
   const n = await vfs.writeFile('x.md', 'hi', { contentType: 'text/markdown' });
   const ns = 'trove+contrib:acme.com/p/idx';
   const res = await handle(new Request(`http://t/api/index/${encodeURIComponent(ns)}`, {
