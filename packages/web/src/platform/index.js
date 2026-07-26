@@ -16,6 +16,7 @@ import { TroveApiClient } from './api.js';
 import { PluginHost } from './pluginHost.js';
 import { WorkbenchService } from './workbench.js';
 import { ViewportService } from './viewport.js';
+import { SpatialNavigationService } from './spatialNav.js';
 
 /**
  * The bearer token for this browser, if any.
@@ -53,10 +54,13 @@ export function createPlatform({ baseUrl = '' } = {}) {
   // Which shell to render — phone, desktop, or TV. Constructed before the defaults are
   // registered, so it reads the setting through `settings.get` once that exists.
   const viewport = new ViewportService({ settings, context });
+  // Arrow keys → geometry, but only on a TV. Inert everywhere else.
+  const spatialNav = new SpatialNavigationService({ workbench, viewport });
 
   const platform = {
     reactive,
-    contributions, context, commands, keybindings, settings, notifications, api, workbench, viewport,
+    contributions, context, commands, keybindings, settings, notifications, api, workbench,
+    viewport, spatialNav,
     capabilities: null,
     openPluginPanel: null, // set by the workbench UI
   };

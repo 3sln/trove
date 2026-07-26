@@ -43,6 +43,8 @@ platform.settings.observe().subscribe(() => applyTheme());
 // Watch the window so rotating a phone, or dragging a desktop window narrow, re-picks
 // the shell. Also stamps data-layout on <html> for the CSS half of the same decision.
 platform.viewport.install();
+// Remote-control navigation, which switches itself on and off with the TV layout.
+platform.spatialNav.install();
 
 // --- keybindings ------------------------------------------------------------
 platform.keybindings.install(window);

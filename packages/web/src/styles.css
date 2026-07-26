@@ -919,3 +919,43 @@ kbd {
   left: 8px; right: 8px; width: auto;
   bottom: calc(var(--phonetabs-h) + env(safe-area-inset-bottom) + 8px);
 }
+
+/* --- TV shell ----------------------------------------------------------------
+   A television is a screen you read from three metres away with a four-button remote.
+   Two things follow. Everything is bigger — not "zoomed", but sized so a filename is
+   legible at that distance. And the focus ring is not a subtle affordance: it is the
+   only cursor there is, so it has to be findable at a glance from across a room. */
+.shell.tv {
+  font-size: 17px;
+  /* Overscan. Plenty of sets still crop the outer few percent of the signal, which is
+     exactly where a rail and a status bar live — without this the first column of
+     navigation is off the edge of the picture on the TV and nowhere else. */
+  padding: 2.2% 2.6%;
+  --activity-w: 84px;
+  --statusbar-h: 34px;
+}
+.shell.tv .activitybar { gap: 10px; padding: 16px 0 18px; }
+.shell.tv .activitybar .item,
+.shell.tv .activitybar .iconbtn,
+.shell.tv .activitybar .brand-mark { width: 64px; height: 64px; border-radius: 14px; }
+.shell.tv .statusbar { font-size: 15px; }
+.shell.tv .launcher { max-width: 1100px; }
+.shell.tv .launch-input { font-size: 24px; }
+.shell.tv .launch-box { padding: 16px 22px; border-radius: 16px; }
+.shell.tv .launch-item { padding: 14px 16px; font-size: 18px; border-radius: 12px; }
+.shell.tv .launch-item .name { max-width: none; }
+.shell.tv .launch-h { font-size: 14px; }
+.shell.tv .btn { padding: 11px 20px; font-size: 16px; }
+
+/* The remote's cursor. Both :focus and :focus-visible — a d-pad move is a programmatic
+   focus() and browsers disagree about whether that counts as "visible". */
+.shell.tv :focus,
+.shell.tv :focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+.shell.tv .launch-item:focus,
+.shell.tv .sheet-row:focus { background: var(--bg-selected); }
+/* A focus ring clipped by an ancestor's overflow is a selection that vanishes mid-list. */
+.shell.tv .launch-body { overflow-x: visible; }
