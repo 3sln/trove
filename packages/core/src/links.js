@@ -27,6 +27,14 @@ import { TroveError } from './errors.js';
 
 export const TROVE_SCHEME = 'trove:';
 
+// An item name is capped at 255 chars (isValidItemName), so a longer selector can never
+// resolve to anything. Refusing it at parse time keeps garbage out of the links index
+// rather than storing kilobytes that will never match.
+const MAX_SELECTOR = 255;
+// How many distinct links one item may record. A document is a grouping, not a database
+// dump; past this the value is in the search index, not the link graph.
+export const MAX_LINKS_PER_ITEM = 500;
+
 // Collection ids are slugs (see CollectionService); a name is anything but a slash,
 // since the pathname shorthand has to stop somewhere.
 const COLLECTION_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
@@ -53,13 +61,19 @@ export function parseTroveUri(uri) {
 
   const id = url.searchParams.get('id');
   const name = url.searchParams.get('name');
-  const shorthand = slash < 0 ? '' : decodeURIComponent(path.slice(slash + 1));
+  let shorthand = '';
+  if (slash >= 0) {
+    // A malformed percent-escape is a malformed link, not an exception to propagate
+    // out of a document render.
+    try { shorthand = decodeURIComponent(path.slice(slash + 1)); } catch { return null; }
+  }
 
   // Both selectors at once is a contradiction, not something to silently pick between.
   if (id != null && (name != null || shorthand)) return null;
-  if (id != null) return id ? { collection, by: 'id', value: id } : null;
-  const chosen = name != null ? name : shorthand;
-  return chosen ? { collection, by: 'name', value: chosen } : null;
+  const by = id != null ? 'id' : 'name';
+  const value = id != null ? id : (name != null ? name : shorthand);
+  if (!value || value.length > MAX_SELECTOR) return null;
+  return { collection, by, value };
 }
 
 /** Whether `uri` is a well-formed trove: reference. */
@@ -89,13 +103,14 @@ export function troveUri(node, by = 'name') {
  * is to know what an item references — not to reproduce one renderer's idea of a link.
  * Trailing punctuation is trimmed so `see trove:default/a.md.` doesn't capture the dot.
  */
-export function extractTroveLinks(text) {
+export function extractTroveLinks(text, { limit = MAX_LINKS_PER_ITEM } = {}) {
   if (typeof text !== 'string' || !text) return [];
   const out = [];
   const seen = new Set();
   // Stop at whitespace and at the delimiters that wrap a URL in markdown/HTML.
   const re = /trove:[^\s<>"'`)\]}]+/gi;
   for (const m of text.matchAll(re)) {
+    if (out.length >= limit) break;
     const raw = m[0].replace(/[.,;:!?]+$/, '');
     const parsed = parseTroveUri(raw);
     if (!parsed) continue;

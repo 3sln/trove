@@ -30,7 +30,7 @@ function matchesCategory(cat, ext, ct) {
   return cat.mime.some((m) => (m.endsWith('/') ? ct.startsWith(m) : ct === m));
 }
 
-/** Classify a node → 'folder'|'audiobook'|'audio'|'image'|'video'|'text'|'file'. */
+/** Classify an item → 'audiobook'|'audio'|'image'|'video'|'text'|'file'. */
 export function kindOf(node) {
   const ext = extOf(node);
   const ct = node?.contentType || '';

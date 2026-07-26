@@ -43,7 +43,7 @@ test('default collection is open in zero-config', async () => {
   const cols = await api(handle, 'GET', '/api/collections');
   expect(cols.json.collections[0].id).toBe('default');
   // anonymous can list (and write to) the default (open) collection
-  const f = await api(handle, 'GET', '/api/fs/list');
+  const f = await api(handle, 'GET', '/api/items');
   expect(f.status).toBe(200);
 });
 
@@ -81,7 +81,7 @@ test('collections isolate data and enforce read/write/delete', async () => {
   const cid = created.json.collection.id;
 
   // The new collection is its own namespace, initially empty.
-  const listed = await api(handle, 'GET', `/api/fs/list?collection=${cid}`, { token: boss });
+  const listed = await api(handle, 'GET', `/api/items?collection=${cid}`, { token: boss });
   expect(listed.status).toBe(200);
   expect(listed.json.items).toEqual([]);
   expect(listed.json.collectionId).toBe(cid);
@@ -92,21 +92,21 @@ test('collections isolate data and enforce read/write/delete', async () => {
 
   // The default collection does NOT see it — collections are separate namespaces, so
   // the same name can exist in both without colliding.
-  const defaultList = await api(handle, 'GET', '/api/fs/list', { token: boss });
+  const defaultList = await api(handle, 'GET', '/api/items', { token: boss });
   expect(defaultList.json.items.some((i) => i.name === 'secret.txt')).toBe(false);
   expect((await writeInto(handle, 'default', boss, 'secret.txt')).status).toBe(200);
 
   // A reader with no grant can't even read the new collection.
-  const noAccess = await api(handle, 'GET', `/api/fs/list?collection=${cid}`, { token: reader });
+  const noAccess = await api(handle, 'GET', `/api/items?collection=${cid}`, { token: reader });
   expect(noAccess.status).toBe(403);
 
   // Grant the reader read-only, then they can list but not write or delete.
   await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
-  const canRead = await api(handle, 'GET', `/api/fs/list?collection=${cid}`, { token: reader });
+  const canRead = await api(handle, 'GET', `/api/items?collection=${cid}`, { token: reader });
   expect(canRead.status).toBe(200);
   expect(canRead.json.items.map((i) => i.name)).toEqual(['secret.txt']);
   expect((await writeInto(handle, cid, reader, 'nope.txt')).status).toBe(403);
-  const cantDelete = await api(handle, 'POST', '/api/fs/delete', { token: reader, body: { id: secret.id } });
+  const cantDelete = await api(handle, 'POST', '/api/items/delete', { token: reader, body: { id: secret.id } });
   expect(cantDelete.status).toBe(403);
 });
 
@@ -139,16 +139,16 @@ test('a read-only user cannot add OR remove tags (tag DELETE is write-gated)', a
   const file = await writeInto(handle, cid, boss, 'doc.txt');
   const id = file.id;
   // Boss tags it.
-  const tagged = await api(handle, 'POST', `/api/files/${id}/tags`, { token: boss, body: { name: 'fav', value: 'yes' } });
+  const tagged = await api(handle, 'POST', `/api/items/${id}/tags`, { token: boss, body: { name: 'fav', value: 'yes' } });
   expect(tagged.status).toBe(200);
 
   await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
   // Read-only reader can neither add nor remove tags.
-  const cantAdd = await api(handle, 'POST', `/api/files/${id}/tags`, { token: reader, body: { name: 'x', value: '1' } });
+  const cantAdd = await api(handle, 'POST', `/api/items/${id}/tags`, { token: reader, body: { name: 'x', value: '1' } });
   expect(cantAdd.status).toBe(403);
-  const cantRemove = await api(handle, 'DELETE', `/api/files/${id}/tags/fav`, { token: reader });
+  const cantRemove = await api(handle, 'DELETE', `/api/items/${id}/tags/fav`, { token: reader });
   expect(cantRemove.status).toBe(403);
   // And the tag survived the denied removal.
-  const boss2 = await api(handle, 'GET', `/api/fs/stat?id=${id}`, { token: boss });
+  const boss2 = await api(handle, 'GET', `/api/items/resolve?id=${id}`, { token: boss });
   expect(boss2.json.node.tags?.fav).toBe('yes');
 });

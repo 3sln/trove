@@ -4,6 +4,7 @@
 
 import { Router, json, parseRange } from './router.js';
 import { TroveError, assertSafePluginSql, concatBytes } from '@trove/core';
+import { parseContribUri, CORE_DOMAIN } from '@trove/core/plugins/identity.js';
 
 const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
 // Cap JSON request bodies so a giant payload can't exhaust server memory. Uploads
@@ -172,9 +173,15 @@ export function createRouter() {
 
   // --- browse ----------------------------------------------------------------
 
+  // --- items -----------------------------------------------------------------
+  // One noun: there is no filesystem and no folders, so everything addressable is an
+  // item in a collection. Collection-level verbs sit at `/api/items/<verb>` and
+  // item-scoped ones at `/api/items/:id/…`. The router matches in registration order,
+  // so these literal routes must stay ABOVE any same-length `:id` route added later.
+
   // Every item in a collection. There is nothing to descend into — a drive is browsed
   // by search and by following links, and this is the "show me everything" fallback.
-  r.get('/api/fs/list', async (ctx) => {
+  r.get('/api/items', async (ctx) => {
     const { vfs, query } = ctx;
     const collectionId = collectionOf(query);
     await assertCap(ctx, collectionId, 'read');
@@ -187,7 +194,7 @@ export function createRouter() {
   });
 
   // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.
-  r.get('/api/fs/stat', async (ctx) => {
+  r.get('/api/items/resolve', async (ctx) => {
     const { query } = ctx;
     const ref = query.id || query.uri || query.name;
     if (!ref) throw TroveError.invalid('id, name or uri is required');
@@ -198,7 +205,7 @@ export function createRouter() {
 
   // What links to this item — the inverse of the links its own content declares, and
   // what replaces "which folder is it in?".
-  r.get('/api/fs/backlinks', async (ctx) => {
+  r.get('/api/items/backlinks', async (ctx) => {
     const node = await nodeWithCap(ctx, ctx.query.id, 'read');
     const items = await ctx.vfs.backlinks(node.id, { limit: clampLimit(ctx.query.limit, 100) });
     const readable = [];
@@ -208,7 +215,7 @@ export function createRouter() {
     return { items: readable };
   });
 
-  r.post('/api/fs/rename', async (ctx) => {
+  r.post('/api/items/rename', async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id || !b.newName) throw TroveError.invalid('id and newName are required');
     const node = await ctx.vfs.stat(b.id);
@@ -216,7 +223,7 @@ export function createRouter() {
     return { node: await ctx.vfs.rename(b.id, b.newName) };
   });
 
-  r.post('/api/fs/delete', async (ctx) => {
+  r.post('/api/items/delete', async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
     const node = await ctx.vfs.stat(b.id);
@@ -226,7 +233,7 @@ export function createRouter() {
 
   // --- download (presign redirect or range-aware proxy) ----------------------
 
-  r.get('/api/fs/download', async (ctx) => {
+  r.get('/api/items/download', async (ctx) => {
     const { vfs, query, req } = ctx;
     const id = query.id;
     if (!id) throw TroveError.invalid('id is required');
@@ -366,9 +373,15 @@ export function createRouter() {
   // Plugin indexers push a namespaced contribution here (semanticTexts / tags /
   // metadata; legacy documents/facet accepted). The namespace is the path param,
   // so a plugin can only ever write under its own id.
+  // Push a contribution under a contributor namespace. TWO gates, because they answer
+  // different questions: `write` on the collection says you may change this item at
+  // all, and namespace ownership says you may speak AS this contributor. Without the
+  // second, anyone who can write anywhere could overwrite `core.links` and quietly
+  // break every backlink, or impersonate another plugin's index.
   r.post('/api/index/:indexerId', async (ctx) => {
     const b = await body(ctx.req);
     if (!b.nodeId) throw TroveError.invalid('nodeId is required');
+    await assertContributorOwned(ctx, ctx.params.indexerId);
     await assertCap(ctx, (await ctx.vfs.stat(b.nodeId)).collectionId, 'write');
     return ctx.vfs.indexContributions(b.nodeId, ctx.params.indexerId, {
       semanticTexts: b.semanticTexts, tags: b.tags, metadata: b.metadata,
@@ -387,13 +400,13 @@ export function createRouter() {
   // --- conversations, tags, sidecar (per file) -------------------------------
   // The :id is a file node id; the sidecar is that file's CRDT document.
 
-  r.get('/api/files/:id/sidecar', async (ctx) => {
+  r.get('/api/items/:id/sidecar', async (ctx) => {
     requireSidecar(ctx.sidecar);
     await nodeWithCap(ctx, ctx.params.id, 'read'); // 404 if the file is gone
     return ctx.sidecar.view(ctx.params.id);
   });
 
-  r.post('/api/files/:id/comments', async (ctx) => {
+  r.post('/api/items/:id/comments', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write');
@@ -401,7 +414,7 @@ export function createRouter() {
     return { comment: await ctx.sidecar.addComment(ctx.params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
   });
 
-  r.post('/api/files/:id/comments/:cid/edit', async (ctx) => {
+  r.post('/api/items/:id/comments/:cid/edit', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
@@ -409,14 +422,14 @@ export function createRouter() {
     return { comment: await ctx.sidecar.editComment(ctx.params.id, ctx.params.cid, b.body, ctx.principal) };
   });
 
-  r.delete('/api/files/:id/comments/:cid', async (ctx) => {
+  r.delete('/api/items/:id/comments/:cid', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
     return ctx.sidecar.deleteComment(ctx.params.id, ctx.params.cid, ctx.principal);
   });
 
-  r.post('/api/files/:id/comments/:cid/react', async (ctx) => {
+  r.post('/api/items/:id/comments/:cid/react', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write');
@@ -425,7 +438,7 @@ export function createRouter() {
     return { comment: await ctx.sidecar.react(ctx.params.id, ctx.params.cid, b.emoji, b.on !== false, ctx.principal) };
   });
 
-  r.post('/api/files/:id/tags', async (ctx) => {
+  r.post('/api/items/:id/tags', async (ctx) => {
     requireSidecar(ctx.sidecar);
     await nodeWithCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
@@ -434,7 +447,7 @@ export function createRouter() {
     return ctx.vfs.setTag(ctx.params.id, b.name, b.value, ctx.principal);
   });
 
-  r.delete('/api/files/:id/tags/:name', async (ctx) => {
+  r.delete('/api/items/:id/tags/:name', async (ctx) => {
     requireSidecar(ctx.sidecar);
     // Removing a tag is a write — enforce the same per-collection ACL as adding one,
     // or a read-only user could strip tags off files they can't modify.
@@ -442,14 +455,14 @@ export function createRouter() {
     return ctx.vfs.removeTag(ctx.params.id, ctx.params.name, ctx.principal);
   });
 
-  r.post('/api/files/:id/subscribe', async (ctx) => {
+  r.post('/api/items/:id/subscribe', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'read');
     const b = await body(ctx.req);
     return ctx.sidecar.subscribe(ctx.params.id, ctx.principal, !!b.muted);
   });
-  r.delete('/api/files/:id/subscribe', async (ctx) => {
+  r.delete('/api/items/:id/subscribe', async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'read');
@@ -644,6 +657,24 @@ function uploadDescriptor(plan) {
   // Drop the now-internal raw transfer fields in favour of `transfer`.
   const { presigned, url, parts, ...rest } = plan;
   return { ...rest, transfer, endpoints };
+}
+
+/**
+ * A contributor namespace may only be written by whoever owns it.
+ *
+ * Only a plugin can push through the API, and only under its own contribution URI —
+ * which is unforgeable, since it is scoped to the plugin's verified domain and name.
+ * That rules out the two things a bare string would allow: writing a built-in's
+ * namespace (`core.*`, whose contributions the server produces and nobody else may
+ * touch), and writing another plugin's.
+ */
+async function assertContributorOwned(ctx, contributorId) {
+  const parsed = parseContribUri(contributorId);
+  if (!parsed || parsed.domain === CORE_DOMAIN) {
+    throw TroveError.forbidden(`"${contributorId}" is not a namespace you can contribute to`);
+  }
+  if (!ctx.plugins) return; // plugin service disabled → no install records to check against
+  await ctx.plugins.assertCapability(ctx.principal, parsed.pluginId, 'indexer');
 }
 
 async function assertCap(ctx, collectionId, capability) {

@@ -34,7 +34,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin || req.method !== 'GET') return; // only same-origin GETs
 
-  if (url.pathname === '/api/fs/download') {
+  if (url.pathname === '/api/items/download') {
     event.respondWith(pinnedFirst(req));
     return;
   }

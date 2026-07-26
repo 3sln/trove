@@ -53,20 +53,20 @@ test('installing a server indexer backfills existing files; uninstall purges', a
 
   // A file exists before the indexer is installed (its .demo ext matches nothing yet).
   const node = await upload(handle, 'report.demo', 'alpha beta gamma');
-  let stat = await json(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  let stat = await json(handle, 'GET', `/api/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions?.[IDX]).toBeUndefined();
 
   // Admin installs it → activate() backfills synchronously within the request.
   const inst = await handle(new Request('http://t/api/plugins/install', { method: 'POST', body: indexerPackage() }));
   expect(inst.status).toBe(200);
 
-  stat = await json(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  stat = await json(handle, 'GET', `/api/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions[IDX].tags).toEqual({ indexed: true, words: 3 });
   expect(stat.json.node.tags.words).toBe(3); // merged view
 
   // Uninstall → purge() clears the contribution.
   const rm = await json(handle, 'DELETE', `/api/plugins/${encodeURIComponent(DEMO_ID)}/install`);
   expect(rm.json.removed).toBe(DEMO_ID);
-  stat = await json(handle, 'GET', `/api/fs/stat?id=${node.id}`);
+  stat = await json(handle, 'GET', `/api/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions?.[IDX]).toBeUndefined();
 });

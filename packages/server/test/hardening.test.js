@@ -12,7 +12,7 @@ async function seed(vfs, name, bytes, contentType) {
 test('download forces attachment + nosniff for non-inline-safe types (HTML/SVG)', async () => {
   const { handle, vfs } = await createServer();
   const html = await seed(vfs, 'evil.html', [60, 33, 45], 'text/html');
-  const res = await handle(new Request(`http://t/api/fs/download?id=${html.id}`));
+  const res = await handle(new Request(`http://t/api/items/download?id=${html.id}`));
   expect(res.headers.get('content-disposition')).toStartWith('attachment');
   expect(res.headers.get('x-content-type-options')).toBe('nosniff');
 });
@@ -20,14 +20,14 @@ test('download forces attachment + nosniff for non-inline-safe types (HTML/SVG)'
 test('download stays inline for safe media types (images)', async () => {
   const { handle, vfs } = await createServer();
   const png = await seed(vfs, 'pic.png', [1, 2, 3], 'image/png');
-  const res = await handle(new Request(`http://t/api/fs/download?id=${png.id}`));
+  const res = await handle(new Request(`http://t/api/items/download?id=${png.id}`));
   expect(res.headers.get('content-disposition')).toStartWith('inline');
 });
 
 test('oversized JSON body is rejected', async () => {
   const { handle } = await createServer();
   const big = 'a'.repeat(4 * 1024 * 1024 + 32); // just over the 4 MiB default cap
-  const res = await handle(new Request('http://t/api/fs/rename', {
+  const res = await handle(new Request('http://t/api/items/rename', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id: 'x', newName: big }),
   }));
@@ -62,7 +62,7 @@ test('readiness probe reports ok when the store answers', async () => {
 test('list limit is clamped (no error on an absurd limit)', async () => {
   const { handle, vfs } = await createServer();
   await vfs.writeFile('a.txt', 'x', { contentType: 'text/plain' });
-  const res = await handle(new Request('http://t/api/fs/list?limit=99999999'));
+  const res = await handle(new Request('http://t/api/items?limit=99999999'));
   expect(res.status).toBe(200);
   expect(Array.isArray((await res.json()).items)).toBe(true);
 });

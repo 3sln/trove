@@ -16,17 +16,12 @@
 
 import { TroveError } from '../errors.js';
 import { withTimeout } from '../retry.js';
+// The contribution contract (shape + caps) lives with contributions, not with one of
+// the runtimes that produce them. Clamping here bounds what crosses the isolate
+// boundary into host memory; the indexing coordinator clamps again as the authority
+// for what is actually stored.
+import { clampContribution, DEFAULT_CAPS } from '../indexers/contribution.js';
 
-/** Output caps applied to every indexer contribution regardless of runtime. */
-export const DEFAULT_CAPS = {
-  maxSemanticTexts: 500, // number of chunks
-  maxTextChars: 100_000, // per chunk
-  maxSemanticChars: 2_000_000, // total across chunks
-  maxTags: 100, // number of tag entries
-  maxTagKeyChars: 128,
-  maxTagValueChars: 2_048,
-  maxMetadataBytes: 256 * 1024, // JSON-serialized metadata
-};
 
 export class IndexerRuntime {
   /**
@@ -103,59 +98,4 @@ function bytesToBase64(bytes) {
  * contribution is trimmed to something safe rather than rejected, so one bad chunk
  * doesn't sink the whole indexing pass.
  */
-export function clampContribution(raw, caps = DEFAULT_CAPS) {
-  const c = { ...DEFAULT_CAPS, ...caps };
-  const out = {};
-  const src = raw && typeof raw === 'object' ? raw : {};
 
-  const texts = src.semanticTexts || src.documents;
-  if (Array.isArray(texts)) {
-    const docs = [];
-    let budget = c.maxSemanticChars;
-    for (const d of texts) {
-      if (docs.length >= c.maxSemanticTexts || budget <= 0) break;
-      const text = typeof d === 'string' ? d : (d && typeof d.text === 'string' ? d.text : null);
-      if (!text) continue;
-      const clipped = text.length > c.maxTextChars ? text.slice(0, c.maxTextChars) : text;
-      const room = Math.min(clipped.length, budget);
-      const finalText = room < clipped.length ? clipped.slice(0, room) : clipped;
-      budget -= finalText.length;
-      const doc = typeof d === 'string' ? { text: finalText } : { ...d, text: finalText };
-      if (doc.fields && typeof doc.fields !== 'object') delete doc.fields;
-      docs.push(doc);
-    }
-    if (docs.length) out.semanticTexts = docs;
-  }
-
-  const tags = src.tags;
-  if (tags && typeof tags === 'object' && !Array.isArray(tags)) {
-    const clean = {};
-    let n = 0;
-    for (const [k, v] of Object.entries(tags)) {
-      if (n >= c.maxTags) break;
-      if (typeof k !== 'string' || k.length > c.maxTagKeyChars) continue;
-      const cv = clampTagValue(v, c.maxTagValueChars);
-      if (cv === undefined) continue;
-      clean[k] = cv;
-      n++;
-    }
-    if (n) out.tags = clean;
-  }
-
-  const metadata = src.metadata || src.facet;
-  if (metadata && typeof metadata === 'object') {
-    try {
-      const json = JSON.stringify(metadata);
-      if (json && json.length <= c.maxMetadataBytes) out.metadata = JSON.parse(json);
-    } catch { /* non-serializable metadata is dropped */ }
-  }
-
-  return out;
-}
-
-function clampTagValue(v, maxChars) {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'string') return v.length > maxChars ? v.slice(0, maxChars) : v;
-  return undefined; // objects/arrays/null aren't filterable tag values
-}

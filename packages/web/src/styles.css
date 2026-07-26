@@ -731,3 +731,7 @@ kbd {
 /* An in-drive link reads differently from one that leaves the app. */
 .md-trove { border-bottom: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent); }
 .md-deadlink { color: var(--text-faint); text-decoration: line-through; cursor: not-allowed; }
+.md-truncated {
+  margin: 1.5em 0 0; padding: 10px 12px; border-radius: 8px;
+  border: 1px dashed var(--border); color: var(--text-faint); font-size: 12.5px;
+}

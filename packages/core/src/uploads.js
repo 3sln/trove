@@ -13,7 +13,7 @@
 // appears only on `complete`, so a half-finished upload leaves no ghost files.
 
 import { TroveError, ErrorCode } from './errors.js';
-import { newId, isValidName } from './util.js';
+import { newId, isValidItemName } from './util.js';
 
 export const DEFAULT_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
 const MIN_MULTIPART_PART = 5 * 1024 * 1024; // S3 floor (except final part)
@@ -74,7 +74,7 @@ export class UploadManager {
    * @param {{collectionId?:string, name:string, size:number, contentType?:string}} req
    */
   async create(req) {
-    if (!isValidName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
+    if (!isValidItemName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
     if (!(req.size >= 0)) throw TroveError.invalid('size must be a non-negative number');
     if (this.maxBytes && req.size > this.maxBytes) {
       // Deterministic per-file limit — retrying can't help, so it's non-retryable

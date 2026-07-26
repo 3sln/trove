@@ -16,24 +16,18 @@ function fallbackUuid() {
   return s;
 }
 
-// ---- POSIX-style path handling ---------------------------------------------
-// Trove uses forward-slash virtual paths everywhere, independent of the host
-// filesystem. Roots are '/', segments never contain slashes, '.'/'..' and empty
-// segments are rejected (no traversal) at the boundary.
+// ---- item names -------------------------------------------------------------
+// There are no paths: a collection is a flat namespace, and a name is the whole
+// address within it. Slashes are rejected because a name has to survive the `/name`
+// shorthand of a trove: link without splitting.
 
-export function normalizePath(p) {
-  if (typeof p !== 'string') throw TroveError.invalid('Path must be a string');
-  // collapse repeats, strip trailing slash (except root)
-  const parts = p.split('/').filter((s) => s.length > 0);
-  for (const seg of parts) {
-    if (seg === '.' || seg === '..') {
-      throw TroveError.invalid(`Illegal path segment "${seg}"`);
-    }
-  }
-  return '/' + parts.join('/');
-}
-
-export function isValidName(name) {
+/**
+ * A user-visible ITEM name. Distinct from the `isValidName` in plugins/identity.js,
+ * which validates a *name segment in the contribution address space* — same word, very
+ * different rule, so they get different names rather than colliding across the two
+ * public entry points that export them.
+ */
+export function isValidItemName(name) {
   return (
     typeof name === 'string' &&
     name.length > 0 &&
@@ -46,28 +40,10 @@ export function isValidName(name) {
   );
 }
 
-export function joinPath(dir, name) {
-  if (!isValidName(name)) throw TroveError.invalid(`Invalid name "${name}"`);
-  const base = normalizePath(dir);
-  return base === '/' ? `/${name}` : `${base}/${name}`;
-}
-
-export function parentPath(p) {
-  const np = normalizePath(p);
-  if (np === '/') return null;
-  const idx = np.lastIndexOf('/');
-  return idx === 0 ? '/' : np.slice(0, idx);
-}
-
-export function basename(p) {
-  const np = normalizePath(p);
-  return np === '/' ? '' : np.slice(np.lastIndexOf('/') + 1);
-}
-
+/** The lowercased extension of an item name, including the dot ('' if none). */
 export function extname(name) {
-  const b = basename(name) || name;
-  const i = b.lastIndexOf('.');
-  return i > 0 ? b.slice(i).toLowerCase() : '';
+  const i = String(name || '').lastIndexOf('.');
+  return i > 0 ? String(name).slice(i).toLowerCase() : '';
 }
 
 /**

@@ -11,6 +11,7 @@
 
 import { TroveError } from './errors.js';
 import { readAll } from './util.js';
+import { normalizeContribution, clampContribution, DEFAULT_CAPS } from './indexers/contribution.js';
 
 export class IndexingCoordinator {
   /**
@@ -20,13 +21,15 @@ export class IndexingCoordinator {
    * @param {import('./indexers/registry.js').IndexerRegistry} deps.indexers
    * @param {(collectionId: string) => Promise<object>} deps.storageFor
    * @param {number} deps.maxIndexBytes
+   * @param {object} [deps.caps]  contribution size caps (see indexers/contribution.js)
    */
-  constructor({ metadata, search, indexers, storageFor, maxIndexBytes }) {
+  constructor({ metadata, search, indexers, storageFor, maxIndexBytes, caps }) {
     this.metadata = metadata;
     this.search = search ?? null;
     this.indexers = indexers;
     this.storageFor = storageFor;
     this.maxIndexBytes = maxIndexBytes;
+    this.caps = { ...DEFAULT_CAPS, ...caps };
   }
 
   /**
@@ -44,23 +47,30 @@ export class IndexingCoordinator {
     return { ok: true };
   }
 
-  /** @deprecated positional form kept for existing callers; use indexContributions. */
-  async indexDocuments(nodeId, indexerId, documents, facet) {
-    return this.indexContributions(nodeId, indexerId, { documents, facet });
-  }
-
+  /**
+   * THE choke point: every contribution reaches storage through here, whether it came
+   * from a built-in indexer, a plugin indexer in the isolate, or a sandboxed plugin
+   * pushing over the API. So this is where the size caps have to be applied — clamping
+   * inside any one producer would leave the other two unbounded, and the API push is
+   * the one most exposed to untrusted code.
+   */
   async #applyContribution(nodeId, contributorId, contribution) {
-    const { semanticTexts, tags, metadata } = normalizeContribution(contribution);
+    const { semanticTexts, tags, metadata } = normalizeContribution(clampContribution(contribution, this.caps));
     if (this.search && semanticTexts.length) await this.search.indexDocuments(nodeId, contributorId, semanticTexts);
     // Indexer contributions live in the queryable metadata store (not the sidecar),
     // so they show up in list/stat and drive tag filtering.
     if (tags || metadata) await this.metadata.setContribution(nodeId, contributorId, { tags, metadata });
   }
 
+  /** Clear this contributor's search entries for a node (an empty re-index). */
+  async #clearSearch(nodeId, contributorId) {
+    if (this.search) await this.search.indexDocuments(nodeId, contributorId, []).catch(() => {});
+  }
+
   /** Remove everything a contributor added to a node (search + tags + metadata). */
   async removeContributions(nodeId, contributorId) {
     // Re-indexing with no docs clears this (node, contributor)'s vectors + keywords.
-    if (this.search) await this.search.indexDocuments(nodeId, contributorId, []).catch(() => {});
+    await this.#clearSearch(nodeId, contributorId);
     await this.metadata.clearContribution(nodeId, contributorId);
   }
 
@@ -114,7 +124,7 @@ export class IndexingCoordinator {
     let done = 0;
     let afterId = null;
     while (done < limit) {
-      const files = await this.metadata.listFiles({ afterId, limit: Math.min(pageSize, limit - done) });
+      const files = await this.metadata.scanItems({ afterId, limit: Math.min(pageSize, limit - done) });
       if (!files.length) break;
       for (const node of files) {
         afterId = node.id;
@@ -143,7 +153,7 @@ export class IndexingCoordinator {
     let cleared = 0;
     let afterId = null;
     for (;;) {
-      const files = await this.metadata.listFiles({ afterId, limit: pageSize });
+      const files = await this.metadata.scanItems({ afterId, limit: pageSize });
       if (!files.length) break;
       for (const node of files) {
         afterId = node.id;
@@ -158,12 +168,3 @@ export class IndexingCoordinator {
   }
 }
 
-// Normalize an indexer/plugin contribution to the three canonical scopes, accepting
-// the legacy `{ documents, facet }` shape (documents→semanticTexts, facet→metadata).
-export function normalizeContribution(c = {}) {
-  return {
-    semanticTexts: c.semanticTexts || c.documents || [],
-    tags: c.tags || null,
-    metadata: c.metadata || c.facet || null,
-  };
-}

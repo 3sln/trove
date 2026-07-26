@@ -94,3 +94,26 @@ test('empty and degenerate input renders nothing rather than throwing', () => {
   expect(() => render('***')).not.toThrow();
   expect(() => render('#'.repeat(50))).not.toThrow();
 });
+
+test('a hostile document is bounded, not fatal — it must never take the viewer down', () => {
+  // The failure this replaces: one recursion per inline span overflowed the stack
+  // mid-render, and the viewer sat on its loading spinner forever saying nothing.
+  const manySpans = '*a* '.repeat(30000);
+  let el;
+  expect(() => { el = render(manySpans); }).not.toThrow();
+  expect(el.querySelectorAll('em').length).toBeGreaterThan(0);
+
+  // Deeply nested markers recurse on CONTENTS only, and stop at a fixed depth.
+  const deep = '*'.repeat(400) + 'x' + '*'.repeat(400);
+  expect(() => render(deep)).not.toThrow();
+
+  // Long single lines and huge documents are truncated with a visible notice — a
+  // silently-cut document reads as "the rest isn't there".
+  const huge = '# H\n\n' + 'lorem ipsum dolor sit amet. '.repeat(40000);
+  const big = render(huge);
+  expect(big.querySelector('.md-truncated')).toBeTruthy();
+
+  // Many blocks are capped the same way.
+  const blocks = render('- x\n\n'.repeat(9000));
+  expect(blocks.querySelector('.md-truncated')).toBeTruthy();
+});

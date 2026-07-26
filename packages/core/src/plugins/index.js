@@ -14,7 +14,8 @@ export { PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore 
 export { parsePluginPackage, capabilityList, ALL_CAPABILITIES, serverIndexers, declaredOpeners, declaredContributions } from './package.js';
 export * from './identity.js';
 export { CONTRIBUTION_TYPES, contributionsOfType } from './contributions.js';
-export { IndexerRuntime, InProcessIndexerRuntime, clampContribution, DEFAULT_CAPS } from './runtime.js';
+export { IndexerRuntime, InProcessIndexerRuntime } from './runtime.js';
+export { clampContribution, DEFAULT_CAPS } from '../indexers/contribution.js';
 export { PluginIndexers, matchFromSelector } from './indexers.js';
 
 // The account a principal installs into. Per-user for now; a workspace/org model can

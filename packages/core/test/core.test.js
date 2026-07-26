@@ -5,7 +5,7 @@
 import { test, expect } from 'bun:test';
 import {
   createVfs, MemoryStorage, MemoryStore, FilesystemStorage,
-  SearchService, LocalHashEmbedding, TroveError, normalizePath, joinPath,
+  SearchService, LocalHashEmbedding, TroveError, isValidItemName, extname,
 } from '../src/index.js';
 
 async function collect(stream) {
@@ -19,10 +19,20 @@ async function collect(stream) {
   return new Uint8Array(await new Blob(chunks).arrayBuffer());
 }
 
-test('path helpers reject traversal', () => {
-  expect(normalizePath('/a//b/')).toBe('/a/b');
-  expect(() => normalizePath('/a/../b')).toThrow();
-  expect(joinPath('/a', 'b')).toBe('/a/b');
+test('an item name is the whole address, so it may not contain a separator', () => {
+  expect(isValidItemName('notes.txt')).toBe(true);
+  expect(isValidItemName('a b & c.md')).toBe(true);
+  // A slash would split under the `trove:collection/name` shorthand.
+  expect(isValidItemName('a/b.txt')).toBe(false);
+  expect(isValidItemName('.')).toBe(false);
+  expect(isValidItemName('..')).toBe(false);
+  expect(isValidItemName('')).toBe(false);
+  expect(isValidItemName('x'.repeat(256))).toBe(false);
+  expect(isValidItemName('bad\u0000name')).toBe(false);
+
+  expect(extname('a.TXT')).toBe('.txt');
+  expect(extname('noext')).toBe('');
+  expect(extname('.hidden')).toBe(''); // a dotfile has no extension
 });
 
 test('storage backend: put/get/head/range/delete', async () => {

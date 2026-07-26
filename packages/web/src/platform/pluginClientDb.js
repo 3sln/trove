@@ -58,9 +58,18 @@ class ClientDatabase {
   }
   // Debounce persistence: export the whole (small, per-scope) db to IndexedDB
   // shortly after the last write.
+  //
+  // The write already returned `{ok:true}` to the plugin by the time this runs, so a
+  // failure here is data the plugin believes it saved and hasn't. Nothing can be
+  // returned to it any more — but it must at least be visible, not swallowed.
   #dirty() {
     clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(() => this.flush().catch(() => {}), 150);
+    this._saveTimer = setTimeout(() => {
+      this.flush().catch((err) => {
+        console.error(`persisting plugin storage "${this.key}" failed`, err);
+        this.onError?.(err, this.key);
+      });
+    }, 150);
   }
   async flush() {
     clearTimeout(this._saveTimer);
@@ -99,7 +108,7 @@ class ClientDatabase {
 // --- the pool ----------------------------------------------------------------
 
 export class ClientSqlProvider {
-  constructor() { this._pool = new Map(); }
+  constructor({ onError } = {}) { this._pool = new Map(); this.onError = onError || null; }
 
   async obtain(key) {
     let db = this._pool.get(key);
@@ -107,14 +116,17 @@ export class ClientSqlProvider {
       const SQL = await loadSql();
       const bytes = await loadBytes(key);
       db = new ClientDatabase(key, new SQL.Database(bytes || undefined));
+      db.onError = this.onError;
       this._pool.set(key, db);
     }
     return db;
   }
 
+  /** Drop a scope's database. Throws if the bytes can't be deleted — the caller
+   *  (uninstall) reports leftover on-device data rather than claiming a clean wipe. */
   async drop(key) {
     const db = this._pool.get(key);
     if (db) { db.close(); this._pool.delete(key); }
-    await dropBytes(key).catch(() => {});
+    await dropBytes(key);
   }
 }

@@ -106,3 +106,66 @@ test('admin can install an admin-gated package', async () => {
   expect(shared.status).toBe(200);
   expect(shared.json.install.adminApprovedBy).toBe('anonymous');
 });
+
+test('a contributor namespace can only be written by the plugin that owns it', async () => {
+  const { handle, vfs } = await createServer();
+  const target = await vfs.writeFile('target.md', 'x', { contentType: 'text/markdown' });
+  const index = await vfs.writeFile('index.md', 'see [t](trove:default/target.md)', { contentType: 'text/markdown' });
+  expect((await vfs.backlinks(target.id)).map((n) => n.name)).toEqual(['index.md']);
+
+  const push = (ns, b) => handle(new Request(`http://t/api/index/${encodeURIComponent(ns)}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b),
+  }));
+
+  // A built-in's namespace is the server's to write. Letting a client overwrite
+  // `core.links` would silently break every backlink in the drive.
+  expect((await push('core.links', { nodeId: index.id, metadata: { links: [] } })).status).toBe(403);
+  expect((await push('trove+contrib:core/workbench/x', { nodeId: index.id, tags: { a: 1 } })).status).toBe(403);
+  // The reserved user-tag scope goes through the tags routes, not this one.
+  expect((await push('user', { nodeId: index.id, tags: { fav: 'yes' } })).status).toBe(403);
+  // A bare string names nothing verifiable.
+  expect((await push('whatever', { nodeId: index.id, tags: { a: 1 } })).status).toBe(403);
+  expect((await vfs.backlinks(target.id)).map((n) => n.name)).toEqual(['index.md']);
+
+  // A plugin's own contribution URI is fine — it's scoped to its verified identity.
+  expect((await push('trove+contrib:acme.com/p/idx', { nodeId: index.id, tags: { a: 1 } })).status).toBe(200);
+});
+
+test('strict mode also requires the plugin to be installed with the indexer capability', async () => {
+  const { handle, vfs } = await createServer({ enforcePluginCaps: true });
+  const n = await vfs.writeFile('x.md', 'hi', { contentType: 'text/markdown' });
+  const push = (ns) => handle(new Request(`http://t/api/index/${encodeURIComponent(ns)}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nodeId: n.id, tags: { a: 1 } }),
+  }));
+  expect((await push('trove+contrib:acme.com/ghost/idx')).status).toBe(403);
+
+  // Installed WITHOUT the indexer capability → still refused.
+  await req(handle, 'POST', '/api/plugins/install?grants=storage', {
+    body: pkg({ domain: 'acme.com', name: 'p', version: '1', capabilities: { storage: true, indexer: true } }),
+  });
+  expect((await push('trove+contrib:acme.com/p/idx')).status).toBe(403);
+});
+
+// Two independent limits, and the order matters: the request body cap rejects a
+// payload too big to even parse, and the contribution caps bound what a payload that
+// DID parse may store. This exercises the second — the first is covered in hardening.
+test('a contribution is clamped wherever it came from, including the API push', async () => {
+  const { handle, vfs } = await createServer();
+  const n = await vfs.writeFile('x.md', 'hi', { contentType: 'text/markdown' });
+  const ns = 'trove+contrib:acme.com/p/idx';
+  const res = await handle(new Request(`http://t/api/index/${encodeURIComponent(ns)}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      nodeId: n.id,
+      tags: Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [`k${i}`, 'v'.repeat(500)])),
+      metadata: { blob: 'y'.repeat(400 * 1024) },
+      semanticTexts: Array.from({ length: 2000 }, (_, i) => ({ text: `chunk ${i}` })),
+    }),
+  }));
+  expect(res.status).toBe(200);
+  const after = await vfs.stat(n.id);
+  const mine = after.contributions[ns];
+  expect(Object.keys(mine.tags).length).toBe(100);          // maxTags
+  expect(Object.values(mine.tags)[0].length).toBe(500);     // under maxTagValueChars, kept whole
+  expect(mine.metadata).toBeUndefined();                    // over maxMetadataBytes → dropped
+});

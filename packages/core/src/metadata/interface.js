@@ -141,12 +141,14 @@ export class MetadataStore {
     throw TroveError.unsupported('searchByName not implemented');
   }
   /**
-   * Page through file nodes in a stable id order, for drive-wide sweeps (indexer
-   * backfill/purge). `{ afterId, limit }`: return up to `limit` files with id > afterId.
+   * Page through EVERY item across all collections in stable id order, for drive-wide
+   * sweeps (indexer backfill/purge). Distinct from listItems, which is one collection's
+   * contents for a reader: this one ignores collections and ordering preferences, and
+   * exists so a sweep can resume from `afterId` without holding the drive in memory.
    * @returns {Promise<object[]>}
    */
-  async listFiles({ afterId = null, limit = 200 } = {}) {
-    throw TroveError.unsupported('listFiles not implemented');
+  async scanItems({ afterId = null, limit = 200 } = {}) {
+    throw TroveError.unsupported('scanItems not implemented');
   }
   /**
    * Drive-wide tag/property query. `filters` is a list of

@@ -50,14 +50,14 @@ test('JWT identity + comment mention → recipient inbox', async () => {
   expect(me.json.principal.id).toBe('alice');
 
   // Alice comments, mentioning Bob.
-  const posted = await req(handle, 'POST', `/api/files/${file.id}/comments`, {
+  const posted = await req(handle, 'POST', `/api/items/${file.id}/comments`, {
     token: aliceToken, body: { body: 'What do you think @[Bob](bob)?' },
   });
   expect(posted.status).toBe(200);
   expect(posted.json.comment.body).toContain('What do you think');
 
   // The sidecar view shows the comment + Bob auto-subscribed.
-  const view = await req(handle, 'GET', `/api/files/${file.id}/sidecar`, { token: aliceToken });
+  const view = await req(handle, 'GET', `/api/items/${file.id}/sidecar`, { token: aliceToken });
   expect(view.json.commentCount).toBe(1);
   expect(view.json.subscribers).toContain('bob');
 
@@ -71,15 +71,15 @@ test('JWT identity + comment mention → recipient inbox', async () => {
   expect(inbox.json.items[0].items[0].by.id).toBe('alice');
 
   // A reply is rejected without auth.
-  const noauth = await req(handle, 'POST', `/api/files/${file.id}/comments`, { body: { body: 'hi' } });
+  const noauth = await req(handle, 'POST', `/api/items/${file.id}/comments`, { body: { body: 'hi' } });
   expect(noauth.status).toBe(401);
 });
 
 test('tags round-trip through the API', async () => {
   const { handle, vfs } = await createServer();
   const file = await vfs.writeFile('a.txt', 'hi', { contentType: 'text/plain' });
-  await req(handle, 'POST', `/api/files/${file.id}/tags`, { body: { name: 'starred' } });
-  await req(handle, 'POST', `/api/files/${file.id}/tags`, { body: { name: 'priority', value: 'high' } });
-  const view = await req(handle, 'GET', `/api/files/${file.id}/sidecar`);
+  await req(handle, 'POST', `/api/items/${file.id}/tags`, { body: { name: 'starred' } });
+  await req(handle, 'POST', `/api/items/${file.id}/tags`, { body: { name: 'priority', value: 'high' } });
+  const view = await req(handle, 'GET', `/api/items/${file.id}/sidecar`);
   expect(view.json.tags).toEqual([{ name: 'priority', value: 'high' }, { name: 'starred', value: null }]);
 });

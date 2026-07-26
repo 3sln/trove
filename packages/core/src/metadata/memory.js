@@ -123,7 +123,7 @@ export class MemoryStore extends MetadataStore {
       .map(clone);
   }
 
-  async listFiles({ afterId = null, limit = 200 } = {}) {
+  async scanItems({ afterId = null, limit = 200 } = {}) {
     const files = [...this.nodes.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const start = afterId ? files.findIndex((n) => n.id > afterId) : 0;
     const from = start === -1 ? files.length : start;

@@ -66,7 +66,15 @@ function inboxItem(note, ui) {
         ui.platform.api.stat(first.nodeId).then((r) => {
           ui.go(new OpenFileAction(r.node));
           ui.platform.workbench.toggleInfoPanel(true);
-        }).catch(() => {});
+        }).catch((err) => {
+          // The item a notification points at can be deleted, or live somewhere the
+          // reader lost access to. Either way the click must not just do nothing.
+          ui.platform.notifications.warn(
+            err?.status === 403 || err?.code === 'forbidden'
+              ? 'You no longer have access to that item.'
+              : 'That item no longer exists.',
+          );
+        });
       }
       ui.app.social.toggleInbox(false);
     },

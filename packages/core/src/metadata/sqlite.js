@@ -166,7 +166,7 @@ export class SqliteStore extends MetadataStore {
     return rows.map(row);
   }
 
-  async listFiles({ afterId = null, limit = 200 } = {}) {
+  async scanItems({ afterId = null, limit = 200 } = {}) {
     const where = [];
     const params = [];
     if (afterId) { where.push('id > ?'); params.push(afterId); }

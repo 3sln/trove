@@ -38,7 +38,11 @@ export class PluginHost {
     this.platform = platform;
     this.plugins = new Map(); // id -> runtime record
     this.registry = new PluginRegistry();
-    this.clientDb = new ClientSqlProvider(); // on-device per-scope SQLite (wasm)
+    // On-device per-scope SQLite (wasm). A failed background persist is data a plugin
+    // already believes it saved, so it surfaces rather than disappearing into a log.
+    this.clientDb = new ClientSqlProvider({
+      onError: (err, key) => this.platform.notifications.error(`A plugin's on-device data couldn't be saved (${key}): ${err.message}`),
+    });
     this.online = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.heartbeatMs = heartbeatMs;
     this._heartbeat = null;
@@ -556,10 +560,22 @@ export class PluginHost {
       if (!isAccount) await this.platform.api.request('DELETE', `/api/plugins/${encodeURIComponent(pluginId)}/data`).catch(() => wipeFailures.push('server-side data'));
       await this.clientDb.drop(`plg:${pluginId}`).catch(() => wipeFailures.push('on-device data'));
     }
-    await this.registry.remove(pluginId).catch(() => {});
+    // The persisted record is what restore() reads: if this fails and we say nothing,
+    // the plugin silently reappears on the next reload looking like a bug in uninstall.
+    let resurrects = false;
+    try {
+      await this.registry.remove(pluginId);
+    } catch (err) {
+      resurrects = true;
+      console.error('removing the persisted plugin record failed', pluginId, err);
+    }
     if (![...this.plugins.values()].some((r) => r.status === 'active')) this.#stopHeartbeat();
     this.#emit();
-    if (wipeFailures.length) this.platform.notifications.warn(`Uninstalled "${name}", but couldn't clear its ${wipeFailures.join(' and ')}.`);
+    if (resurrects) {
+      this.platform.notifications.error(`Removed "${name}", but its saved record couldn't be deleted — it may come back when you reload.`);
+    } else if (wipeFailures.length) {
+      this.platform.notifications.warn(`Uninstalled "${name}", but couldn't clear its ${wipeFailures.join(' and ')}.`);
+    }
   }
 
   // --- trust ------------------------------------------------------------------

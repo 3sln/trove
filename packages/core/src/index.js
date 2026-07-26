@@ -25,10 +25,11 @@ export { KeywordStore, MemoryKeywordStore } from './search/keywordStore.js';
 export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/embeddings.js';
 
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
-export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, clampContribution, DEFAULT_CAPS, PluginIndexers, matchFromSelector } from './plugins/index.js';
+export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, PluginIndexers, matchFromSelector } from './plugins/index.js';
 export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
-export { IndexingCoordinator, normalizeContribution } from './indexing.js';
+export { IndexingCoordinator } from './indexing.js';
+export { normalizeContribution, clampContribution, clampTagValue, DEFAULT_CAPS } from './indexers/contribution.js';
 
 // Cloudflare Vectorize — first-class pluggable vector DB.
 export { VectorizeVectorStore } from './search/vectorize.js';

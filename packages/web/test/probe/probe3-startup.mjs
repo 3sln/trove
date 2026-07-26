@@ -11,7 +11,7 @@ const { page, errors, close, goto, setFault } = await boot({
 });
 
 // Fail every list call (server-side, deterministic) before the app loads.
-setFault('/api/fs/list', true);
+setFault('/api/items', true);
 
 await goto();
 check('workbench shell still renders despite a failing server', (await page.locator('.shell').count()) === 1);
@@ -28,7 +28,7 @@ check('launcher shows the load error, not a false empty state',
 check('an error toast is shown', (await page.locator('.toasts .toast.error').count()) >= 1);
 
 // Now recover: stop failing, refresh, and the collection should load.
-setFault('/api/fs/list', false);
+setFault('/api/items', false);
 await page.evaluate(() => window.__trove.platform.commands?.execute?.('explorer.refresh')).catch(() => {});
 await page.waitForTimeout(800);
 const recovered = await page.evaluate(() => (window.__trove.app.explorer.state.items || []).map((i) => i.name));

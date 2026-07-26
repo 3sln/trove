@@ -39,7 +39,7 @@ test('a plain 4xx error surfaces its structured message', async () => {
   ]);
   const client = new TroveApiClient({ fetch });
   let err;
-  try { await client.request('POST', '/api/fs/mkdir', { body: {} }); } catch (e) { err = e; }
+  try { await client.request('POST', '/api/items/nope', { body: {} }); } catch (e) { err = e; }
   expect(err.code).toBe('already_exists');
   expect(err.message).toContain('already exists');
   expect(fetch.calls.n).toBe(1);
@@ -50,7 +50,7 @@ test('a retryable 500 with no body is retried then surfaces a transient error', 
   const fetch = fakeFetch([{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }]);
   const client = new TroveApiClient({ fetch });
   let err;
-  try { await client.request('GET', '/api/fs/list', {}); } catch (e) { err = e; }
+  try { await client.request('GET', '/api/items', {}); } catch (e) { err = e; }
   expect(err.code).toBe('transient');
   expect(fetch.calls.n).toBe(4); // 1 + 3 retries
 });

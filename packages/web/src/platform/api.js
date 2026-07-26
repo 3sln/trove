@@ -74,25 +74,22 @@ export class TroveApiClient {
   }
   /** Every item in a collection. */
   list(opts = {}) {
-    return this.request('GET', '/api/fs/list', { query: opts });
+    return this.request('GET', '/api/items', { query: opts });
   }
   /** Resolve an item by id, by `trove:` URI, or by name within a collection. */
   stat(ref, opts = {}) {
     const key = String(ref).startsWith('trove:') ? 'uri' : 'id';
-    return this.request('GET', '/api/fs/stat', { query: { [key]: ref, ...opts } });
-  }
-  byName(name, collection) {
-    return this.request('GET', '/api/fs/stat', { query: { name, collection } });
+    return this.request('GET', '/api/items/resolve', { query: { [key]: ref, ...opts } });
   }
   /** What links to this item. */
   backlinks(id, opts = {}) {
-    return this.request('GET', '/api/fs/backlinks', { query: { id, ...opts } });
+    return this.request('GET', '/api/items/backlinks', { query: { id, ...opts } });
   }
   rename(id, newName) {
-    return this.request('POST', '/api/fs/rename', { body: { id, newName } });
+    return this.request('POST', '/api/items/rename', { body: { id, newName } });
   }
   remove(id) {
-    return this.request('POST', '/api/fs/delete', { body: { id } });
+    return this.request('POST', '/api/items/delete', { body: { id } });
   }
   search(q, opts = {}) {
     return this.request('GET', '/api/search', { query: { q, ...opts } });
@@ -153,25 +150,25 @@ export class TroveApiClient {
 
   // --- conversations, tags, sidecar ------------------------------------------
   sidecar(id) {
-    return this.request('GET', `/api/files/${encodeURIComponent(id)}/sidecar`);
+    return this.request('GET', `/api/items/${encodeURIComponent(id)}/sidecar`);
   }
   addComment(id, { body, parentId, mentions } = {}) {
-    return this.request('POST', `/api/files/${encodeURIComponent(id)}/comments`, { body: { body, parentId, mentions } });
+    return this.request('POST', `/api/items/${encodeURIComponent(id)}/comments`, { body: { body, parentId, mentions } });
   }
   editComment(id, cid, body) {
-    return this.request('POST', `/api/files/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}/edit`, { body: { body } });
+    return this.request('POST', `/api/items/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}/edit`, { body: { body } });
   }
   deleteComment(id, cid) {
-    return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}`);
+    return this.request('DELETE', `/api/items/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}`);
   }
   reactComment(id, cid, emoji, on) {
-    return this.request('POST', `/api/files/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}/react`, { body: { emoji, on } });
+    return this.request('POST', `/api/items/${encodeURIComponent(id)}/comments/${encodeURIComponent(cid)}/react`, { body: { emoji, on } });
   }
   setTag(id, name, value) {
-    return this.request('POST', `/api/files/${encodeURIComponent(id)}/tags`, { body: { name, value } });
+    return this.request('POST', `/api/items/${encodeURIComponent(id)}/tags`, { body: { name, value } });
   }
   removeTag(id, name) {
-    return this.request('DELETE', `/api/files/${encodeURIComponent(id)}/tags/${encodeURIComponent(name)}`);
+    return this.request('DELETE', `/api/items/${encodeURIComponent(id)}/tags/${encodeURIComponent(name)}`);
   }
 
   // --- notifications & push --------------------------------------------------
@@ -190,7 +187,7 @@ export class TroveApiClient {
 
   /** URL for GET-ing bytes (used by <img>/<audio>/<video> and downloads). */
   downloadUrl(id, { attachment } = {}) {
-    return `${this.baseUrl}/api/fs/download?id=${encodeURIComponent(id)}${attachment ? '&disposition=attachment' : ''}`;
+    return `${this.baseUrl}/api/items/download?id=${encodeURIComponent(id)}${attachment ? '&disposition=attachment' : ''}`;
   }
 
   /** Read a whole file as text/bytes (small files, indexers). */

@@ -114,7 +114,7 @@ export class SocialService {
     const parentId = this.state.replyTo?.id || null;
     // Offline → queue the op; it replays (CRDT-merges) on reconnect.
     if (this.offline && !this.offline.state.online) {
-      await this.offline.queueOp({ method: 'POST', path: `/api/files/${encodeURIComponent(nodeId)}/comments`, body: { body, parentId } });
+      await this.offline.queueOp({ method: 'POST', path: `/api/items/${encodeURIComponent(nodeId)}/comments`, body: { body, parentId } });
       this.#set({ replyTo: null });
       this.platform.notifications.info('Offline — your comment will post when you reconnect.');
       return;
@@ -150,7 +150,7 @@ export class SocialService {
     const nodeId = this.state.sidecar?.nodeId;
     if (!name.trim()) return;
     if (this.offline && !this.offline.state.online) {
-      await this.offline.queueOp({ method: 'POST', path: `/api/files/${encodeURIComponent(nodeId)}/tags`, body: { name: name.trim(), value } });
+      await this.offline.queueOp({ method: 'POST', path: `/api/items/${encodeURIComponent(nodeId)}/tags`, body: { name: name.trim(), value } });
       this.platform.notifications.info('Offline — tag will sync when you reconnect.');
       return;
     }
@@ -161,7 +161,7 @@ export class SocialService {
     const nodeId = this.state.sidecar?.nodeId;
     // Offline → queue like addTag so the removal isn't silently lost.
     if (this.offline && !this.offline.state.online) {
-      await this.offline.queueOp({ method: 'DELETE', path: `/api/files/${encodeURIComponent(nodeId)}/tags/${encodeURIComponent(name)}` });
+      await this.offline.queueOp({ method: 'DELETE', path: `/api/items/${encodeURIComponent(nodeId)}/tags/${encodeURIComponent(name)}` });
       this.platform.notifications.info('Offline — tag removal will sync when you reconnect.');
       return;
     }

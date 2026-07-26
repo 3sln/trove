@@ -8,8 +8,6 @@ const { svg, h } = dd;
 // Each entry is an array of <path>/<primitive> specs (attrs use SVG names).
 const PATHS = {
   link: [{ d: 'M10 13a5 5 0 0 0 7.07 0l3-3A5 5 0 0 0 13 3l-1.5 1.5' }, { d: 'M14 11a5 5 0 0 0-7.07 0l-3 3A5 5 0 0 0 11 21l1.5-1.5' }],
-  folder: [{ d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }],
-  'folder-open': [{ d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2M3 9h16.5a1 1 0 0 1 .97 1.24l-1.5 6A1 1 0 0 1 18 17H5a2 2 0 0 1-2-2z' }],
   file: [{ d: 'M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z' }, { d: 'M14 3v5h5' }],
   'file-text': [{ d: 'M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z' }, { d: 'M14 3v5h5M9 13h6M9 17h6M9 9h2' }],
   'file-image': [{ d: 'M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z' }, { d: 'M14 3v5h5' }, { d: 'M8.5 15l2-2 3 3 2-1.5' }, { d: 'M10 12a1 1 0 1 0 0-.01' }],
@@ -22,7 +20,6 @@ const PATHS = {
   upload: [{ d: 'M12 16V4M7 9l5-5 5 5M4 20h16' }],
   download: [{ d: 'M12 4v12M7 11l5 5 5-5M4 20h16' }],
   trash: [{ d: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6' }],
-  'new-folder': [{ d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }, { d: 'M12 11v5M9.5 13.5h5' }],
   refresh: [{ d: 'M20 11a8 8 0 1 0-.5 4M20 5v6h-6' }],
   'chevron-right': [{ d: 'M9 6l6 6-6 6' }],
   'chevron-left': [{ d: 'M15 6l-6 6 6 6' }],
