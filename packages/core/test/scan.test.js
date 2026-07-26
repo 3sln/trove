@@ -7,7 +7,10 @@
 // asymmetry that matters — adopting is automatic, deleting never is.
 
 import { test, expect } from 'bun:test';
-import { createVfs, MemoryStorage, IssueRegistry, MemoryKV, StorageBackend } from '../src/index.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createVfs, MemoryStorage, FilesystemStorage, IssueRegistry, MemoryKV, StorageBackend } from '../src/index.js';
 
 const drive = async () => {
   const issues = new IssueRegistry({ kv: new MemoryKV() });
@@ -136,4 +139,56 @@ test('a backend that cannot list says so instead of reporting an empty drive', a
   }
   const vfs = await createVfs({ storage: new Blind() });
   await expect(vfs.scanCollection('default')).rejects.toThrow(/cannot list/);
+});
+
+test('a scan of an unchanged filesystem drive changes nothing', async () => {
+  // The etag a listing reports has to be computed the SAME WAY as the one `put`
+  // recorded, or every object looks modified and the scan re-reads and re-indexes the
+  // whole drive. It did: 3,005 files, 34 seconds, "3005 changed", nothing actually
+  // different. Two encodings of the same facts (decimal vs hex) was all it took.
+  const dir = await mkdtemp(join(tmpdir(), 'trove-fsscan-'));
+  try {
+    const vfs = await createVfs({ storage: new FilesystemStorage({ root: dir }) });
+    for (let i = 0; i < 5; i++) {
+      await vfs.writeFile(`f${i}.txt`, `contents ${i}`, { contentType: 'text/plain' });
+    }
+    const first = await vfs.scanCollection('default');
+    expect(first).toMatchObject({ adopted: 0, refreshed: 0, orphaned: 0, failed: 0 });
+
+    // …and it still notices a real change.
+    const node = await vfs.metadata.getByName('default', 'f0.txt');
+    const storage = await vfs.storageFor('default');
+    await storage.put(node.storageKey, 'completely different contents now', { contentType: 'text/plain' });
+    expect(await vfs.scanCollection('default')).toMatchObject({ refreshed: 1, adopted: 0 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a stray file is counted once, not once per page', async () => {
+  // `unaddressable` describes the whole tree, so a paged listing must not repeat it —
+  // a caller that sums pages would multiply it by the page count. One stray file in a
+  // 3,000-object drive was reported as seven.
+  const dir = await mkdtemp(join(tmpdir(), 'trove-stray-'));
+  try {
+    const storage = new FilesystemStorage({ root: dir });
+    const vfs = await createVfs({ storage });
+    for (let i = 0; i < 12; i++) await vfs.writeFile(`f${i}.txt`, 'x', { contentType: 'text/plain' });
+    // A file copied straight into the data directory, not at the path its name maps to.
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    await mkdir(join(dir, 'objects'), { recursive: true });
+    await writeFile(join(dir, 'objects', 'dropped-here.md'), '# copied in by hand');
+
+    // Force several pages over the same tree.
+    let total = 0;
+    let cursor = null;
+    do {
+      const page = await storage.list({ cursor, limit: 5 });
+      total += page.unaddressable || 0;
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(total).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

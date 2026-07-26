@@ -92,13 +92,20 @@ export class FilesystemStorage extends StorageBackend {
     for (const e of page) {
       try {
         const st = await fs.stat(e.full);
-        objects.push({ key: e.key, size: st.size, etag: `"${st.size}-${Math.floor(st.mtimeMs)}"`, modifiedAt: Math.floor(st.mtimeMs) });
+        // etagOfStat, NOT a second hand-rolled format. An etag only means anything if
+        // it is computed identically everywhere: this listing is compared against the
+        // etag `put` recorded, and a different encoding of the same facts made every
+        // object look changed — a scan that re-read and re-indexed the entire drive.
+        objects.push({ key: e.key, size: st.size, etag: etagOfStat(st), modifiedAt: Math.floor(st.mtimeMs) });
       } catch { /* vanished mid-walk; the next scan will see it */ }
     }
     return {
       objects,
       nextCursor: from + limit < entries.length ? page[page.length - 1].key : null,
-      unaddressable,
+      // A figure about the WHOLE tree, so it is reported once — on the first page only.
+      // Returning it on every page made a caller that sums pages multiply it by the page
+      // count: one stray file in a 3,000-object drive was reported as seven.
+      ...(cursor ? {} : { unaddressable }),
     };
   }
 
