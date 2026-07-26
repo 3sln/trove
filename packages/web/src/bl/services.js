@@ -13,6 +13,9 @@ export class ExplorerService {
       items: [], loading: false, error: null,
       selection: [], sort: settings.get('explorer.sort'), order: settings.get('explorer.sortOrder'),
       collectionId: 'default', collections: [], canCreateCollection: false,
+      // `stats` is the whole collection; `items` is the page on screen. Keeping both
+      // is what lets the UI say "500 of 3,006" instead of quietly claiming 500.
+      stats: null, nextCursor: null, loadingMore: false,
     };
     this.subject = new ObservableSubject(this.state);
   }

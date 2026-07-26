@@ -153,9 +153,23 @@ function buildContent(state, ui, q, mode, modal) {
   if (recents.length) groups.push({ title: 'Recent', items: recents });
 
   const ex = state.ex;
+  const shown = (ex.items || []).length;
+  const total = ex.stats?.items ?? shown;
+  const items = (ex.items || []).map((n) => fileItem(n, ui, modal));
+  // A partial list must not be titled "All items" — that is a claim about the drive,
+  // and on a collection bigger than one page it is false. Say what is on screen, and
+  // offer the rest rather than leaving it unreachable.
+  if (ex.nextCursor) {
+    items.push({
+      icon: 'refresh',
+      title: ex.loadingMore ? 'Loading…' : `Show more (${(total - shown).toLocaleString()} more)`,
+      detail: 'or search to jump straight to something',
+      run: () => ui.exec('explorer.loadMore'),
+    });
+  }
   groups.push({
-    title: 'All items',
-    items: (ex.items || []).map((n) => fileItem(n, ui, modal)),
+    title: ex.nextCursor ? `All items · showing ${shown.toLocaleString()} of ${total.toLocaleString()}` : 'All items',
+    items,
     // Don't show a false "empty" when the load actually FAILED (e.g. server
     // unreachable) — say so, so the user knows to retry rather than believing the
     // collection is empty. (A toast also fires, but the persistent state must be honest.)

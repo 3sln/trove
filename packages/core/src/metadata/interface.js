@@ -157,7 +157,19 @@ export class MetadataStore {
    * falls back to an indeterminate indicator, which is honest.
    * @returns {Promise<number|null>}
    */
-  async countItems() {
+  async countItems(collectionId) {
+    return null;
+  }
+  /**
+   * How many items a collection holds and how many bytes they occupy.
+   *
+   * Separate from `listItems` because a page is not a drive: a client that reports the
+   * length of the page it received tells the user their 3,000-file drive holds 500
+   * files, which is not a rounding error but a wrong number. Optional; a store that
+   * can't answer returns null and the UI says nothing rather than guessing.
+   * @returns {Promise<{items: number, bytes: number}|null>}
+   */
+  async collectionStats(collectionId) {
     return null;
   }
   /**

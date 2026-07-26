@@ -34,6 +34,10 @@ export class NavigateAction extends AppAction {
       explorer.set({
         items: res.items, loading: false, selection: [], sort, order,
         collectionId: res.collectionId || collectionId,
+        // What the COLLECTION holds, as against the page we were handed. Reporting the
+        // page length would tell someone with 3,000 files that they have 500.
+        stats: res.stats || null,
+        nextCursor: res.nextCursor || null,
       });
       // Remember where they were, so the next visit opens there rather than guessing.
       platform.settings.set?.('explorer.lastCollection', collectionId);
@@ -110,6 +114,30 @@ export class CreateCollectionAction extends AppAction {
       app.engine.dispatch(new NavigateAction(res.collection.id));
     } catch (err) {
       app.platform.notifications.error(`Couldn’t create collection: ${err.message}`);
+    }
+  }
+}
+
+/** Append the next page of a collection to what's already on screen. */
+export class LoadMoreAction extends AppAction {
+  async execute({ app }) {
+    const { explorer, platform } = app;
+    const cursor = explorer.state.nextCursor;
+    if (!cursor || explorer.state.loadingMore) return;
+    explorer.set({ loadingMore: true });
+    try {
+      const res = await platform.api.list({
+        sort: explorer.state.sort, order: explorer.state.order,
+        collection: explorer.state.collectionId, cursor,
+      });
+      explorer.set({
+        items: [...explorer.state.items, ...res.items],
+        nextCursor: res.nextCursor || null,
+        loadingMore: false,
+      });
+    } catch (err) {
+      explorer.set({ loadingMore: false });
+      platform.notifications.error(`Couldn't load more: ${err.message}`);
     }
   }
 }

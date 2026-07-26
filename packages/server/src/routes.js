@@ -190,7 +190,11 @@ export function createRouter() {
       limit: clampLimit(query.limit, 500),
       cursor: query.cursor,
     });
-    return { items, nextCursor, collectionId };
+    // `stats` describes the COLLECTION; `items` is one page of it. Without this the
+    // client can only report the page it happens to be holding, which on a drive with
+    // more items than fit in a page is simply a wrong number on screen.
+    const stats = await vfs.metadata.collectionStats?.(collectionId).catch(() => null) ?? null;
+    return { items, nextCursor, collectionId, stats };
   });
 
   // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.

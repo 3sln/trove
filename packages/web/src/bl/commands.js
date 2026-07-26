@@ -5,7 +5,7 @@
 
 import {
   NavigateAction, RefreshAction, DeleteAction, RenameAction,
-  UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction,
+  UploadFilesAction, OpenFileAction, SearchAction, CreateCollectionAction, LoadMoreAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri } from '@trove/core/links.js';
@@ -40,6 +40,7 @@ export function registerCommands(app) {
 
   // --- explorer --------------------------------------------------------------
   cmd('explorer.refresh', 'Refresh', () => go(new RefreshAction()), { category: 'Explorer', icon: 'refresh' });
+  cmd('explorer.loadMore', 'Show More Items', () => go(new LoadMoreAction()), { palette: false });
   cmd('explorer.upload', 'Upload Files…', () => {
     pickFiles((files) => files.length && go(new UploadFilesAction(files, explorer.state.collectionId)));
   }, { category: 'Explorer', icon: 'upload' });

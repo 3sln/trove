@@ -65,7 +65,11 @@ function activityChips(state, ui) {
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
-  const totalBytes = items.reduce((n, i) => n + (i.size || 0), 0);
+  // The COLLECTION's totals when the server could give them, not the page's. Summing
+  // what happens to be loaded reports a 3,000-file drive as 500 files — a wrong number,
+  // not a rounded one. Falls back to the page only when the server didn't say.
+  const totalItems = ex.stats?.items ?? items.length;
+  const totalBytes = ex.stats?.bytes ?? items.reduce((n, i) => n + (i.size || 0), 0);
   const active = state.tr.items.filter((t) => t.status === 'active');
   const caps = ui.platform.capabilities;
 
@@ -92,7 +96,8 @@ export default function statusBar(state, ui) {
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
           run: () => ui.app.transfers.cancel(t.id),
         }))) })
-      : span({ className: 'seg' }, `${items.length} item${items.length === 1 ? '' : 's'}`),
+      : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${totalItems}` : '' },
+        `${totalItems.toLocaleString()} item${totalItems === 1 ? '' : 's'}`),
     ...left,
     div({ className: 'spacer' }),
     ...activityChips(state, ui),
