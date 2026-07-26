@@ -92,6 +92,10 @@ export class UploadManager {
       storageKey,
       collectionId,
       name: req.name,
+      // Whether the caller asked to replace an existing item of this name. Carried on
+      // the session because the decision is made when the upload STARTS but has to be
+      // honoured when it COMPLETES, possibly much later.
+      overwrite: !!req.overwrite,
       size: req.size,
       contentType,
       createdAt: Date.now(),
@@ -216,6 +220,7 @@ export class UploadManager {
       etag,
       collectionId: s.collectionId,
       name: s.name,
+      overwrite: !!s.overwrite,
     };
   }
 

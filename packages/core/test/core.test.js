@@ -142,3 +142,32 @@ test('filesystem backend put/get with range', async () => {
   expect(new TextDecoder().decode(await collect(stream))).toBe('cde');
   expect(range.total).toBe(8);
 });
+
+test('two uploads racing for the same name both survive', async () => {
+  const vfs = await createVfs();
+  const read = async (id) => new TextDecoder().decode(await collect((await vfs.readStream(id)).stream));
+
+  // Both negotiate before either completes, so both are told "note.txt" is free —
+  // neither item exists yet. An unconditional replace at completion would destroy
+  // whichever landed first, silently.
+  const a = await vfs.createUpload({ name: 'note.txt', size: 5 });
+  const b = await vfs.createUpload({ name: 'note.txt', size: 5 });
+  expect(a.name).toBe('note.txt');
+  expect(b.name).toBe('note.txt');
+  await vfs.uploadPart(a.uploadId, 1, new TextEncoder().encode('AAAAA'));
+  await vfs.uploadPart(b.uploadId, 1, new TextEncoder().encode('BBBBB'));
+  const na = await vfs.completeUpload(a.uploadId);
+  const nb = await vfs.completeUpload(b.uploadId);
+
+  expect(na.id).not.toBe(nb.id);
+  expect(await read(na.id)).toBe('AAAAA');
+  expect(await read(nb.id)).toBe('BBBBB');
+  expect((await vfs.list('default')).items.map((i) => i.name).sort()).toEqual(['note (1).txt', 'note.txt']);
+
+  // An explicit overwrite still replaces in place — that's a request, not a collision.
+  const o = await vfs.createUpload({ name: 'note.txt', size: 5, overwrite: true });
+  await vfs.uploadPart(o.uploadId, 1, new TextEncoder().encode('CCCCC'));
+  const no = await vfs.completeUpload(o.uploadId);
+  expect(no.id).toBe(na.id);
+  expect(await read(no.id)).toBe('CCCCC');
+});

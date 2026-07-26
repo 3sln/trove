@@ -119,15 +119,27 @@ export class Vfs {
     return node;
   }
 
-  async #upsertItem({ collectionId, name, storageKey, size, contentType, etag }) {
+  /**
+   * Attach freshly-written bytes to an item.
+   *
+   * `overwrite` decides what happens when the name is already taken. A direct
+   * `writeFile` replaces (the caller named an item and handed over its new contents),
+   * but an upload must not: two uploads of the same name can be negotiated before
+   * either completes — both are told the name is free, because neither item exists yet
+   * — and an unconditional replace at completion silently destroys whichever landed
+   * first. So an upload re-resolves the collision at the moment it commits.
+   */
+  async #upsertItem({ collectionId, name, storageKey, size, contentType, etag, overwrite = true }) {
+    let finalName = name;
     const existing = await this.metadata.getByName(collectionId, name);
-    if (existing) {
+    if (existing && overwrite) {
       const oldKey = existing.storageKey;
       const updated = await this.metadata.update(existing.id, { storageKey, size, contentType, etag });
       if (oldKey && oldKey !== storageKey) (await this.storageFor(collectionId)).delete(oldKey).catch(() => {});
       return updated;
     }
-    return this.metadata.create({ collectionId, name, storageKey, size, contentType, etag });
+    if (existing) finalName = await this.#uniqueName(collectionId, name);
+    return this.metadata.create({ collectionId, name: finalName, storageKey, size, contentType, etag });
   }
 
   /**
@@ -221,6 +233,7 @@ export class Vfs {
       const node = await this.#upsertItem({
         collectionId: obj.collectionId, name: obj.name, storageKey: obj.storageKey,
         size: obj.size, contentType: obj.contentType, etag: obj.etag,
+        overwrite: obj.overwrite,
       });
       this.indexing.indexNode(node).catch((e) => console.error('index error', e));
       return node;

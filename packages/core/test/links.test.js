@@ -98,3 +98,26 @@ test('backlinks follow a link written by id across a rename', async () => {
   // …and the stale link now resolves to nothing rather than to whatever takes the name.
   expect(await vfs.find('trove:default?name=notes.md')).toBe(null);
 });
+
+test('a backlink limit is spent on rows the caller can see, not on ones they cannot', async () => {
+  const vfs = await createVfs({ storage: new MemoryStorage() });
+  const target = await vfs.writeFile('target.md', 'x', { contentType: 'text/markdown' });
+  const uri = 'trove:default?name=target.md';
+  const link = async (collectionId, name, at) => {
+    const n = await vfs.metadata.create({ collectionId, name });
+    await vfs.metadata.setContribution(n.id, 'core.links', { metadata: { links: [uri] } });
+    // Backlinks come back newest-first; make the readable one the OLDEST so it is
+    // exactly the row a post-filter would lose.
+    vfs.metadata.nodes.get(n.id).updatedAt = at;
+  };
+  await link('default', 'visible.md', 1);
+  for (let i = 0; i < 50; i++) await link('secret', `s${i}.md`, 100 + i);
+
+  // Unscoped, the readable row falls outside a small limit entirely.
+  const unscoped = await vfs.backlinks(target.id, { limit: 10 });
+  expect(unscoped.some((n) => n.name === 'visible.md')).toBe(false);
+
+  // Scoped, the limit applies to what the caller can actually see.
+  const scoped = await vfs.backlinks(target.id, { limit: 10, collectionIds: ['default'] });
+  expect(scoped.map((n) => n.name)).toEqual(['visible.md']);
+});

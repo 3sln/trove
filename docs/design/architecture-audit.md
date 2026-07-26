@@ -195,3 +195,29 @@ The legacy `facet`/`documents` shims are now gone rather than deferred, along wi
 `serverIndexers`-as-a-top-level-array and the `contribute:*` runtime registration path
 (both dead, and the latter was a hole in "what the user approved is what gets
 registered" — a protocol test now asserts neither side can speak it).
+
+
+---
+
+## 8. Final pass: boundaries in the wrong place
+
+A design + fragility audit after the folder removal settled. The theme was not missing
+checks but **checks drawn at the wrong layer** — each of these had a guard that was real,
+documented, and applied to only one of the paths that needed it.
+
+| Found | Why it was wrong, not just missing |
+|---|---|
+| `clampContribution` lived inside the plugin isolate runtime | It bounded plugin indexers and nothing else. Built-ins were unbounded, and so was the API push — the path *most* exposed to untrusted code. 2.5 MB of tags stored against a documented cap of 100×2 KB. The caps belong to a contribution, so they moved to the one choke point all three producers converge on. |
+| `/api/index/:indexerId` checked only `write` | Two different questions were being answered by one gate. `write` says you may change this item; ownership says you may speak as this contributor. Without the second, a namespace was a free-text field — pushing to `core.links` silently emptied an item's backlinks, 200 OK. |
+| Backlinks were permission-filtered *after* the query | The LIMIT got spent on rows the caller couldn't see, so the panel could say "nothing links here" while readable links sat past the cut. Scoping belongs inside the query; the "readable collections" pattern was also copy-pasted three times and is now one helper. |
+| Upload name collisions resolved at negotiate time only | Two uploads of the same name are both told it's free — neither item exists yet — and the completion path replaced unconditionally. The first one's bytes were destroyed silently. The non-overwrite promise now holds where it commits, not only where it's made. |
+| Markdown parsed with one recursion per inline span | ~20k emphasis spans overflowed the stack mid-render, and the `error:` handler didn't catch it (that one is for the observable, not the mapper), so the viewer sat on a spinner forever. The input is a file someone uploaded: its shape is not ours to choose. |
+
+Two cohesion problems in the same shape: **one word meaning two things.** Two different
+`isValidName`s (item names vs contribution-address segments) were exported from two
+public entry points; `listFiles` sat beside `listItems` meaning "sweep the whole drive".
+And after folders went away, `/api/fs/*` and `/api/files/*` named a filesystem that
+doesn't exist — now one noun, `/api/items`.
+
+**All findings from this pass are fixed**, each with a regression test that fails
+against the previous behaviour.

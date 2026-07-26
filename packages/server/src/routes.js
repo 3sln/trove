@@ -207,12 +207,14 @@ export function createRouter() {
   // what replaces "which folder is it in?".
   r.get('/api/items/backlinks', async (ctx) => {
     const node = await nodeWithCap(ctx, ctx.query.id, 'read');
-    const items = await ctx.vfs.backlinks(node.id, { limit: clampLimit(ctx.query.limit, 100) });
-    const readable = [];
-    for (const item of items) {
-      if (await canRead(ctx, item.collectionId)) readable.push(item);
-    }
-    return { items: readable };
+    // Scoped in the query, not filtered after: backlinks cross collections, so a limit
+    // spent on unreadable rows would report "nothing links here" while something the
+    // caller can see sits just past the cut.
+    const items = await ctx.vfs.backlinks(node.id, {
+      limit: clampLimit(ctx.query.limit, 100),
+      collectionIds: await readableCollectionIds(ctx),
+    });
+    return { items };
   });
 
   r.post('/api/items/rename', async (ctx) => {
@@ -319,14 +321,10 @@ export function createRouter() {
 
   // --- search & indexing -----------------------------------------------------
 
-  r.get('/api/search', async ({ vfs, query, collections, principal }) => {
+  r.get('/api/search', async (ctx) => {
+    const { vfs, query } = ctx;
     if (!query.q) throw TroveError.invalid('q is required');
-    // Only search collections the caller can read.
-    let collectionIds;
-    if (collections) {
-      const readable = (await collections.list(principal)).map((c) => c.id);
-      collectionIds = query.collection ? readable.filter((id) => id === query.collection) : readable;
-    }
+    const collectionIds = await readableCollectionIds(ctx, query.collection);
     const results = await vfs.searchQuery(query.q, {
       mode: query.mode, limit: clampLimit(query.limit, 40),
       indexers: query.indexers ? query.indexers.split(',') : undefined,
@@ -339,30 +337,22 @@ export function createRouter() {
   // parses `#tag` syntax; a plugged-in one may use an LLM), then dispatched. Returns
   // the results AND the `resolved` query (what was actually searched) so the client
   // can honestly show it.
-  r.post('/api/query', async ({ vfs, collections, principal, req }) => {
-    const b = await body(req);
+  r.post('/api/query', async (ctx) => {
+    const b = await body(ctx.req);
     if (typeof b.q !== 'string' || !b.q.trim()) throw TroveError.invalid('q is required');
-    let collectionIds;
-    if (collections) {
-      const readable = (await collections.list(principal)).map((c) => c.id);
-      collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
-    }
-    const { results, resolved } = await vfs.query(b.q, {
+    const collectionIds = await readableCollectionIds(ctx, b.collection);
+    const { results, resolved } = await ctx.vfs.query(b.q, {
       mode: b.mode, limit: clampLimit(b.limit, 40), collectionIds,
     });
     return { query: b.q, results, resolved };
   });
 
   // Drive-wide tag/property filter (the launcher's `#tag` / `#key:op:value`).
-  r.post('/api/tags/search', async ({ vfs, collections, principal, req }) => {
-    const b = await body(req);
+  r.post('/api/tags/search', async (ctx) => {
+    const b = await body(ctx.req);
     const filters = Array.isArray(b.filters) ? b.filters : [];
-    let collectionIds;
-    if (collections) {
-      const readable = (await collections.list(principal)).map((c) => c.id);
-      collectionIds = b.collection ? readable.filter((id) => id === b.collection) : readable;
-    }
-    const items = await vfs.findByTags(filters, {
+    const collectionIds = await readableCollectionIds(ctx, b.collection);
+    const items = await ctx.vfs.findByTags(filters, {
       q: b.q, collectionIds, limit: clampLimit(b.limit, 100),
     });
     return { items };
@@ -677,20 +667,23 @@ async function assertContributorOwned(ctx, contributorId) {
   await ctx.plugins.assertCapability(ctx.principal, parsed.pluginId, 'indexer');
 }
 
+/**
+ * The collections this caller may read, optionally narrowed to one they asked for.
+ * `undefined` when collections are disabled, which means "don't scope" downstream.
+ *
+ * Every drive-wide query needs this, and it has to be applied INSIDE the query rather
+ * than by filtering results: a LIMIT spent on rows the caller can't see would report
+ * "no matches" while matches they can see sit just past the cut.
+ */
+async function readableCollectionIds(ctx, narrowTo) {
+  if (!ctx.collections) return undefined;
+  const readable = (await ctx.collections.list(ctx.principal)).map((c) => c.id);
+  return narrowTo ? readable.filter((id) => id === narrowTo) : readable;
+}
+
 async function assertCap(ctx, collectionId, capability) {
   if (!ctx.collections) return; // collections disabled → no per-collection ACL
   await ctx.collections.assert(ctx.principal, collectionId, capability);
-}
-// Same check as a boolean, for filtering a result set the caller may only partly see
-// (backlinks can cross collections — you must not learn that an item exists in one you
-// can't read just because something you can read points at it).
-async function canRead(ctx, collectionId) {
-  try {
-    await assertCap(ctx, collectionId, 'read');
-    return true;
-  } catch {
-    return false;
-  }
 }
 // Stat a node and enforce a capability on its collection in one step — the single
 // most repeated shape across the mutating routes.
