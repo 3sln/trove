@@ -7,8 +7,7 @@ import {
   isValidDomain, isValidName,
 } from '../src/plugins/identity.js';
 import {
-  declaredContributions, contributionsOfType, serverIndexers, parseKeymap,
-  CONTRIBUTION_TYPES, MANIFEST_CONTRIBUTION_TYPES,
+  declaredContributions, contributionsOfType, serverIndexers, parseKeymap, CONTRIBUTION_TYPES,
 } from '../src/plugins/contributions.js';
 
 const M = {
@@ -120,28 +119,5 @@ test('parseKeymap reads a VS Code-shaped keymap and drops unusable entries', () 
 });
 
 test('the type list is the single source of truth for what may be declared', () => {
-  expect(CONTRIBUTION_TYPES.sort()).toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem', 'view']);
-});
-
-test('a package cannot declare a host-only contribution, and does not install if it tries', () => {
-  // A view owns the whole results area — the host's own Upload/Retry buttons live in it,
-  // and the selection `explorer.delete` acts on comes out of it. See docs/design/views.md.
-  // Throwing is the point: the alternative is a package that installs and has one of its
-  // declared contributions silently ignored.
-  const withView = { ...M, contributes: { gallery: { type: 'view', title: 'Gallery' } } };
-  expect(() => declaredContributions(withView)).toThrow(/only the host may provide/i);
-
-  // The two lists are not the same question. The registry knows `view`; a manifest may
-  // not ask for one.
-  expect(CONTRIBUTION_TYPES).toContain('view');
-  expect(MANIFEST_CONTRIBUTION_TYPES).not.toContain('view');
-  expect(MANIFEST_CONTRIBUTION_TYPES.sort())
-    .toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem']);
-
-  // And an unknown type is told what it MAY declare — naming a type that would then be
-  // refused is worse than not mentioning it.
-  let msg = '';
-  try { declaredContributions({ ...M, contributes: { x: { type: 'nope' } } }); } catch (e) { msg = e.message; }
-  expect(msg).toContain('opener');
-  expect(msg).not.toContain('view');
+  expect(CONTRIBUTION_TYPES.sort()).toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem']);
 });

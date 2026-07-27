@@ -390,7 +390,13 @@ export class SearchAction extends AppAction {
     try {
       // The server transforms the raw query (parse/LLM) and tells us what it actually
       // searched — surfaced to the user via `resolved` so search is honest.
-      const res = await platform.api.query(q, { mode, limit: 40 });
+      //
+      // We send the views we can draw with, because the transformer is the only thing in
+      // the stack that read the sentence: "photos from the trip last summer" asks for a
+      // gallery, and by the time the results are back all anyone can do is guess from
+      // content types. It can only name a view from this list.
+      const views = platform.contributions.ofType('view').map((v) => ({ id: v.id, title: v.title || v.id }));
+      const res = await platform.api.query(q, { mode, limit: 40, views });
       search.set({ results: res.results, resolved: res.resolved || null, loading: false, ran: true, offline: false });
     } catch (err) {
       if (offline) {

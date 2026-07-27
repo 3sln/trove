@@ -500,7 +500,10 @@ export class Vfs {
   async query(rawQuery, opts = {}) {
     let resolved;
     try {
-      resolved = await this.searchTransformer.transform(rawQuery, { tagKeys: opts.tagKeys });
+      // `views` is what the CLIENT can draw with. A transformer that suggests how the
+      // results want to be looked at can only name one of these — the server has no
+      // other way to know which views a given build registered.
+      resolved = await this.searchTransformer.transform(rawQuery, { tagKeys: opts.tagKeys, views: opts.views });
     } catch {
       resolved = { semanticText: rawQuery, tagFilters: [], source: 'parse', note: 'transform-failed' };
     }

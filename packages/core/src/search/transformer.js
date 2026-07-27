@@ -6,10 +6,25 @@
 //
 // Whatever a transformer returns is what the search runs on, and the server reports
 // it back to the client so the UI can honestly show what was searched.
+//
+// It may also say how the results want to be LOOKED AT. "photos from the trip last
+// summer" is a request for a gallery as much as it is a query, and the transformer is
+// the one thing in the stack that has read the sentence — by the time results come back
+// all anyone can do is guess from content types. So `view` rides along on the resolved
+// query, and the client treats it as the suggestion it is.
 
 import { TroveError } from '../errors.js';
 
-/** @typedef {{ semanticText: string, tagFilters: Array<object>, source?: string, note?: string }} ResolvedQuery */
+/**
+ * @typedef {object} ResolvedQuery
+ * @property {string} semanticText what to search for
+ * @property {Array<object>} tagFilters structured filters to narrow it by
+ * @property {string} [source] how it was resolved — 'parse' or 'llm'
+ * @property {string} [note] why, when it didn't go as planned
+ * @property {string|null} [view] the id of a view the results would suit, from
+ *   `ctx.views`. A suggestion: the client ignores an id it doesn't have, and never
+ *   applies it over a view the user picked for themselves.
+ */
 
 /**
  * @typedef {object} SearchPrompt
@@ -22,7 +37,9 @@ import { TroveError } from '../errors.js';
 export class SearchTransformer {
   /**
    * @param {string} rawQuery the user's input
-   * @param {{ tagKeys?: string[] }} [ctx] hints (known tag keys, etc.)
+   * @param {{ tagKeys?: string[], views?: Array<{id: string, title?: string}> }} [ctx]
+   *   what the caller can tell us: the tag keys in use, and the views this client can
+   *   draw with (so a `view` hint names one that exists rather than one we invented).
    * @returns {Promise<ResolvedQuery>}
    */
   async transform(rawQuery, ctx) {
@@ -90,6 +107,24 @@ export class ParsingSearchTransformer extends SearchTransformer {
   }
 }
 
+/**
+ * The views a client offered, cleaned up enough to put in a prompt.
+ *
+ * This list arrives from the client, so it is bounded before it becomes part of a system
+ * prompt — not because a long one is dangerous, but because it is the caller's text in
+ * our instructions and an unbounded field there is somebody else's budget.
+ */
+function viewChoices(views) {
+  if (!Array.isArray(views)) return [];
+  return views
+    .filter((v) => v && typeof v.id === 'string' && v.id)
+    .slice(0, 12)
+    .map((v) => ({
+      id: v.id.slice(0, 80),
+      title: (typeof v.title === 'string' && v.title ? v.title : v.id).slice(0, 40),
+    }));
+}
+
 // An LLM-assisted transformer for Cloudflare Workers AI (or any compatible runner).
 // `run(model, { messages })` should return the model's text (Workers AI returns
 // `{ response }`). It asks a cheap chat model to convert free text into
@@ -128,9 +163,19 @@ export class WorkersAiSearchTransformer extends SearchTransformer {
     if (!this._run || !parsed.text) return { semanticText: parsed.text, tagFilters: parsed.filters, source: 'parse' };
     try {
       const keys = (ctx.tagKeys || []).slice(0, 60);
+      const views = viewChoices(ctx.views);
       const sys = 'You convert a user\'s file-search request into JSON: '
-        + '{"semanticText": string, "tagFilters": [{"key":string,"op":"="|"!="|"<"|"<="|">"|">=","value":string}|{"key":string,"present":true}]}. '
+        + '{"semanticText": string, "tagFilters": [{"key":string,"op":"="|"!="|"<"|"<="|">"|">=","value":string}|{"key":string,"present":true}]'
+        + (views.length ? ', "view": string|null' : '') + '}. '
         + 'Only use tag keys from this list: ' + JSON.stringify(keys) + '. '
+        + (views.length
+          // Asking for null explicitly, and saying when: a model given a list of options
+          // and no way to decline will pick one every time, and a gallery forced onto a
+          // search for meeting notes is worse than not having asked.
+          ? 'If the request clearly implies how the results should be displayed, set "view" to one of '
+            + JSON.stringify(views.map((v) => v.id)) + ' — ' + views.map((v) => `${v.id} is ${v.title}`).join(', ')
+            + '. Otherwise set "view" to null. '
+          : '')
         + 'Put the natural-language description of the content into semanticText. Output JSON only.';
       const out = await this._run(this.model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: parsed.text }] });
       const textOut = typeof out === 'string' ? out : (out?.response || out?.result?.response || '');
@@ -139,7 +184,10 @@ export class WorkersAiSearchTransformer extends SearchTransformer {
       const modelFilters = Array.isArray(json.tagFilters) ? json.tagFilters.filter((f) => f && f.key) : [];
       // Merge explicit user filters with the model's; explicit ones win.
       const tagFilters = [...parsed.filters, ...modelFilters];
-      return { semanticText, tagFilters, source: 'llm' };
+      // Only a view we offered. A model that invents an id, or reaches for one this
+      // client never mentioned, has said nothing.
+      const view = views.some((v) => v.id === json.view) ? json.view : null;
+      return { semanticText, tagFilters, source: 'llm', view };
     } catch (err) {
       return { semanticText: parsed.text, tagFilters: parsed.filters, source: 'parse', note: 'llm-unavailable' };
     }

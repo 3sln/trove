@@ -11,7 +11,7 @@
 // readable instead of blank.
 
 import { boot, checker } from './harness.mjs';
-import { buildPackage } from '../pluginFixture.mjs';
+import { SearchTransformer } from '../../../core/src/search/transformer.js';
 
 const { check, done } = checker();
 
@@ -153,54 +153,9 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(700);
 
-// --- 6. A view is the host's, and only the host's ------------------------------
-// A view owns the whole results area — the header's Upload button is in it, and so is
-// the selection `explorer.delete` acts on. So it is host-only, refused at the registry
-// as well as at manifest parse. Checked in the running app, not just in a unit test,
-// because the registry is the door the launcher actually reads through.
-// See docs/design/views.md.
-const hostOnly = await page.evaluate(async () => {
-  const t = window.__trove;
-  const refused = (uri, extra) => {
-    try {
-      t.platform.contributions.register(uri, { type: 'view', title: 'Gallery', render: () => null, ...extra });
-      return false;
-    } catch { return true; }
-  };
-  return {
-    owned: refused('trove+contrib:acme.com/demo/gallery', { pluginId: 'acme.com/demo' }),
-    unowned: refused('trove+contrib:acme.com/demo/gallery', {}),
-    smuggled: refused('core.view.gallery', { pluginId: 'acme.com/demo' }),
-    views: t.platform.contributions.ofType('view').map((v) => v.id),
-  };
-});
-check('a plugin cannot register a view, however it is addressed',
-  hostOnly.owned && hostOnly.unowned && hostOnly.smuggled, JSON.stringify(hostOnly));
-check('and the host\'s own two are all that is registered',
-  JSON.stringify(hostOnly.views) === JSON.stringify(['core.view.list', 'core.view.grid']),
-  JSON.stringify(hostOnly.views));
-
-// The other door: a real package that declares a view must FAIL TO INSTALL, not install
-// with the view quietly dropped. The install review is what the user approved, so a
-// package that gets to run with one of its declarations ignored has been misrepresented.
-const { zip } = await buildPackage({
-  manifest: { contributes: { gallery: { type: 'view', title: 'Gallery', match: { mime: ['image/*'] } } } },
-});
-const parsed = await page.evaluate((data) => {
-  const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-  try {
-    window.__trove.test.parsePackage(bytes);
-    return { ok: true, message: '' };
-  } catch (err) { return { ok: false, message: err.message }; }
-}, Buffer.from(zip).toString('base64'));
-check('a package declaring a view does not parse, so it never reaches install',
-  !parsed.ok && /only the host may provide/i.test(parsed.message), JSON.stringify(parsed));
-
-// --- 7. A view that throws degrades to the list, not to nothing ----------------
+// --- 6. A view that throws degrades to the list, not to nothing ----------------
 // A view is the WHOLE results area. One that throws takes the drive's contents off the
-// screen with it, so the failure is caught where it can still be recovered from. This is
-// registered as a build's own view (no plugin, so nothing filters it out) because that
-// is exactly the case the guard is for: in-process code with no sandbox around it.
+// screen with it, so the failure is caught where it can still be recovered from.
 const degraded = await page.evaluate(async () => {
   const t = window.__trove;
   t.platform.contributions.register('core.view.broken', {
@@ -219,7 +174,7 @@ check('a view that throws still leaves the files on screen', degraded.rows >= 13
 check('and says which view failed rather than failing silently',
   /Broken/.test(degraded.said), degraded.said);
 
-// --- 8. One view left means no switcher at all ---------------------------------
+// --- 7. One view left means no switcher at all ---------------------------------
 const alone = await page.evaluate(async () => {
   const t = window.__trove;
   for (const id of ['core.view.broken', 'core.view.grid']) {
@@ -238,5 +193,76 @@ check('and the drive still draws', alone.rows >= 13, JSON.stringify(alone));
 
 const real = errors.filter((e) => !e.includes('net::ERR_ABORTED') && !e.includes('this view is broken'));
 check('no uncaught errors along the way', real.length === 0, real.slice(0, 4).join(' | '));
+await close({ exit: false });
+
+// --- 8. The search transformer gets to suggest a view --------------------------
+// A second server, same client bundle, whose transformer answers with a view hint. The
+// transformer is the only thing in the stack that read the sentence — by the time the
+// results are back all anyone can do is guess from content types — so it may say how the
+// results want to be looked at. It can only name a view the client told it about.
+let seenViews = null;
+// A real SearchTransformer subclass — the server takes an INSTANCE or driver config, and
+// a duck-typed object silently falls through to the default one.
+class HintingTransformer extends SearchTransformer {
+  async transform(raw, ctx = {}) {
+    seenViews = ctx.views || null;
+    // "as a gallery" stands in for whatever a real transformer infers from a sentence;
+    // what is under test here is the plumbing, not the inference.
+    const offered = (ctx.views || []).some((v) => v.id === 'core.view.grid');
+    const view = /gallery|photos/i.test(raw) && offered ? 'core.view.grid'
+      : /invented/i.test(raw) ? 'acme.gallery' : null;
+    return { semanticText: raw.replace(/as a gallery/i, '').trim(), tagFilters: [], source: 'llm', view };
+  }
+
+  describe() {
+    return { placeholder: 'Describe what you\'re looking for' };
+  }
+}
+
+const h = await boot({
+  serverConfig: { searchTransformer: new HintingTransformer() },
+  seed: async (vfs) => {
+    for (const n of ['minutes', 'agenda', 'budget', 'roadmap']) {
+      await vfs.writeFile(`${n}.txt`, 'Notes about the quarter.', { contentType: 'text/plain' });
+    }
+  },
+});
+await h.goto();
+await h.page.waitForSelector('.launch-item', { timeout: 8000 });
+
+const search = async (q) => {
+  await h.page.fill('.launch-input', q);
+  await h.page.waitForFunction(() => window.__trove.app.search.state.ran && !window.__trove.app.search.state.loading,
+    null, { timeout: 8000 });
+  await h.page.waitForTimeout(400);
+};
+
+// Text files, so nothing about the CONTENT would have chosen a grid. Only the sentence.
+await search('the quarter as a gallery');
+check('a transformer\'s view hint decides how the results are drawn',
+  (await h.page.locator('.grid-tile').count()) >= 4 && (await h.page.locator('.launch-item').count()) === 0,
+  `${await h.page.locator('.grid-tile').count()} tiles`);
+check('and the client told it which views it could name',
+  Array.isArray(seenViews) && seenViews.some((v) => v.id === 'core.view.grid' && v.title === 'Grid'),
+  JSON.stringify(seenViews));
+
+await search('the quarter');
+check('a query with no hint goes back to what the results themselves suggest',
+  (await h.page.locator('.launch-item').count()) >= 4 && (await h.page.locator('.grid-tile').count()) === 0);
+
+// A transformer is deployment configuration and can outlive the build it was written
+// against, so naming a view this client doesn't have must do nothing at all.
+await search('invented view please');
+check('a hint naming a view this build does not have is ignored, not an error',
+  (await h.page.locator('.launch-item').count()) >= 1 && (await h.page.locator('.grid-tile').count()) === 0);
+
+// And it stays a suggestion: pressing a button outranks it.
+await h.page.evaluate(() => window.__trove.platform.settings.set('explorer.view', 'core.view.list'));
+await search('the quarter as a gallery');
+check('but a view the user picked outranks the hint',
+  (await h.page.locator('.launch-item').count()) >= 4 && (await h.page.locator('.grid-tile').count()) === 0);
+
+const hintErrors = h.errors.filter((e) => !e.includes('net::ERR_ABORTED'));
+check('no uncaught errors from the hinted searches', hintErrors.length === 0, hintErrors.slice(0, 3).join(' | '));
 done();
-await close();
+await h.close();

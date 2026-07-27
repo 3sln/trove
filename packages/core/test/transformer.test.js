@@ -46,3 +46,52 @@ test('WorkersAiSearchTransformer keeps explicit #tag filters and falls back on b
   expect(r.source).toBe('parse');
   expect(r.note).toBe('llm-unavailable');
 });
+
+// The transformer is the only thing in the stack that read the user's sentence. "photos
+// from the trip" asks for a gallery as much as it asks for files, and by the time the
+// results are back all anyone can do is guess from content types — so a `view` hint
+// rides along on the resolved query.
+test('a transformer may suggest a view, but only one the client offered', async () => {
+  const VIEWS = [{ id: 'core.view.list', title: 'List' }, { id: 'core.view.grid', title: 'Grid' }];
+  const answering = (json) => new WorkersAiSearchTransformer({ run: async () => ({ response: JSON.stringify(json) }) });
+
+  const picked = await answering({ semanticText: 'beach photos', tagFilters: [], view: 'core.view.grid' })
+    .transform('beach pics', { views: VIEWS });
+  expect(picked.view).toBe('core.view.grid');
+
+  // An id nobody offered is not a suggestion, it is a guess about another deployment.
+  const invented = await answering({ semanticText: 'beach photos', tagFilters: [], view: 'acme.gallery' })
+    .transform('beach pics', { views: VIEWS });
+  expect(invented.view).toBe(null);
+
+  // Declining is a real answer, and the prompt has to ask for it — a model handed a list
+  // of options with no way out picks one every time.
+  const declined = await answering({ semanticText: 'meeting notes', tagFilters: [], view: null })
+    .transform('notes from the standup', { views: VIEWS });
+  expect(declined.view).toBe(null);
+
+  // No views offered → nothing to suggest, and the prompt never mentions them.
+  let sys = '';
+  const bare = new WorkersAiSearchTransformer({
+    run: async (_m, { messages }) => { sys = messages[0].content; return { response: '{"semanticText":"x","tagFilters":[]}' }; },
+  });
+  expect((await bare.transform('beach pics')).view).toBe(null);
+  expect(sys).not.toContain('"view"');
+});
+
+test('the view list a client sends is bounded before it becomes part of a prompt', async () => {
+  let sys = '';
+  const t = new WorkersAiSearchTransformer({
+    run: async (_m, { messages }) => { sys = messages[0].content; return { response: '{"semanticText":"x","tagFilters":[]}' }; },
+  });
+  await t.transform('anything', {
+    views: [
+      ...Array.from({ length: 40 }, (_, i) => ({ id: `core.view.v${i}`, title: 'x'.repeat(200) })),
+      { id: 'x'.repeat(500), title: 'huge' },
+      null, {}, { title: 'no id' }, // junk a client can send and a prompt must not carry
+    ],
+  });
+  expect(sys.length).toBeLessThan(4000);
+  expect(sys).toContain('core.view.v0');
+  expect(sys).not.toContain('core.view.v20');
+});

@@ -5,15 +5,8 @@
 // contribution rather than an edit to the launcher — which is the whole point: the
 // launcher should not have to know how many ways there are to look at a drive.
 //
-// Unlike an opener, a view is HOST-ONLY: the built-ins, plus whatever a build passes to
-// `createWorkbench({ views })`. A plugin cannot declare one, and the reasons are in
-// docs/design/views.md — briefly, the results area is where the host's own controls live
-// and where the selection that `explorer.delete` acts on comes from, so it is not a
-// surface to hand across a sandbox for a feature nobody has asked for yet.
-//
-// That is also why the contract below is a dodo vnode and not something serializable.
-// It is in-process code either way; pretending otherwise would buy a portability nobody
-// can use and cost the group headers their host-owned buttons.
+// A view is the workbench's own: the built-ins, plus whatever a build passes to
+// `createWorkbench({ views })`. It runs in the host, so the contract is a dodo vnode.
 //
 // The contract is one function:
 //
@@ -68,18 +61,27 @@ export function availableViews(platform) {
 }
 
 /**
- * The view to draw with.
+ * The view to draw with, in order of how much someone meant it.
  *
- * A saved choice wins. Failing that, a view whose `match` suits what is actually on
- * screen — a collection of photographs opens as a grid without anyone asking for it —
- * and failing that, the highest priority, which is the list.
+ * 1. A saved choice — they pressed a button. Nothing infers its way past that.
+ * 2. The search transformer's hint, when there is a search on screen. It read the
+ *    sentence: "photos from the trip last summer" is a request for a gallery as much as
+ *    it is a query, and nothing downstream can recover that from a list of content types.
+ * 3. A view whose `match` suits what is actually there — a collection of photographs
+ *    opens as a grid without anyone asking.
+ * 4. The highest priority, which is the list.
+ *
+ * A hint naming a view this build doesn't have is ignored, not an error: the transformer
+ * is deployment configuration and may outlive the build it was written against.
  */
-export function activeView(platform, items = []) {
+export function activeView(platform, items = [], hint = null) {
   const views = availableViews(platform);
   if (!views.length) return null;
   const saved = platform.settings.get(SETTING);
   const chosen = saved && views.find((v) => v.id === saved);
   if (chosen) return chosen;
+  const suggested = hint && views.find((v) => v.id === hint);
+  if (suggested) return suggested;
   const nodes = items.map((i) => i.node).filter(Boolean);
   if (nodes.length >= 3) {
     const suits = (v) => v.match && Object.keys(v.match).length

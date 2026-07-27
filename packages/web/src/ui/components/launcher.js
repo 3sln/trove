@@ -85,7 +85,10 @@ export default function launcher(state, ui, opts = {}) {
   // means — one row down is one tile down in a grid, not one tile across — but the
   // index, the selection and the wrapping stay here, so up and down mean the same
   // thing whichever view is showing.
-  const view = activeView(ui.platform, flat);
+  //
+  // The search transformer may have suggested one. Only for an actual search: on the
+  // home list there is no sentence to have read.
+  const view = activeView(ui.platform, flat, mode === 'search' ? state.se.resolved?.view : null);
   const onKey = (e) => {
     // `textual`: there is text in the box, so left/right are the caret's and no view
     // may claim them. Fixing a typo must not move the highlight.

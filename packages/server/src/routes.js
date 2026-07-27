@@ -429,6 +429,10 @@ export function createRouter() {
     const collectionIds = await readableCollectionIds(ctx, b.collection);
     const { results, resolved } = await ctx.vfs.query(b.q, {
       mode: b.mode, limit: clampLimit(b.limit, 40), collectionIds,
+      // Which views this client can draw with, so the transformer can suggest one of
+      // them. Passed through as-is — the transformer bounds it before use, and a client
+      // that sends nonsense only fails to get a suggestion.
+      views: Array.isArray(b.views) ? b.views : undefined,
     });
     return { query: b.q, results, resolved };
   });

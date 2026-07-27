@@ -62,10 +62,10 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
   collection that is mostly photographs opens as a grid without being asked. A gallery,
   a map or a table is a `view` contribution, not a patch to the launcher — the
   launcher still owns the items, the highlight and the keyboard, so every view
-  navigates the same way. Views are **host-only**: unlike an opener, a view owns the
-  whole results area, including the host's own buttons and the selection that
-  *delete* acts on, so a plugin cannot contribute one
-  ([why, and what would change it](docs/design/views.md)).
+  navigates the same way. The **search transformer can suggest one** — it is the only
+  thing in the stack that read the sentence, and "photos from the trip last summer"
+  asks for a gallery as much as it asks for files. It names a view the client offered,
+  and a view you picked yourself still wins.
 - **Build your own drive** — `createWorkbench({ openers, views })` is the entry point,
   so a bespoke or hosted build ships its own first-party openers and views through the
   same registry plugins use. No fork of `@trove/web`.
@@ -913,7 +913,7 @@ wins.
 | how text becomes vectors | `EmbeddingProvider` | `embed(texts) -> number[][]` |
 | SQL (D1, Turso, Postgres…) | `SqliteProvider` + `SqliteDatabase` | `obtain` / `exec` `run` `get` `all` `batch` |
 | who the caller is | `IdentityProvider` | `authenticate(request) -> Principal \| null` |
-| what a search query means | `SearchTransformer` | `transform(raw)` and `describe()` |
+| what a search query means | `SearchTransformer` | `transform(raw, ctx)` and `describe()` |
 | shared small state | `KeyValueStore` | `get` `set` `delete` `list` |
 
 ```js

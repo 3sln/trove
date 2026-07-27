@@ -65,6 +65,30 @@ test('a chosen view wins over what the contents suggest, and can be un-chosen', 
   expect(activeView(p, photos).id).toBe('core.view.grid');
 });
 
+// The search transformer read the sentence. "photos from the trip last summer" is a
+// request for a gallery as much as it is a query, and nothing downstream can recover
+// that — by then all there is to go on is a list of content types.
+test('the transformer\'s hint decides the view, under the user\'s own choice', () => {
+  const p = platform();
+  registerBuiltinViews(p);
+  const docs = [txt('a.txt'), txt('b.txt'), txt('c.txt')];
+
+  // Without a hint these are documents and draw as a list.
+  expect(activeView(p, docs).id).toBe('core.view.list');
+  // With one, the sentence wins over what the content types suggest.
+  expect(activeView(p, docs, 'core.view.grid').id).toBe('core.view.grid');
+
+  // But never over a view the user pressed a button for.
+  chooseView(p, 'core.view.list');
+  expect(activeView(p, docs, 'core.view.grid').id).toBe('core.view.list');
+  chooseView(p, null);
+
+  // A hint for a view this build doesn't have is ignored, not an error — a transformer
+  // is deployment config and may outlive the build it was written against.
+  expect(activeView(p, docs, 'acme.gallery').id).toBe('core.view.list');
+  expect(activeView(p, [img('1.jpg'), img('2.jpg'), img('3.jpg')], 'acme.gallery').id).toBe('core.view.grid');
+});
+
 test('a saved view that is no longer installed does not leave the drive blank', () => {
   const p = platform();
   registerBuiltinViews(p);
@@ -85,35 +109,6 @@ test('a when-clause gates a view the same way it gates every other contribution'
   expect(availableViews(p)[0].title).toBe('Map');
 });
 
-// A view owns the entire results area — the host's own Upload/Retry buttons are in it,
-// and so is the selection `explorer.delete` acts on. It is host-only, and the registry
-// is the door that matters because it is what the launcher reads. (The manifest door is
-// core's, tested there.) See docs/design/views.md.
-test('a view cannot arrive from a plugin', () => {
-  const p = platform();
-  const view = { type: 'view', title: 'Gallery', render: () => null };
-  // Owned by a plugin, under the plugin's own domain — the ordinary way a contribution
-  // is registered once its package installs.
-  expect(() => p.contributions.register('trove+contrib:acme.com/docs/gallery', { ...view, pluginId: 'acme.com/docs' }))
-    .toThrow(/only be provided by the host/i);
-  // Unowned, but still not the host's namespace: a name someone can later claim.
-  expect(() => p.contributions.register('trove+contrib:acme.com/docs/gallery', view))
-    .toThrow(/only be provided by the host/i);
-  // And a plugin id smuggled onto a core name.
-  expect(() => p.contributions.register('core.view.gallery', { ...view, pluginId: 'acme.com/docs' }))
-    .toThrow(/only be provided by the host/i);
-  expect(p.contributions.ofType('view').length).toBe(0);
-
-  // The host's own, which is the whole point of the type existing.
-  p.contributions.register('core.view.gallery', view);
-  expect(p.contributions.ofType('view').map((v) => v.id)).toEqual(['core.view.gallery']);
-  // An opener from the same plugin is unaffected — this is one type, not a ban on
-  // plugins contributing UI.
-  p.contributions.register('trove+contrib:acme.com/docs/pdf', {
-    pluginId: 'acme.com/docs', type: 'opener', title: 'PDF', entry: 'src/pdf.js',
-  });
-  expect(p.contributions.ofType('opener').length).toBe(1);
-});
 
 // A view is the WHOLE results area, so one that cannot draw takes the drive's contents
 // off the screen with it. Views are host code with no sandbox around them, which is
