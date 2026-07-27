@@ -41,7 +41,7 @@ import {
   resolveAuthDiscovery,
 } from '@trove/core';
 import { Provider } from '@3sln/ngin';
-import { lazySingleton, need } from '../lazy.js';
+import { need } from '../lazy.js';
 
 // Injected instance or driver config — the duality the whole server is built on,
 // and the only thing a provider has to decide before it builds anything.
@@ -119,14 +119,14 @@ export function coreProviders(config, lifecycleState) {
       get closing() { return lifecycleState.closing; },
     }),
 
-    storage: lazySingleton(
+    storage: Provider.fromLazySingleton(
       () => resolve(config.storage ?? config.vfs?.storage, StorageBackend, buildStorage),
     ),
 
     // One shared SQLite provider (a keyed pool) for metadata, kv, and per-plugin
     // scopes. Always present so plugin storage works regardless of the metadata
     // backend. Injectable, so a Worker supplies a D1-backed one instead.
-    sqlite: lazySingleton(
+    sqlite: Provider.fromLazySingleton(
       async () => {
         const provider = resolve(config.sqlite, SqliteProvider, () => new LocalSqliteProvider({
           path: config.sqlite?.path
@@ -139,7 +139,7 @@ export function coreProviders(config, lifecycleState) {
       (provider) => provider.close?.(),
     ),
 
-    metadata: lazySingleton(
+    metadata: Provider.fromLazySingleton(
       async (deps) => {
         const { sqlite } = await need(deps, ['sqlite']);
         return resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, (cfg) =>
@@ -148,17 +148,17 @@ export function coreProviders(config, lifecycleState) {
             : new MemoryStore()));
       },
       null,
-      ['sqlite'],
+      { deps: ['sqlite'] },
     ),
 
-    embeddings: lazySingleton(
+    embeddings: Provider.fromLazySingleton(
       () => resolve(config.embeddings, EmbeddingProvider, (cfg) =>
         (cfg.driver === 'http'
           ? new HttpEmbedding(cfg.http)
           : new LocalHashEmbedding({ dimensions: cfg.dimensions ?? 256 }))),
     ),
 
-    search: lazySingleton(
+    search: Provider.fromLazySingleton(
       async (deps) => {
         const { sqlite, embeddings } = await need(deps, ['sqlite', 'embeddings']);
         if (config.search instanceof SearchService) return config.search;
@@ -181,29 +181,29 @@ export function coreProviders(config, lifecycleState) {
         });
       },
       null,
-      ['sqlite', 'embeddings'],
+      { deps: ['sqlite', 'embeddings'] },
     ),
 
-    indexers: lazySingleton(() => resolve(config.indexers, IndexerRegistry, () => new IndexerRegistry())),
+    indexers: Provider.fromLazySingleton(() => resolve(config.indexers, IndexerRegistry, () => new IndexerRegistry())),
 
     // Raw query → { semanticText, tagFilters }. Default parses the `#tag` grammar;
     // inject one (Workers AI) for LLM-assisted query understanding.
-    searchTransformer: lazySingleton(() => resolve(config.searchTransformer, SearchTransformer, (cfg) =>
+    searchTransformer: Provider.fromLazySingleton(() => resolve(config.searchTransformer, SearchTransformer, (cfg) =>
       ((cfg?.driver === 'workers-ai' || config?.ai)
         ? new WorkersAiSearchTransformer({ ai: cfg?.ai || config?.ai, model: cfg?.model, run: cfg?.run })
         : new ParsingSearchTransformer()))),
 
     // BYO IdP. Default anonymous (single shared user) so a zero-config run works;
     // production injects a JwtIdentityProvider.
-    identity: lazySingleton(() => resolve(config.identity, IdentityProvider, buildIdentity)),
+    identity: Provider.fromLazySingleton(() => resolve(config.identity, IdentityProvider, buildIdentity)),
 
     // Where an unauthenticated client is sent — ONE answer for the whole drive,
     // used by the JSON API's 401s and by MCP's discovery alike.
-    auth: lazySingleton(() => resolveAuthDiscovery(config)),
+    auth: Provider.fromLazySingleton(() => resolveAuthDiscovery(config)),
 
     // Shared KV (subscriptions, inboxes, leases). Co-located in the main database
     // when there is one, so it actually persists.
-    kv: lazySingleton(
+    kv: Provider.fromLazySingleton(
       async (deps) => {
         const { sqlite, metadata } = await need(deps, ['sqlite', 'metadata']);
         const store = resolve(config.kv, KeyValueStore, (cfg) =>
@@ -214,7 +214,7 @@ export function coreProviders(config, lifecycleState) {
         return store;
       },
       null,
-      ['sqlite', 'metadata'],
+      { deps: ['sqlite', 'metadata'] },
     ),
 
     // The two halves of "tell the user what's going on", split by lifetime:
@@ -226,18 +226,18 @@ export function coreProviders(config, lifecycleState) {
     //
     // They meet at the retry: a failure raises an issue, retrying it starts a task,
     // and the task succeeding clears the issue.
-    tasks: lazySingleton(() => resolve(config.tasks, TaskRegistry, () => new TaskRegistry())),
+    tasks: Provider.fromLazySingleton(() => resolve(config.tasks, TaskRegistry, () => new TaskRegistry())),
 
-    issues: lazySingleton(
+    issues: Provider.fromLazySingleton(
       async (deps) => {
         const { kv } = await need(deps, ['kv']);
         return resolve(config.issues, IssueRegistry, () => new IssueRegistry({ kv }));
       },
       null,
-      ['kv'],
+      { deps: ['kv'] },
     ),
 
-    push: lazySingleton(() => resolve(config.push, WebPushService, () =>
+    push: Provider.fromLazySingleton(() => resolve(config.push, WebPushService, () =>
       (config.vapid?.publicKey && config.vapid?.privateKey
         ? new WebPushService({
           publicKey: config.vapid.publicKey,
@@ -246,7 +246,7 @@ export function coreProviders(config, lifecycleState) {
         })
         : null))),
 
-    notifications: lazySingleton(
+    notifications: Provider.fromLazySingleton(
       async (deps) => {
         const { kv, push } = await need(deps, ['kv', 'push']);
         const center = new NotificationCenter({ kv, push, flushIntervalMs: config.mentionFlushMs ?? 30_000 });
@@ -256,10 +256,10 @@ export function coreProviders(config, lifecycleState) {
       // Stopping the flusher used to be a line in close() that had to remember this
       // existed. Now it is attached to the thing it stops.
       (center) => center.stop(),
-      ['kv', 'push'],
+      { deps: ['kv', 'push'] },
     ),
 
-    sidecar: lazySingleton(
+    sidecar: Provider.fromLazySingleton(
       async (deps) => {
         const { storage, issues, notifications } = await need(deps, ['storage', 'issues', 'notifications']);
         return resolve(config.sidecar, SidecarService, () => new SidecarService({
@@ -270,13 +270,13 @@ export function coreProviders(config, lifecycleState) {
         }));
       },
       (sidecar) => sidecar.dispose?.(),
-      ['storage', 'issues', 'notifications'],
+      { deps: ['storage', 'issues', 'notifications'] },
     ),
 
     // The ownership + permission boundary; each collection is a store config.
     // `config.collections === false` disables it (single open storage, no ACLs),
     // and the resource is then null — a provider is allowed to provide nothing.
-    collections: lazySingleton(
+    collections: Provider.fromLazySingleton(
       async (deps) => {
         if (config.collections === false) return null;
         const { kv, storage } = await need(deps, ['kv', 'storage']);
@@ -294,10 +294,10 @@ export function coreProviders(config, lifecycleState) {
         }));
       },
       null,
-      ['kv', 'storage'],
+      { deps: ['kv', 'storage'] },
     ),
 
-    vfs: lazySingleton(
+    vfs: Provider.fromLazySingleton(
       async (deps) => {
         const r = await need(deps, [
           'storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections',
@@ -308,29 +308,29 @@ export function coreProviders(config, lifecycleState) {
         return vfs;
       },
       null,
-      ['storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections', 'searchTransformer', 'issues'],
+      { deps: ['storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections', 'searchTransformer', 'issues'] },
     ),
 
     // Bulk plugin package blobs. Defaults to the primary storage under a prefix;
     // TROVE_PACKAGE_STORE points it elsewhere.
-    packageStore: lazySingleton(
+    packageStore: Provider.fromLazySingleton(
       async (deps) => {
         const { storage } = await need(deps, ['storage']);
         return resolve(config.packages, PackageStore, () =>
           new StoragePackageStore(config.packageStore ? buildStorage(config.packageStore) : storage));
       },
       null,
-      ['storage'],
+      { deps: ['storage'] },
     ),
 
     // Server indexer sub-packages run through a pluggable runtime. The default is
     // the in-process (trusted) runner; a deployment swaps in an isolate runtime.
-    indexerRuntime: lazySingleton(() =>
+    indexerRuntime: Provider.fromLazySingleton(() =>
       (config.serverIndexers === false
         ? null
         : resolve(config.indexerRuntime, IndexerRuntime, () => new InProcessIndexerRuntime()))),
 
-    plugins: lazySingleton(
+    plugins: Provider.fromLazySingleton(
       async (deps) => {
         const r = await need(deps, ['vfs', 'sqlite', 'packageStore', 'indexerRuntime', 'collections']);
         const service = new PluginService({
@@ -347,7 +347,7 @@ export function coreProviders(config, lifecycleState) {
         return service;
       },
       null,
-      ['vfs', 'sqlite', 'packageStore', 'indexerRuntime', 'collections'],
+      { deps: ['vfs', 'sqlite', 'packageStore', 'indexerRuntime', 'collections'] },
     ),
   };
 }

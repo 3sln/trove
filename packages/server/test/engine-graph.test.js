@@ -48,11 +48,19 @@ test('a resource is built once however many things ask for it', async () => {
   await engine.dispose();
 });
 
-test('teardown runs in reverse, so nothing is disposed after what it was built from', async () => {
-  // This is the property `close()` used to assert by being written in the right
-  // order, two hundred lines away from the build order it had to agree with.
-  const order = [];
+test('teardown order comes from the declarations, not the source order', async () => {
+  // Worth being precise about: the providers happen to be WRITTEN in dependency
+  // order, so a reverse-of-source teardown would pass the assertions below too.
+  // What is actually being relied on is that each one declares its needs — check
+  // that first, or this test proves nothing it claims to.
   const engine = createDriveEngine(configFromEnv(ENV));
+  const declared = (name) => engine.container.get(name).constructor.deps;
+  expect(declared('metadata')).toEqual(['sqlite']);
+  expect(declared('kv')).toEqual(['sqlite', 'metadata']);
+  expect(declared('sidecar')).toEqual(['storage', 'issues', 'notifications']);
+  expect(declared('vfs')).toContain('sidecar');
+
+  const order = [];
   for (const name of ['sqlite', 'kv', 'issues', 'sidecar', 'notifications', 'vfs']) {
     const provider = engine.container.get(name);
     const real = provider.dispose?.bind(provider);
