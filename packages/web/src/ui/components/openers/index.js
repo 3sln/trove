@@ -5,7 +5,6 @@
 import { dd, cell, fromAsync, watch } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { bytes } from '../../format.js';
-import { audiobookOpener } from './audiobook.js';
 import { markdownOpener } from './markdown.js';
 
 const { div, pre, img, span, button, video, audio } = dd;
@@ -15,14 +14,9 @@ const { div, pre, img, span, button, video, audio } = dd;
 // that a built-in supplies a `component` (it runs in the host) where a plugin
 // supplies an `entry` module (it runs in its own sandboxed frame).
 const BUILT_IN = {
-  'core.audiobook': {
-    title: 'Audiobook Player', priority: 50,
-    match: { ext: ['.m4b', '.m4a'], mime: ['audio/mp4', 'audio/x-m4b'] },
-    component: audiobookOpener,
-  },
   'core.audio': {
     title: 'Audio Player', priority: 20,
-    match: { mime: ['audio/*'], ext: ['.mp3', '.flac', '.wav', '.opus', '.ogg'] },
+    match: { mime: ['audio/*'], ext: ['.mp3', '.flac', '.wav', '.opus', '.ogg', '.m4a', '.m4b'] },
     component: audioOpener,
   },
   'core.video': {

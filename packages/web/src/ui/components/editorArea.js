@@ -2,7 +2,7 @@
 // nav bar: a Back button, a trail of the stacked panels (Search › A › B),
 // and details/close actions. The opener host returns a *stable* keyed alias per
 // panel so dodo reuses its DOM across unrelated workbench re-renders — critical for
-// the audiobook player, whose <audio> must keep playing while state churns; the
+// any media opener, whose <audio>/<video> must keep playing while state churns; the
 // DOM persists as long as the panel stays in the stack.
 
 import { dd } from '../../runtime.js';

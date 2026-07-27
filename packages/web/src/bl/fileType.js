@@ -10,11 +10,9 @@ export function extOf(node) {
 }
 
 // Category → { mime: prefixes/exact it matches, ext: extensions }. Order matters:
-// kindOf checks these top-down, so audiobook wins over the generic audio player for
-// an .m4a (both match its audio/mp4 mime).
+// kindOf checks these top-down.
 const CATEGORIES = [
-  { kind: 'audiobook', icon: 'book', mime: ['audio/x-m4b'], ext: ['.m4b', '.m4a'] },
-  { kind: 'audio', icon: 'file-audio', mime: ['audio/'], ext: ['.mp3', '.flac', '.wav', '.opus', '.ogg'] },
+  { kind: 'audio', icon: 'file-audio', mime: ['audio/'], ext: ['.mp3', '.flac', '.wav', '.opus', '.ogg', '.m4a', '.m4b'] },
   { kind: 'image', icon: 'file-image', mime: ['image/'], ext: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif'] },
   { kind: 'video', icon: 'file-video', mime: ['video/'], ext: ['.mp4', '.webm', '.mkv', '.mov'] },
   {
@@ -30,18 +28,10 @@ function matchesCategory(cat, ext, ct) {
   return cat.mime.some((m) => (m.endsWith('/') ? ct.startsWith(m) : ct === m));
 }
 
-/** Classify an item → 'audiobook'|'audio'|'image'|'video'|'text'|'file'. */
+/** Classify an item → 'audio'|'image'|'video'|'text'|'file'. */
 export function kindOf(node) {
   const ext = extOf(node);
   const ct = node?.contentType || '';
-  // The name hint only counts for a file that is actually AUDIO. Matched anywhere in the
-  // name and ahead of the extension table, `audiobook-notes.md` classified as an
-  // audiobook — which made it non-texty, so pinning it skipped text extraction and it was
-  // unfindable in offline search.
-  if (/audiobook/.test((node?.name || '').toLowerCase())
-      && (ct.startsWith('audio/') || ['.m4b', '.m4a', '.mp3', '.aac', '.opus'].includes(ext))) {
-    return 'audiobook';
-  }
   for (const cat of CATEGORIES) if (matchesCategory(cat, ext, ct)) return cat.kind;
   return 'file';
 }

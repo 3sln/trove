@@ -39,9 +39,10 @@ const { page, errors, close, goto, vfs } = await boot({
       { contentType: 'text/plain' });
     await vfs.writeFile('notes.txt', 'Plain notes with no tags.', { contentType: 'text/plain' });
     // Handled by the demo plugin's sandboxed opener (installed later in the journey).
-    await vfs.writeFile('clip.demo', 'demo clip payload', { contentType: 'application/octet-stream' });
-    // An .m4a matches BOTH the audiobook and audio openers → exercises the chooser.
-    await vfs.metadata.create({ name: 'audiobook.m4a', storageKey: 'k-ab', size: 1024, contentType: 'audio/mp4' });
+    // `text/plain` so `core.text` claims it by mime while the demo plugin claims it by
+    // extension — two openers, which is what the chooser is for.
+    await vfs.writeFile('clip.demo', 'demo clip payload', { contentType: 'text/plain' });
+
     await vfs.metadata.setContribution(welcome.id, 'user', { tags: { fav: 'yes', rating: '5' } });
     await vfs.metadata.setContribution(sailing.id, 'user', { tags: { fav: 'yes', deep: 'yes' } });
   },
@@ -186,28 +187,7 @@ const afterUpload = await page.locator('.launch-item .name').allTextContents();
 check('an uploaded file appears in the drive', afterUpload.includes('uploaded.txt'), afterUpload.join(', '));
 await shot('after-upload');
 
-// ---- 11. Opener chooser (two openers match .m4a) -----------------------------
-await page.locator('.launch-item', { hasText: 'audiobook.m4a' }).first().click();
-await page.waitForSelector('.opener-chooser', { timeout: 4000 });
-const openerNames = (await page.locator('.opener-opt .oo-title').allTextContents()).join(', ');
-check('opener chooser appears when several viewers match', /Audiobook/i.test(openerNames) && /Audio Player/i.test(openerNames), openerNames);
-await shot('opener-chooser');
-await page.locator('.opener-opt', { hasText: 'Audio Player' }).first().click();
-await page.locator('.opener-remember input').check();
-await page.locator('.opener-chooser .btn.primary', { hasText: 'Open' }).click();
-await page.waitForTimeout(700);
-check('choosing an opener remembers it for the type',
-  await page.evaluate(() => (window.__trove.platform.settings.get('openers.associations') || {})['.m4a'] === 'core.audio'));
-await shot('opener-chosen');
-
-// ---- 12. Settings (incl. the Default Openers section) ------------------------
-await page.evaluate(() => window.__trove.platform.workbench.setActivity('settings'));
-await page.waitForSelector('.settings', { timeout: 3000 });
-const hasOpenerRow = await page.locator('.settings .group', { hasText: 'Default Openers' }).locator('.setting', { hasText: '.m4a' }).count();
-check('settings lists the saved default opener', hasOpenerRow >= 1);
-await shot('settings');
-
-// ---- 13. Install the sandboxed demo plugin -----------------------------------
+// ---- 11. Install the sandboxed demo plugin -----------------------------------
 // Declare the capabilities the demo's opener/dock/media path needs (the fixture's
 // default manifest only asks for storage/ui/commands).
 const { zip } = await buildPackage({
@@ -226,12 +206,43 @@ check('sandboxed plugin installs and reports active',
   await page.evaluate(() => window.__trove.platform.plugins.list().some((p) => p.status === 'active' && p.responsive)));
 await shot('plugins-installed');
 
+// ---- 12. Opener chooser (a plugin viewer competes with a built-in) -----------
+// Installing left us on the plugins view; the chooser is reached from the launcher.
+await page.evaluate(() => window.__trove.platform.workbench.showHome());
+await page.waitForSelector('.launcher .launch-item', { timeout: 5000 });
+await page.locator('.launch-item', { hasText: 'clip.demo' }).first().click();
+await page.waitForSelector('.opener-chooser', { timeout: 4000 });
+const openerNames = (await page.locator('.opener-opt .oo-title').allTextContents()).join(', ');
+check('opener chooser appears when several viewers match', /Demo Player/i.test(openerNames) && /Text Viewer/i.test(openerNames), openerNames);
+await shot('opener-chooser');
+await page.locator('.opener-opt', { hasText: 'Text Viewer' }).first().click();
+await page.locator('.opener-remember input').check();
+await page.locator('.opener-chooser .btn.primary', { hasText: 'Open' }).click();
+await page.waitForTimeout(700);
+check('choosing an opener remembers it for the type',
+  await page.evaluate(() => (window.__trove.platform.settings.get('openers.associations') || {})['.demo'] === 'core.text'));
+await shot('opener-chosen');
+
+// ---- 13. Settings (incl. the Default Openers section) ------------------------
+await page.evaluate(() => window.__trove.platform.workbench.setActivity('settings'));
+await page.waitForSelector('.settings', { timeout: 3000 });
+const hasOpenerRow = await page.locator('.settings .group', { hasText: 'Default Openers' }).locator('.setting', { hasText: '.demo' }).count();
+check('settings lists the saved default opener', hasOpenerRow >= 1);
+await shot('settings');
+
 // ---- 14. Plugin viewer + dock (PiP) ------------------------------------------
 // clip.demo is handled by the demo plugin's opener, which runs in its OWN sandboxed
-// iframe and opts into the floating dock.
+// iframe and opts into the floating dock. Opened BY NAME rather than by clicking: the
+// chooser step above deliberately saved `.demo → core.text`, and a click would honour
+// that preference — correctly, which is why this step names the opener it means.
 await page.evaluate(() => window.__trove.platform.workbench.showHome());
 await page.waitForTimeout(800);
-await page.locator('.launch-item', { hasText: 'clip.demo' }).first().click({ timeout: 10000 });
+await page.evaluate(() => {
+  const t = window.__trove;
+  const node = t.app.explorer.state.items.find((i) => i.name === 'clip.demo');
+  const plugin = t.platform.contributions.ofType('opener').find((o) => o.pluginId);
+  t.platform.workbench.openFile(node, plugin.id);
+});
 // Wait for the viewer's OWN iframe (the plugin already has its background frame), so
 // this doesn't race the sandbox handshake.
 const gotViewerFrame = await page.waitForFunction(() => document.querySelectorAll('iframe').length >= 2, { timeout: 15000 })

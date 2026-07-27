@@ -1,6 +1,6 @@
 // Opener choice: which viewer opens a file when several can. Built-in and plugin
 // openers register the same way (a selector + priority), so a file can match more
-// than one — e.g. a plugin PDF viewer alongside a built-in, or the audiobook vs the
+// than one — e.g. a plugin PDF viewer alongside a built-in, or a rich player vs the
 // plain audio player for an .m4a. When that happens and the user hasn't expressed a
 // preference, we ask; their choice can be remembered per file type.
 //
