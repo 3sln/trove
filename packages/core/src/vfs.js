@@ -156,6 +156,20 @@ export class Vfs {
     return this.resolve(ref, collectionId);
   }
 
+  /**
+   * Like `stat`, but the trash is visible.
+   *
+   * Restore and permanent-delete act on items `stat` deliberately cannot see, and the
+   * callers that needed them were reaching past this object into `metadata.getById` —
+   * which is a different resolver: no `trove:` URIs, no lookup by name. This is the
+   * one `remove` and `restore` themselves already use, said out loud.
+   */
+  async statAny(ref, collectionId) {
+    const node = await this.#findAny(ref, collectionId);
+    if (!node) throw TroveError.notFound('Item');
+    return node;
+  }
+
   /** Items whose content links to this one — see MetadataStore.findLinksTo. */
   async backlinks(id, opts = {}) {
     const node = await this.resolve(id);

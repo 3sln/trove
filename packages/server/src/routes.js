@@ -157,8 +157,7 @@ export function createRouter() {
     // (else the client picks the wrong upload strategy on a non-default collection).
     let storage = vfs.storage;
     if (query.collection) {
-      await assertCap(ctx, query.collection, 'read');
-      storage = await vfs.storageFor(query.collection);
+      storage = await (await ctx.access.collection(query.collection, 'read')).storage();
     }
     return {
       collection: query.collection || 'default',
@@ -222,20 +221,19 @@ export function createRouter() {
     return { collection: collections.describe(c, principal) };
   });
 
-  r.post('/api/collections', ['collections'], async ({ collections, principal, req }) => {
-    if (!collections) throw TroveError.unsupported('Collections are not enabled');
-    const b = await body(req);
-    return { collection: await collections.create(b, principal) };
+  r.post('/api/collections', ['collections'], async (ctx) => {
+    requireCollections(ctx);
+    return { collection: await ctx.collections.create(await body(ctx.req), ctx.principal) };
   });
 
-  r.post('/api/collections/:id', ['collections'], async ({ collections, principal, params, req }) => {
-    if (!collections) throw TroveError.unsupported('Collections are not enabled');
-    const b = await body(req);
-    return { collection: await collections.update(params.id, b, principal) };
+  r.post('/api/collections/:id', ['collections'], async (ctx) => {
+    requireCollections(ctx);
+    return { collection: await ctx.collections.update(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
 
-  r.delete('/api/collections/:id', ['collections', 'vfs'], async ({ collections, vfs, principal, params }) => {
-    if (!collections) throw TroveError.unsupported('Collections are not enabled');
+  r.delete('/api/collections/:id', ['collections', 'vfs'], async (ctx) => {
+    requireCollections(ctx);
+    const { collections, vfs, principal, params } = ctx;
     // A collection record is the only thing that knows where its items' BYTES live, so
     // deleting it while items still reference it stranded every one of them: `storageFor`
     // throws "Collection not found", and since reindex walks the whole metadata store,
@@ -253,10 +251,9 @@ export function createRouter() {
     return collections.remove(params.id, principal);
   });
 
-  r.post('/api/collections/:id/grants', ['collections'], async ({ collections, principal, params, req }) => {
-    if (!collections) throw TroveError.unsupported('Collections are not enabled');
-    const b = await body(req);
-    return { collection: await collections.setGrant(params.id, b, principal) };
+  r.post('/api/collections/:id/grants', ['collections'], async (ctx) => {
+    requireCollections(ctx);
+    return { collection: await ctx.collections.setGrant(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
 
   // --- browse ----------------------------------------------------------------
@@ -269,11 +266,11 @@ export function createRouter() {
 
   // Every item in a collection. There is nothing to descend into — a drive is browsed
   // by search and by following links, and this is the "show me everything" fallback.
-  r.get('/api/items', ['collections', 'vfs'], async (ctx) => {
+  r.get('/api/items', ['vfs'], async (ctx) => {
     const { vfs, query } = ctx;
     const collectionId = collectionOf(query);
-    await assertCap(ctx, collectionId, 'read');
-    const { items, nextCursor } = await vfs.list(collectionId, {
+    const collection = await ctx.access.collection(collectionId, 'read');
+    const { items, nextCursor } = await collection.list({
       sort: query.sort, order: query.order,
       limit: clampLimit(query.limit, 500),
       cursor: query.cursor,
@@ -285,57 +282,53 @@ export function createRouter() {
     // Space left on the backing store, when it can say. Null for object stores, which
     // have no such number — and a UI that showed a made-up gauge for S3 would be worse
     // than one that shows nothing.
-    const usage = await vfs.storageUsage(collectionId).catch(() => null);
+    const usage = await collection.usage().catch(() => null);
     return { items, nextCursor, collectionId, stats, usage };
   });
 
   // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.
-  r.get('/api/items/resolve', ['collections', 'vfs'], async (ctx) => {
-    const { query } = ctx;
-    const ref = query.id || query.uri || query.name;
+  r.get('/api/items/resolve', [], async (ctx) => {
+    const ref = ctx.query.id || ctx.query.uri || ctx.query.name;
     if (!ref) throw TroveError.invalid('id, name or uri is required');
-    const node = await ctx.vfs.stat(ref, collectionOf(query));
-    await assertCap(ctx, node.collectionId, 'read');
-    return { node };
+    // A name is only unique within a collection, so the hint goes to `stat`; the
+    // capability is asserted on the collection the node turns out to be in.
+    const handle = await ctx.access.node(ref, 'read', { collectionId: collectionOf(ctx.query) });
+    return { node: handle.node };
   });
 
   // What links to this item — the inverse of the links its own content declares, and
   // what replaces "which folder is it in?".
-  r.get('/api/items/backlinks', ['collections', 'vfs'], async (ctx) => {
-    const node = await nodeWithCap(ctx, ctx.query.id, 'read');
+  r.get('/api/items/backlinks', ['collections'], async (ctx) => {
+    const node = await ctx.access.node(ctx.query.id, 'read');
     // Scoped in the query, not filtered after: backlinks cross collections, so a limit
     // spent on unreadable rows would report "nothing links here" while something the
     // caller can see sits just past the cut.
-    const items = await ctx.vfs.backlinks(node.id, {
+    const items = await node.backlinks({
       limit: clampLimit(ctx.query.limit, 100),
       collectionIds: await readableCollectionIds(ctx),
     });
     return { items };
   });
 
-  r.post('/api/items/rename', ['collections', 'vfs'], async (ctx) => {
+  r.post('/api/items/rename', [], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id || !b.newName) throw TroveError.invalid('id and newName are required');
-    const node = await ctx.vfs.stat(b.id);
-    await assertCap(ctx, node.collectionId, 'write');
-    return { node: await ctx.vfs.rename(b.id, b.newName) };
+    const node = await ctx.access.node(b.id, 'write');
+    return { node: await node.rename(b.newName) };
   });
 
-  r.post('/api/items/delete', ['collections', 'vfs'], async (ctx) => {
+  r.post('/api/items/delete', [], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
-    const node = await ctx.vfs.stat(b.id);
-    await assertCap(ctx, node.collectionId, 'delete');
-    return ctx.vfs.remove(b.id);
+    return (await ctx.access.node(b.id, 'delete')).remove();
   });
 
   // --- download (presign redirect or range-aware proxy) ----------------------
 
-  r.get('/api/items/download', ['collections', 'vfs'], async (ctx) => {
-    const { vfs, query, req } = ctx;
-    const id = query.id;
-    if (!id) throw TroveError.invalid('id is required');
-    const node = await nodeWithCap(ctx, id, 'read');
+  r.get('/api/items/download', [], async (ctx) => {
+    const { query, req } = ctx;
+    if (!query.id) throw TroveError.invalid('id is required');
+    const node = await ctx.access.node(query.id, 'read');
     const ct = node.contentType || 'application/octet-stream';
     // Force a download for anything not safe to render inline in our own origin
     // (HTML/SVG/etc. would otherwise be same-origin XSS when opened directly).
@@ -345,11 +338,11 @@ export function createRouter() {
     // Ranged requests must proxy (we can't add Range to a bare redirect safely
     // for all clients), so only redirect for full-file GETs.
     if (!range) {
-      const d = await vfs.getDownload(id, { download: attach });
+      const d = await node.download({ download: attach });
       if (d.mode === 'redirect') return Response.redirect(d.url, 302);
     }
 
-    const { stream, size, contentType, etag, range: served } = await vfs.readStream(id, { range });
+    const { stream, size, contentType, etag, range: served } = await node.read({ range });
     const headers = {
       'content-type': contentType || ct,
       'accept-ranges': 'bytes',
@@ -368,50 +361,47 @@ export function createRouter() {
 
   // --- uploads ---------------------------------------------------------------
 
-  r.post('/api/uploads', ['collections', 'vfs'], async (ctx) => {
+  r.post('/api/uploads', [], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    const collectionId = collectionOf(b);
-    await assertCap(ctx, collectionId, 'write');
-    const plan = await ctx.vfs.createUpload({
-      collectionId, name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
+    const collection = await ctx.access.collection(collectionOf(b), 'write');
+    return uploadDescriptor(await collection.createUpload({
+      name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
       overwrite: b.overwrite === true,
-    });
-    return uploadDescriptor(plan);
+    }));
   });
 
-  r.get('/api/uploads/:id/status', ['collections', 'vfs'], async (ctx) => {
-    await assertUploadCap(ctx, ctx.params.id, 'write');
-    return ctx.vfs.uploadStatus(ctx.params.id);
+  // An upload spans several requests keyed only by an unguessable id, so each one
+  // re-obtains the handle — which re-asserts `write` on the session's collection. A
+  // grant revoked mid-upload stops the next part, which is the point.
+
+  r.get('/api/uploads/:id/status', [], async (ctx) => (await ctx.access.upload(ctx.params.id)).status());
+
+  r.post('/api/uploads/:id/parts/:n/sign', [], async (ctx) => {
+    const upload = await ctx.access.upload(ctx.params.id);
+    return { url: await upload.signPart(Number(ctx.params.n)) };
   });
 
-  r.post('/api/uploads/:id/parts/:n/sign', ['collections', 'vfs'], async (ctx) => {
-    await assertUploadCap(ctx, ctx.params.id, 'write');
-    return { url: await ctx.vfs.signUploadPart(ctx.params.id, Number(ctx.params.n)) };
-  });
-
-  r.post('/api/uploads/:id/parts/:n/report', ['collections', 'vfs'], async (ctx) => {
-    await assertUploadCap(ctx, ctx.params.id, 'write');
+  r.post('/api/uploads/:id/parts/:n/report', [], async (ctx) => {
+    const upload = await ctx.access.upload(ctx.params.id);
     const b = await body(ctx.req);
-    return ctx.vfs.reportUploadPart(ctx.params.id, Number(ctx.params.n), b.etag);
+    return upload.reportPart(Number(ctx.params.n), b.etag);
   });
 
   // Direct part upload — raw body streamed to storage.
-  r.put('/api/uploads/:id/parts/:n', ['collections', 'vfs'], async (ctx) => {
-    await assertUploadCap(ctx, ctx.params.id, 'write');
-    const res = await ctx.vfs.uploadPart(ctx.params.id, Number(ctx.params.n), ctx.req.body ?? new Uint8Array(0));
-    return json(res);
+  r.put('/api/uploads/:id/parts/:n', [], async (ctx) => {
+    const upload = await ctx.access.upload(ctx.params.id);
+    return json(await upload.uploadPart(Number(ctx.params.n), ctx.req.body ?? new Uint8Array(0)));
   });
 
-  r.post('/api/uploads/:id/complete', ['collections', 'vfs'], async (ctx) => {
-    await assertUploadCap(ctx, ctx.params.id, 'write');
+  r.post('/api/uploads/:id/complete', [], async (ctx) => {
+    const upload = await ctx.access.upload(ctx.params.id);
     const b = await body(ctx.req);
-    return { node: await ctx.vfs.completeUpload(ctx.params.id, b.parts) };
+    return { node: await upload.complete(b.parts) };
   });
 
-  r.delete('/api/uploads/:id', ['collections', 'vfs'], async (ctx) => {
-    await assertUploadCap(ctx, ctx.params.id, 'write');
-    await ctx.vfs.abortUpload(ctx.params.id);
+  r.delete('/api/uploads/:id', [], async (ctx) => {
+    await (await ctx.access.upload(ctx.params.id)).abort();
     return { ok: true };
   });
 
@@ -464,12 +454,12 @@ export function createRouter() {
   // all, and namespace ownership says you may speak AS this contributor. Without the
   // second, anyone who can write anywhere could overwrite `core.links` and quietly
   // break every backlink, or impersonate another plugin's index.
-  r.post('/api/index/:indexerId', ['collections', 'plugins', 'vfs'], async (ctx) => {
+  r.post('/api/index/:indexerId', ['plugins'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.nodeId) throw TroveError.invalid('nodeId is required');
     await assertContributorOwned(ctx, ctx.params.indexerId);
-    await assertCap(ctx, (await ctx.vfs.stat(b.nodeId)).collectionId, 'write');
-    return ctx.vfs.indexContributions(b.nodeId, ctx.params.indexerId, {
+    const node = await ctx.access.node(b.nodeId, 'write');
+    return node.contribute(ctx.params.indexerId, {
       semanticTexts: b.semanticTexts, tags: b.tags, metadata: b.metadata,
       documents: b.documents, facet: b.facet, // legacy
     });
@@ -581,47 +571,38 @@ export function createRouter() {
   // `delete` on the collection, the same capability the delete itself needed — seeing
   // what you deleted, and undoing it, are not lesser rights than deleting.
 
-  r.get('/api/trash', ['collections', 'vfs'], async (ctx) => {
+  r.get('/api/trash', [], async (ctx) => {
     const collectionId = collectionOf(ctx.query);
-    await assertCap(ctx, collectionId, 'delete');
-    return { items: await ctx.vfs.listTrash(collectionId, { limit: clampLimit(ctx.query.limit, 200) }), collectionId };
+    const collection = await ctx.access.collection(collectionId, 'delete');
+    return { items: await collection.listTrash({ limit: clampLimit(ctx.query.limit, 200) }), collectionId };
   });
 
-  r.post('/api/trash/restore', ['collections', 'vfs'], async (ctx) => {
+  r.post('/api/trash/restore', [], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
-    const node = await ctx.vfs.metadata.getById(b.id);
-    if (!node) throw TroveError.notFound('Item');
-    await assertCap(ctx, node.collectionId, 'delete');
-    return { node: await ctx.vfs.restore(b.id) };
+    // `trashed` — the item is out of the drive, which is the only reason to restore it.
+    const node = await ctx.access.node(b.id, 'delete', { trashed: true });
+    return { node: await node.restore() };
   });
 
   // Destroy for real. Separate from DELETE /api/items so that emptying the trash can
   // never be something you reach by accident from the ordinary delete path.
-  r.post('/api/trash/purge', ['collections', 'vfs'], async (ctx) => {
+  r.post('/api/trash/purge', [], async (ctx) => {
     const b = await body(ctx.req);
     if (b.id) {
-      const node = await ctx.vfs.metadata.getById(b.id);
-      if (!node) throw TroveError.notFound('Item');
-      await assertCap(ctx, node.collectionId, 'delete');
-      await ctx.vfs.remove(b.id, { permanent: true });
+      const node = await ctx.access.node(b.id, 'delete', { trashed: true });
+      await node.remove({ permanent: true });
       return { purged: 1 };
     }
-    const collectionId = collectionOf(b);
-    await assertCap(ctx, collectionId, 'delete');
-    const trash = await ctx.vfs.listTrash(collectionId, { limit: MAX_PAGE });
-    let purged = 0;
-    for (const node of trash) {
-      await ctx.vfs.remove(node.id, { permanent: true }).then(() => { purged++; }).catch(() => {});
-    }
-    return { purged };
+    const collection = await ctx.access.collection(collectionOf(b), 'delete');
+    return collection.purgeTrash({ limit: MAX_PAGE });
   });
 
   // Reconcile a collection against the bytes actually in its store — how files added,
   // replaced, or removed by anything other than Trove get noticed. Needs `write` on the
   // collection, because a scan can create items in it.
-  r.post('/api/collections/:id/scan', ['backgroundWork', 'collections', 'tasks'], async (ctx) => {
-    await assertCap(ctx, ctx.params.id, 'write');
+  r.post('/api/collections/:id/scan', ['backgroundWork', 'tasks'], async (ctx) => {
+    await ctx.access.collection(ctx.params.id, 'write');
     if (!ctx.backgroundWork) throw TroveError.unsupported('Scanning is not available on this deployment');
     const { task, alreadyRunning } = await ctx.backgroundWork.beginScan(ctx.params.id, { reason: 'Started manually' });
     if (alreadyRunning) {
@@ -831,7 +812,7 @@ export function createRouter() {
     requirePluginStore(sqlite, principal);
     // Authoritative capability check when the plugin is server-installed (transitional:
     // allowed if there's no install record — device plugins predate this).
-    if (plugins) await plugins.assertCapability(principal, params.pluginId, 'storage');
+    await plugins.assertCapability(principal, params.pluginId, 'storage');
     const { scope = 'plugin', op, sql, params: args = [], statements, domain } = await body(req);
     if (!PLUGIN_SQL_OPS.has(op)) throw TroveError.invalid(`Unknown storage op "${op}"`);
     if (scope !== 'plugin' && scope !== 'domain') throw TroveError.invalid(`Unknown storage scope "${scope}"`);
@@ -845,7 +826,7 @@ export function createRouter() {
       assertOwnDomain(params.pluginId, domain);
       // Installed AND approved for the shared scope — the two are different questions,
       // and only the second is the one an administrator was asked about.
-      if (plugins) await plugins.assertSharedStorage(principal, params.pluginId);
+      await plugins.assertSharedStorage(principal, params.pluginId);
     }
     const db = await sqlite.obtain({ key: storeKey(principal, params.pluginId, scope, domain) });
     return { result: await runPluginSql(db, op, { sql, args, statements }) };
@@ -858,7 +839,7 @@ export function createRouter() {
     // Same gate as the /sql route. Without it this was destroy-any-plugin's-data for
     // anyone who could reach the app origin — the one route in the pair that checked
     // nothing at all.
-    if (plugins) await plugins.assertCapability(principal, params.pluginId, 'storage');
+    await plugins.assertCapability(principal, params.pluginId, 'storage');
     await sqlite.drop({ key: storeKey(principal, params.pluginId, 'plugin') });
     return { ok: true };
   });
@@ -979,6 +960,17 @@ async function readableCollectionIds(ctx, narrowTo) {
  */
 const collectionsEnabled = (ctx) => ctx.config?.collections !== false;
 
+/**
+ * Managing collections is only meaningful where there is an ACL layer to manage.
+ *
+ * From config, not from `ctx.collections` being null — the two agree today only
+ * because the provider derives one from the other, and a build failure would make
+ * "Collections are not enabled" a lie about a drive that has them.
+ */
+function requireCollections(ctx) {
+  if (!collectionsEnabled(ctx)) throw TroveError.unsupported('Collections are not enabled');
+}
+
 async function assertCap(ctx, collectionId, capability) {
   if (!collectionsEnabled(ctx)) return; // no ACL layer configured
   await ctx.collections.assert(ctx.principal, collectionId, capability);
@@ -1019,20 +1011,6 @@ async function assertTaskAccess(ctx, task, what) {
   if (!task) throw TroveError.notFound('Task');
   if (task.collectionId == null) return requireWholeDrive(ctx, `${what} a drive-wide task`);
   await assertCap(ctx, task.collectionId, 'write');
-}
-// Stat a node and enforce a capability on its collection in one step — the single
-// most repeated shape across the mutating routes.
-async function nodeWithCap(ctx, id, capability) {
-  const node = await ctx.vfs.stat(id);
-  await assertCap(ctx, node.collectionId, capability);
-  return node;
-}
-// Re-check the caller still holds the capability on an in-flight upload's collection.
-// The upload lifecycle spans several requests keyed only by an unguessable uploadId;
-// without this a revoked grant could still drive/commit the upload.
-async function assertUploadCap(ctx, uploadId, capability) {
-  const { collectionId } = await ctx.vfs.uploadStatus(uploadId);
-  await assertCap(ctx, collectionId, capability);
 }
 function requirePrincipal(principal) {
   if (!principal) throw TroveError.unauthorized('Authentication required');

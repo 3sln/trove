@@ -147,7 +147,20 @@ function collectionHandle(vfs, collectionId, held) {
   }
 
   if (permits('delete')) {
-    handle.purgeTrash = (opts) => vfs.purgeTrash({ ...opts, collectionId });
+    // Scoped by listing THIS collection's trash and destroying those rows.
+    //
+    // `vfs.purgeTrash` is the retention sweeper: it takes `{ before, limit }` and no
+    // collection at all, because it runs for the whole drive on a timer. Handing it a
+    // `collectionId` it does not read looked collection-scoped and was not — a `delete`
+    // grant on one collection would have emptied every other collection's trash.
+    handle.purgeTrash = async ({ limit = 1000 } = {}) => {
+      const trash = await vfs.listTrash(collectionId, { limit });
+      let purged = 0;
+      for (const node of trash) {
+        await vfs.remove(node.id, { permanent: true }).then(() => { purged++; }).catch(() => {});
+      }
+      return { purged };
+    };
   }
 
   return handle;
@@ -171,12 +184,20 @@ export class NodeAccessProvider extends Provider {
     this.config = config;
   }
 
-  async obtain({ principal, id, capability = 'read' } = {}) {
+  // `id` is anything `stat` resolves: a node id, a `trove:` URI, or a name — and a
+  // name is only unique within a collection, hence the hint. The capability is still
+  // asserted on the collection the node TURNS OUT to be in, never on the hint, so
+  // naming the wrong collection finds nothing rather than authorizing against it.
+  // `trashed: true` widens resolution to include the trash, which `stat` deliberately
+  // cannot see — restoring and permanently deleting are the only operations on items
+  // that are no longer part of the drive. It widens WHAT IS VISIBLE, never what is
+  // permitted: the capability is asserted exactly the same way afterwards.
+  async obtain({ principal, id, collectionId, trashed = false, capability = 'read' } = {}) {
     if (!id) throw TroveError.invalid('A node id is required');
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
     const sidecar = await this.sidecar.obtain();
-    const node = await vfs.stat(id);
+    const node = trashed ? await vfs.statAny(id, collectionId) : await vfs.stat(id, collectionId);
 
     const config = await this.config.obtain();
     if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, requested(capability));
@@ -222,6 +243,54 @@ export class CollectionAccessProvider extends Provider {
     const collection = await collections.assert(principal, id, capability);
     return collectionHandle(vfs, id,
       intersect(collections.capabilities(principal, collection), requested(capability)));
+  }
+
+  release() {}
+}
+
+/**
+ * `deps = { upload: { principal, id } }`
+ *
+ * An upload is a conversation, not a call: negotiate, sign or push parts, report them,
+ * commit. It spans several requests keyed only by an unguessable `uploadId`, which is
+ * why every one of them has to re-check — a grant revoked between `POST /api/uploads`
+ * and `complete` must stop the upload, and "we checked at the start" would not.
+ *
+ * The check was `assertUploadCap`: look the session up to learn its collection, assert
+ * `write` there, then drive an unrestricted `vfs` with the raw id. Six routes, and the
+ * grant was thrown away in every one. Here the session IS the handle.
+ */
+export class UploadAccessProvider extends Provider {
+  static deps = ['vfs', 'collections', 'config'];
+
+  constructor({ vfs, collections, config }) {
+    super();
+    this.vfs = vfs;
+    this.collections = collections;
+    this.config = config;
+  }
+
+  async obtain({ principal, id } = {}) {
+    if (!id) throw TroveError.invalid('An upload id is required');
+    const vfs = await this.vfs.obtain();
+    // Resolving first is what makes the check possible at all: only the session knows
+    // which collection the bytes are destined for.
+    const session = await vfs.uploadStatus(id);
+    const config = await this.config.obtain();
+    if (enforcing(config)) {
+      const collections = await this.collections.obtain();
+      await collections.assert(principal, session.collectionId, 'write');
+    }
+    return {
+      id,
+      collectionId: session.collectionId,
+      status: () => vfs.uploadStatus(id),
+      signPart: (n) => vfs.signUploadPart(id, n),
+      reportPart: (n, etag) => vfs.reportUploadPart(id, n, etag),
+      uploadPart: (n, bodyStream, opts) => vfs.uploadPart(id, n, bodyStream, opts),
+      complete: (parts) => vfs.completeUpload(id, parts),
+      abort: () => vfs.abortUpload(id),
+    };
   }
 
   release() {}

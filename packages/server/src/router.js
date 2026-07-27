@@ -139,17 +139,15 @@ export class Router {
     // carried by the object it hands back, so there is no unrestricted service
     // and no raw id left over to use with one.
     const held = [];
+    const obtain = async (name, request) => {
+      const l = await ctx.container.lease({ [name]: { principal: ctx.principal, ...request } });
+      held.push(l);
+      return l.resources[name];
+    };
     const access = ctx.container ? {
-      node: async (id, capability) => {
-        const l = await ctx.container.lease({ node: { principal: ctx.principal, id, capability } });
-        held.push(l);
-        return l.resources.node;
-      },
-      collection: async (id, capability) => {
-        const l = await ctx.container.lease({ collection: { principal: ctx.principal, id, capability } });
-        held.push(l);
-        return l.resources.collection;
-      },
+      node: (id, capability, opts) => obtain('node', { id, capability, ...opts }),
+      collection: (id, capability) => obtain('collection', { id, capability }),
+      upload: (id) => obtain('upload', { id }),
     } : null;
     try {
       lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;

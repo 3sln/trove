@@ -29,7 +29,7 @@
       "name": "@trove/server",
       "version": "0.0.1",
       "dependencies": {
-        "@3sln/ngin": "github:3sln/ngin#c283f02a84f8392933bfeac8cb813c0553e3af5d",
+        "@3sln/ngin": "github:3sln/ngin#d77f51511cff1d24ce8ceede5f0844e06ef25d35",
         "@trove/core": "0.0.1",
       },
     },
@@ -39,7 +39,7 @@
       "dependencies": {
         "@3sln/bones": "^0.0.5",
         "@3sln/dodo": "^0.0.9",
-        "@3sln/ngin": "github:3sln/ngin#c283f02a84f8392933bfeac8cb813c0553e3af5d",
+        "@3sln/ngin": "github:3sln/ngin#d77f51511cff1d24ce8ceede5f0844e06ef25d35",
         "@trove/plugin-sdk": "0.0.1",
         "es-module-lexer": "^1.7.0",
         "fflate": "^0.8.3",
@@ -56,7 +56,7 @@
 
     "@3sln/dodo": ["@3sln/dodo@0.0.9", "", {}, "sha512-d0PVcdMTo6rL6+8lcdYGVKlO1LXWlfNe41RbCPP/UE4JYmzdqisp+sBecEYeSRxTLpu0olw7k+BiZ/cdihyKMw=="],
 
-    "@3sln/ngin": ["@3sln/ngin@github:3sln/ngin#c283f02", {}, "3sln-ngin-c283f02", "sha512-PQhrmEYDX8juyOfhJWYzvt4RkaOaTFdD2K6EG4ZbSUQOIs0d7cAUfQ7P/NPAovBWWs17Jb1dv91b9fz1ry0lsw=="],
+    "@3sln/ngin": ["@3sln/ngin@github:3sln/ngin#d77f515", {}, "3sln-ngin-d77f515", "sha512-dijZkEnfi8ILOC5SAJ6MB6m7XNTtpghY/6HjKzTX1PtahL57rSS2B9hrO3CH4N4XiGC4ULPkL7p3LYP7c2hnkg=="],
 
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
 

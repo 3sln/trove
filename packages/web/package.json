@@ -11,7 +11,7 @@
   "dependencies": {
     "@3sln/bones": "^0.0.5",
     "@3sln/dodo": "^0.0.9",
-    "@3sln/ngin": "github:3sln/ngin#c283f02a84f8392933bfeac8cb813c0553e3af5d",
+    "@3sln/ngin": "github:3sln/ngin#d77f51511cff1d24ce8ceede5f0844e06ef25d35",
     "@trove/plugin-sdk": "0.0.1",
     "es-module-lexer": "^1.7.0",
     "fflate": "^0.8.3",
