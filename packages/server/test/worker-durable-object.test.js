@@ -12,8 +12,28 @@
 
 import { test, expect } from 'bun:test';
 import { MemoryKV, MemoryStorage } from '@trove/core';
+
 import { createTaskHost, remoteBackground } from '../src/adapters/worker-tasks.js';
 import { createServer, configFromEnv } from '../src/index.js';
+
+/** Storage whose first `list()` waits, so "two at once" really is two at once. */
+class GatedStorage extends MemoryStorage {
+  constructor() {
+    super();
+    this.scanning = Promise.withResolvers();
+    this.gate = Promise.withResolvers();
+    this._gated = false;
+  }
+  open() { this.gate.resolve(); }
+  async list(opts) {
+    if (!this._gated) {
+      this._gated = true;
+      this.scanning.resolve();
+      await this.gate.promise;
+    }
+    return super.list(opts);
+  }
+}
 
 /** A DurableObjectState: key/value storage, one alarm, and waitUntil. */
 function fakeState() {
@@ -48,8 +68,8 @@ function fakeNamespace(obj) {
 }
 
 /** A drive plus the object that owns its background work, sharing one backing store. */
-async function drive({ env = {}, objects = 0 } = {}) {
-  const shared = { kv: new MemoryKV(), storage: new MemoryStorage() };
+async function drive({ env = {}, objects = 0, storage = new MemoryStorage() } = {}) {
+  const shared = { kv: new MemoryKV(), storage };
   const inner = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), ...shared });
   for (let i = 0; i < objects; i++) {
     await (await inner.vfs.storageFor('default')).put(`outside-${String(i).padStart(3, '0')}.txt`, new Uint8Array([i]));
@@ -152,12 +172,18 @@ test('the alarm carries a stopped scan to completion', async () => {
 });
 
 test('a second start while one is running is told so, not run twice', async () => {
-  const { edge, state } = await drive({ objects: 5 });
-  const [a, b] = await Promise.all([
-    edge.beginScan('default', { reason: 'one' }),
-    edge.beginScan('default', { reason: 'two' }),
-  ]);
-  expect([a.alreadyRunning, b.alreadyRunning].filter(Boolean).length).toBe(1);
+  // Held inside its first list(), so the first scan is unambiguously still going
+  // when the second arrives. A memory scan of five objects otherwise finishes
+  // inside one turn, and two back-to-back scans say nothing about the guard.
+  const storage = new GatedStorage();
+  const { edge, state } = await drive({ objects: 5, storage });
+  const first = edge.beginScan('default', { reason: 'one' });
+  await storage.scanning.promise;
+  const second = await edge.beginScan('default', { reason: 'two' });
+  storage.open();
+
+  expect(second.alreadyRunning).toBe(true);
+  expect((await first).alreadyRunning).toBe(false);
   await state.settle();
 });
 

@@ -27,6 +27,7 @@ import {
   resolveAuthDiscovery, protectedResourceMetadata, challengeHeaders, publicOrigin,
 } from '@trove/core';
 import { createRouter } from './routes.js';
+import { createScanEngine, scanStarter } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';
 
 // Every backend is pluggable. Each field of `config` accepts EITHER a ready
@@ -314,84 +315,11 @@ export async function createServer(config = {}) {
   // Where a scan that ran out of time left off. Persisted, because the whole point is
   // that the next invocation — possibly in a different isolate, minutes later — picks
   // the bucket up rather than starting again.
-  const SCAN_NS = 'scan-cursor';
-  // How long a scan's claim on its collection stays valid without being renewed. Long
-  // enough that a slow list() doesn't lose it, short enough that a holder that died
-  // (isolate evicted, container killed) doesn't block the collection for long.
-  const LEASE_MS = 60_000;
-  const beginScan = async (collectionId = 'default', { reason, deadlineMs = null } = {}) => {
-    // Claim the collection before doing anything. The in-memory "already running?"
-    // check in the route only sees THIS process, and a scan writes a resume cursor:
-    // two of them running at once means last-writer-wins on that cursor, and a slice
-    // of the bucket is silently never reached. That is a data problem, not a tidiness
-    // one, so the guard has to live somewhere both processes can see — see
-    // KeyValueStore.acquire.
-    const token = await kv.acquire(SCAN_NS, collectionId, LEASE_MS);
-    if (!token) {
-      return {
-        task: null,
-        alreadyRunning: true,
-        done: Promise.resolve({
-          alreadyRunning: true, scanned: 0, adopted: 0, refreshed: 0, orphaned: 0,
-          skipped: 0, failed: 0, unaddressable: 0, stopped: false, nextCursor: null, resumed: false,
-        }),
-      };
-    }
-    {
-      const begun = tasks.begin(
-        {
-          kind: 'scan',
-          title: `Scanning “${collectionId}” for outside changes`,
-          detail: reason || null,
-          unit: 'objects',
-          collectionId,
-          cancellable: true,
-        },
-        async (task) => {
-          // A budget, when the caller has one. On Workers a request has a CPU ceiling
-          // measured in seconds and a bucket has none at all, so "run until done" is not a
-          // thing that can be promised — this runs a slice and remembers where it got to.
-          const until = deadlineMs ? Date.now() + deadlineMs : null;
-          const cursor = (await kv.get(SCAN_NS, collectionId))?.cursor || null;
-          // A scan with no deadline can run for many minutes, well past the lease. Renew
-          // as it goes, and treat a failed renewal as a stop signal: something else now
-          // owns this collection, and continuing would put us back in the race the lease
-          // exists to prevent.
-          let lost = false;
-          let renewedAt = Date.now();
-          const result = await vfs.scanCollection(collectionId, {
-            cursor,
-            shouldStop: () => closing || task.cancelled || lost || (until != null && Date.now() > until),
-            // The store can't say how many objects it holds without listing them, so this is
-            // honestly indeterminate: a count that rises, with no total to divide it by.
-            onProgress: ({ scanned, adopted, refreshed }) => {
-              task.progress({
-                done: scanned,
-                detail: adopted || refreshed ? `${adopted} new, ${refreshed} changed` : null,
-              });
-              if (Date.now() - renewedAt < LEASE_MS / 3) return;
-              renewedAt = Date.now();
-              kv.renew(SCAN_NS, collectionId, token, LEASE_MS)
-                .then((ok) => { if (!ok) lost = true; })
-                .catch(() => {});
-            },
-          });
-          // Remember the resume point, or clear it once a pass completes — but only
-          // while we still hold the claim. Writing a cursor we no longer own is exactly
-          // the clobber this is here to stop.
-          if (lost || !(await kv.renew(SCAN_NS, collectionId, token, LEASE_MS))) {
-            return { ...result, lostLease: true };
-          }
-          if (result.nextCursor) await kv.set(SCAN_NS, collectionId, { cursor: result.nextCursor, at: Date.now() });
-          else await kv.delete(SCAN_NS, collectionId).catch(() => {});
-          return result;
-        },
-      );
-      const done = begun.done.finally(() => kv.release(SCAN_NS, collectionId, token).catch(() => {}));
-      done.catch(() => {});
-      return { task: begun.task, alreadyRunning: false, done };
-    }
-  };
+  // SPIKE: scanning runs as an ngin engine — see engine/index.js. `beginScan`
+  // keeps the signature it always had, so every caller and every test is
+  // untouched, which is what makes the rewrite checkable rather than hopeful.
+  const scanEngine = createScanEngine({ vfs, tasks, kv, shouldClose: () => closing });
+  const beginScan = scanStarter(scanEngine);
   const startScan = async (collectionId, opts) => (await beginScan(collectionId, opts)).done;
   // Where a route's "start this" goes. Normally straight to the functions above — the
   // process serving the request is also the one that will do the work. On a runtime

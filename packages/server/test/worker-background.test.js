@@ -12,6 +12,32 @@
 
 import { test, expect } from 'bun:test';
 import { MemoryKV, MemoryStorage } from '@trove/core';
+
+/**
+ * Storage whose first `list()` waits until the test lets it go.
+ *
+ * "Two at once" needs two that are genuinely at once. A memory-backed scan of a
+ * handful of objects finishes inside a single turn of the event loop, so
+ * starting one and then the other tests them running back to back — which is
+ * allowed, and says nothing about the guard.
+ */
+class GatedStorage extends MemoryStorage {
+  constructor() {
+    super();
+    this.scanning = Promise.withResolvers(); // resolves once a scan is really in flight
+    this.gate = Promise.withResolvers();
+    this._gated = false;
+  }
+  open() { this.gate.resolve(); }
+  async list(opts) {
+    if (!this._gated) {
+      this._gated = true;
+      this.scanning.resolve();
+      await this.gate.promise;
+    }
+    return super.list(opts);
+  }
+}
 import worker from '../src/adapters/worker.js';
 import { createServer, configFromEnv } from '../src/index.js';
 
@@ -85,20 +111,23 @@ test('two processes cannot scan the same collection at once', async () => {
   // Both write the resume cursor; last-writer-wins. Scan A reaches object 900, scan B
   // is at 300 and writes after it, and the next run resumes from 300 — everything A
   // walked past is now behind a cursor nobody will return to.
-  const shared = { kv: new MemoryKV(), storage: new MemoryStorage() };
+  const storage = new GatedStorage();
+  const shared = { kv: new MemoryKV(), storage };
   const a = await createServer({ ...configFromEnv(ENV), ...shared });
   const b = await createServer({ ...configFromEnv(ENV), ...shared });
 
-  const [ra, rb] = await Promise.all([
-    a.startScan('default', { reason: 'isolate a' }),
-    b.startScan('default', { reason: 'isolate b' }),
-  ]);
-  expect([ra.alreadyRunning, rb.alreadyRunning].filter(Boolean).length).toBe(1);
+  // A is held inside its first list(), so it is unambiguously still scanning.
+  const first = a.startScan('default', { reason: 'isolate a' });
+  await storage.scanning.promise;
+  const second = await b.startScan('default', { reason: 'isolate b' });
+  storage.open();
+
+  expect(second.alreadyRunning).toBe(true);
+  expect((await first).alreadyRunning).toBeUndefined();
   // And the one that was turned away did nothing at all — it must not have written a
   // cursor, which is the whole point.
-  const loser = ra.alreadyRunning ? ra : rb;
-  expect(loser.scanned).toBe(0);
-  expect(loser.nextCursor).toBe(null);
+  expect(second.scanned).toBe(0);
+  expect(second.nextCursor).toBe(null);
 });
 
 test('the claim is released, so the next scan is not locked out', async () => {
