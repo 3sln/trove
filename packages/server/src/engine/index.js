@@ -8,6 +8,10 @@
 import { Engine } from '@3sln/ngin';
 import { coreProviders } from './providers/core.js';
 import { ScanClaimProvider } from './providers/scan.js';
+import {
+  NodeAccessProvider, CollectionAccessProvider,
+  SystemNodeProvider, SystemCollectionProvider,
+} from './providers/access.js';
 import { ScanCollection } from './actions/scanCollection.js';
 
 export { ScanCollection, ScanClaimProvider };
@@ -23,6 +27,15 @@ export function driveProviders(config, lifecycleState) {
   return {
     ...coreProviders(config, lifecycleState),
     claim: ScanClaimProvider,
+    // Authorization as something you hold rather than something you checked —
+    // see providers/access.js. Denial happens during the lease, so an action
+    // that may not act never runs at all.
+    node: NodeAccessProvider,
+    collection: CollectionAccessProvider,
+    // The background domain's grant, named separately so declaring it is a
+    // visible decision rather than an option someone passed.
+    systemNode: SystemNodeProvider,
+    systemCollection: SystemCollectionProvider,
   };
 }
 

@@ -348,6 +348,9 @@ export async function createServer(config = {}) {
   }
 
   return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild,
+    // The graph itself, so an action or query can be dispatched directly — by a
+    // test, by MCP, by anything that is not an HTTP route.
+    engine, engineContainer: engine.container,
     // `start*` always runs the work HERE — that is what maintenance and the alarm loop
     // inside a Durable Object want. `begin*` goes wherever `config.background` says,
     // which for a front-line Worker isolate is the object rather than itself.
