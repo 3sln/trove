@@ -12,17 +12,22 @@
 //   [[d1_databases]] binding = "DB"          -> metadata, kv, keyword search
 //   [[vectorize]]    binding = "VECTORIZE"   -> semantic search
 //   [ai]             binding = "AI"          -> LLM query understanding (optional)
+//   [[durable_objects.bindings]] name = "TASKS" class_name = "TroveTasks"
+//                                            -> owns scans and reindexes (see below)
 
 import { D1SqliteProvider } from '@trove/core';
 import { createServer, configFromEnv } from '../index.js';
+import { createTaskHost, remoteBackground } from './worker-tasks.js';
 
 let cached = null;
 
 /**
  * @param {object} env Worker env bindings
  * @param {(env) => object} [buildVfs] optional: return { storage, metadata } (e.g. D1)
+ * @param {{delegate?: boolean}} [opts] delegate=false builds the server that DOES the
+ *   background work (inside the Durable Object) rather than one that hands it off
  */
-async function getServer(env, buildVfs) {
+async function getServer(env, buildVfs, { delegate = true } = {}) {
   if (cached) return cached;
   const config = configFromEnv(env);
   if (buildVfs) config.vfs = buildVfs(env);
@@ -56,7 +61,22 @@ async function getServer(env, buildVfs) {
       return res.status === 404 ? null : res;
     };
   }
+  // The Durable Object that owns long work. Bound as TASKS, it becomes the one place
+  // scans and reindexes run and the one place their tasks are listed — so a client
+  // polling /api/tasks reaches the isolate that actually has the task, and Cancel
+  // reaches the AbortController it is meant to abort. Without the binding the drive
+  // still works: the work runs in the request isolate under waitUntil, which is what
+  // it did before, with the caveats in the README.
+  if (delegate && env.TASKS) {
+    const remote = remoteBackground(env.TASKS);
+    config.tasks = remote.tasks;
+    config.background = remote.background;
+    config.maintain = remote.maintain;
+    // Timers do not survive a request here, and the object has its own alarm loop.
+    config.startFlusher = false;
+  }
   cached = await createServer(config);
+  cached.maintain = config.maintain || null;
   return cached;
 }
 
@@ -78,6 +98,9 @@ async function getServer(env, buildVfs) {
  *
  *   [triggers]
  *   crons = ["*​/5 * * * *"]
+ *
+ * A third piece, `TroveTasks`, is exported below: `waitUntil` can keep work alive but
+ * cannot let another isolate SEE it, which is what progress polling and Cancel need.
  */
 export default {
   async fetch(request, env, ctx) {
@@ -96,13 +119,33 @@ export default {
    */
   async scheduled(event, env, ctx) {
     const server = await getServer(env);
+    const budgetMs = Number(env.TROVE_CRON_BUDGET_MS || 20_000);
     // AWAITED, not fire-and-forget: `scheduled` gets its own budget, and the runtime
-    // keeps the isolate alive exactly as long as this promise is pending.
-    const work = server.runMaintenance({ budgetMs: Number(env.TROVE_CRON_BUDGET_MS || 20_000) })
-      .catch((e) => console.error('[trove] scheduled maintenance failed', e));
+    // keeps the isolate alive exactly as long as this promise is pending. With the
+    // Durable Object bound this hands the slice to it instead — the object then keeps
+    // itself going on its own alarm, so a bucket too large for one firing does not
+    // wait for the next cron tick to continue.
+    const work = Promise.resolve(
+      server.maintain ? server.maintain(budgetMs) : server.runMaintenance({ budgetMs }),
+    ).catch((e) => console.error('[trove] scheduled maintenance failed', e));
     if (ctx?.waitUntil) ctx.waitUntil(work);
     await work;
   },
 };
+
+/**
+ * The Durable Object class. Declare it in wrangler.toml and it becomes the home of
+ * every scan and reindex — see worker-tasks.js for why that is the fix rather than
+ * making the task list durable.
+ *
+ *   [[durable_objects.bindings]]
+ *   name = "TASKS"
+ *   class_name = "TroveTasks"
+ *
+ *   [[migrations]]
+ *   tag = "v1"
+ *   new_sqlite_classes = ["TroveTasks"]
+ */
+export const TroveTasks = createTaskHost((env) => getServer(env, undefined, { delegate: false }));
 
 export { getServer };

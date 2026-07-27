@@ -254,29 +254,57 @@ export async function createServer(config = {}) {
   // command, and the retry on a failed-index issue. Written once so a user watching a
   // rebuild sees the same task whichever of them started it, and so "reindex" can't
   // drift into three subtly different operations.
-  const startReindex = ({ reason, title } = {}) => tasks.run(
+  // `begin*` hands back the task record straight away and the work as a promise;
+  // `start*` is the same thing for callers that only want the outcome. A route needs
+  // the first — it has to answer with something the client can watch, and it cannot
+  // wait for a reindex to finish to find out what that is.
+  const beginReindex = async ({ reason, title } = {}) => {
+    // Drive-wide, so one claim for the whole drive. Two concurrent full rebuilds do
+    // double the work to reach the same place, and on a metered backend that is real
+    // money — the same reason the route checks its local task list, made true across
+    // processes rather than only within one.
+    const token = await kv.acquire('reindex', 'all', 60_000);
+    if (!token) {
+      return { task: null, alreadyRunning: true, done: Promise.resolve({ alreadyRunning: true, indexed: 0, failed: 0, total: 0, stopped: false }) };
+    }
     {
-      kind: 'index',
-      title: title || 'Rebuilding the search index',
-      detail: reason || null,
-      unit: 'items',
-      cancellable: true,
-    },
-    async (task) => {
-      const result = await vfs.reindexAll({
-        // The registry stops at a cancel; `closing` covers a shutdown, which is the
-        // same need with no one to click the button.
-        shouldStop: () => closing || task.cancelled,
-        onProgress: ({ indexed, failed, total }) => task.progress({
-          done: indexed,
-          total,
-          detail: failed ? `${failed} could not be indexed` : null,
-        }),
-      });
-      if (result.stopped) throw TroveError.internal('Reindex stopped before it finished');
-      return result;
-    },
-  );
+      const begun = tasks.begin(
+        {
+          kind: 'index',
+          title: title || 'Rebuilding the search index',
+          detail: reason || null,
+          unit: 'items',
+          cancellable: true,
+        },
+        async (task) => {
+          let renewedAt = Date.now();
+          const result = await vfs.reindexAll({
+            // The registry stops at a cancel; `closing` covers a shutdown, which is the
+            // same need with no one to click the button.
+            shouldStop: () => closing || task.cancelled,
+            onProgress: ({ indexed, failed, total }) => {
+              task.progress({
+                done: indexed,
+                total,
+                detail: failed ? `${failed} could not be indexed` : null,
+              });
+              if (Date.now() - renewedAt < 20_000) return;
+              renewedAt = Date.now();
+              kv.renew('reindex', 'all', token, 60_000).catch(() => {});
+            },
+          });
+          if (result.stopped) throw TroveError.internal('Reindex stopped before it finished');
+          return result;
+        },
+      );
+      // Released when the WORK ends, not when this function returns — it returns as
+      // soon as the task exists, which is long before the rebuild is done.
+      const done = begun.done.finally(() => kv.release('reindex', 'all', token).catch(() => {}));
+      done.catch(() => {});
+      return { task: begun.task, alreadyRunning: false, done };
+    }
+  };
+  const startReindex = async (opts) => (await beginReindex(opts)).done;
   // Retrying an issue runs the same work as everything else, and reports it the same
   // way. The issue is not cleared here — it is cleared by the indexing that succeeds,
   // so a retry can't report success over a problem that is still there.
@@ -287,37 +315,91 @@ export async function createServer(config = {}) {
   // that the next invocation — possibly in a different isolate, minutes later — picks
   // the bucket up rather than starting again.
   const SCAN_NS = 'scan-cursor';
-  const startScan = (collectionId = 'default', { reason, deadlineMs = null } = {}) => tasks.run(
-    {
-      kind: 'scan',
-      title: `Scanning “${collectionId}” for outside changes`,
-      detail: reason || null,
-      unit: 'objects',
-      collectionId,
-      cancellable: true,
-    },
-    async (task) => {
-      // A budget, when the caller has one. On Workers a request has a CPU ceiling
-      // measured in seconds and a bucket has none at all, so "run until done" is not a
-      // thing that can be promised — this runs a slice and remembers where it got to.
-      const until = deadlineMs ? Date.now() + deadlineMs : null;
-      const cursor = (await kv.get(SCAN_NS, collectionId))?.cursor || null;
-      const result = await vfs.scanCollection(collectionId, {
-        cursor,
-        shouldStop: () => closing || task.cancelled || (until != null && Date.now() > until),
-        // The store can't say how many objects it holds without listing them, so this is
-        // honestly indeterminate: a count that rises, with no total to divide it by.
-        onProgress: ({ scanned, adopted, refreshed }) => task.progress({
-          done: scanned,
-          detail: adopted || refreshed ? `${adopted} new, ${refreshed} changed` : null,
+  // How long a scan's claim on its collection stays valid without being renewed. Long
+  // enough that a slow list() doesn't lose it, short enough that a holder that died
+  // (isolate evicted, container killed) doesn't block the collection for long.
+  const LEASE_MS = 60_000;
+  const beginScan = async (collectionId = 'default', { reason, deadlineMs = null } = {}) => {
+    // Claim the collection before doing anything. The in-memory "already running?"
+    // check in the route only sees THIS process, and a scan writes a resume cursor:
+    // two of them running at once means last-writer-wins on that cursor, and a slice
+    // of the bucket is silently never reached. That is a data problem, not a tidiness
+    // one, so the guard has to live somewhere both processes can see — see
+    // KeyValueStore.acquire.
+    const token = await kv.acquire(SCAN_NS, collectionId, LEASE_MS);
+    if (!token) {
+      return {
+        task: null,
+        alreadyRunning: true,
+        done: Promise.resolve({
+          alreadyRunning: true, scanned: 0, adopted: 0, refreshed: 0, orphaned: 0,
+          skipped: 0, failed: 0, unaddressable: 0, stopped: false, nextCursor: null, resumed: false,
         }),
-      });
-      // Remember the resume point, or clear it once a pass completes.
-      if (result.nextCursor) await kv.set(SCAN_NS, collectionId, { cursor: result.nextCursor, at: Date.now() });
-      else await kv.delete(SCAN_NS, collectionId).catch(() => {});
-      return result;
-    },
-  );
+      };
+    }
+    {
+      const begun = tasks.begin(
+        {
+          kind: 'scan',
+          title: `Scanning “${collectionId}” for outside changes`,
+          detail: reason || null,
+          unit: 'objects',
+          collectionId,
+          cancellable: true,
+        },
+        async (task) => {
+          // A budget, when the caller has one. On Workers a request has a CPU ceiling
+          // measured in seconds and a bucket has none at all, so "run until done" is not a
+          // thing that can be promised — this runs a slice and remembers where it got to.
+          const until = deadlineMs ? Date.now() + deadlineMs : null;
+          const cursor = (await kv.get(SCAN_NS, collectionId))?.cursor || null;
+          // A scan with no deadline can run for many minutes, well past the lease. Renew
+          // as it goes, and treat a failed renewal as a stop signal: something else now
+          // owns this collection, and continuing would put us back in the race the lease
+          // exists to prevent.
+          let lost = false;
+          let renewedAt = Date.now();
+          const result = await vfs.scanCollection(collectionId, {
+            cursor,
+            shouldStop: () => closing || task.cancelled || lost || (until != null && Date.now() > until),
+            // The store can't say how many objects it holds without listing them, so this is
+            // honestly indeterminate: a count that rises, with no total to divide it by.
+            onProgress: ({ scanned, adopted, refreshed }) => {
+              task.progress({
+                done: scanned,
+                detail: adopted || refreshed ? `${adopted} new, ${refreshed} changed` : null,
+              });
+              if (Date.now() - renewedAt < LEASE_MS / 3) return;
+              renewedAt = Date.now();
+              kv.renew(SCAN_NS, collectionId, token, LEASE_MS)
+                .then((ok) => { if (!ok) lost = true; })
+                .catch(() => {});
+            },
+          });
+          // Remember the resume point, or clear it once a pass completes — but only
+          // while we still hold the claim. Writing a cursor we no longer own is exactly
+          // the clobber this is here to stop.
+          if (lost || !(await kv.renew(SCAN_NS, collectionId, token, LEASE_MS))) {
+            return { ...result, lostLease: true };
+          }
+          if (result.nextCursor) await kv.set(SCAN_NS, collectionId, { cursor: result.nextCursor, at: Date.now() });
+          else await kv.delete(SCAN_NS, collectionId).catch(() => {});
+          return result;
+        },
+      );
+      const done = begun.done.finally(() => kv.release(SCAN_NS, collectionId, token).catch(() => {}));
+      done.catch(() => {});
+      return { task: begun.task, alreadyRunning: false, done };
+    }
+  };
+  const startScan = async (collectionId, opts) => (await beginScan(collectionId, opts)).done;
+  // Where a route's "start this" goes. Normally straight to the functions above — the
+  // process serving the request is also the one that will do the work. On a runtime
+  // where that is not true (Workers: an isolate can be discarded the moment the
+  // response resolves), `config.background` points them at whatever owns the work
+  // instead, and the routes are none the wiser.
+  const routeBeginScan = config.background?.beginScan || beginScan;
+  const routeBeginReindex = config.background?.beginReindex || beginReindex;
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
 
   issues.handle('reindex-node', (issue) => tasks.run(
@@ -454,7 +536,7 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return withChallenge(new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } }), req);
       }
-      const res = await router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan, mcp, auth });
+      const res = await router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan, beginReindex: routeBeginReindex, beginScan: routeBeginScan, mcp, auth });
       // A route can refuse on its own (a token that verified but names nobody we know,
       // a session that expired between calls). Whatever refused, the answer to "so
       // where do I sign in" is the same one, so it is attached in one place rather
@@ -525,7 +607,12 @@ export async function createServer(config = {}) {
     return out;
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild, startScan, startReindex, runMaintenance, mcp, auth, close };
+  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild,
+    // `start*` always runs the work HERE — that is what maintenance and the alarm loop
+    // inside a Durable Object want. `begin*` goes wherever `config.background` says,
+    // which for a front-line Worker isolate is the object rather than itself.
+    startScan, startReindex, beginScan: routeBeginScan, beginReindex: routeBeginReindex,
+    runMaintenance, mcp, auth, close };
 }
 
 /**

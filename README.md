@@ -231,6 +231,14 @@ binding = "AI"
 directory = "packages/web/dist"
 binding = "ASSETS"
 
+[[durable_objects.bindings]]     # owns scans and reindexes — see below
+name = "TASKS"
+class_name = "TroveTasks"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TroveTasks"]
+
 [vars]
 TROVE_STORAGE = "s3"             # R2 through the S3 API
 TROVE_S3_BUCKET = "trove"
@@ -276,33 +284,71 @@ record immediately rather than holding the connection open for it. On Node and B
 process keeps that promise alive. On Workers, without help, you would get a scan that
 did a third of the bucket and reported success.
 
-Two mechanisms cover it, and the second one needs a line in your config:
+Three mechanisms cover it. Two need a line in your config.
 
-* **`ctx.waitUntil`** — the adapter hands the runtime every task still running when the
-  response is ready, so the isolate stays alive until they finish. This is automatic.
-* **Cron Triggers** — `setInterval` does not survive the request it was registered in,
-  so `TROVE_SCAN_INTERVAL_MS` and `TROVE_MAINTENANCE_INTERVAL_MS` do nothing here; they
-  are Node/Bun only. Periodic work runs from the `scheduled` handler instead:
+**`ctx.waitUntil`** — the adapter hands the runtime every task still running when the
+response is ready, so the isolate stays alive until they finish. Automatic, no config.
+It buys a bigger bite, not an unlimited one: CPU is still capped per invocation.
+
+**A Durable Object** — this is the one that matters, and the reason is worth stating.
+`waitUntil` can keep work alive, but it cannot let a *different* isolate see it. The
+scan runs wherever the POST landed; the GET that polls it lands wherever the router
+feels like; Cancel lands somewhere else again. Bind the object and all three reach the
+same place:
+
+```toml
+[[durable_objects.bindings]]
+name = "TASKS"
+class_name = "TroveTasks"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TroveTasks"]
+```
+
+With `TASKS` bound, scans and reindexes run *inside* the object, and it becomes the one
+place their tasks are listed. Progress polling shows real progress, Cancel reaches the
+work it means to abort, and "is one already running?" is answered by a single instance
+rather than by whichever isolate happened to be asked. It also keeps itself moving with
+`setAlarm`, so a bucket too large for one slice continues in ~5 s rather than waiting
+for the next cron tick.
+
+Note what did **not** change: the task list is still in memory and still per-process.
+Making it durable would be the wrong fix — a stored record saying `running` after the
+isolate that owned it was evicted is a phantom nothing can ever correct, where a
+restart clears an in-memory one. The registry didn't need to become durable; the work
+needed a real process to live in. Failures are already durable, as Issues.
+
+**Cron Triggers** — `setInterval` does not survive the request it was registered in, so
+`TROVE_SCAN_INTERVAL_MS` and `TROVE_MAINTENANCE_INTERVAL_MS` do nothing here; they are
+Node/Bun only. Periodic work runs from the `scheduled` handler instead:
 
 ```toml
 [triggers]
 crons = ["*/5 * * * *"]
 
 [vars]
-TROVE_CRON_BUDGET_MS = "20000"   # wall-clock a firing may spend; default 20s
+TROVE_CRON_BUDGET_MS = "20000"   # wall-clock a cron firing may spend; default 20s
+TROVE_SLICE_MS = "20000"         # wall-clock one Durable Object slice may spend
 ```
 
 Each firing sweeps abandoned uploads and unflushed sidecars, applies trash retention,
 then scans — splitting whatever budget is left across your collections. A scan that
-runs out of budget **stores the cursor it reached** and stops, so the next firing
-continues from there rather than restarting; a bucket too large to walk in one firing
-still gets walked, just across several. Keep the budget under your Worker's CPU limit
-(30 s by default) with room to spare.
+runs out of budget **stores the cursor it reached** and stops, so the next slice
+continues from there rather than restarting. Keep the budget under your Worker's CPU
+limit (30 s by default) with room to spare.
 
-One consequence worth knowing: the task list is per-isolate and in-memory (by design —
-see `packages/core/src/tasks.js`). A client polling `/api/tasks` may be routed to an
-isolate that never saw the scan and so shows nothing running. The work is unaffected,
-and anything that goes *wrong* is recorded as an Issue, which is durable.
+Without the `TASKS` binding the drive still works — background work runs in the request
+isolate under `waitUntil`, exactly as it did before. What you lose is visibility: a
+client polling `/api/tasks` may reach an isolate that never saw the scan and show
+nothing running, and Cancel on such a task silently does nothing.
+
+Independently of any of this, a scan **claims its collection** before it starts, through
+a lease in the metadata database (`KeyValueStore.acquire`). Two scans of one collection
+running at once would both write the resume cursor, last-writer-wins, and a slice of the
+bucket would be silently skipped — so the guard has to live where every process can see
+it, not in one process's memory. That applies to multi-instance Node and Bun deployments
+too, not just Workers.
 
 ### Making yourself an admin
 
@@ -387,6 +433,7 @@ the same values as config fields instead.
 | `TROVE_SCAN_INTERVAL_MS` | off | reconcile with the store on a timer (not Workers) |
 | `TROVE_MAINTENANCE_INTERVAL_MS` | `300000` | sweep stale uploads and sidecars (not Workers) |
 | `TROVE_CRON_BUDGET_MS` | `20000` | Workers only: wall-clock one cron firing may spend |
+| `TROVE_SLICE_MS` | `20000` | Workers only: wall-clock one Durable Object slice may spend |
 | `TROVE_MENTION_FLUSH_MS` | — | how often mention notifications batch out |
 | `TROVE_VAPID_PUBLIC_KEY` / `_PRIVATE_KEY` / `_SUBJECT` | — | Web Push for @mentions |
 | **limits + serving** | | |

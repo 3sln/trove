@@ -11,6 +11,7 @@
 // registered in, so on Workers those simply never fire.
 
 import { test, expect } from 'bun:test';
+import { MemoryKV, MemoryStorage } from '@trove/core';
 import worker from '../src/adapters/worker.js';
 import { createServer, configFromEnv } from '../src/index.js';
 
@@ -71,6 +72,54 @@ test('a scan that runs out of budget resumes where it stopped', async () => {
   const items = (await vfs.list('default', { limit: 100 })).items;
   expect(items.length).toBe(25);
   expect(new Set(items.map((i) => i.storageKey)).size).toBe(25);
+});
+
+// --- claiming ------------------------------------------------------------------
+
+test('two processes cannot scan the same collection at once', async () => {
+  // Two isolates, or two containers behind a load balancer: same bucket, same
+  // metadata, separate memories. The route's "is one already running?" check consults
+  // an in-memory task list, so each of these sees nothing running and starts.
+  //
+  // What that costs is not duplicated effort, it is a skipped slice of the bucket.
+  // Both write the resume cursor; last-writer-wins. Scan A reaches object 900, scan B
+  // is at 300 and writes after it, and the next run resumes from 300 — everything A
+  // walked past is now behind a cursor nobody will return to.
+  const shared = { kv: new MemoryKV(), storage: new MemoryStorage() };
+  const a = await createServer({ ...configFromEnv(ENV), ...shared });
+  const b = await createServer({ ...configFromEnv(ENV), ...shared });
+
+  const [ra, rb] = await Promise.all([
+    a.startScan('default', { reason: 'isolate a' }),
+    b.startScan('default', { reason: 'isolate b' }),
+  ]);
+  expect([ra.alreadyRunning, rb.alreadyRunning].filter(Boolean).length).toBe(1);
+  // And the one that was turned away did nothing at all — it must not have written a
+  // cursor, which is the whole point.
+  const loser = ra.alreadyRunning ? ra : rb;
+  expect(loser.scanned).toBe(0);
+  expect(loser.nextCursor).toBe(null);
+});
+
+test('the claim is released, so the next scan is not locked out', async () => {
+  const shared = { kv: new MemoryKV(), storage: new MemoryStorage() };
+  const a = await createServer({ ...configFromEnv(ENV), ...shared });
+  const b = await createServer({ ...configFromEnv(ENV), ...shared });
+  await a.startScan('default', { reason: 'first' });
+  // A lock nobody ever releases is worse than no lock: the collection would simply
+  // stop being scanned, and nothing would say so.
+  expect((await b.startScan('default', { reason: 'second' })).alreadyRunning).toBeUndefined();
+});
+
+test('the claim is per collection, not drive-wide', async () => {
+  // One collection being scanned must not stop every other collection from being
+  // scanned — a drive-wide lock would turn a large photo library into a permanent
+  // block on everything else.
+  const kv = new MemoryKV();
+  const server = await createServer({ ...configFromEnv(ENV), kv });
+  const held = await kv.acquire('scan-cursor', 'photos', 60_000);
+  expect(held).toBeTruthy();
+  expect((await server.startScan('default', { reason: 'unrelated' })).alreadyRunning).toBeUndefined();
 });
 
 test('a resumed scan does not report the items it has not reached as orphaned', async () => {

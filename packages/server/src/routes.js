@@ -485,10 +485,16 @@ export function createRouter() {
   // three adapters; the client polls fast only while something is running and goes
   // silent otherwise, which costs nothing at rest.
 
+  // Every call through `ctx.tasks` is awaited. In a single long-lived process the
+  // registry is a local object and these resolve immediately; where the work runs
+  // somewhere else — a Durable Object, because a Worker isolate cannot own work that
+  // outlives a request — the same calls cross a boundary. Awaiting costs nothing in
+  // the first case and is the difference between working and not in the second.
+
   r.get('/api/tasks', async (ctx) => {
     const collectionIds = await readableCollectionIds(ctx);
     return {
-      tasks: ctx.tasks.list({
+      tasks: await ctx.tasks.list({
         collectionIds,
         // A drive-wide task (a full reindex) names no collection, so scoping can't
         // place it — only someone who can act on the whole drive is shown one.
@@ -498,13 +504,13 @@ export function createRouter() {
   });
 
   r.post('/api/tasks/:id/cancel', async (ctx) => {
-    await assertTaskAccess(ctx, ctx.tasks.get(ctx.params.id), 'cancel');
-    return { cancelled: ctx.tasks.cancel(ctx.params.id) };
+    await assertTaskAccess(ctx, await ctx.tasks.get(ctx.params.id), 'cancel');
+    return { cancelled: await ctx.tasks.cancel(ctx.params.id) };
   });
 
   r.delete('/api/tasks/:id', async (ctx) => {
-    await assertTaskAccess(ctx, ctx.tasks.get(ctx.params.id), 'dismiss');
-    ctx.tasks.dismiss(ctx.params.id);
+    await assertTaskAccess(ctx, await ctx.tasks.get(ctx.params.id), 'dismiss');
+    await ctx.tasks.dismiss(ctx.params.id);
     return { ok: true };
   });
 
@@ -555,13 +561,17 @@ export function createRouter() {
   // the caller owns. Returns the task, which is how the caller watches it.
   r.post('/api/reindex', async (ctx) => {
     await requireWholeDrive(ctx, 'rebuild the search index');
-    if (!ctx.startReindex) throw TroveError.unsupported('Reindexing is not available on this deployment');
-    const running = ctx.tasks.list().find((t) => t.kind === 'index' && t.status === 'running');
-    // Two concurrent full rebuilds would double the work to reach the same place.
-    if (running) return { task: running, alreadyRunning: true };
-    const task = ctx.startReindex({ reason: 'Started manually' });
-    task.catch(() => {});
-    return { task: ctx.tasks.list().find((t) => t.kind === 'index' && t.status === 'running') || null };
+    if (!ctx.beginReindex) throw TroveError.unsupported('Reindexing is not available on this deployment');
+    // Two concurrent full rebuilds would double the work to reach the same place, so
+    // `beginReindex` claims the drive first and says whether it got it. The claim is
+    // shared state rather than this process's task list — the other rebuild may be in
+    // another isolate, and a check that can only see local memory would not find it.
+    const { task, alreadyRunning } = await ctx.beginReindex({ reason: 'Started manually' });
+    if (alreadyRunning) {
+      const local = (await ctx.tasks.list()).find((t) => t.kind === 'index' && t.status === 'running');
+      return { task: local || null, alreadyRunning: true };
+    }
+    return { task };
   });
 
   // --- trash -----------------------------------------------------------------
@@ -610,11 +620,14 @@ export function createRouter() {
   // collection, because a scan can create items in it.
   r.post('/api/collections/:id/scan', async (ctx) => {
     await assertCap(ctx, ctx.params.id, 'write');
-    if (!ctx.startScan) throw TroveError.unsupported('Scanning is not available on this deployment');
-    const running = ctx.tasks.list().find((t) => t.kind === 'scan' && t.collectionId === ctx.params.id && t.status === 'running');
-    if (running) return { task: running, alreadyRunning: true };
-    ctx.startScan(ctx.params.id, { reason: 'Started manually' }).catch(() => {});
-    return { task: ctx.tasks.list().find((t) => t.kind === 'scan' && t.collectionId === ctx.params.id && t.status === 'running') || null };
+    if (!ctx.beginScan) throw TroveError.unsupported('Scanning is not available on this deployment');
+    const { task, alreadyRunning } = await ctx.beginScan(ctx.params.id, { reason: 'Started manually' });
+    if (alreadyRunning) {
+      const local = (await ctx.tasks.list())
+        .find((t) => t.kind === 'scan' && t.collectionId === ctx.params.id && t.status === 'running');
+      return { task: local || null, alreadyRunning: true };
+    }
+    return { task };
   });
 
   // --- identity --------------------------------------------------------------

@@ -79,6 +79,20 @@ export class TaskRegistry {
    * @param {(handle: object) => Promise<any>} fn
    */
   async run(spec, fn) {
+    return this.begin(spec, fn).done;
+  }
+
+  /**
+   * As `run()`, but hands back the task record immediately alongside the promise.
+   *
+   * A route that starts long work has to answer with something the client can watch,
+   * and it cannot wait for the work to finish to find out what that something is. The
+   * record exists the moment the task starts; this is how a caller gets at it without
+   * awaiting the whole job.
+   *
+   * @returns {{task: object, done: Promise<any>}}
+   */
+  begin(spec, fn) {
     const handle = this.start(spec);
     const promise = (async () => {
       try {
@@ -94,7 +108,7 @@ export class TaskRegistry {
     // the work exists — see below.
     this._inFlight.add(promise);
     promise.catch(() => {}).finally(() => this._inFlight.delete(promise));
-    return promise;
+    return { task: this.get(handle.id), done: promise };
   }
 
   /**
