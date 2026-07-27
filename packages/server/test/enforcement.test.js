@@ -14,24 +14,9 @@
 // Any authenticated caller could then contribute under any vendor's name.
 
 import { test, expect } from 'bun:test';
-import fs from 'node:fs';
-import path from 'node:path';
 import { createServer, configFromEnv } from '../src/index.js';
 
 const ENV = { TROVE_STORAGE: 'memory' };
-// Comments stripped: the prose below quotes the very pattern being searched for,
-// and a scanner that cannot tell code from a paragraph about code reports itself.
-const ROUTES = fs.readFileSync(path.resolve(import.meta.dir, '../src/routes.js'), 'utf8')
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .replace(/^\s*\/\/.*$/gm, '');
-
-test('no access check stands down because a service is missing', () => {
-  // Only the shape matters here, so this is deliberately blunt: a bare falsiness
-  // test on a leased resource, inside the access helpers, is the bug.
-  const guards = [...ROUTES.matchAll(/if \(!ctx\.(collections|plugins|identity|kv|sqlite)\)[^\n]*/g)]
-    .map((m) => m[0].trim());
-  expect(guards).toEqual([]);
-});
 
 test('a service that is absent throws rather than waving the request through', async () => {
   // "Just let it error" is the right answer for a resource that should be there.

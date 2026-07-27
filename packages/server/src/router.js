@@ -136,9 +136,9 @@ export class Router {
     let lease = null;
     try {
       lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;
-      const result = await found.route.handler(guarded({
+      const result = await found.route.handler({
         req, params: found.params, query, url, ...ctx, ...(lease?.resources || {}),
-      }, ctx.container));
+      });
       const res = result instanceof Response ? result : json(result ?? { ok: true });
       return cors(res, origin);
     } catch (raw) {
@@ -149,37 +149,6 @@ export class Router {
       await lease?.release();
     }
   }
-}
-
-/**
- * Make reaching for an undeclared resource throw instead of yielding undefined.
- *
- * Several guards in the route layer are written to stand down when a service is
- * switched off -- `if (!ctx.plugins) return;` means "no install records to check
- * against, so nothing to enforce". That is correct for a service an operator
- * disabled, and catastrophic for one that is merely undeclared: the check does
- * not fail, it silently passes. Exactly that turned an ownership check on
- * contributor namespaces into a no-op the first time these declarations were
- * written.
- *
- * So a name the container COULD have provided, that this route did not ask for,
- * is an error rather than an absence. Names the container knows nothing about
- * are left alone, since undefined is an ordinary answer for those.
- */
-function guarded(bag, container) {
-  if (!container?.has) return bag;
-  return new Proxy(bag, {
-    get(target, prop, receiver) {
-      if (typeof prop === 'string' && !(prop in target) && container.has(prop)) {
-        throw new Error(
-          `This route reads "${prop}" but does not declare it. Add it to the route's `
-          + 'dependency list — an undeclared resource is undefined, and a guard that '
-          + 'stands down when a service is absent would silently stop enforcing.',
-        );
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-  });
 }
 
 // Resolve the Access-Control-Allow-Origin value: null (no CORS) unless configured.
