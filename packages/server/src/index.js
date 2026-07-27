@@ -27,7 +27,7 @@ import {
   resolveAuthDiscovery, protectedResourceMetadata, challengeHeaders, publicOrigin,
 } from '@trove/core';
 import { createRouter } from './routes.js';
-import { createScanEngine, scanStarter } from './engine/index.js';
+import { createDriveEngine, scanStarter, BACKBONE, buildStorage } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';
 
 // Every backend is pluggable. Each field of `config` accepts EITHER a ready
@@ -36,94 +36,7 @@ import { createMcpHandler } from './mcp/index.js';
 // so the server constructor is a clean dependency-injection surface and core
 // stays platform-agnostic.
 
-function resolve(value, BaseClass, build) {
-  if (value instanceof BaseClass) return value; // an injected provider instance
-  return build(value || {}); // a { driver, ... } config (or nothing → default)
-}
 
-function buildStorage(cfg) {
-  switch (cfg.driver) {
-    case 's3': return new S3Storage(cfg.s3);
-    case 'filesystem': return new FilesystemStorage({ root: cfg.root });
-    case 'memory': default: return new MemoryStorage();
-  }
-}
-function buildMetadata(cfg, sqliteProvider) {
-  switch (cfg.driver) {
-    case 'sqlite': return new SqliteStore({ provider: sqliteProvider, key: 'metadata' });
-    case 'memory': default: return new MemoryStore();
-  }
-}
-function buildEmbeddings(cfg) {
-  if (cfg.driver === 'http') return new HttpEmbedding(cfg.http);
-  return new LocalHashEmbedding({ dimensions: cfg.dimensions ?? 256 });
-}
-async function buildVectorStore(cfg, dimensions, sqlite) {
-  switch (cfg.driver) {
-    case 'qdrant': return new QdrantVectorStore({ dimensions, ...cfg.qdrant });
-    case 'vectorize': return new VectorizeVectorStore({ dimensions, binding: cfg.binding, ...cfg.vectorize });
-    case 'sqlite': {
-      // sqlite-vec is an optional native dependency: absent on an unsupported platform
-      // or a `--omit=optional` install. Degrade loudly to memory rather than refusing to
-      // start — keyword search still works, and the warning says what was lost.
-      const store = await SqliteVectorStore.open({ provider: sqlite, dimensions });
-      if (store) return store;
-      console.warn(
-        '[trove] sqlite-vec is not loadable here — semantic search is falling back to an '
-        + 'IN-MEMORY index that is rebuilt from scratch on every restart. Install the '
-        + 'optional `sqlite-vec` dependency, or set TROVE_VECTOR to an external store.',
-      );
-      return new MemoryVectorStore({ dimensions });
-    }
-    case 'memory': default: return new MemoryVectorStore({ dimensions });
-  }
-}
-// FTS5 is compiled into both bun:sqlite and node:sqlite, so unlike the vector half
-// there is nothing here that can be missing.
-async function buildKeywordStore(cfg, sqlite) {
-  switch (cfg.driver) {
-    case 'sqlite': return SqliteKeywordStore.open({ provider: sqlite });
-    case 'memory': default: return new MemoryKeywordStore();
-  }
-}
-// Search transformer factory. `parse` (default) is deterministic `#tag` parsing;
-// `workers-ai` uses a Cloudflare Workers AI binding (injected by the worker adapter
-// as config.searchTransformer.ai) or a REST runner, falling back to parsing.
-function buildSearchTransformer(cfg, config) {
-  if (cfg?.driver === 'workers-ai' || config?.ai) {
-    return new WorkersAiSearchTransformer({ ai: cfg?.ai || config?.ai, model: cfg?.model, run: cfg?.run });
-  }
-  return new ParsingSearchTransformer();
-}
-function buildIdentity(cfg) {
-  switch (cfg.driver) {
-    // Cloudflare Access, configured by team name alone. Everything else about Access —
-    // the JWKS path, the issuer, and (since managed OAuth) the authorization server an
-    // agent signs in at — is that same domain, and writing it into three settings that
-    // must agree is three chances to get it wrong.
-    case 'cloudflare-access':
-      return new JwtIdentityProvider(cloudflareAccess({ ...(cfg.access || {}), ...(cfg.jwt || {}) }));
-    case 'jwt': return new JwtIdentityProvider(cfg.jwt || {});
-    case 'header': return new HeaderIdentityProvider(cfg.header || {});
-    case 'anonymous': case undefined: case null: return new AnonymousIdentityProvider();
-    default:
-      // A typo must NOT open the drive. `TROVE_AUTH=JWT` (wrong case), `oidc`,
-      // `cloudflare_access` all fell through to anonymous — which also skipped the
-      // per-driver branch that reads TROVE_AUTH_REQUIRED, and silenced the boot warning
-      // (it only fires when the driver string IS 'anonymous'). The result was a
-      // world-readable, world-writable drive with a clean log, and an MCP endpoint that
-      // dropped its own auth requirement because it sniffs the provider's class name.
-      throw TroveError.invalid(
-        `Unknown TROVE_AUTH driver "${cfg.driver}" — expected one of: anonymous, jwt, header, cloudflare-access`,
-      );
-  }
-}
-// The SQLite provider: a keyed pool the whole server shares (metadata + kv co-locate
-// in the main db file; plugin scopes get isolated sibling files). Injectable, so a
-// Worker can supply a D1/Durable-Object-backed provider instead.
-function buildSqliteProvider(cfg) {
-  return new LocalSqliteProvider({ path: cfg?.path || './data/trove.db' });
-}
 
 /**
  * Assemble the server. Any backend may be supplied as a provider instance
@@ -142,114 +55,26 @@ function buildSqliteProvider(cfg) {
  * @returns {Promise<{ vfs: Vfs, handle: (req: Request) => Promise<Response> }>}
  */
 export async function createServer(config = {}) {
-  const storage = resolve(config.storage ?? config.vfs?.storage, StorageBackend, buildStorage);
+  // The drive is a dependency graph now — see engine/providers/core.js. What was
+  // 200 lines of statements whose ORDER was the graph is a declaration the
+  // container walks, which is also what makes `close()` stop being a hand-kept
+  // list that had to agree with it.
+  const lifecycleState = { closing: false };
+  const engine = createDriveEngine(config, lifecycleState);
 
-  // One shared SQLite provider (keyed pool) for metadata, kv, and per-plugin scopes.
-  // Always present so plugin storage works regardless of the metadata backend
-  // (file-backed when metadata is sqlite, else ephemeral in-memory). Injectable, so
-  // a Worker can supply a D1 / Durable-Object-backed provider instead.
-  const sqliteProvider = resolve(config.sqlite, SqliteProvider, () =>
-    buildSqliteProvider(config.sqlite || { path: config.metadata?.driver === 'sqlite' ? config.metadata.path : ':memory:' }));
-  await sqliteProvider.init();
+  // Obtained up front because they are this function's return value: callers
+  // hold `server.vfs` and `server.kv` directly, and a facade handing back
+  // promises for them would break every one of them.
+  const backbone = await engine.container.lease(BACKBONE);
+  const {
+    storage, sqlite: sqliteProvider, metadata, kv, tasks, issues, notifications,
+    sidecar, collections, identity, auth, search, vfs, plugins,
+  } = backbone.resources;
 
-  const metadata = resolve(config.metadata ?? config.vfs?.metadata, MetadataStore, (cfg) => buildMetadata(cfg, sqliteProvider));
-  const embeddings = resolve(config.embeddings, EmbeddingProvider, buildEmbeddings);
-
-  // Where the search index lives follows the SQLite provider, not the config: the
-  // question is whether there is somewhere durable to write, and only the provider
-  // knows. A file-backed provider gets a SQLite index that survives a restart; an
-  // in-memory one gets the memory stores, because an index in an ephemeral database is
-  // strictly worse than one in memory — it looks persistent until the restart that
-  // proves it isn't. An explicit driver in config always wins.
-  const searchDriver = (cfg) => (cfg?.driver ? cfg : { ...cfg, driver: sqliteProvider.durable ? 'sqlite' : 'memory' });
-
-  const search = await resolve(config.search, SearchService, async () => new SearchService({
-    embeddings,
-    vectorStore: await resolve(config.vectorStore, VectorStore, (cfg) =>
-      buildVectorStore(searchDriver(cfg), embeddings.dimensions, sqliteProvider)),
-    keywordStore: await resolve(config.keywordStore, KeywordStore, (cfg) =>
-      buildKeywordStore(searchDriver(cfg), sqliteProvider)),
-  }));
-
-  const indexers = resolve(config.indexers, IndexerRegistry, () => new IndexerRegistry());
-
-  // Search transformer: raw query → { semanticText, tagFilters }. Default parses the
-  // `#tag` grammar; inject one (e.g. Workers AI) for LLM-assisted query understanding.
-  const searchTransformer = resolve(config.searchTransformer, SearchTransformer, (cfg) => buildSearchTransformer(cfg, config));
-
-  // Identity: BYO IdP. Default anonymous (single shared user) so a zero-config
-  // run still works; production injects a JwtIdentityProvider (Cloudflare Access).
-  const identity = resolve(config.identity, IdentityProvider, buildIdentity);
-
-  // Shared KV (subscriptions, inboxes). When metadata is sqlite, KV shares the same
-  // provider (co-located in the main db file) so it actually persists — memory
-  // otherwise.
-  const kv = resolve(config.kv, KeyValueStore, (cfg) =>
-    (sqliteProvider && (cfg?.driver === 'sqlite' || metadata instanceof SqliteStore))
-      ? new SqliteKV({ provider: sqliteProvider, key: 'kv' })
-      : new MemoryKV());
-  await kv.init?.();
-
-  // The two halves of "tell the user what's going on", split by lifetime:
-  //
-  //   tasks   in-flight work, in memory, per-process. A reindex that was running when
-  //           the server stopped is not running now — forgetting it is correct.
-  //   issues  standing problems, in the KV store, durable. A file that failed to index
-  //           is STILL unindexed after a restart, so this one has to survive.
-  //
-  // They meet at the retry: a failure raises an issue, retrying it starts a task, and
-  // the task succeeding clears the issue.
-  const tasks = resolve(config.tasks, TaskRegistry, () => new TaskRegistry());
-  const issues = resolve(config.issues, IssueRegistry, () => new IssueRegistry({ kv }));
-
-  // Web push (optional — only when VAPID keys are configured).
-  const push = resolve(config.push, WebPushService, () =>
-    config.vapid?.publicKey && config.vapid?.privateKey
-      ? new WebPushService({ publicKey: config.vapid.publicKey, privateKey: config.vapid.privateKey, subject: config.vapid.subject || 'mailto:admin@example.com' })
-      : null);
-
-  // Mention batcher + inbox. Flushes on an interval (bodyless web push).
-  const notifications = new NotificationCenter({ kv, push, flushIntervalMs: config.mentionFlushMs ?? 30_000 });
-
-  // Sidecar conversations/tags/facets; mentions are piped to the batcher.
-  const sidecar = resolve(config.sidecar, SidecarService, () => new SidecarService({
-    storage,
-    issues,
-    onMentions: (mentions) => notifications.enqueue(mentions).catch((e) => console.error('enqueue mentions failed', e)),
-  }));
-  // Retrying a stuck write-back is the same verb the schedule uses, so a user pressing
-  // "Retry" on the issue does exactly what the background retry would have.
-  issues.handle('sidecar-flush', () => sidecar.manager.retryPending());
-
-  // Collections — the ownership + permission boundary; each is a store config.
-  // Disable with config.collections === false (single open storage, no ACLs).
-  let collections = null;
-  if (config.collections !== false) {
-    collections = resolve(config.collections, CollectionService, () => new CollectionService({
-      kv,
-      storageFactory: (storeConfig) => buildStorage(storeConfig),
-      admins: config.admins || [],
-      creatorRoles: config.creatorRoles || [],
-      defaultOpen: config.defaultOpen !== false,
-      // Record the primary driver on 'default', but reuse its live instance.
-      defaultStore: (config.storage && !(config.storage instanceof StorageBackend)) ? config.storage : { driver: config.storageDriver || 'memory' },
-      storageOverrides: { default: storage },
-    }));
-  }
-
-  const vfs = new Vfs({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, maxUploadBytes: config.maxUploadBytes ?? null });
-  await vfs.init();
-
-  // A drive with files and an empty index is a drive where nothing can be found, and
-  // in an app where search IS the navigation that reads as data loss. It happens for
-  // ordinary reasons — an index that lived in memory, a vector table dropped after an
-  // embedding change, a restore from a metadata-only backup — so the fix is to notice
-  // and rebuild rather than to assume it can't happen.
-  //
-  // Runs in the BACKGROUND: a rebuild re-reads every file, and holding up the server
-  // until it finishes would turn a recoverable state into an outage. The promise is
-  // returned so a caller (a test, a CLI) can wait for it.
-  let closing = false;
+  // Aliased so the rest of this function reads as it did; the container's
+  // `lifecycle` provider is the same flag, which is how a long-running action
+  // can ask whether the server is going down without closing over anything.
+  const closing = () => lifecycleState.closing;
 
   // ONE reindex verb, used by all three callers — the startup rebuild, the manual
   // command, and the retry on a failed-index issue. Written once so a user watching a
@@ -282,7 +107,7 @@ export async function createServer(config = {}) {
           const result = await vfs.reindexAll({
             // The registry stops at a cancel; `closing` covers a shutdown, which is the
             // same need with no one to click the button.
-            shouldStop: () => closing || task.cancelled,
+            shouldStop: () => closing() || task.cancelled,
             onProgress: ({ indexed, failed, total }) => {
               task.progress({
                 done: indexed,
@@ -318,8 +143,7 @@ export async function createServer(config = {}) {
   // SPIKE: scanning runs as an ngin engine — see engine/index.js. `beginScan`
   // keeps the signature it always had, so every caller and every test is
   // untouched, which is what makes the rewrite checkable rather than hopeful.
-  const scanEngine = createScanEngine({ vfs, tasks, kv, shouldClose: () => closing });
-  const beginScan = scanStarter(scanEngine);
+  const beginScan = scanStarter(engine);
   const startScan = async (collectionId, opts) => (await beginScan(collectionId, opts)).done;
   // Where a route's "start this" goes. Normally straight to the functions above — the
   // process serving the request is also the one that will do the work. On a runtime
@@ -340,32 +164,6 @@ export async function createServer(config = {}) {
   const indexRebuild = config.rebuildIndexOnStart === false
     ? null
     : rebuildIndexIfLost(vfs, search, startReindex);
-
-  // Server plugin installs: bulk package blobs go in a pluggable PackageStore
-  // (default = the primary storage backend under a prefix; TROVE_PACKAGE_STORE points
-  // it elsewhere), while install records live in the shared SQLite provider.
-  const packageStore = resolve(config.packages, PackageStore, () =>
-    new StoragePackageStore(config.packageStore ? buildStorage(config.packageStore) : storage));
-  // Server indexer sub-packages run through a pluggable IndexerRuntime. The default is
-  // the in-process (trusted) runner; a deployment swaps in an isolate runtime by
-  // passing config.indexerRuntime. Set config.serverIndexers = false to disable them.
-  const indexerRuntime = config.serverIndexers === false
-    ? null
-    : resolve(config.indexerRuntime, IndexerRuntime, () => new InProcessIndexerRuntime());
-  const pluginIndexers = indexerRuntime
-    ? new PluginIndexers({ vfs, runtime: indexerRuntime, packages: packageStore })
-    : null;
-  const plugins = new PluginService({
-    packages: packageStore,
-    installs: new SqlitePluginInstallStore({ provider: sqliteProvider }),
-    indexers: pluginIndexers,
-    isAdmin: (principal) => (collections ? collections.isAdmin(principal) : !!principal),
-    maxPackageBytes: config.maxUploadBytes ?? undefined,
-    strict: config.enforcePluginCaps === true,
-  });
-  await plugins.init();
-
-  if (config.startFlusher !== false) notifications.start();
 
   // Periodic maintenance. Both of these caches are otherwise unbounded: abandoned
   // upload sessions (a client that starts an upload and never finishes) accumulate in
@@ -413,10 +211,6 @@ export async function createServer(config = {}) {
 
   const router = createRouter();
 
-  // Where an unauthenticated client is sent — ONE answer for the whole drive, used by
-  // the JSON API's 401s and by MCP's discovery alike. Falls back to the JWT issuer,
-  // which for essentially every OIDC provider IS the authorization server.
-  const auth = resolveAuthDiscovery(config);
   // Said at boot, because that is when someone is looking and can still fix it. The
   // alternative is discovering it from a client that can't sign in and a 401 that
   // doesn't say why.
@@ -495,13 +289,16 @@ export async function createServer(config = {}) {
     // unwind — otherwise every remaining file fails against a closing handle. Stopping
     // early is safe: a half-built index is still an empty-looking one, so the next
     // start rebuilds it.
-    closing = true;
+    lifecycleState.closing = true;
     await indexRebuild?.catch(() => {});
-    notifications.stop();
     if (maintenance) clearInterval(maintenance);
     if (scanTimer) clearInterval(scanTimer);
-    await sidecar.dispose?.();
-    await sqliteProvider?.close();
+    // Everything else is the container's: it disposes in reverse construction
+    // order, so each resource goes down before the ones it was built from. That
+    // used to be a hand-written list here which had to agree with a build order
+    // two hundred lines above it, and nothing checked that it did.
+    await backbone.release();
+    await engine.dispose();
   }
 
   /**

@@ -1,38 +1,42 @@
-// SPIKE: the scan route, run as an ngin engine.
+// The drive as an ngin engine.
 //
-// The point of doing it this way round — engine underneath, `beginScan` on top
-// with its signature unchanged — is that the 400-odd existing tests are the
-// check. They call `createServer` and drive HTTP; if they still pass, the
-// rewrite changed no behaviour. A migration that cannot be verified that way is
-// not worth starting.
-//
-// What one route tells us about forty:
-//
-//   • Routes stop receiving an 18-key context object and start naming what they
-//     use. `ScanCollection` declares `vfs, tasks, lifecycle, claim` and can
-//     touch nothing else — which is also how you find out what a route touches
-//     without reading it.
-//   • Work that must be released is released by the container. The claim's
-//     lifetime IS the action's lease.
-//   • Progress and results travel one way instead of two. `{ task, done }` and
-//     `task.progress()` were both feeds already, hand-rolled.
-//   • Cancellation arrives from two directions and both are handled in one
-//     place: `signal.aborted` (the caller gave up) and `handle.cancelled` (the
-//     user clicked Cancel).
+// `createServer` is a facade over this: it builds the container, obtains the
+// backbone, and wires the HTTP surface on top. That layering is what makes the
+// migration checkable — every existing test calls `createServer` and drives
+// HTTP, so if they still pass, the rewrite changed no behaviour.
 
 import { Engine } from '@3sln/ngin';
-import { providersFor } from './providers.js';
+import { coreProviders } from './providers/core.js';
+import { ScanClaimProvider } from './providers/scan.js';
 import { ScanCollection } from './actions/scanCollection.js';
 
-export { ScanCollection };
+export { ScanCollection, ScanClaimProvider };
+export { buildStorage } from './providers/core.js';
 
 /**
- * Build the engine that owns scanning.
- * @param {{vfs, tasks, kv, shouldClose?: () => boolean}} deps
+ * Every provider the drive has.
+ *
+ * @param {object} config the same config object `createServer` takes
+ * @param {{closing: boolean}} lifecycleState mutable; `close()` flips it
  */
-export function createScanEngine(deps) {
-  return new Engine({ providers: providersFor(deps) });
+export function driveProviders(config, lifecycleState) {
+  return {
+    ...coreProviders(config, lifecycleState),
+    claim: ScanClaimProvider,
+  };
 }
+
+/** @returns {Engine} */
+export function createDriveEngine(config = {}, lifecycleState = { closing: false }) {
+  return new Engine({ providers: driveProviders(config, lifecycleState) });
+}
+
+/** The names `createServer` hands back, and therefore obtains up front. */
+export const BACKBONE = [
+  'storage', 'sqlite', 'metadata', 'kv', 'tasks', 'issues', 'notifications',
+  'sidecar', 'collections', 'identity', 'auth', 'search', 'vfs', 'plugins',
+  'lifecycle',
+];
 
 /** The shape `beginScan` has always returned, so no caller has to change. */
 const NOTHING_SCANNED = {
@@ -41,10 +45,10 @@ const NOTHING_SCANNED = {
 };
 
 /**
- * `beginScan(collectionId, opts) -> { task, alreadyRunning, done }`, backed by a
- * dispatch. Identical contract to the hand-written one it replaces.
+ * `beginScan(collectionId, opts) -> { task, alreadyRunning, done, feed }`,
+ * backed by a dispatch.
  *
- * @param {import('@3sln/ngin').Engine} engine
+ * @param {Engine} engine
  */
 export function scanStarter(engine) {
   return async function beginScan(collectionId = 'default', { reason, deadlineMs = null } = {}) {
@@ -54,7 +58,12 @@ export function scanStarter(engine) {
     // loop and is what lets the route answer with something watchable.
     const started = await feed.next(['started']);
     if (started.alreadyRunning) {
-      return { task: null, alreadyRunning: true, done: Promise.resolve({ alreadyRunning: true, ...NOTHING_SCANNED }) };
+      return {
+        task: null,
+        alreadyRunning: true,
+        done: Promise.resolve({ alreadyRunning: true, ...NOTHING_SCANNED }),
+        feed,
+      };
     }
 
     // `abort` is named so the wait is not pre-empted by aborting. That rule is

@@ -1,19 +1,10 @@
 // The scan's dependencies, as ngin providers.
 //
-// SPIKE. One route's worth, to find out whether the backend reads better as an
-// engine before forty of them are rewritten. See engine/README.md.
-//
-// Two shapes are here on purpose:
-//
-//   • Things `createServer` already built (vfs, tasks, kv) are wrapped as
-//     singletons. That is what the first step of a real migration looks like —
-//     the graph moves under the container one piece at a time, and nothing has
-//     to be rebuilt to start.
-//   • The scan CLAIM is a real provider, because it is the piece that shows why
-//     a container is worth having. Its lifetime is exactly a lease: obtained
-//     before the work, released after, released even if the work throws. That
-//     is `Provider.obtain`/`release` verbatim, and it replaces a hand-rolled
-//     try/finally that had already gone wrong once by releasing too early.
+// The one provider here that is not part of the drive's backbone: a claim is
+// obtained per scan, not once per process. Its lifetime is exactly an action's
+// lease — taken before the work, given back after, given back even if the work
+// throws — which is `Provider.obtain`/`release` verbatim, and replaces a
+// hand-rolled try/finally that had already gone wrong once by releasing early.
 
 import { Provider } from '@3sln/ngin';
 
@@ -73,22 +64,4 @@ export class ScanClaimProvider extends Provider {
     }
     this.kv.release(claim._kv);
   }
-}
-
-/**
- * Wrap what the server already assembled. The endgame is for each of these to
- * construct its own resource — that is where the container starts paying for
- * teardown order and lazy init — but nothing about the layers above depends on
- * which it is, which is the property that makes the migration incremental.
- */
-export function providersFor({ vfs, tasks, kv, shouldClose = () => false }) {
-  return {
-    vfs: Provider.fromSingleton(vfs),
-    tasks: Provider.fromSingleton(tasks),
-    kv: Provider.fromSingleton(kv),
-    // Shutdown, as a dependency rather than a captured closure variable. An
-    // action that must stop when the server is going down should have to say so.
-    lifecycle: Provider.fromSingleton({ get closing() { return shouldClose(); } }),
-    claim: ScanClaimProvider,
-  };
 }

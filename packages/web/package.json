@@ -2,7 +2,7 @@
   "name": "@trove/web",
   "version": "0.0.1",
   "type": "module",
-  "description": "Trove web client — a VS Code-style workbench with a contribution system, sandboxed plugins, semantic search, and media openers.",
+  "description": "Trove web client \u2014 a VS Code-style workbench with a contribution system, sandboxed plugins, semantic search, and media openers.",
   "scripts": {
     "dev": "web-dev-server --config web-dev-server.config.mjs",
     "build": "bun build.mjs",
@@ -11,7 +11,7 @@
   "dependencies": {
     "@3sln/bones": "^0.0.5",
     "@3sln/dodo": "^0.0.9",
-    "@3sln/ngin": "^0.0.3",
+    "@3sln/ngin": "github:3sln/ngin#22e945f7b354c29e9f0f33e3b02be51e7da8ef1a",
     "@trove/plugin-sdk": "0.0.1",
     "es-module-lexer": "^1.7.0",
     "fflate": "^0.8.3",

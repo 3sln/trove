@@ -16,7 +16,8 @@
     "src/"
   ],
   "dependencies": {
-    "@trove/core": "0.0.1"
+    "@trove/core": "0.0.1",
+    "@3sln/ngin": "github:3sln/ngin#22e945f7b354c29e9f0f33e3b02be51e7da8ef1a"
   },
   "license": "MIT",
   "author": "Ray Stubbs"

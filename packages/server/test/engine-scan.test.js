@@ -7,7 +7,7 @@
 import { test, expect } from 'bun:test';
 import { MemoryKV, MemoryStorage, StorageBackend } from '@trove/core';
 import { createServer, configFromEnv } from '../src/index.js';
-import { createScanEngine, ScanCollection } from '../src/engine/index.js';
+import { createDriveEngine, ScanCollection } from '../src/engine/index.js';
 
 const ENV = { TROVE_STORAGE: 'memory' };
 
@@ -98,7 +98,7 @@ test('an action declares what it touches, and gets only that', async () => {
 test('a dependency the container does not have fails by name', async () => {
   // Not `undefined is not a function` from somewhere inside a scan: the graph
   // is declared, so an unsatisfiable one says which name it could not find.
-  const engine = createScanEngine({ vfs: {}, tasks: {}, kv: new MemoryKV() });
+  const engine = createDriveEngine(configFromEnv(ENV));
   const stray = new (class extends (await import('@3sln/ngin')).Action {
     static deps = ['nonesuch'];
     execute() {}
