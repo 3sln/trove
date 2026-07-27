@@ -8,6 +8,7 @@
 
 import { test, expect } from 'bun:test';
 import { ViewportService, looksLikeTv } from '../src/platform/viewport.js';
+import { cell, effect } from '../src/runtime.js';
 
 // A window stand-in: the four things the service actually reads.
 function fakeWindow({ width = 1280, height = 800, coarse = false, ua = '', url = 'http://x/' } = {}) {
@@ -20,7 +21,8 @@ function fakeWindow({ width = 1280, height = 800, coarse = false, ua = '', url =
     addEventListener() {}, removeEventListener() {},
   };
 }
-const settingsStub = (layout = 'auto') => ({ get: () => layout, observe: () => ({ subscribe() {} }) });
+// `observe()` hands back a cell now, which is what the service watches.
+const settingsStub = (layout = 'auto') => ({ get: () => layout, observe: () => cell(layout) });
 
 test('a narrow window is a phone whether or not it is a phone', () => {
   // A desktop window dragged narrow has exactly the phone's problem — no room for a rail
@@ -70,7 +72,7 @@ test('resizing across the boundary republishes; jiggling inside it does not', as
   const win = fakeWindow({ width: 1280 });
   const seen = [];
   const vp = new ViewportService({ window: win, settings: settingsStub() });
-  vp.observe().subscribe({ next: (v) => seen.push(v.mode) });
+  effect(vp.observe(), (v) => seen.push(v.mode));
   seen.length = 0; // drop the replayed current value
 
   win.innerWidth = 1200;

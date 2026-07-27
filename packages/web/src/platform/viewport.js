@@ -11,7 +11,7 @@
 // the default: `?ui=phone` in the URL, or the `workbench.layout` setting, wins outright.
 // Someone whose TV we mis-detect can fix it in Settings rather than living with it.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell, effect } from '../runtime.js';
 
 export const LAYOUTS = ['auto', 'desktop', 'phone', 'tv'];
 
@@ -43,19 +43,23 @@ export class ViewportService {
     // a laptop, and how the e2e suite drives each shell without a device farm.
     this.urlOverride = readUrlOverride(win);
     this.state = this.#measure();
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
     this._onResize = () => this.refresh();
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
 
   /** Start listening. Separate from the constructor so tests can measure without hooks. */
   install() {
     this.window.addEventListener?.('resize', this._onResize);
     this.window.addEventListener?.('orientationchange', this._onResize);
-    this.settings?.observe?.().subscribe?.(() => this.refresh());
+    // `effect` runs now and on every change. The old form was
+     // `settings.observe().subscribe?.(…)` — optional-chained, so when `observe()`
+     // stopped returning something with `.subscribe` it would have become a silent
+     // no-op and the viewport would have stopped following its own setting.
+    if (this.settings) effect(this.settings.observe(), () => this.refresh());
     this.#publish(this.state);
     return this;
   }
@@ -72,7 +76,7 @@ export class ViewportService {
     if (same) return;
     this.state = next;
     this.#publish(next);
-    this.subject.next(next);
+    this.cell.setValue(next);
   }
 
   #publish(vp) {

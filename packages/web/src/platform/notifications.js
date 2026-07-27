@@ -2,17 +2,17 @@
 // that fails routes here so problems are never silent. Reactive: the status/UI
 // watches `observe()`.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 let seq = 0;
 
 export class NotificationService {
   constructor() {
     this.items = [];
-    this.subject = new ObservableSubject([]);
+    this.cell = cell([]);
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #push(level, message, opts = {}) {
     const item = {
@@ -22,7 +22,7 @@ export class NotificationService {
       sticky: opts.sticky || level === 'error',
     };
     this.items = [...this.items, item];
-    this.subject.next(this.items);
+    this.cell.setValue(this.items);
     if (!item.sticky) setTimeout(() => this.dismiss(item.id), opts.timeout ?? 4000);
     return item.id;
   }
@@ -41,10 +41,10 @@ export class NotificationService {
   /** Update a notification in place (e.g. a progress message). */
   update(id, patch) {
     this.items = this.items.map((i) => (i.id === id ? { ...i, ...patch } : i));
-    this.subject.next(this.items);
+    this.cell.setValue(this.items);
   }
   dismiss(id) {
     this.items = this.items.filter((i) => i.id !== id);
-    this.subject.next(this.items);
+    this.cell.setValue(this.items);
   }
 }

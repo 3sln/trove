@@ -37,8 +37,7 @@
       "name": "@trove/web",
       "version": "0.0.1",
       "dependencies": {
-        "@3sln/bones": "^0.0.5",
-        "@3sln/dodo": "^0.0.9",
+        "@3sln/dodo": "github:3sln/dodo#3ba40d828a5682b8f23f9297aa2605eaf63f93c0",
         "@3sln/ngin": "github:3sln/ngin#d77f51511cff1d24ce8ceede5f0844e06ef25d35",
         "@trove/plugin-sdk": "0.0.1",
         "es-module-lexer": "^1.7.0",
@@ -52,9 +51,7 @@
     },
   },
   "packages": {
-    "@3sln/bones": ["@3sln/bones@0.0.5", "", {}, "sha512-fts4JVlnfcd44ADtYxE6KQQwWKUVhMBo9omt6fqzZbtSOYSlYkEt7El+PJghwoA8R366ImR3FE1f2Vgvw7g4MA=="],
-
-    "@3sln/dodo": ["@3sln/dodo@0.0.9", "", {}, "sha512-d0PVcdMTo6rL6+8lcdYGVKlO1LXWlfNe41RbCPP/UE4JYmzdqisp+sBecEYeSRxTLpu0olw7k+BiZ/cdihyKMw=="],
+    "@3sln/dodo": ["@3sln/dodo@github:3sln/dodo#3ba40d8", {}, "3sln-dodo-3ba40d8", "sha512-M0M92U0bUX7MV2sG4J+RZDwevs4Uo9fmmnPPhFITtU1HhNlNLECjHFILUpYsW5P7JR/m5sZAopFxV9iIx+o/iA=="],
 
     "@3sln/ngin": ["@3sln/ngin@github:3sln/ngin#d77f515", {}, "3sln-ngin-d77f515", "sha512-dijZkEnfi8ILOC5SAJ6MB6m7XNTtpghY/6HjKzTX1PtahL57rSS2B9hrO3CH4N4XiGC4ULPkL7p3LYP7c2hnkg=="],
 
@@ -907,6 +904,8 @@
     "@koa/router/http-errors": ["http-errors@1.8.1", "", { "dependencies": { "depd": "~1.1.2", "inherits": "2.0.4", "setprototypeof": "1.2.0", "statuses": ">= 1.5.0 < 2", "toidentifier": "1.0.1" } }, "sha512-Kpk9Sm7NmI+RHhnj6OIWDI1d6fIoFAtFt9RLaTMRlg/8w49juAStsrBgp0Dp4OdxdVbRIeKhtCUvoi/RuAhO4g=="],
 
     "@rollup/pluginutils/picomatch": ["picomatch@4.0.5", "", {}, "sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A=="],
+
+    "@trove/web/@3sln/ngin": ["@3sln/ngin@github:3sln/ngin#d77f515", {}, "3sln-ngin-d77f515", "sha512-dijZkEnfi8ILOC5SAJ6MB6m7XNTtpghY/6HjKzTX1PtahL57rSS2B9hrO3CH4N4XiGC4ULPkL7p3LYP7c2hnkg=="],
 
     "@web/dev-server-core/mime-types": ["mime-types@2.1.35", "", { "dependencies": { "mime-db": "1.52.0" } }, "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw=="],
 

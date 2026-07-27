@@ -5,6 +5,7 @@
 // dispatch follow-up Actions (the choreographer pattern).
 
 import { Engine, Provider } from '@3sln/ngin';
+import { effect } from '../runtime.js';
 import { ExplorerService, SearchClientService, TransfersService } from './services.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
@@ -39,7 +40,7 @@ export function createApp(platform) {
   // NavigateAction set them — so selecting a file never flipped hasSelection true and
   // Delete silently did nothing. Deriving them from the observable keeps them honest.
   platform.context.setMany({ 'explorer.collectionId': 'default', 'explorer.hasSelection': false });
-  explorer.observe().subscribe((ex) => {
+  effect(explorer.observe(), (ex) => {
     platform.context.setMany({
       'explorer.collectionId': ex.collectionId || 'default',
       'explorer.hasSelection': (ex.selection?.length || 0) > 0,
@@ -49,7 +50,7 @@ export function createApp(platform) {
   // Load a file's conversation/tags whenever the active viewer panel changes (the
   // panel stack lives in the navigation sub-service now).
   let lastTab = null;
-  platform.workbench.observeNav().subscribe((nav) => {
+  effect(platform.workbench.observeNav(), (nav) => {
     if (nav.activeTabId !== lastTab) {
       lastTab = nav.activeTabId;
       // Clear the sidecar when no file is active (last tab closed) so a stale

@@ -4,7 +4,7 @@
 // catalog. Mirrors bridle's main.js: assemble providers, reconcile the root
 // alias, install shortcuts.
 
-import { dd } from './runtime.js';
+import { dd, effect } from './runtime.js';
 import { createPlatform } from './platform/index.js';
 import { createApp } from './bl/index.js';
 import { NavigateAction, UploadFilesAction, OpenInitialCollectionAction } from './bl/actions.js';
@@ -37,7 +37,7 @@ function applyTheme() {
   document.documentElement.dataset.theme = platform.settings.get('workbench.theme') || 'dark';
 }
 applyTheme();
-platform.settings.observe().subscribe(() => applyTheme());
+effect(platform.settings.observe(), () => applyTheme());
 
 // --- form factor ------------------------------------------------------------
 // Watch the window so rotating a phone, or dragging a desktop window narrow, re-picks
@@ -98,7 +98,11 @@ window.addEventListener('drop', (e) => {
 (async () => {
   try {
     platform.capabilities = await platform.api.capabilities();
-    platform.workbench.subject.next(platform.workbench.state); // nudge status bar
+    // What the server can do is read straight off `platform`, not held in a store, so
+    // nothing invalidated when it arrived. Re-pushing the same state object will not
+    // do it either: a cell compares with Object.is and drops a write of what it
+    // already holds. Saying "this changed under you" is the store's job.
+    platform.workbench.touch(); // the status bar reads capabilities
   } catch (err) {
     platform.notifications.error(`Cannot reach the Trove server: ${err.message}`);
   }

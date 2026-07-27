@@ -22,7 +22,7 @@
 //   register    { default?, description? }         (a context value slot)
 //   keymap      { bindings:[{key, command, when?, args?}] }
 
-import { ObservableSubject } from '../runtime.js';
+import { cell, derive } from '../runtime.js';
 import { selectorMatches } from '@trove/core/util.js';
 import { parseContribUri, coreUri, CONTRIB_SCHEME } from '@trove/core/plugins/identity.js';
 import { CONTRIBUTION_TYPES } from '@trove/core/plugins/contributions.js';
@@ -42,14 +42,12 @@ export function toUri(nameOrUri) {
 export class ContributionRegistry {
   constructor() {
     this.items = new Map(); // uri -> { uri, type, id, name, pluginId, ...options }
-    this.subject = new ObservableSubject([]);
-    this.byTypeSubjects = new Map(); // type -> ObservableSubject (lazily created)
+    this.cell = cell([]);
+    this.byType = new Map(); // type -> derived cell (lazily created)
   }
 
   #emit() {
-    const all = [...this.items.values()];
-    this.subject.next(all);
-    for (const [type, subj] of this.byTypeSubjects) subj.next(all.filter((c) => c.type === type));
+    this.cell.setValue([...this.items.values()]);
   }
 
   /**
@@ -112,16 +110,22 @@ export class ContributionRegistry {
     return this.all().filter((c) => c.pluginId === pluginId && (!type || c.type === type));
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
-  /** A reactive view of one type (status items, openers, …). */
+  /**
+   * A reactive view of one type (status items, openers, …).
+   *
+   * Derived rather than a second subject fanned out to by hand: `derive` recomputes
+   * from the one list, and a watcher of the result is only re-rendered when its own
+   * slice actually differs — so registering an opener no longer redraws the status bar.
+   */
   observeType(type) {
-    let subj = this.byTypeSubjects.get(type);
-    if (!subj) {
-      subj = new ObservableSubject(this.ofType(type));
-      this.byTypeSubjects.set(type, subj);
+    let view = this.byType.get(type);
+    if (!view) {
+      view = derive([this.cell], (all) => all.filter((c) => c.type === type));
+      this.byType.set(type, view);
     }
-    return subj;
+    return view;
   }
 
   // --- typed lookups ---------------------------------------------------------

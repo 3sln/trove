@@ -2,7 +2,7 @@
 // Each declares a selector (extensions / mime) and a component(node, ui) → vnode.
 // The editor area picks the highest-priority opener whose selector matches.
 
-import { dd, Observable, ObservableSubject, watch } from '../../../runtime.js';
+import { dd, cell, fromAsync, watch } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { bytes } from '../../format.js';
 import { audiobookOpener } from './audiobook.js';
@@ -82,7 +82,7 @@ export function renderOpener(node, openerId, ui) {
 const TEXT_VIEW_BYTES = 512 * 1024;
 
 function textOpener(node, ui) {
-  const src = Observable.fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: TEXT_VIEW_BYTES, size: node.size }));
+  const src = fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: TEXT_VIEW_BYTES, size: node.size }));
   return dd.alias(() =>
     ui.platform.reactive.watch(
       src,
@@ -113,11 +113,11 @@ function textOpener(node, ui) {
 // (with a reason) the moment it fires.
 const MEDIA_ERR = "This file couldn't be loaded — it may be missing or in an unsupported format.";
 function mediaWithError(node, ui, makeEl) {
-  const state$ = new ObservableSubject({ error: null });
-  const onError = () => state$.next({ error: MEDIA_ERR });
+  const state = cell({ error: null });
+  const onError = () => state.setValue({ error: MEDIA_ERR });
   const el = makeEl(onError);
   return dd.alias(() =>
-    watch(state$, (s) => (s.error ? fallbackOpener(node, ui, s.error) : el)),
+    watch(state, (s) => (s.error ? fallbackOpener(node, ui, s.error) : el)),
   )();
 }
 

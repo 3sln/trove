@@ -11,7 +11,7 @@
 //     with whatever changed server-side meanwhile.
 // Reactive: the workbench watches `online`, the pinned set, and the queue depth.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 import { LocalHashEmbedding } from '@trove/core/search/embeddings.js';
 // Chunking and tokenizing must MATCH the server's — offline results are compared
 // against embeddings the server produced, so a local variant would quietly skew them.
@@ -29,14 +29,14 @@ export class OfflineService {
     this.api = platform.api;
     this.db = null;
     this.state = { online: navigator.onLine, pins: [], queued: 0, syncing: false };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
 
   async init() {

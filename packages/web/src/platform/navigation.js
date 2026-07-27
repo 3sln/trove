@@ -5,7 +5,7 @@
 // WorkbenchService; the workbench coordinates the couplings it can't own (setting the
 // activity to 'home' and closing the modal search when a file opens).
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 const RECENTS_KEY = 'trove.recents';
 const RECENTS_MAX = 12;
@@ -19,15 +19,15 @@ export class NavigationService {
       activeFile: null, // top file panel node (or null)
       recents: loadRecents(),
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
 
   #top() {

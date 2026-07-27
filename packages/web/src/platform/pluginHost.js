@@ -47,7 +47,7 @@ export class PluginHost {
     this.heartbeatMs = heartbeatMs;
     this._heartbeat = null;
     this._probing = false;
-    this.subject = platform.reactive.ObservableSubject ? new platform.reactive.ObservableSubject([]) : null;
+    this.cell = platform.reactive.cell([]);
 
     // Collaborators. The dock destroys frames through the frame manager (assigned
     // just below — the callback is lazy), and both are consulted on frame teardown.
@@ -65,10 +65,10 @@ export class PluginHost {
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #emit() {
-    this.subject?.next(this.list());
+    this.cell.setValue(this.list());
   }
 
   /**

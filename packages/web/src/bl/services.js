@@ -1,10 +1,10 @@
 // Reactive data services the workbench renders from. These hold *data* state
 // (the current collection's items, search results, in-flight transfers) as
 // opposed to the shell's UI state (WorkbenchService). ngin Actions mutate them;
-// the UI `watch`es them. Each is a plain ObservableSubject wrapper so the render
-// layer stays declarative.
+// the UI `watch`es them. Each is a plain cell wrapper so the render layer stays
+// declarative.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 export class ExplorerService {
   constructor(settings) {
@@ -17,14 +17,14 @@ export class ExplorerService {
       // is what lets the UI say "500 of 3,006" instead of quietly claiming 500.
       stats: null, usage: null, nextCursor: null, loadingMore: false, trash: null,
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
   set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
   /**
    * @param {string[]} ids
@@ -62,14 +62,14 @@ export class ExplorerService {
 export class SearchClientService {
   constructor() {
     this.state = { query: '', mode: 'hybrid', results: [], loading: false, error: null, ran: false, paletteFiles: [], paletteQuery: '', paletteLoading: false, paletteError: null };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
   set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
 }
 
@@ -89,16 +89,16 @@ export class TransfersService {
   /** @param {import('./activity.js').ActivityService} [activity] */
   constructor(activity = null) {
     this.state = { items: [] }; // { id, name, direction, ratio, loaded, total, status, error }
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
     this._controllers = new Map();
     this.activity = activity;
     this._tasks = new Map(); // transfer id -> activity task handle
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #emit() {
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
   start(id, name, total, controller) {
     this._controllers.set(id, controller);

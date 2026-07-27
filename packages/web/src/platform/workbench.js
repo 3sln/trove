@@ -5,7 +5,7 @@
 // double-shift opens a modal search overlay; picking from it resets the stack.
 // It also mirrors key bits into the ContextKeyService for when-clauses.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 import { OverlayService, wrapIndex } from './overlay.js';
 import { NavigationService } from './navigation.js';
 
@@ -27,11 +27,11 @@ export class WorkbenchService {
       // that is pulled up on demand.
       sheet: null,
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
   observeOverlay() {
     return this.overlay.observe();
@@ -41,7 +41,19 @@ export class WorkbenchService {
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
+  }
+
+  /**
+   * Say that something the shell renders from changed without going through here.
+   *
+   * There is exactly one such thing — `platform.capabilities`, which arrives from the
+   * server after boot and is read straight off the platform by the status bar. A cell
+   * drops a write of the value it already holds, so re-pushing `state` is not a nudge;
+   * a fresh object is.
+   */
+  touch() {
+    this.#set({});
   }
 
   // --- overlay delegations (state lives in OverlayService) -------------------

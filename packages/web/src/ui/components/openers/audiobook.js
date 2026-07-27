@@ -7,9 +7,9 @@
 //
 // The <audio> element is created imperatively and kept in a per-file controller
 // so playback survives re-renders; the view is a pure function of controller
-// state rendered through bones `watch`.
+// state rendered through `watch`.
 
-import { dd, ObservableSubject } from '../../../runtime.js';
+import { dd, cell } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { duration } from '../../format.js';
 import { readAudiobookInfo } from '../../mp4.js';
@@ -27,11 +27,11 @@ class Controller {
     this.audio = new Audio();
     this.audio.preload = 'metadata';
     this.audio.src = this.url;
-    this.state$ = new ObservableSubject({
+    this.state$ = cell({
       loading: true, playing: false, current: 0, total: 0, rate: this.#savedRate(),
       chapters: [], meta: {}, coverUrl: null, error: null, buffered: 0,
     });
-    this.state = this.state$.value;
+    this.state = this.state$.getValue();
     this.audio.playbackRate = this.state.rate;
     this.#wireAudio();
     this.#load();
@@ -39,7 +39,7 @@ class Controller {
 
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.state$.next(this.state);
+    this.state$.setValue(this.state);
   }
 
   #wireAudio() {

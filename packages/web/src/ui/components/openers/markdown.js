@@ -18,7 +18,7 @@
 // document length and the node count are capped — a truncated document with a visible
 // notice beats a hung one.
 
-import { dd, Observable } from '../../../runtime.js';
+import { dd, fromAsync } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { parseTroveUri } from '@trove/core/links.js';
 import { openTroveLink } from '../../../bl/links.js';
@@ -28,7 +28,7 @@ const { div, span, h1, h2, h3, p, ul, ol, li, pre, code, a, em, strong, blockquo
 export function markdownOpener(node, ui) {
   // Bounded at the TRANSFER, not just the render: MAX_CHARS below stops us laying out a
   // huge document, but without this the whole file is still pulled into the tab first.
-  const src = Observable.fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: MAX_CHARS, size: node.size }).then((r) => r.text));
+  const src = fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: MAX_CHARS, size: node.size }).then((r) => r.text));
   return dd.alias(() =>
     ui.platform.reactive.watch(
       src,

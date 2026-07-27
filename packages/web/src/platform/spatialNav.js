@@ -21,6 +21,8 @@
 // Natively focusable, plus the app's own clickable rows. Keeping this list explicit
 // (rather than "anything with a click handler", which the DOM cannot tell us) means a
 // new clickable component is opted in deliberately.
+import { effect } from '../runtime.js';
+
 const NATIVE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
 // `.setting-row` used to be listed here and has never existed — the rendered class is
 // `.setting`, and it isn't clickable anyway (its control is). Every entry below is
@@ -58,7 +60,7 @@ export class SpatialNavigationService {
 
   /** Follow the viewport: arrows are remapped only while the TV layout is showing. */
   install() {
-    this.viewport?.observe?.().subscribe?.({ next: (vp) => this.setActive(vp.mode === 'tv') });
+    if (this.viewport) effect(this.viewport.observe(), (vp) => this.setActive(vp.mode === 'tv'));
     this.setActive(this.viewport?.state?.mode === 'tv');
     return this;
   }

@@ -5,7 +5,7 @@
 // subscription flow (register the service worker, subscribe with the server's
 // VAPID key). All mutations optimistically reload the affected sidecar.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 export class SocialService {
   constructor(platform) {
@@ -22,16 +22,16 @@ export class SocialService {
       posting: false,
       replyTo: null, // { id, author } when composing a reply
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
     this._pollTimer = null;
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
 
   async init() {

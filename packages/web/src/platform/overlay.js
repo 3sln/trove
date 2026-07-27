@@ -4,7 +4,7 @@
 // stack, so they own their own state + subject. The workbench holds one and delegates,
 // coordinating only the Esc/close-topmost ordering (which also spans the stack).
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 export class OverlayService {
   constructor(context) {
@@ -15,15 +15,15 @@ export class OverlayService {
       contextMenu: null,
       pluginPanel: null,
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
 
   // --- command palette -------------------------------------------------------

@@ -1,6 +1,7 @@
 // The host-side contribution registry, and the two things that read a contribution
 // URI as data: when-clause keys (registers) and the status-bar HTML sanitizer.
 
+import { effect } from '../src/runtime.js';
 import { test, expect } from './testkit.js';
 import { ContributionRegistry, toUri } from '../src/platform/contributions.js';
 import { evaluateWhen } from '../src/platform/whenclause.js';
@@ -56,7 +57,7 @@ test('an unknown type is refused rather than stored as an inert entry', () => {
 test('register/update/unregister drive the reactive views', () => {
   const r = registry();
   const seen = [];
-  r.observeType('statusItem').subscribe({ next: (v) => seen.push(v.length) });
+  effect(r.observeType('statusItem'), (v) => seen.push(v.length));
 
   const dispose = r.register(URI('status'), { pluginId: 'acme.com/docs', type: 'statusItem', slot: 'right', html: '' });
   expect(r.ofType('statusItem').length).toBe(1);

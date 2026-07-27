@@ -4,7 +4,7 @@
 // either call ui.exec(commandId) or ui.go(action). This is the only module that
 // knows about every service at once.
 
-import { dd, ObservableSubject } from '../../runtime.js';
+import { dd, cell, derive, constant } from '../../runtime.js';
 import { NavigateAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
@@ -21,38 +21,49 @@ import { phoneTopBar, phoneBottomBar, phoneSheet } from '../components/phoneChro
 const { alias, div } = dd;
 
 export default function workbench({ engine, app, platform, plugins }) {
-  const bump$ = new ObservableSubject(0);
+  // A counter rather than a timestamp: a cell drops a write of the value it already
+  // holds, and two `rerender()` calls in the same millisecond would have compared equal.
+  const bump = cell(0);
   const ui = {
     engine, app, platform,
     go: (action) => engine.dispatch(action),
     exec: (id, ...args) => platform.commands.execute(id, ...args),
-    rerender: () => bump$.next(Date.now()),
+    rerender: () => bump.update((n) => n + 1),
     uninstallPlugin: (id) => plugins?.uninstall(id),
   };
 
-  const { watch, zip } = platform.reactive;
-  const combined$ = zip(
+  const { watch } = platform.reactive;
+  // One derived snapshot of every slice the shell reads. `derive` invalidates when any
+  // of them does and recomputes once on the next read, so fifteen changes in a frame
+  // still cost one render.
+  const combined = derive(
+    [
+      platform.workbench.observe(),
+      platform.workbench.observeOverlay(),
+      platform.workbench.observeNav(),
+      app.explorer.observe(),
+      app.search.observe(),
+      app.transfers.observe(),
+      platform.notifications.observe(),
+      platform.context.observe(),
+      platform.settings.observe(),
+      platform.plugins.observe() ?? constant([]),
+      platform.contributions.observeType('statusItem'),
+      app.social.observe(),
+      app.offline.observe(),
+      app.activity.observe(),
+      platform.viewport.observe(),
+      bump,
+    ],
+    // `_bump` is IN the snapshot, unlike before. `watch` skips a render whose value is
+    // shallow-equal to the last one, so a forced re-render that left no trace in the
+    // object would be discarded as "nothing changed" — which is the opposite of what
+    // asking for one means.
     (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, _bump) =>
-      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp }),
-    platform.workbench.observe(),
-    platform.workbench.observeOverlay(),
-    platform.workbench.observeNav(),
-    app.explorer.observe(),
-    app.search.observe(),
-    app.transfers.observe(),
-    platform.notifications.observe(),
-    platform.context.observe(),
-    platform.settings.observe(),
-    platform.plugins.observe() || new ObservableSubject([]),
-    platform.contributions.observeType('statusItem'),
-    app.social.observe(),
-    app.offline.observe(),
-    app.activity.observe(),
-    platform.viewport.observe(),
-    bump$,
+      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, _bump }),
   );
 
-  return alias(() => watch(combined$, (state) => view(state, ui)));
+  return alias(() => watch(combined, (state) => view(state, ui)));
 }
 
 function view(state, ui) {

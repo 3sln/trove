@@ -26,7 +26,7 @@
 // idle, and re-check when the tab regains focus. At rest this costs one request when
 // the app loads. If a real-time channel ever exists, only `#poll` changes.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 const ACTIVE_MS = 1000; // while something is running, we want a live-feeling bar
 const IDLE_MS = 60_000; // otherwise just enough to notice a task someone else started
@@ -48,7 +48,7 @@ export class ActivityService {
       issuesError: null,
       open: false, // the activity panel
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
     this._local = new Map(); // id -> local task (this browser owns these)
     this._server = [];
     this._timer = null;
@@ -56,11 +56,11 @@ export class ActivityService {
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
   #set(patch) {
     this.state = { ...this.state, ...patch };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
   #merge() {
     this.#set({ tasks: [...this._local.values(), ...this._server] });

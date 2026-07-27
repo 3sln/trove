@@ -3,12 +3,12 @@
 // is open, its type, whether the palette is showing…). when-clauses evaluate
 // against it, so commands/keybindings/menus light up and dim as state changes.
 //
-// It's a single ObservableSubject of the whole context object, so any consumer
-// can `watch` it and re-render, and keybinding resolution reads a plain snapshot.
+// It's a single cell of the whole context object, so any consumer can `watch` it and
+// re-render, and keybinding resolution reads a plain snapshot.
 // Plugins get a *scoped* setter (keys they set are namespaced under their id) so
 // they can drive their own when-clauses without stomping core keys.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 import { evaluateWhen } from './whenclause.js';
 
 export class ContextKeyService {
@@ -18,7 +18,7 @@ export class ContextKeyService {
       isMac: /mac/i.test(navigatorPlatform()),
       ...initial,
     };
-    this.subject = new ObservableSubject(this.state);
+    this.cell = cell(this.state);
   }
 
   get(key) {
@@ -28,13 +28,13 @@ export class ContextKeyService {
     return this.state;
   }
   observe() {
-    return this.subject;
+    return this.cell;
   }
 
   set(key, value) {
     if (this.state[key] === value) return;
     this.state = { ...this.state, [key]: value };
-    this.subject.next(this.state);
+    this.cell.setValue(this.state);
   }
   setMany(obj) {
     let changed = false;
@@ -47,14 +47,14 @@ export class ContextKeyService {
     }
     if (changed) {
       this.state = next;
-      this.subject.next(next);
+      this.cell.setValue(next);
     }
   }
   remove(key) {
     if (!(key in this.state)) return;
     const { [key]: _drop, ...rest } = this.state;
     this.state = rest;
-    this.subject.next(rest);
+    this.cell.setValue(rest);
   }
 
   /** True if `whenExpr` holds against the current context. */

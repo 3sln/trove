@@ -4,7 +4,7 @@
 // is generated from the schema, so adding a setting never means touching UI code.
 // Plugin keys are namespaced under the plugin id.
 
-import { ObservableSubject } from '../runtime.js';
+import { cell } from '../runtime.js';
 
 const STORAGE_KEY = 'trove.settings';
 
@@ -12,7 +12,7 @@ export class SettingsService {
   constructor() {
     this.schema = new Map(); // key -> { type, default, title, description, enum?, minimum?, maximum?, category, order }
     this.values = read();
-    this.subject = new ObservableSubject(this.effective());
+    this.cell = cell(this.effective());
   }
 
   /**
@@ -21,10 +21,10 @@ export class SettingsService {
    */
   register(schemas) {
     for (const s of [].concat(schemas)) this.schema.set(s.key, s);
-    this.subject.next(this.effective());
+    this.cell.setValue(this.effective());
     return () => {
       for (const s of [].concat(schemas)) this.schema.delete(s.key);
-      this.subject.next(this.effective());
+      this.cell.setValue(this.effective());
     };
   }
 
@@ -38,13 +38,13 @@ export class SettingsService {
     if (schema && value === schema.default) delete this.values[key];
     else this.values[key] = value;
     write(this.values);
-    this.subject.next(this.effective());
+    this.cell.setValue(this.effective());
   }
 
   reset(key) {
     delete this.values[key];
     write(this.values);
-    this.subject.next(this.effective());
+    this.cell.setValue(this.effective());
   }
 
   /** Full resolved values (defaults ⊕ overrides). */
@@ -57,7 +57,7 @@ export class SettingsService {
   }
 
   observe() {
-    return this.subject;
+    return this.cell;
   }
 
   /** Schema entries grouped by category, for the Settings UI. */

@@ -6,12 +6,12 @@ a **sandboxed plugin system**. Ships as a runtime-agnostic library plus a server
 that speaks plain `Request → Response`, so it runs on **Node**, **Bun**, or
 **Cloudflare Workers** with a light wrapper.
 
-Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS),
-**dodo** (functional VDOM), **bones** (reactive glue).
+Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) and
+**dodo** (functional VDOM, with its own reactive cells).
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  @trove/web         search-first workbench (dodo/ngin/bones)   │
+│  @trove/web         search-first workbench (dodo · ngin)       │
 │   contributions · commands · keymaps · settings · plugin host  │
 ├──────────────────────────────────────────────────────────────┤
 │  @trove/server         Request → Response  (Node · Worker)     │
@@ -1068,7 +1068,7 @@ and what actually runs.
 packages/
   core/         @trove/core — Vfs, storage/metadata/search backends, uploads (runtime-agnostic)
   server/       @trove/server — Request→Response API + Bun / Node / Worker adapters
-  web/          @trove/web — the workbench (dodo + ngin + bones)
+  web/          @trove/web — the workbench (dodo + ngin)
   plugin-sdk/   @trove/plugin-sdk — the iframe-side plugin API + RPC
 ```
 
