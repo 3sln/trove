@@ -559,14 +559,14 @@ export function createRouter() {
   // Rebuild the search index on demand. Admin-only: it re-reads every object in the
   // drive, so it is a real load, and it is drive-wide rather than scoped to anything
   // the caller owns. Returns the task, which is how the caller watches it.
-  r.post('/api/reindex', ['collections', 'tasks'], async (ctx) => {
+  r.post('/api/reindex', ['backgroundWork', 'collections', 'tasks'], async (ctx) => {
     await requireWholeDrive(ctx, 'rebuild the search index');
-    if (!ctx.beginReindex) throw TroveError.unsupported('Reindexing is not available on this deployment');
+    if (!ctx.backgroundWork) throw TroveError.unsupported('Reindexing is not available on this deployment');
     // Two concurrent full rebuilds would double the work to reach the same place, so
     // `beginReindex` claims the drive first and says whether it got it. The claim is
     // shared state rather than this process's task list — the other rebuild may be in
     // another isolate, and a check that can only see local memory would not find it.
-    const { task, alreadyRunning } = await ctx.beginReindex({ reason: 'Started manually' });
+    const { task, alreadyRunning } = await ctx.backgroundWork.beginReindex({ reason: 'Started manually' });
     if (alreadyRunning) {
       const local = (await ctx.tasks.list()).find((t) => t.kind === 'index' && t.status === 'running');
       return { task: local || null, alreadyRunning: true };
@@ -618,10 +618,10 @@ export function createRouter() {
   // Reconcile a collection against the bytes actually in its store — how files added,
   // replaced, or removed by anything other than Trove get noticed. Needs `write` on the
   // collection, because a scan can create items in it.
-  r.post('/api/collections/:id/scan', ['collections', 'tasks'], async (ctx) => {
+  r.post('/api/collections/:id/scan', ['backgroundWork', 'collections', 'tasks'], async (ctx) => {
     await assertCap(ctx, ctx.params.id, 'write');
-    if (!ctx.beginScan) throw TroveError.unsupported('Scanning is not available on this deployment');
-    const { task, alreadyRunning } = await ctx.beginScan(ctx.params.id, { reason: 'Started manually' });
+    if (!ctx.backgroundWork) throw TroveError.unsupported('Scanning is not available on this deployment');
+    const { task, alreadyRunning } = await ctx.backgroundWork.beginScan(ctx.params.id, { reason: 'Started manually' });
     if (alreadyRunning) {
       const local = (await ctx.tasks.list())
         .find((t) => t.kind === 'scan' && t.collectionId === ctx.params.id && t.status === 'running');

@@ -59,7 +59,7 @@ export async function createServer(config = {}) {
   // 200 lines of statements whose ORDER was the graph is a declaration the
   // container walks, which is also what makes `close()` stop being a hand-kept
   // list that had to agree with it.
-  const lifecycleState = { closing: false };
+  const lifecycleState = { closing: false, background: null };
   const engine = createDriveEngine(config, lifecycleState);
 
   // Obtained up front because they are this function's return value: callers
@@ -150,8 +150,15 @@ export async function createServer(config = {}) {
   // where that is not true (Workers: an isolate can be discarded the moment the
   // response resolves), `config.background` points them at whatever owns the work
   // instead, and the routes are none the wiser.
-  const routeBeginScan = config.background?.beginScan || beginScan;
-  const routeBeginReindex = config.background?.beginReindex || beginReindex;
+  // Bound once the verbs exist. `config.background` is how a deployment says the
+  // work runs somewhere else — the Workers adapter points it at a Durable Object
+  // — and everything above this line is unaware either way.
+  lifecycleState.background = {
+    beginScan: config.background?.beginScan || beginScan,
+    beginReindex: config.background?.beginReindex || beginReindex,
+  };
+  const routeBeginScan = lifecycleState.background.beginScan;
+  const routeBeginReindex = lifecycleState.background.beginReindex;
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
 
   issues.handle('reindex-node', (issue) => tasks.run(
@@ -266,9 +273,6 @@ export async function createServer(config = {}) {
         // reaching for more.
         container: engine.container,
         config, principal, auth, mcp,
-        // Verbs rather than resources: which process actually runs the work is
-        // a deployment fact (see engine/providers), so these stay injected.
-        startReindex, startScan, beginReindex: routeBeginReindex, beginScan: routeBeginScan,
       });
       // A route can refuse on its own (a token that verified but names nobody we know,
       // a session that expired between calls). Whatever refused, the answer to "so

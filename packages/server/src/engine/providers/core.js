@@ -119,6 +119,27 @@ export function coreProviders(config, lifecycleState) {
       get closing() { return lifecycleState.closing; },
     }),
 
+    // WHO RUNS LONG WORK.
+    //
+    // A scan or a reindex outlives the request that asked for it, and where it
+    // runs is a deployment fact: in this process on Node and Bun, in a Durable
+    // Object on Workers, because an isolate cannot own work that outlives a
+    // response. That is the two-domain split — request and background — and it
+    // is not a Workers concession. On a long-lived process the two domains
+    // happen to share a process, which is the coincidence; Workers only makes
+    // the seam visible by forcing it.
+    //
+    // So a route asks for `backgroundWork` and says what it wants started. It
+    // does not know, and must not know, which process obliges.
+    //
+    // Late-bound through `lifecycleState`, which is the one honest circularity
+    // here: dispatching needs the engine that owns this container, so it cannot
+    // be a constructor dependency of something inside it.
+    backgroundWork: Provider.fromSingleton({
+      beginScan: (collectionId, opts) => lifecycleState.background.beginScan(collectionId, opts),
+      beginReindex: (opts) => lifecycleState.background.beginReindex(opts),
+    }),
+
     storage: Provider.fromLazySingleton(
       () => resolve(config.storage ?? config.vfs?.storage, StorageBackend, buildStorage),
     ),

@@ -109,6 +109,25 @@ test('closing the server disposes the graph', async () => {
   await expect(server.startScan('default', { reason: 'after close' })).rejects.toThrow(/disposed/i);
 });
 
+test('who runs long work is a dependency, not a branch at the call site', async () => {
+  // The two-domain split — request and background — as a declared thing rather
+  // than a Workers concession. On Node and Bun the two happen to share a
+  // process; on Workers the background half is a Durable Object. A route asks
+  // for `backgroundWork` and says what to start, and does not learn which.
+  const started = [];
+  const server = await createServer({
+    ...configFromEnv(ENV),
+    background: {
+      beginScan: (collectionId, opts) => { started.push(['scan', collectionId]); return { task: null, alreadyRunning: false }; },
+      beginReindex: () => { started.push(['index']); return { task: null, alreadyRunning: false }; },
+    },
+  });
+  const res = await server.handle(new Request('http://t/api/collections/default/scan', { method: 'POST' }));
+  expect(res.status).toBe(200);
+  expect(started).toEqual([['scan', 'default']]);
+  await server.close();
+});
+
 test('shutdown is a dependency, not a captured variable', async () => {
   // Long work has to be able to ask whether the server is going down. That used
   // to be a `let closing` nothing could see it reading.

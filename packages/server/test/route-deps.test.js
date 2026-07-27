@@ -25,6 +25,7 @@ const SRC = fs.readFileSync(path.resolve(import.meta.dir, '../src/routes.js'), '
 const RESOURCES = [
   'vfs', 'collections', 'kv', 'sqlite', 'plugins', 'tasks', 'issues', 'sidecar',
   'notifications', 'identity', 'search', 'storage', 'metadata', 'auth', 'push',
+  'backgroundWork',
 ];
 
 // Bounded by the next declaration rather than by counting brackets. Counting is
