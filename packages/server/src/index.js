@@ -6,28 +6,18 @@
 // variables to that config so a container needs no code, and static assets
 // (the built web app) can be served by passing an `assets` fetcher.
 
+// Only the names this module still touches. Everything that BUILDS a backend moved
+// to engine/providers/core.js when the drive became a dependency graph; the class
+// names that remain are the JSDoc types of `createServer`'s injection surface, which
+// is the part of that duality callers still read.
 import {
-  Vfs, StorageBackend, MemoryStorage, FilesystemStorage, S3Storage,
-  MetadataStore, MemoryStore, SqliteStore,
-  SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,
-  SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer,
-  VectorStore, MemoryVectorStore, QdrantVectorStore, VectorizeVectorStore, SqliteVectorStore,
-  KeywordStore, MemoryKeywordStore, SqliteKeywordStore,
-  IndexerRegistry,
-  IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
-  cloudflareAccess, accessHost,
-  KeyValueStore, MemoryKV, SqliteKV,
-  SqliteProvider, LocalSqliteProvider,
-  SidecarService, NotificationCenter, WebPushService,
-  CollectionService,
-  PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
-  IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
-  TaskRegistry, IssueRegistry,
-  TroveError,
-  resolveAuthDiscovery, protectedResourceMetadata, challengeHeaders, publicOrigin,
+  Vfs, StorageBackend, MetadataStore, SearchService, EmbeddingProvider,
+  VectorStore, KeywordStore, IndexerRegistry,
+  accessHost, TroveError,
+  protectedResourceMetadata, challengeHeaders, publicOrigin,
 } from '@trove/core';
 import { createRouter } from './routes.js';
-import { createDriveEngine, scanStarter, BACKBONE, buildStorage } from './engine/index.js';
+import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';
 
 // Every backend is pluggable. Each field of `config` accepts EITHER a ready
@@ -227,6 +217,8 @@ export async function createServer(config = {}) {
   // Null when switched off, and then nothing below routes to it.
   const mcp = createMcpHandler({
     vfs, collections, identity, config, auth,
+    // So an agent's tool call obtains the same authorized handles an HTTP route does.
+    container: engine.container,
     version: config.version || '0.0.1',
   });
 

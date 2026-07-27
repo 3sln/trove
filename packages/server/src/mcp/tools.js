@@ -31,16 +31,43 @@ looking for something, search for it — do not try to construct a path.
 Files reference each other with trove: URIs (trove:default?name=notes.md). Search matches
 meaning as well as words, so a description of the content works as a query.`;
 
-/** Collections this principal can read, or undefined when ACLs are off. */
+/**
+ * Whether this deployment has an ACL layer at all — from configuration, never from
+ * whether `ctx.collections` happens to be there. The two agree while everything is
+ * wired correctly and diverge exactly when it is not, and here the failure mode is an
+ * agent quietly reading every collection in the drive.
+ */
+const enforcing = (ctx) => ctx.config?.collections !== false;
+
+/**
+ * Collections this principal can read, or undefined when there is no ACL layer.
+ *
+ * `undefined` means "do not scope the query", which is only correct when there is
+ * nothing to scope BY. Search and backlinks reach across collections by design, so an
+ * unscoped query hands back names, ids and `trove:` URIs from collections the caller
+ * cannot read.
+ */
 async function readable(ctx, narrowTo) {
-  if (!ctx.collections) return undefined;
+  if (!enforcing(ctx)) return undefined;
   const ids = (await ctx.collections.list(ctx.principal)).map((c) => c.id);
   return narrowTo ? ids.filter((id) => id === narrowTo) : ids;
 }
 
-async function assertCap(ctx, collectionId, capability) {
-  if (!ctx.collections) return;
-  await ctx.collections.assert(ctx.principal, collectionId, capability);
+/**
+ * A file, and the operations this agent may perform on it.
+ *
+ * `access.node` resolves by id, by name within a collection, or by `trove:` URI, and
+ * throws when the capability is not held — so a tool that gets a handle back is a tool
+ * that may act. Missing becomes the sentence a MODEL should read: "Item" tells it
+ * nothing, and it will retry the same call.
+ */
+async function fileHandle(ctx, file, collectionId, capability) {
+  try {
+    return await ctx.access.node(file, capability, { collectionId });
+  } catch (err) {
+    if (err?.code === 'not_found') throw TroveError.notFound(`No file called "${file}"`);
+    throw err;
+  }
 }
 
 /** Everything about a node worth telling a model, and nothing internal. */
@@ -59,11 +86,10 @@ function describeNode(node) {
 
 const textLike = (type) => !type || /^text\/|json|xml|yaml|javascript|csv|markdown|x-sh/.test(type);
 
-async function readText(vfs, node) {
-  const { stream } = await vfs.readStream(node.id, { range: { start: 0, end: MAX_READ_BYTES } });
+async function readText(handle) {
+  const { stream } = await handle.read({ range: { start: 0, end: MAX_READ_BYTES } });
   const text = await new Response(stream).text();
-  const truncated = node.size > MAX_READ_BYTES;
-  return { text, truncated };
+  return { text, truncated: handle.size > MAX_READ_BYTES };
 }
 
 /**
@@ -132,11 +158,10 @@ export function registerTroveTools(server) {
       },
     },
     async run({ collection = 'default', cursor, limit }, ctx) {
-      await assertCap(ctx, collection, 'read');
-      // The description promises recency and `vfs.list` defaults to alphabetical, so it
+      // The description promises recency and `list` defaults to alphabetical, so it
       // has to be asked for. An agent answering "what did I add recently?" off the top
       // of an alphabetical list is confidently wrong in a way nothing surfaces.
-      const page = await ctx.vfs.list(collection, {
+      const page = await (await ctx.access.collection(collection, 'read')).list({
         cursor, sort: 'updatedAt', order: 'desc',
         limit: Math.min(Math.max(1, limit || 25), MAX_RESULTS),
       });
@@ -164,14 +189,13 @@ export function registerTroveTools(server) {
       required: ['file'],
     },
     async run({ file, collection = 'default' }, ctx) {
-      const node = await ctx.vfs.find(file, collection);
-      if (!node) throw TroveError.notFound(`No file called "${file}"`);
-      await assertCap(ctx, node.collectionId, 'read');
+      const handle = await fileHandle(ctx, file, collection, 'read');
+      const node = handle.node;
       if (!textLike(node.contentType)) {
         return toolText(`"${node.name}" is ${node.contentType || 'binary'} (${node.size} bytes) and has no text to read.\n`
           + JSON.stringify(describeNode(node), null, 2), { structured: describeNode(node) });
       }
-      const { text, truncated } = await readText(ctx.vfs, node);
+      const { text, truncated } = await readText(handle);
       // Saying it was cut off matters: a model that believes it read a whole document
       // will confidently answer questions about the part it never saw.
       return toolText(truncated
@@ -199,11 +223,9 @@ export function registerTroveTools(server) {
     },
     async run({ name, content, collection = 'default', contentType }, ctx) {
       if (!name?.trim()) throw TroveError.invalid('name is required');
-      await assertCap(ctx, collection, 'write');
-      const node = await ctx.vfs.writeFile(name, content ?? '', {
-        collectionId: collection,
-        contentType: contentType || ctx.vfs.guessContentType(name),
-      });
+      const into = await ctx.access.collection(collection, 'write');
+      // No contentType falls through to the vfs's own guess from the name.
+      const node = await into.writeFile(name, content ?? '', { contentType });
       return toolText(`Wrote ${node.name} (${node.size} bytes) — ${troveUri(node)}`,
         { structured: describeNode(node) });
     },
@@ -224,11 +246,9 @@ export function registerTroveTools(server) {
       required: ['file'],
     },
     async run({ file, collection = 'default' }, ctx) {
-      const node = await ctx.vfs.find(file, collection);
-      if (!node) throw TroveError.notFound(`No file called "${file}"`);
-      await assertCap(ctx, node.collectionId, 'delete');
-      await ctx.vfs.remove(node.id);
-      return toolText(`Moved "${node.name}" to the trash. It can be restored from the drive's trash.`);
+      const handle = await fileHandle(ctx, file, collection, 'delete');
+      await handle.remove();
+      return toolText(`Moved "${handle.name}" to the trash. It can be restored from the drive's trash.`);
     },
   });
 
@@ -241,7 +261,7 @@ export function registerTroveTools(server) {
       + 'division of the drive — the closest thing here to a folder, except they do not nest.',
     inputSchema: { type: 'object', properties: {} },
     async run(_args, ctx) {
-      if (!ctx.collections) {
+      if (!enforcing(ctx)) {
         return toolText(JSON.stringify({ collections: [{ id: 'default', capabilities: ['read', 'write', 'delete'] }] }, null, 2));
       }
       const list = await ctx.collections.list(ctx.principal);
@@ -265,14 +285,13 @@ export function registerTroveTools(server) {
       required: ['file'],
     },
     async run({ file, collection = 'default' }, ctx) {
-      const node = await ctx.vfs.find(file, collection);
-      if (!node) throw TroveError.notFound(`No file called "${file}"`);
-      await assertCap(ctx, node.collectionId, 'read');
+      const handle = await fileHandle(ctx, file, collection, 'read');
+      const node = handle.node;
       // Scoped, exactly like the HTTP route. Backlinks reach ACROSS collections by
       // design — that is what makes them useful — so an unscoped query hands back the
       // names, ids and trove: URIs of files inside collections the caller cannot read.
       const collectionIds = await readable(ctx);
-      const backlinks = await ctx.vfs.backlinks(node.id, { limit: 20, collectionIds })
+      const backlinks = await handle.backlinks({ limit: 20, collectionIds })
         // Distinguishable from "nothing links here", which in a drive with no folders is
         // a load-bearing fact an agent will reason from.
         .catch((err) => { throw TroveError.transient(`Could not read backlinks: ${err.message}`); });
@@ -292,7 +311,7 @@ export function registerTroveTools(server) {
       const ids = await readable(ctx);
       const out = [];
       for (const cid of ids || ['default']) {
-        const page = await ctx.vfs.list(cid, { limit: 100 });
+        const page = await (await ctx.access.collection(cid, 'read')).list({ limit: 100 });
         for (const node of page.items || []) {
           out.push({
             uri: troveUri(node),
@@ -305,18 +324,23 @@ export function registerTroveTools(server) {
       return { resources: out };
     },
     async read(params, ctx) {
-      const node = await ctx.vfs.find(params.uri);
-      if (!node) throw TroveError.notFound(`No such resource: ${params.uri}`);
-      await assertCap(ctx, node.collectionId, 'read');
+      let handle;
+      try {
+        handle = await ctx.access.node(params.uri, 'read');
+      } catch (err) {
+        if (err?.code === 'not_found') throw TroveError.notFound(`No such resource: ${params.uri}`);
+        throw err;
+      }
+      const node = handle.node;
       if (!textLike(node.contentType)) {
         // Base64 rather than refusing: a client that asked for an image wants the image.
-        const { stream } = await ctx.vfs.readStream(node.id, { range: { start: 0, end: MAX_READ_BYTES } });
+        const { stream } = await handle.read({ range: { start: 0, end: MAX_READ_BYTES } });
         const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
         let bin = '';
         for (const b of bytes) bin += String.fromCharCode(b);
         return { contents: [{ uri: params.uri, mimeType: node.contentType, blob: btoa(bin) }] };
       }
-      const { text } = await readText(ctx.vfs, node);
+      const { text } = await readText(handle);
       return { contents: [{ uri: params.uri, mimeType: node.contentType || 'text/plain', text }] };
     },
   });

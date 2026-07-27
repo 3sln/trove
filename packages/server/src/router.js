@@ -6,6 +6,7 @@
 // unexpected becomes a clean 500 without leaking internals.
 
 import { TroveError, wrapError, ErrorCode, publicOrigin } from '@trove/core';
+import { leaseScope } from './scope.js';
 
 // Methods that change state. A GET is safe by definition, so it isn't checked.
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
@@ -135,20 +136,11 @@ export class Router {
     // in `finally`, so a handler that throws still gives its resources back.
     let lease = null;
     // Handles obtained during the request, released with it. `access` is how a
-    // handler asks for an AUTHORIZED view of a node or collection: the grant is
-    // carried by the object it hands back, so there is no unrestricted service
-    // and no raw id left over to use with one.
-    const held = [];
-    const obtain = async (name, request) => {
-      const l = await ctx.container.lease({ [name]: { principal: ctx.principal, ...request } });
-      held.push(l);
-      return l.resources[name];
-    };
-    const access = ctx.container ? {
-      node: (id, capability, opts) => obtain('node', { id, capability, ...opts }),
-      collection: (id, capability) => obtain('collection', { id, capability }),
-      upload: (id) => obtain('upload', { id }),
-    } : null;
+    // handler asks for an AUTHORIZED view of a node, collection or upload: the
+    // grant is carried by the object it hands back, so there is no unrestricted
+    // service and no raw id left over to use with one.
+    const scope = leaseScope(ctx.container, ctx.principal);
+    const access = scope.access;
     try {
       lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;
       const result = await found.route.handler({
@@ -161,10 +153,8 @@ export class Router {
       if (err.code === ErrorCode.INTERNAL) console.error('Unhandled:', err.cause || err);
       return cors(json(err.toJSON(), err.status), origin);
     } finally {
-      // Every lease gets released, including the ones after a release that threw.
-      // A sequential `for (… ) await l.release()` leaks the rest of the list on
-      // the first failure, which is precisely the moment leaking hurts most.
-      await Promise.allSettled([...held, lease].filter(Boolean).map((l) => l.release()));
+      await scope.release();
+      await lease?.release();
     }
   }
 }

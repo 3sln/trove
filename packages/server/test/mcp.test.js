@@ -447,3 +447,55 @@ test('MCP can be switched off entirely, and then the endpoint is simply not ther
   // The drive still says where to sign in — that was never MCP's to own.
   expect((await handle(new Request(`${ORIGIN}/.well-known/oauth-protected-resource`))).status).toBe(200);
 });
+
+test('deleting through an agent needs delete, not merely write', async () => {
+  // `write` does not imply `delete` in CollectionService, and the agent surface has to
+  // agree with the browser one. Before the handles, every tool asserted its own
+  // capability by hand against an unrestricted vfs — two models of one rule, and this
+  // is the pair that would have diverged first.
+  const kv = new MemoryKV();
+  const collections = new CollectionService({
+    kv, storageFactory: () => new MemoryStorage(), admins: ['admin@example.com'],
+    defaultOpen: false, defaultStore: { driver: 'memory' },
+  });
+  const { handle, vfs } = await createServer({
+    rebuildIndexOnStart: false,
+    collections,
+    identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
+    authServer: 'https://auth.example.com',
+  });
+  const admin = { id: 'admin@example.com', email: 'admin@example.com', roles: [] };
+  const c = await collections.create({ name: 'Work', store: { driver: 'memory' } }, admin);
+  await collections.setGrant(c.id, { type: 'user', subject: 'bob@example.com', capabilities: ['read', 'write'] }, admin);
+  await vfs.writeFile('draft.txt', 'keep me', { collectionId: c.id, contentType: 'text/plain' });
+  const bob = await sign({ sub: 'bob@example.com', email: 'bob@example.com' });
+
+  const del = await callTool(handle, 'delete_file', { file: 'draft.txt', collection: c.id }, { token: bob });
+  expect(del.isError).toBe(true);
+  // And the file survived the refusal.
+  const still = await callTool(handle, 'read_file', { file: 'draft.txt', collection: c.id }, { token: bob });
+  expect(still.text).toContain('keep me');
+});
+
+test('an ACL layer that cannot answer refuses the agent rather than serving it', async () => {
+  // Enforcement decides from configuration. A tool that stood down because a service
+  // was unreachable would hand an agent the whole drive at exactly the wrong moment.
+  const kv = new MemoryKV();
+  const collections = new CollectionService({
+    kv, storageFactory: () => new MemoryStorage(), admins: ['admin@example.com'],
+    defaultOpen: false, defaultStore: { driver: 'memory' },
+  });
+  const { handle, vfs } = await createServer({
+    rebuildIndexOnStart: false,
+    collections,
+    identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
+    authServer: 'https://auth.example.com',
+  });
+  await vfs.writeFile('secret.txt', 'the combination is 1234', { contentType: 'text/plain' });
+  collections.assert = () => { throw new Error('service unavailable'); };
+
+  const bob = await sign({ sub: 'bob@example.com', email: 'bob@example.com' });
+  const read = await callTool(handle, 'read_file', { file: 'secret.txt' }, { token: bob });
+  expect(read.isError).toBe(true);
+  expect(read.text).not.toContain('1234');
+});

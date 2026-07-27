@@ -18,6 +18,7 @@ import { McpServer, rpcError, JSONRPC_ERRORS } from './protocol.js';
 import { registerTroveTools } from './tools.js';
 import { mcpConfigFromEnv, mcpResourceUri } from './auth.js';
 import { crossSiteRefusal } from '../router.js';
+import { leaseScope } from '../scope.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -68,7 +69,7 @@ function authRequired(cfg, identity) {
  * @param {object} deps
  * @param {object} deps.auth the drive's resolved auth discovery (see resolveAuthDiscovery)
  */
-export function createMcpHandler({ vfs, collections, identity, config = {}, auth = {}, version } = {}) {
+export function createMcpHandler({ vfs, collections, container, identity, config = {}, auth = {}, version } = {}) {
   const cfg = { path: '/mcp', enabled: true, ...mcpConfigFromEnv(config.env || {}), ...(config.mcp || {}) };
   if (cfg.enabled === false) return null;
   const server = createMcpServer({ version });
@@ -175,21 +176,29 @@ export function createMcpHandler({ vfs, collections, identity, config = {}, auth
       return jsonResponse(rpcError(null, JSONRPC_ERRORS.PARSE, 'Body is not valid JSON'), 400);
     }
 
-    const ctx = { vfs, collections, principal, config };
+    // The same authorization the browser gets, from the same place: a tool asks for a
+    // node or collection HANDLE and operates through it, so there is no MCP-shaped path
+    // around the collection ACL and no unrestricted `vfs` sitting in a tool body.
+    const scope = leaseScope(container, principal);
+    const ctx = { vfs, collections, principal, config, access: scope.access };
 
-    // A batch is an array. Notifications inside it contribute nothing to the reply, and
-    // a batch of only notifications gets 202 with no body at all.
-    if (Array.isArray(msg)) {
-      if (!msg.length) return jsonResponse(rpcError(null, JSONRPC_ERRORS.INVALID_REQUEST, 'Empty batch'), 400);
-      const replies = (await Promise.all(msg.map((m) => server.dispatch(m, ctx)))).filter(Boolean);
-      return replies.length ? jsonResponse(replies) : new Response(null, { status: 202 });
+    try {
+      // A batch is an array. Notifications inside it contribute nothing to the reply,
+      // and a batch of only notifications gets 202 with no body at all.
+      if (Array.isArray(msg)) {
+        if (!msg.length) return jsonResponse(rpcError(null, JSONRPC_ERRORS.INVALID_REQUEST, 'Empty batch'), 400);
+        const replies = (await Promise.all(msg.map((m) => server.dispatch(m, ctx)))).filter(Boolean);
+        return replies.length ? jsonResponse(replies) : new Response(null, { status: 202 });
+      }
+
+      const reply = await server.dispatch(msg, ctx);
+      // A notification gets 202 and NO body. Returning a JSON-RPC envelope here is the
+      // classic way to make a conformant client decide the server is broken.
+      if (!reply) return new Response(null, { status: 202 });
+      return jsonResponse(reply);
+    } finally {
+      await scope.release();
     }
-
-    const reply = await server.dispatch(msg, ctx);
-    // A notification gets 202 and NO body. Returning a JSON-RPC envelope here is the
-    // classic way to make a conformant client decide the server is broken.
-    if (!reply) return new Response(null, { status: 202 });
-    return jsonResponse(reply);
   }
 
   return {
