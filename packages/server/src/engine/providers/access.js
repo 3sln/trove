@@ -42,6 +42,12 @@ const enforcing = (config) => config?.collections !== false;
  */
 export const SYSTEM = Symbol('trove.system-grant');
 
+/** Conversations are optional; a drive without them says so rather than crashing. */
+function requireSidecar(sidecar) {
+  if (!sidecar) throw TroveError.unsupported('Conversations are not enabled on this server');
+  return sidecar;
+}
+
 function assertCapability(capability) {
   if (!['read', 'write', 'delete', 'admin'].includes(capability)) {
     throw TroveError.invalid(`Unknown capability "${capability}"`);
@@ -61,7 +67,7 @@ const permits = (granted, capability) =>
  * @param {object} node   already resolved by `stat`
  * @param {string|symbol} granted the capability that was asserted
  */
-function nodeHandle(vfs, node, granted) {
+function nodeHandle(vfs, sidecar, node, granted) {
   // Data, not authority. Present so a response can name what it acted on.
   const handle = {
     id: node.id,
@@ -77,6 +83,13 @@ function nodeHandle(vfs, node, granted) {
   handle.read = (opts) => vfs.readStream(node.id, opts);
   handle.download = (opts) => vfs.getDownload(node.id, opts);
   handle.backlinks = (opts) => vfs.backlinks(node.id, opts);
+  // Conversations and tags live in the sidecar, not the vfs — but they are still
+  // operations ON THIS NODE, so the same grant has to reach them. Fronting only
+  // the vfs would have left eight routes asserting a capability and then working
+  // through an unrestricted service, which is the shape this exists to remove.
+  handle.view = () => requireSidecar(sidecar).view(node.id);
+  handle.subscribe = (principal, muted) => requireSidecar(sidecar).subscribe(node.id, principal, muted);
+  handle.unsubscribe = (principal) => requireSidecar(sidecar).unsubscribe(node.id, principal);
 
   if (permits(granted, 'write')) {
     handle.rename = (newName) => vfs.rename(node.id, newName);
@@ -84,6 +97,13 @@ function nodeHandle(vfs, node, granted) {
     handle.removeTag = (name, principal) => vfs.removeTag(node.id, name, principal);
     handle.contribute = (contributorId, contribution) =>
       vfs.indexContributions(node.id, contributorId, contribution);
+    handle.comment = (comment, principal) => requireSidecar(sidecar).addComment(node.id, comment, principal);
+    handle.editComment = (cid, body, principal) =>
+      requireSidecar(sidecar).editComment(node.id, cid, body, principal);
+    handle.deleteComment = (cid, principal) =>
+      requireSidecar(sidecar).deleteComment(node.id, cid, principal);
+    handle.react = (cid, emoji, on, principal) =>
+      requireSidecar(sidecar).react(node.id, cid, emoji, on, principal);
   }
 
   if (permits(granted, 'delete')) {
@@ -126,11 +146,12 @@ function collectionHandle(vfs, collectionId, granted) {
  * never runs — when the node is missing or the capability is not held.
  */
 export class NodeAccessProvider extends Provider {
-  static deps = ['vfs', 'collections', 'config'];
+  static deps = ['vfs', 'sidecar', 'collections', 'config'];
 
-  constructor({ vfs, collections, config }) {
+  constructor({ vfs, sidecar, collections, config }) {
     super();
     this.vfs = vfs;
+    this.sidecar = sidecar;
     this.collections = collections;
     this.config = config;
   }
@@ -139,16 +160,17 @@ export class NodeAccessProvider extends Provider {
     if (!id) throw TroveError.invalid('A node id is required');
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
+    const sidecar = await this.sidecar.obtain();
     const node = await vfs.stat(id);
 
     const config = await this.config.obtain();
-    if (!enforcing(config)) return nodeHandle(vfs, node, 'admin');
+    if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, 'admin');
 
     // `assert` throws when the capability is not held. Nothing here decides from
     // presence: if the service is missing this raises, it does not allow.
     const collections = await this.collections.obtain();
     await collections.assert(principal, node.collectionId, capability);
-    return nodeHandle(vfs, node, capability);
+    return nodeHandle(vfs, sidecar, node, capability);
   }
 
   // vfs is a lazy singleton: its release is a no-op and the handle holds nothing
@@ -197,12 +219,12 @@ export class CollectionAccessProvider extends Provider {
  * reader is already looking to find out what an action touches.
  */
 export class SystemNodeProvider extends Provider {
-  static deps = ['vfs'];
-  constructor({ vfs }) { super(); this.vfs = vfs; }
+  static deps = ['vfs', 'sidecar'];
+  constructor({ vfs, sidecar }) { super(); this.vfs = vfs; this.sidecar = sidecar; }
   async obtain({ id } = {}) {
     if (!id) throw TroveError.invalid('A node id is required');
     const vfs = await this.vfs.obtain();
-    return nodeHandle(vfs, await vfs.stat(id), SYSTEM);
+    return nodeHandle(vfs, await this.sidecar.obtain(), await vfs.stat(id), SYSTEM);
   }
   release() {}
 }

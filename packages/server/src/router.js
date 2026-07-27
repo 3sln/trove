@@ -134,10 +134,27 @@ export class Router {
     // Exactly what the route declared, leased for exactly the request. Released
     // in `finally`, so a handler that throws still gives its resources back.
     let lease = null;
+    // Handles obtained during the request, released with it. `access` is how a
+    // handler asks for an AUTHORIZED view of a node or collection: the grant is
+    // carried by the object it hands back, so there is no unrestricted service
+    // and no raw id left over to use with one.
+    const held = [];
+    const access = ctx.container ? {
+      node: async (id, capability) => {
+        const l = await ctx.container.lease({ node: { principal: ctx.principal, id, capability } });
+        held.push(l);
+        return l.resources.node;
+      },
+      collection: async (id, capability) => {
+        const l = await ctx.container.lease({ collection: { principal: ctx.principal, id, capability } });
+        held.push(l);
+        return l.resources.collection;
+      },
+    } : null;
     try {
       lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;
       const result = await found.route.handler({
-        req, params: found.params, query, url, ...ctx, ...(lease?.resources || {}),
+        req, params: found.params, query, url, access, ...ctx, ...(lease?.resources || {}),
       });
       const res = result instanceof Response ? result : json(result ?? { ok: true });
       return cors(res, origin);
@@ -146,6 +163,7 @@ export class Router {
       if (err.code === ErrorCode.INTERNAL) console.error('Unhandled:', err.cause || err);
       return cors(json(err.toJSON(), err.status), origin);
     } finally {
+      for (const l of held) await l.release();
       await lease?.release();
     }
   }

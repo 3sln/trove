@@ -646,73 +646,65 @@ export function createRouter() {
   // --- conversations, tags, sidecar (per file) -------------------------------
   // The :id is a file node id; the sidecar is that file's CRDT document.
 
-  r.get('/api/items/:id/sidecar', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
-    await nodeWithCap(ctx, ctx.params.id, 'read'); // 404 if the file is gone
-    return ctx.sidecar.view(ctx.params.id);
+  r.get('/api/items/:id/sidecar', [], async (ctx) => {
+    // The handle is the sidecar for this node: obtaining it resolved the node
+    // (404 if gone) and asserted `read` on its collection.
+    return (await ctx.access.node(ctx.params.id, 'read')).view();
   });
 
-  r.post('/api/items/:id/comments', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
+  r.post('/api/items/:id/comments', [], async (ctx) => {
     requirePrincipal(ctx.principal);
-    await nodeWithCap(ctx, ctx.params.id, 'write');
+    const node = await ctx.access.node(ctx.params.id, 'write');
     const b = await body(ctx.req);
-    return { comment: await ctx.sidecar.addComment(ctx.params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
+    return { comment: await node.comment({ body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
   });
 
-  r.post('/api/items/:id/comments/:cid/edit', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
+  r.post('/api/items/:id/comments/:cid/edit', [], async (ctx) => {
     requirePrincipal(ctx.principal);
-    await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
+    const node = await ctx.access.node(ctx.params.id, 'write'); // + authorship checked in the service
     const b = await body(ctx.req);
-    return { comment: await ctx.sidecar.editComment(ctx.params.id, ctx.params.cid, b.body, ctx.principal) };
+    return { comment: await node.editComment(ctx.params.cid, b.body, ctx.principal) };
   });
 
-  r.delete('/api/items/:id/comments/:cid', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
+  r.delete('/api/items/:id/comments/:cid', [], async (ctx) => {
     requirePrincipal(ctx.principal);
-    await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
-    return ctx.sidecar.deleteComment(ctx.params.id, ctx.params.cid, ctx.principal);
+    const node = await ctx.access.node(ctx.params.id, 'write'); // + authorship checked in the service
+    return node.deleteComment(ctx.params.cid, ctx.principal);
   });
 
-  r.post('/api/items/:id/comments/:cid/react', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
+  r.post('/api/items/:id/comments/:cid/react', [], async (ctx) => {
     requirePrincipal(ctx.principal);
-    await nodeWithCap(ctx, ctx.params.id, 'write');
+    const node = await ctx.access.node(ctx.params.id, 'write');
     const b = await body(ctx.req);
     if (!b.emoji) throw TroveError.invalid('emoji is required');
-    return { comment: await ctx.sidecar.react(ctx.params.id, ctx.params.cid, b.emoji, b.on !== false, ctx.principal) };
+    return { comment: await node.react(ctx.params.cid, b.emoji, b.on !== false, ctx.principal) };
   });
 
-  r.post('/api/items/:id/tags', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
-    await nodeWithCap(ctx, ctx.params.id, 'write');
+  r.post('/api/items/:id/tags', [], async (ctx) => {
+    const node = await ctx.access.node(ctx.params.id, 'write');
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
     // The façade sets the CRDT tag AND its queryable mirror together (no swallow).
-    return ctx.vfs.setTag(ctx.params.id, b.name, b.value, ctx.principal);
+    return node.setTag(b.name, b.value, ctx.principal);
   });
 
-  r.delete('/api/items/:id/tags/:name', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
-    // Removing a tag is a write — enforce the same per-collection ACL as adding one,
-    // or a read-only user could strip tags off files they can't modify.
-    await nodeWithCap(ctx, ctx.params.id, 'write');
-    return ctx.vfs.removeTag(ctx.params.id, ctx.params.name, ctx.principal);
+  r.delete('/api/items/:id/tags/:name', [], async (ctx) => {
+    // Removing a tag is a write — a read handle has no removeTag, so a read-only
+    // user cannot strip tags off files they cannot modify.
+    const node = await ctx.access.node(ctx.params.id, 'write');
+    return node.removeTag(ctx.params.name, ctx.principal);
   });
 
-  r.post('/api/items/:id/subscribe', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
+  r.post('/api/items/:id/subscribe', [], async (ctx) => {
     requirePrincipal(ctx.principal);
-    await nodeWithCap(ctx, ctx.params.id, 'read');
+    const node = await ctx.access.node(ctx.params.id, 'read');
     const b = await body(ctx.req);
-    return ctx.sidecar.subscribe(ctx.params.id, ctx.principal, !!b.muted);
+    return node.subscribe(ctx.principal, !!b.muted);
   });
-  r.delete('/api/items/:id/subscribe', ['collections', 'sidecar', 'vfs'], async (ctx) => {
-    requireSidecar(ctx.sidecar);
+  r.delete('/api/items/:id/subscribe', [], async (ctx) => {
     requirePrincipal(ctx.principal);
-    await nodeWithCap(ctx, ctx.params.id, 'read');
-    return ctx.sidecar.unsubscribe(ctx.params.id, ctx.principal);
+    const node = await ctx.access.node(ctx.params.id, 'read');
+    return node.unsubscribe(ctx.principal);
   });
 
   // --- notifications & web push ----------------------------------------------
