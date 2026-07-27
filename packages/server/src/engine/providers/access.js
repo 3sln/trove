@@ -38,11 +38,6 @@ function requireSidecar(sidecar) {
   return sidecar;
 }
 
-function assertCapability(capability) {
-  if (!['read', 'write', 'delete', 'admin'].includes(capability)) {
-    throw TroveError.invalid(`Unknown capability "${capability}"`);
-  }
-}
 
 /**
  * What the principal actually holds — never a second opinion about it.
@@ -61,6 +56,11 @@ function assertCapability(capability) {
  * operation that only needs to read should not be one typo from deleting.
  */
 const ALL = new Set(['read', 'write', 'delete', 'admin']);
+
+/** One list of what a capability can be, so a typo is refused rather than read as none. */
+function assertCapability(capability) {
+  if (!ALL.has(capability)) throw TroveError.invalid(`Unknown capability "${capability}"`);
+}
 
 /** What naming `capability` asks for, under CollectionService's own implication. */
 function requested(capability) {

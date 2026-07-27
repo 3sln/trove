@@ -204,7 +204,9 @@ export class PluginService {
       if (this.strict) throw TroveError.forbidden(`Plugin "${pluginId}" is not installed on this account`);
       return; // transitional allow
     }
-    if (!r.grants.includes(cap)) {
+    // `|| []` denies rather than throws on a record with no grants field. A record that
+    // cannot say what it was granted was granted nothing.
+    if (!(r.grants || []).includes(cap)) {
       throw TroveError.forbidden(`Plugin "${pluginId}" was not granted the "${cap}" capability`);
     }
   }
