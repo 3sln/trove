@@ -48,12 +48,36 @@ test('a write handle can rename but not delete', async () => {
   await server.close();
 });
 
-test('a delete handle can remove, and reading is implied throughout', async () => {
+test('a delete handle can remove, and nothing else', async () => {
+  // `read` is NOT implied. CollectionService implies nothing but admin, and a
+  // handle that decided otherwise would be a second, more permissive model of
+  // the same rule.
   const { server, item } = await drive();
   const { node } = await lease(server, { node: { id: item.id, capability: 'delete' } });
   expect(typeof node.remove).toBe('function');
-  expect(typeof node.read).toBe('function'); // you cannot delete what you may not see
+  expect(node.read).toBeUndefined();
+  expect(node.rename).toBeUndefined();
   await node.remove();
+  await server.close();
+});
+
+test('an admin handle is wide, because admin does imply the rest', async () => {
+  const { server, item } = await drive();
+  const { node } = await lease(server, { node: { id: item.id, capability: 'admin' } });
+  expect(typeof node.read).toBe('function');
+  expect(typeof node.rename).toBe('function');
+  expect(typeof node.remove).toBe('function');
+  await server.close();
+});
+
+test('asking narrowly stays narrow, even for someone who holds everything', async () => {
+  // Least privilege. On a default open drive the caller holds every capability;
+  // a handle asked for `read` still cannot delete, because holding a capability
+  // and wielding it are different things.
+  const { server, item } = await drive();
+  const { node } = await lease(server, { node: { id: item.id, capability: 'read' } });
+  expect(typeof node.read).toBe('function');
+  expect(node.remove).toBeUndefined();
   await server.close();
 });
 
@@ -131,7 +155,30 @@ test('the system grant is a separate provider, not an option anyone can pass', a
 test('turning collections off grants everything, by configuration', async () => {
   const { server, item } = await drive({ collections: false });
   const { node } = await lease(server, { node: { id: item.id, capability: 'delete' } });
-  expect(node.granted).toBe('admin');
+  expect(typeof node.remove).toBe('function');
+  await server.close();
+});
+
+test('the handle reflects what the principal HOLDS, not what it asserted', async () => {
+  // The bug this replaced: implication was decided here — write implies read,
+  // delete implies read — and CollectionService does not agree. Only `admin`
+  // implies anything there, so a grant of ['write'] alone carries no read. A
+  // handle obtained with capability 'write' was therefore handing out read,
+  // download and view to a principal the ACL had never given them to. Two models
+  // of one rule, with the more permissive winning.
+  const server = await createServer({ ...configFromEnv(ENV), defaultOpen: false, admins: ['root'] });
+  const item = await server.vfs.writeFile('w.md', 'x', { contentType: 'text/markdown' });
+  const writer = { id: 'writer@example.com' };
+  await server.collections.update('default',
+    { acl: { grants: [{ type: 'user', subject: writer.id, capabilities: ['write'] }] } },
+    { id: 'root' });
+
+  const { node } = await server.engineContainer.use(
+    { node: { principal: writer, id: item.id, capability: 'write' } }, (r) => r,
+  );
+  expect(typeof node.rename).toBe('function');   // asked for write, and holds it
+  expect(node.read).toBeUndefined();             // does NOT hold read
+  expect(node.download).toBeUndefined();
   await server.close();
 });
 

@@ -32,16 +32,6 @@ import { TroveError } from '@trove/core';
  */
 const enforcing = (config) => config?.collections !== false;
 
-/**
- * Grant marker for work with no user behind it — a scheduled scan, a reindex.
- *
- * A separate provider rather than a principal that means "allow everything",
- * deliberately: a magic principal is a value, and values travel. They arrive
- * from request bodies, get stored, get logged and copied. A grant that cannot be
- * obtained by passing a principal cannot be reached by passing the wrong one.
- */
-export const SYSTEM = Symbol('trove.system-grant');
-
 /** Conversations are optional; a drive without them says so rather than crashing. */
 function requireSidecar(sidecar) {
   if (!sidecar) throw TroveError.unsupported('Conversations are not enabled on this server');
@@ -54,11 +44,30 @@ function assertCapability(capability) {
   }
 }
 
-/** Does this grant include `capability`? `admin` implies the rest. */
-const permits = (granted, capability) =>
-  granted === SYSTEM || granted === capability || granted === 'admin'
-  || (granted === 'delete' && capability === 'read')
-  || (granted === 'write' && capability === 'read');
+/**
+ * What the principal actually holds — never a second opinion about it.
+ *
+ * An earlier draft of this file decided implication here: `write` implies
+ * `read`, `delete` implies `read`. CollectionService does not agree — only
+ * `admin` implies anything (see `expand`), and a grant of `['write']` alone
+ * carries no read. So a handle obtained with `capability: 'write'` was handing
+ * out `read`, `download` and `view` to a principal the ACL had never given them
+ * to. Two models of the same rule, and the more permissive one winning.
+ *
+ * There is one model now, and it lives in CollectionService. This asks — and
+ * then intersects with what the caller ASKED for, so a handle stays as narrow as
+ * the request that made it. An admin who obtains a `read` handle gets a read
+ * handle; holding a capability and wielding it are different things, and an
+ * operation that only needs to read should not be one typo from deleting.
+ */
+const ALL = new Set(['read', 'write', 'delete', 'admin']);
+
+/** What naming `capability` asks for, under CollectionService's own implication. */
+function requested(capability) {
+  return capability === 'admin' ? new Set(ALL) : new Set([capability]);
+}
+
+const intersect = (held, asked) => new Set([...asked].filter((c) => held.has(c)));
 
 /**
  * One node, and the operations the caller may perform on it.
@@ -67,7 +76,9 @@ const permits = (granted, capability) =>
  * @param {object} node   already resolved by `stat`
  * @param {string|symbol} granted the capability that was asserted
  */
-function nodeHandle(vfs, sidecar, node, granted) {
+function nodeHandle(vfs, sidecar, node, held) {
+  const permits = (capability) => held.has(capability);
+  const granted = held === ALL ? 'system' : [...held].sort().join(',');
   // Data, not authority. Present so a response can name what it acted on.
   const handle = {
     id: node.id,
@@ -76,13 +87,14 @@ function nodeHandle(vfs, sidecar, node, granted) {
     contentType: node.contentType,
     size: node.size,
     node,
-    granted: granted === SYSTEM ? 'system' : granted,
+    granted,
   };
 
-  // Reading is implied by every capability — you cannot write what you may not see.
-  handle.read = (opts) => vfs.readStream(node.id, opts);
-  handle.download = (opts) => vfs.getDownload(node.id, opts);
-  handle.backlinks = (opts) => vfs.backlinks(node.id, opts);
+  if (permits('read')) {
+    handle.read = (opts) => vfs.readStream(node.id, opts);
+    handle.download = (opts) => vfs.getDownload(node.id, opts);
+    handle.backlinks = (opts) => vfs.backlinks(node.id, opts);
+  }
   // Conversations and tags live in the sidecar, not the vfs — but they are still
   // operations ON THIS NODE, so the same grant has to reach them. Fronting only
   // the vfs would have left eight routes asserting a capability and then working
@@ -91,7 +103,7 @@ function nodeHandle(vfs, sidecar, node, granted) {
   handle.subscribe = (principal, muted) => requireSidecar(sidecar).subscribe(node.id, principal, muted);
   handle.unsubscribe = (principal) => requireSidecar(sidecar).unsubscribe(node.id, principal);
 
-  if (permits(granted, 'write')) {
+  if (permits('write')) {
     handle.rename = (newName) => vfs.rename(node.id, newName);
     handle.setTag = (name, value, principal) => vfs.setTag(node.id, name, value, principal);
     handle.removeTag = (name, principal) => vfs.removeTag(node.id, name, principal);
@@ -106,7 +118,7 @@ function nodeHandle(vfs, sidecar, node, granted) {
       requireSidecar(sidecar).react(node.id, cid, emoji, on, principal);
   }
 
-  if (permits(granted, 'delete')) {
+  if (permits('delete')) {
     handle.remove = (opts) => vfs.remove(node.id, opts);
     handle.restore = () => vfs.restore(node.id);
   }
@@ -115,23 +127,26 @@ function nodeHandle(vfs, sidecar, node, granted) {
 }
 
 /** One collection, and the operations the caller may perform in it. */
-function collectionHandle(vfs, collectionId, granted) {
+function collectionHandle(vfs, collectionId, held) {
+  const permits = (capability) => held.has(capability);
   const handle = {
     id: collectionId,
-    granted: granted === SYSTEM ? 'system' : granted,
+    granted: held === ALL ? 'system' : [...held].sort().join(','),
   };
 
-  handle.list = (opts) => vfs.list(collectionId, opts);
-  handle.usage = () => vfs.storageUsage(collectionId);
-  handle.storage = () => vfs.storageFor(collectionId);
-  handle.listTrash = (opts) => vfs.listTrash(collectionId, opts);
+  if (permits('read')) {
+    handle.list = (opts) => vfs.list(collectionId, opts);
+    handle.usage = () => vfs.storageUsage(collectionId);
+    handle.storage = () => vfs.storageFor(collectionId);
+    handle.listTrash = (opts) => vfs.listTrash(collectionId, opts);
+  }
 
-  if (permits(granted, 'write')) {
+  if (permits('write')) {
     handle.createUpload = (req) => vfs.createUpload({ ...req, collectionId });
     handle.writeFile = (name, body, opts) => vfs.writeFile(name, body, { ...opts, collectionId });
   }
 
-  if (permits(granted, 'delete')) {
+  if (permits('delete')) {
     handle.purgeTrash = (opts) => vfs.purgeTrash({ ...opts, collectionId });
   }
 
@@ -164,13 +179,16 @@ export class NodeAccessProvider extends Provider {
     const node = await vfs.stat(id);
 
     const config = await this.config.obtain();
-    if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, 'admin');
+    if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, requested(capability));
 
     // `assert` throws when the capability is not held. Nothing here decides from
     // presence: if the service is missing this raises, it does not allow.
     const collections = await this.collections.obtain();
-    await collections.assert(principal, node.collectionId, capability);
-    return nodeHandle(vfs, sidecar, node, capability);
+    const collection = await collections.assert(principal, node.collectionId, capability);
+    // Shaped by what the principal HOLDS — asked of the one thing that knows —
+    // narrowed to what this call asked for.
+    return nodeHandle(vfs, sidecar, node,
+      intersect(collections.capabilities(principal, collection), requested(capability)));
   }
 
   // vfs is a lazy singleton: its release is a no-op and the handle holds nothing
@@ -198,11 +216,12 @@ export class CollectionAccessProvider extends Provider {
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
     const config = await this.config.obtain();
-    if (!enforcing(config)) return collectionHandle(vfs, id, 'admin');
+    if (!enforcing(config)) return collectionHandle(vfs, id, requested(capability));
 
     const collections = await this.collections.obtain();
-    await collections.assert(principal, id, capability);
-    return collectionHandle(vfs, id, capability);
+    const collection = await collections.assert(principal, id, capability);
+    return collectionHandle(vfs, id,
+      intersect(collections.capabilities(principal, collection), requested(capability)));
   }
 
   release() {}
@@ -224,7 +243,7 @@ export class SystemNodeProvider extends Provider {
   async obtain({ id } = {}) {
     if (!id) throw TroveError.invalid('A node id is required');
     const vfs = await this.vfs.obtain();
-    return nodeHandle(vfs, await this.sidecar.obtain(), await vfs.stat(id), SYSTEM);
+    return nodeHandle(vfs, await this.sidecar.obtain(), await vfs.stat(id), ALL);
   }
   release() {}
 }
@@ -233,7 +252,7 @@ export class SystemCollectionProvider extends Provider {
   static deps = ['vfs'];
   constructor({ vfs }) { super(); this.vfs = vfs; }
   async obtain({ id = 'default' } = {}) {
-    return collectionHandle(await this.vfs.obtain(), id, SYSTEM);
+    return collectionHandle(await this.vfs.obtain(), id, ALL);
   }
   release() {}
 }

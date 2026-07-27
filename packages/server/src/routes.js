@@ -1037,9 +1037,6 @@ async function assertUploadCap(ctx, uploadId, capability) {
 function requirePrincipal(principal) {
   if (!principal) throw TroveError.unauthorized('Authentication required');
 }
-function requireSidecar(sidecar) {
-  if (!sidecar) throw TroveError.unsupported('Conversations are not enabled on this server');
-}
 function requireNotifications(n) {
   if (!n) throw TroveError.unsupported('Notifications are not enabled on this server');
 }

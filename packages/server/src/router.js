@@ -163,8 +163,10 @@ export class Router {
       if (err.code === ErrorCode.INTERNAL) console.error('Unhandled:', err.cause || err);
       return cors(json(err.toJSON(), err.status), origin);
     } finally {
-      for (const l of held) await l.release();
-      await lease?.release();
+      // Every lease gets released, including the ones after a release that threw.
+      // A sequential `for (… ) await l.release()` leaks the rest of the list on
+      // the first failure, which is precisely the moment leaking hurts most.
+      await Promise.allSettled([...held, lease].filter(Boolean).map((l) => l.release()));
     }
   }
 }
