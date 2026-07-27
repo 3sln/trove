@@ -119,5 +119,28 @@ test('parseKeymap reads a VS Code-shaped keymap and drops unusable entries', () 
 });
 
 test('the type list is the single source of truth for what may be declared', () => {
-  expect(CONTRIBUTION_TYPES.sort()).toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem']);
+  expect(CONTRIBUTION_TYPES.sort()).toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem', 'view']);
+});
+
+test('a view declares a match hint and a priority, and needs no entry to be valid', () => {
+  // A view is how a LIST is drawn, so unlike an opener it can be a pure in-process
+  // render function — which is what every built-in view is. `needsEntry` would make the
+  // built-ins undeclarable.
+  const [v] = declaredContributions({
+    ...M,
+    contributes: {
+      // `mime` as a bare string, to confirm a view goes through the same selector
+      // coercion as an opener — an uncoerced one throws `.some is not a function` at
+      // selection time, which here would mean no results drawn at all.
+      gallery: { type: 'view', title: 'Gallery', icon: 'grid', priority: 70, match: { mime: 'image/*' } },
+    },
+  });
+  expect(v).toMatchObject({
+    type: 'view', title: 'Gallery', icon: 'grid', priority: 70,
+    match: { mime: ['image/*'] }, when: null, offline: false,
+  });
+  expect(v.uri).toBe('trove+contrib:acme.com/docs/gallery');
+  // A view can be a pure in-process render function — which is what every built-in
+  // view is — so it must not inherit the manifest's entry the way an opener does.
+  expect(v.entry).toBeUndefined();
 });

@@ -8,8 +8,13 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { OpenFileAction, SearchAction, FilterAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
+import { activeView, renderView, viewSwitcher, viewMove } from './views/index.js';
+import { openRowMenu } from './views/parts.js';
 
 const { div, span, input, button } = dd;
+
+// The keys a view may claim. Everything else the search box keeps.
+const ARROWS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
 // What to put in the search box, and how much of it fits.
 //
@@ -76,8 +81,19 @@ export default function launcher(state, ui, opts = {}) {
     wb.moveLaunch(delta, flat.length);
     syncSelection(ui, flat[wb.state.launch.index]);
   };
+  // How the results are drawn right now. The view gets a say in what an arrow key
+  // means — one row down is one tile down in a grid, not one tile across — but the
+  // index, the selection and the wrapping stay here, so up and down mean the same
+  // thing whichever view is showing.
+  const view = activeView(ui.platform, flat);
   const onKey = (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+    // `textual`: there is text in the box, so left/right are the caret's and no view
+    // may claim them. Fixing a typo must not move the highlight.
+    const claimed = ARROWS.has(e.key)
+      ? viewMove(view, e.key, { index: idx, count: flat.length, textual: q.length > 0 })
+      : null;
+    if (claimed !== null) { e.preventDefault(); move(claimed); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
     else if (e.key === 'Enter') { e.preventDefault(); flat[idx]?.run(); }
     else if (e.key === 'Escape' && q) { e.preventDefault(); clearSearch(ui); }
@@ -87,7 +103,7 @@ export default function launcher(state, ui, opts = {}) {
     else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
       const it = flat[idx];
       // Arrowing here already selected the row, so the menu acts on the right thing.
-      if (it?.menu) { e.preventDefault(); openRowMenu(document.querySelector('.launch-item.active'), it, ui); }
+      if (it?.menu) { e.preventDefault(); openRowMenu(document.querySelector('.launch-item.active, .grid-tile.active'), it, ui); }
     }
   };
 
@@ -98,11 +114,12 @@ export default function launcher(state, ui, opts = {}) {
     || (resolved.tagFilters && resolved.tagFilters.length)
     || (resolved.semanticText || '').trim() !== q.trim());
 
-  let gi = -1;
   const inner = div({ className: 'launcher' },
     div({ className: 'launch-box' },
       icon(mode === 'command' ? 'command' : mode === 'filter' ? 'tag' : 'search', { size: 18 }),
-      input({ className: 'launch-input', value: q, autofocus: true, spellcheck: 'false',
+      // `false`, not `'false'`: this is set as a property, and the string is truthy —
+      // so the search box had spellcheck ON, red-underlining every filename typed into it.
+      input({ className: 'launch-input', value: q, autofocus: true, spellcheck: false,
         placeholder: promptFor(ui, { compact: state.vp?.mode === 'phone', modal }) })
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
@@ -117,27 +134,16 @@ export default function launcher(state, ui, opts = {}) {
           'aria-pressed': state.voice?.listening ? 'true' : 'false',
         }, icon('mic', { size: 15 })).on({ click: () => ui.exec('search.voice') })
         : null,
+      // Which way to look at the drive. Not in the modal search, where the answer is
+      // always "the one thing I am about to press Enter on".
+      modal ? null : viewSwitcher(ui.platform, view),
     ),
     showResolved ? resolvedBar(resolved) : null,
+    // The results belong to the active view — see ui/components/views. The launcher says
+    // WHAT is on screen (these groups, this highlight); the view says how it looks. That
+    // split is why a gallery is a contribution rather than another branch in here.
     div({ className: 'launch-body' },
-      ...groups.map((group) => div({ className: 'launch-group' },
-        // `group.title` is uppercased by CSS, which is right for a label and wrong for
-        // anything the user typed — it turns their `#draft` into `#DRAFT`, a tag that
-        // isn't what they wrote. So a group can carry a verbatim half.
-        div({ className: 'launch-h' },
-          // Label and value together on the left; `.launch-h` is space-between, so an
-          // ungrouped value gets flung to the far edge away from the label it belongs to.
-          div({ className: 'lh-title' },
-            span(group.title),
-            group.verbatim ? span({ className: 'lh-verbatim' }, group.verbatim) : null),
-          group.action || null),
-        group.items.length
-          ? div({ className: 'launch-list' }, ...group.items.map((it) => {
-            const at = ++gi;
-            return itemRow(it, at === idx, { hover: () => hoverAt(at), select: () => selectAt(at) }, ui);
-          }))
-          : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
-      )),
+      renderView(view, { groups, index: idx, handlers: { hover: hoverAt, select: selectAt }, state, ui }),
       searchHelp(state, ui, mode),
     ),
   );
@@ -153,43 +159,6 @@ function resolvedBar(r) {
     (r.semanticText || '').trim() ? span({ className: 'rq-text' }, `“${r.semanticText.trim()}”`) : null,
     ...(r.tagFilters || []).map((f) => span({ className: 'rq-chip' }, icon('tag', { size: 11 }), filterLabel(f))),
   );
-}
-
-function itemRow(it, active, { hover, select }, ui) {
-  const row = div({ className: `launch-item ${active ? 'active' : ''}` },
-    icon(it.icon, { size: 15 }),
-    span({ className: 'name' }, it.title),
-    it.detail ? span({ className: 'launch-detail' }, it.detail) : null,
-    it.badge ? span({ className: 'launch-kind' }, it.badge) : null,
-    // Everything you can do to a file, on the file. Rename, download, copy link and
-    // delete were all commands with no way to reach them: the palette's versions act on
-    // "the selection", and until the highlight became a selection there never was one.
-    it.menu
-      ? button({ className: 'launch-more', title: `Actions for ${it.title}`, $attrs: { 'aria-label': `Actions for ${it.title}` } }, icon('dots', { size: 14 }))
-        .on({ click: (e) => { e.stopPropagation(); openRowMenu(e.currentTarget, it, ui, null, select); } })
-      : null,
-  // One `.on()` call: a second replaces the handler map rather than merging into it,
-  // which is how adding `contextmenu` silently removed `click` and stopped every file
-  // in the drive from opening.
-  ).on({
-    click: it.run,
-    mouseenter: hover,
-    ...(it.menu ? { contextmenu: (e) => { e.preventDefault(); openRowMenu(e.currentTarget, it, ui, e, select); } } : {}),
-  });
-  return row;
-}
-
-// Anchor the menu to the row (or the pointer, when there was one) rather than to a
-// remembered click position, so the keyboard route lands somewhere sensible too.
-function openRowMenu(anchor, it, ui, event, select) {
-  const r = anchor?.getBoundingClientRect?.();
-  const x = event?.clientX ?? (r ? r.right - 8 : 0);
-  const y = event?.clientY ?? (r ? r.bottom : 0);
-  // Read the coordinates BEFORE selecting: selecting re-renders, and `anchor` is then
-  // a detached node whose rect is all zeroes.
-  const items = it.menu(ui);
-  select?.();
-  ui.platform.workbench.showContextMenu(x, y, items);
 }
 
 // Keep the drive's idea of "what is selected" in step with the highlighted row.

@@ -7,6 +7,8 @@
 //                  "match": { "ext": [".demo"] }, "entry": "src/openers/player.js" },
 //     "pdf":     { "type": "indexer",    "match": { "ext": [".pdf"] }, "entry": "src/indexers/pdf.js" },
 //     "tap":     { "type": "command",    "title": "Demo: Tap" },
+//     "gallery": { "type": "view",       "title": "Gallery", "icon": "grid",
+//                  "match": { "mime": ["image/*"] }, "entry": "src/views/gallery.js" },
 //     "status":  { "type": "statusItem", "slot": "right" },
 //     "busy":    { "type": "register",   "default": false },
 //     "keys":    { "type": "keymap",     "path": "keymaps/default.json" }
@@ -45,6 +47,19 @@ const TYPES = {
   indexer: {
     needsEntry: true,
     normalize: (c) => ({ title: c.title || null, match: normalizeMatch(c.match) }),
+  },
+  // How a list of items is DRAWN. An opener renders one file; a view renders the
+  // results — rows, a gallery of thumbnails, a map. The launcher offers whichever are
+  // registered and remembers the choice, so "grid view for images" is a contribution
+  // rather than an edit to the launcher.
+  //
+  // `match` is a hint, not a gate: a view that suits pictures says so and is offered
+  // first for a collection full of them, but nothing stops someone picking the list.
+  view: {
+    normalize: (c) => ({
+      title: c.title || null, icon: c.icon || null, priority: c.priority ?? 50,
+      match: normalizeMatch(c.match), when: c.when || null, offline: !!c.offline,
+    }),
   },
   // A slot in the status bar. The plugin pushes content into it at runtime; for now
   // the only content type is sanitized HTML.

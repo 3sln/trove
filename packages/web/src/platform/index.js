@@ -111,6 +111,10 @@ function registerDefaults(p) {
     // the opener switcher.
     { key: 'openers.associations', type: 'object', hidden: true, title: 'Default viewers',
       default: { '.md': 'core.markdown', '.markdown': 'core.markdown' } },
+    // How results are drawn (see ui/components/views). Hidden and with no default on
+    // purpose: unset means "you decide", and the launcher then offers the grid by itself
+    // for a collection full of pictures. Picking one in the switcher pins it.
+    { key: 'explorer.view', type: 'string', hidden: true, title: 'Results view' },
   ]);
 
   // --- the built-in keymap (commands themselves are registered in ../bl) -----

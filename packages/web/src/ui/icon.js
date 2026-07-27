@@ -44,6 +44,8 @@ const PATHS = {
   info: [{ d: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01' }],
   warn: [{ d: 'M12 3l9 16H3zM12 10v4M12 17h.01' }],
   x: [{ d: 'M6 6l12 12M18 6L6 18' }],
+  list: [{ d: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01' }],
+  grid: [{ d: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' }],
 };
 
 // Map a node to an icon name via the shared file-type classifier.
@@ -55,14 +57,17 @@ export function icon(name, { size = 18, strokeWidth = 1.6, className } = {}) {
   // resolves to a function and takes down the whole render with `specs.map is not a
   // function`.
   const specs = Object.hasOwn(PATHS, name) ? PATHS[name] : PATHS.file;
+  // `class` through `$attrs`, not `className`. An SVGElement's `className` is a
+  // read-only SVGAnimatedString, so the prop is written out as a literal `className="…"`
+  // attribute — which no selector matches. `.sheet-row .sr-go` was styling nothing.
   return svg(
     {
       $attrs: {
         viewBox: '0 0 24 24', width: size, height: size, fill: 'none',
         stroke: 'currentColor', 'stroke-width': strokeWidth,
         'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+        ...(className ? { class: className } : {}),
       },
-      className: className || '',
     },
     ...specs.map((s) => h('path', { $attrs: filterAttrs(s) })),
   );

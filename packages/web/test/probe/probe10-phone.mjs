@@ -87,6 +87,16 @@ const moreText = await page.locator('.sheet').innerText();
 for (const label of ['Settings', 'Notifications', 'Activity', 'Trash', 'All commands']) {
   check(`"${label}" is reachable from the overflow`, moreText.includes(label), moreText.replace(/\n/g, ' | '));
 }
+// An SVG's `className` is a read-only SVGAnimatedString, so a `className` prop on an
+// icon was written out as a literal `className="sr-go"` attribute — which no selector
+// matches, so `.sheet-row .sr-go` styled nothing. Nothing on screen looked wrong, so the
+// attribute itself is the only place it shows.
+const iconClasses = await page.evaluate(() => ({
+  junk: document.querySelectorAll('svg[classname]').length,
+  chevrons: document.querySelectorAll('.sheet-row svg.sr-go').length,
+}));
+check('an icon\'s class lands where CSS can see it', iconClasses.junk === 0 && iconClasses.chevrons >= 1,
+  JSON.stringify(iconClasses));
 // And it goes where it says.
 await page.getByText('Settings', { exact: false }).first().click();
 await page.waitForSelector('.settings', { timeout: 3000 }).catch(() => {});

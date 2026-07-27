@@ -54,11 +54,18 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
   your last choice is the default, and you can swap. Underneath is a real
   contribution system: commands, a command palette + quick-open, keybindings
   (chords, user overrides), when-clauses, schema-driven settings, and media openers.
-- **Media openers** — markdown (with live `trove:` links), text, image, audio,
-  video, and a full **audiobook player**
-  for `.m4b`: chapter list, cover art, rich metadata, variable speed, ±30s skip,
-  and **resumable progress** — chapters/metadata parsed straight from the MP4
-  boxes via HTTP Range reads (opening a 600 MB book is instant).
+- **Media openers** — markdown (with live `trove:` links), text, image, audio and
+  video. Deliberately plain: an opener is a contribution, so a richer player is
+  something a build or a plugin adds rather than something this one has to guess at.
+- **Views** — how the *results* are drawn is a contribution too. A list and a grid
+  ship; the switcher sits in the search box and remembers your choice, and a
+  collection that is mostly photographs opens as a grid without being asked. A gallery,
+  a map or a table is a `view` contribution, not a patch to the launcher — the
+  launcher still owns the items, the highlight and the keyboard, so every view
+  navigates the same way.
+- **Build your own drive** — `createWorkbench({ openers, views })` is the entry point,
+  so a bespoke or hosted build ships its own first-party openers and views through the
+  same registry plugins use. No fork of `@trove/web`.
 - **Sandboxed plugins** — plugins are **self-contained ZIP packages** (a
   `manifest.json`, an entry script, and any assets) installed by **URL or file
   upload** — no central catalogue. Each runs in a **hidden, sandboxed iframe on an

@@ -140,6 +140,23 @@ check('#tag filter finds tagged files drive-wide',
   tagHits.includes('welcome.md') && tagHits.includes('sailing.txt') && !tagHits.includes('notes.txt'), tagHits.join(', '));
 await shot('search-tagfilter');
 await page.locator('.launch-clear').click();
+await page.waitForTimeout(400);
+
+// ---- 7b. Look at the same drive a different way ------------------------------
+// The list and the grid are both `view` contributions; the switcher is in the search
+// box. Nothing about the results changes — same items, same highlight, same header
+// actions — which is the whole contract.
+await page.locator('.vs-btn[title="Grid view"]').click();
+await page.waitForTimeout(400);
+check('switching to the grid view redraws the same drive as tiles',
+  (await page.locator('.grid-tile').count()) >= 4 && (await page.locator('.launch-h .launch-up').count()) >= 1,
+  `${await page.locator('.grid-tile').count()} tiles`);
+await shot('view-grid');
+await page.locator('.vs-btn[title="List view"]').click();
+await page.waitForTimeout(400);
+// Un-pin it, so the rest of the walkthrough (and its screenshots) is the default drive.
+await page.evaluate(() => window.__trove.platform.settings.set('explorer.view', undefined));
+await page.waitForTimeout(300);
 
 // ---- 8. Command palette ------------------------------------------------------
 await page.keyboard.press('Control+Shift+KeyP');
