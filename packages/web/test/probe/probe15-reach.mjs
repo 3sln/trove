@@ -70,6 +70,19 @@ const body = await page.$eval('.dialog', (e) => e.textContent);
 check('deleting asks first, and says what actually happens', /trash/i.test(body), body.slice(0, 90));
 check('and names the file', body.includes('doomed.txt'), body.slice(0, 90));
 
+// The two checks above passed for months while this dialog rendered ONE WORD PER
+// LINE. `.body` is also the shell's rail+main grid class, so the prose was landing
+// in a 52px column — the text was correct, and every assertion that reads innerText
+// is blind to that. A layout defect needs a geometric assertion, so: measure it.
+const prose = await page.$eval('.dialog .body', (e) => {
+  const cs = getComputedStyle(e);
+  const r = e.getBoundingClientRect();
+  return { display: cs.display, height: r.height, width: r.width, lineHeight: parseFloat(cs.lineHeight) || 20 };
+});
+check('the dialog\'s prose lays out as prose, not one word per line',
+  prose.height <= prose.lineHeight * 4, JSON.stringify(prose));
+check('and it uses the width the dialog gives it', prose.width > 200, String(Math.round(prose.width)));
+
 await page.click('.dialog .btn.primary');
 await page.waitForTimeout(700);
 const after = await rowNames();

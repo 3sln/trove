@@ -497,7 +497,11 @@ kbd {
   border-radius: 12px; box-shadow: var(--shadow); z-index: 50; padding: 20px; animation: pop .13s var(--ease);
 }
 .dialog h3 { margin: 0 0 12px; font-size: 16px; }
-.dialog .body { color: var(--text-dim); line-height: 1.5; margin-bottom: 16px; }
+/* `display: block` because `.body` is ALSO the shell's rail+main grid (see above),
+   and that rule matches in here too. A dialog's prose was landing in a column sized
+   to the activity rail — 52px — so every confirmation rendered one word per line.
+   The text was right, which is why nothing that reads innerText ever noticed. */
+.dialog .body { display: block; color: var(--text-dim); line-height: 1.5; margin-bottom: 16px; }
 .dialog .row-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 /* Opener chooser */
