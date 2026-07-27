@@ -53,14 +53,15 @@ export default function workbench({ engine, app, platform, plugins }) {
       app.offline.observe(),
       app.activity.observe(),
       platform.viewport.observe(),
+      platform.voice.observe(),
       bump,
     ],
     // `_bump` is IN the snapshot, unlike before. `watch` skips a render whose value is
     // shallow-equal to the last one, so a forced re-render that left no trace in the
     // object would be discarded as "nothing changed" — which is the opposite of what
     // asking for one means.
-    (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, _bump) =>
-      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, _bump }),
+    (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, voice, _bump) =>
+      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, voice, _bump }),
   );
 
   return alias(() => watch(combined, (state) => view(state, ui)));

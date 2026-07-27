@@ -17,6 +17,7 @@ import { PluginHost } from './pluginHost.js';
 import { WorkbenchService } from './workbench.js';
 import { ViewportService } from './viewport.js';
 import { SpatialNavigationService } from './spatialNav.js';
+import { VoiceSearchService } from './voiceSearch.js';
 
 /**
  * The bearer token for this browser, if any.
@@ -61,11 +62,14 @@ export function createPlatform({ baseUrl = '' } = {}) {
   const viewport = new ViewportService({ settings, context });
   // Arrow keys → geometry, but only on a TV. Inert everywhere else.
   const spatialNav = new SpatialNavigationService({ workbench, viewport });
+  // Speak to search. Mostly this just puts the search field under the remote's mic —
+  // see voiceSearch.js for why that is the whole feature on a TV.
+  const voice = new VoiceSearchService({ workbench, notifications, settings });
 
   const platform = {
     reactive,
     contributions, context, commands, keybindings, settings, notifications, api, workbench,
-    viewport, spatialNav,
+    viewport, spatialNav, voice,
     capabilities: null,
     openPluginPanel: null, // set by the workbench UI
   };
@@ -126,6 +130,10 @@ function registerDefaults(p) {
       { key: 'escape', command: 'workbench.closeOverlays' },
       { key: 'f5', command: 'explorer.refresh' },
       { key: 'mod+shift+i', command: 'workbench.toggleInfoPanel' },
+      // Some remotes and keyboards send a dedicated search key; where they do, it lands
+      // on the one command that opens the search field ready for dictation.
+      { key: 'mod+shift+v', command: 'search.voice' },
+      { key: 'browsersearch', command: 'search.voice' },
     ],
   });
 }

@@ -43,6 +43,10 @@ effect(platform.settings.observe(), () => applyTheme());
 // Watch the window so rotating a phone, or dragging a desktop window narrow, re-picks
 // the shell. Also stamps data-layout on <html> for the CSS half of the same decision.
 platform.viewport.install();
+// Ask once whether this browser can transcribe on-device, so the launcher knows
+// whether to offer a microphone. Nothing is downloaded and no permission is requested
+// — see platform/voice.js.
+platform.voice.refresh().catch(() => {});
 // Remote-control navigation, which switches itself on and off with the TV layout.
 platform.spatialNav.install();
 

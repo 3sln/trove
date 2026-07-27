@@ -6,6 +6,7 @@
 import {
   NavigateAction, RefreshAction, DeleteAction, RenameAction,
   UploadFilesAction, OpenFileAction, CreateCollectionAction, LoadMoreAction, TrashAction,
+  SearchAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri } from '@trove/core/links.js';
@@ -24,6 +25,26 @@ export function registerCommands(app) {
   cmd('workbench.view.plugins', 'Show Plugins', () => workbench.setActivity('plugins'), { category: 'View' });
   cmd('workbench.openSettings', 'Open Settings', () => workbench.setActivity('settings'), { category: 'Preferences', icon: 'gear' });
   cmd('workbench.closeOverlays', 'Close', () => workbench.closeOverlays(), { palette: false });
+
+  // Speak to search.
+  //
+  // On a TV this is mostly NOT about recognising anything: a remote's mic dictates into
+  // whatever text field the platform keyboard is attached to, and is swallowed by the
+  // system assistant when there isn't one. So the command's first job is to put the
+  // search field on screen and focused, which is a feature on every TV whether or not
+  // the browser can transcribe. Where it can — on-device only, see platform/voice.js —
+  // it also starts listening and types what it hears.
+  cmd('search.voice', 'Search by Voice', async () => {
+    await platform.voice.run({
+      onText: (text, { final }) => {
+        if (!text) return;
+        workbench.setLaunchQuery(text);
+        // Interim results keep the box in step with the speaker; only the settled
+        // transcript is worth a round trip to the server.
+        if (final) go(new SearchAction(text));
+      },
+    });
+  }, { category: 'View', icon: 'search' });
 
   // --- background work + standing problems -----------------------------------
   cmd('workbench.showActivity', 'Show Activity (running work & problems)',

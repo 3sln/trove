@@ -107,6 +107,16 @@ export default function launcher(state, ui, opts = {}) {
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
         .on({ click: () => clearSearch(ui) }) : null,
+      // Only where the browser can transcribe WITHOUT sending audio anywhere. A remote's
+      // own mic needs no button from us — it dictates into this field once it is focused,
+      // which is what `search.voice` is really for.
+      ui.platform.voice?.canListen()
+        ? button({
+          className: `launch-mic ${state.voice?.listening ? 'on' : ''}`,
+          title: state.voice?.listening ? 'Stop listening' : 'Search by voice',
+          'aria-pressed': state.voice?.listening ? 'true' : 'false',
+        }, icon('mic', { size: 15 })).on({ click: () => ui.exec('search.voice') })
+        : null,
     ),
     showResolved ? resolvedBar(resolved) : null,
     div({ className: 'launch-body' },
