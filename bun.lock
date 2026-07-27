@@ -37,7 +37,7 @@
       "name": "@trove/web",
       "version": "0.0.1",
       "dependencies": {
-        "@3sln/dodo": "github:3sln/dodo#3ba40d828a5682b8f23f9297aa2605eaf63f93c0",
+        "@3sln/dodo": "^0.0.10",
         "@3sln/ngin": "github:3sln/ngin#d77f51511cff1d24ce8ceede5f0844e06ef25d35",
         "@trove/plugin-sdk": "0.0.1",
         "es-module-lexer": "^1.7.0",
@@ -51,7 +51,7 @@
     },
   },
   "packages": {
-    "@3sln/dodo": ["@3sln/dodo@github:3sln/dodo#3ba40d8", {}, "3sln-dodo-3ba40d8", "sha512-M0M92U0bUX7MV2sG4J+RZDwevs4Uo9fmmnPPhFITtU1HhNlNLECjHFILUpYsW5P7JR/m5sZAopFxV9iIx+o/iA=="],
+    "@3sln/dodo": ["@3sln/dodo@0.0.10", "", {}, "sha512-bkZPspzCby0Q1PoRtXAoNcqQFTK0tNEddLxpGC1FaKXXfffUwJfkw1bXxWUxPQEtddlgW7r16c/myhcXnPHURg=="],
 
     "@3sln/ngin": ["@3sln/ngin@github:3sln/ngin#d77f515", {}, "3sln-ngin-d77f515", "sha512-dijZkEnfi8ILOC5SAJ6MB6m7XNTtpghY/6HjKzTX1PtahL57rSS2B9hrO3CH4N4XiGC4ULPkL7p3LYP7c2hnkg=="],
 

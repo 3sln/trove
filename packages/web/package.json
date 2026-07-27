@@ -9,7 +9,7 @@
     "test:browser": "web-test-runner --config web-test-runner.config.mjs"
   },
   "dependencies": {
-    "@3sln/dodo": "github:3sln/dodo#3ba40d828a5682b8f23f9297aa2605eaf63f93c0",
+    "@3sln/dodo": "^0.0.10",
     "@3sln/ngin": "github:3sln/ngin#d77f51511cff1d24ce8ceede5f0844e06ef25d35",
     "@trove/plugin-sdk": "0.0.1",
     "es-module-lexer": "^1.7.0",
