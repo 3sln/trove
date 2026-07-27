@@ -209,13 +209,15 @@ export function createRouter() {
 
   // --- collections -----------------------------------------------------------
 
-  r.get('/api/collections', ['collections'], async ({ collections, principal }) => {
-    if (!collections) return { collections: [{ id: 'default', name: 'My Drive', capabilities: ['read', 'write', 'delete', 'admin'] }] };
+  r.get('/api/collections', ['collections'], async (ctx) => {
+    const { collections, principal } = ctx;
+    if (!collectionsEnabled(ctx)) return { collections: [{ id: 'default', name: 'My Drive', capabilities: ['read', 'write', 'delete', 'admin'] }] };
     return { collections: await collections.list(principal), canCreate: collections.canCreate(principal) };
   });
 
-  r.get('/api/collections/:id', ['collections'], async ({ collections, principal, params }) => {
-    if (!collections) return { collection: { id: 'default', name: 'My Drive' } };
+  r.get('/api/collections/:id', ['collections'], async (ctx) => {
+    const { collections, principal, params } = ctx;
+    if (!collectionsEnabled(ctx)) return { collection: { id: 'default', name: 'My Drive' } };
     const c = await collections.assert(principal, params.id, 'read');
     return { collection: collections.describe(c, principal) };
   });
@@ -946,7 +948,12 @@ async function assertContributorOwned(ctx, contributorId) {
   if (!parsed || parsed.domain === CORE_DOMAIN) {
     throw TroveError.forbidden(`"${contributorId}" is not a namespace you can contribute to`);
   }
-  if (!ctx.plugins) return; // plugin service disabled → no install records to check against
+  // No presence check. `plugins` is always built — there is no configuration that
+  // switches it off — so `if (!ctx.plugins) return` guarded a condition that could
+  // not occur, and the only thing it ever did was fail OPEN when the wiring was
+  // wrong: this check silently became a no-op and any authenticated caller could
+  // contribute under any vendor's name. Enforcement decides from configuration,
+  // never from whether an object happens to be here; a missing service throws.
   // The namespace is only unforgeable if we check that the plugin is actually installed.
   // `assertCapability` alone allows when there is no install record (transitional, for
   // device-installed plugins), which made "unforgeable" false in the shipped default:
@@ -964,13 +971,24 @@ async function assertContributorOwned(ctx, contributorId) {
  * "no matches" while matches they can see sit just past the cut.
  */
 async function readableCollectionIds(ctx, narrowTo) {
-  if (!ctx.collections) return undefined;
+  if (!collectionsEnabled(ctx)) return undefined;
   const readable = (await ctx.collections.list(ctx.principal)).map((c) => c.id);
   return narrowTo ? readable.filter((id) => id === narrowTo) : readable;
 }
 
+/**
+ * Whether this deployment has an ACL layer at all.
+ *
+ * Read from configuration, not from whether `ctx.collections` is truthy. The two
+ * agree when everything is wired correctly, and diverge exactly when it is not —
+ * and a security check that stands down because a service is missing is one that
+ * stops enforcing at the worst possible moment. Configuration says whether to
+ * enforce; the service does the enforcing, and if it is absent this throws.
+ */
+const collectionsEnabled = (ctx) => ctx.config?.collections !== false;
+
 async function assertCap(ctx, collectionId, capability) {
-  if (!ctx.collections) return; // collections disabled → no per-collection ACL
+  if (!collectionsEnabled(ctx)) return; // no ACL layer configured
   await ctx.collections.assert(ctx.principal, collectionId, capability);
 }
 
@@ -980,11 +998,15 @@ async function assertCap(ctx, collectionId, capability) {
  * CollectionService.hasWholeDrive for why this isn't plain `isAdmin`.
  */
 async function requireWholeDrive(ctx, what) {
-  const allowed = ctx.collections ? await ctx.collections.hasWholeDrive(ctx.principal) : !!ctx.principal;
+  const allowed = collectionsEnabled(ctx)
+    ? await ctx.collections.hasWholeDrive(ctx.principal)
+    : !!ctx.principal;
   if (!allowed) throw TroveError.forbidden(`You do not have permission to ${what}`);
 }
 const canWholeDrive = (ctx) =>
-  (ctx.collections ? ctx.collections.hasWholeDrive(ctx.principal) : Promise.resolve(!!ctx.principal));
+  (collectionsEnabled(ctx)
+    ? ctx.collections.hasWholeDrive(ctx.principal)
+    : Promise.resolve(!!ctx.principal));
 
 /**
  * Who may act on an issue: whoever may act on the thing it is about.
