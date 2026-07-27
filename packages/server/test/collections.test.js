@@ -152,3 +152,23 @@ test('a read-only user cannot add OR remove tags (tag DELETE is write-gated)', a
   const boss2 = await api(handle, 'GET', `/api/items/resolve?id=${id}`, { token: boss });
   expect(boss2.json.node.tags?.fav).toBe('yes');
 });
+
+test('capabilities reports the STORE of the collection asked about', async () => {
+  // The client picks its upload strategy from this. Reporting the default
+  // collection's backend for a request about another one hands it the wrong plan —
+  // and reading a collection's configuration needs `read` on that collection.
+  const { handle } = await adminServer();
+  const boss = await mint({ sub: 'boss' });
+  const outsider = await mint({ sub: 'outsider' });
+  const created = await api(handle, 'POST', '/api/collections', {
+    token: boss, body: { name: 'Vault', store: { driver: 'memory' } },
+  });
+  const cid = created.json.collection.id;
+
+  const own = await api(handle, 'GET', `/api/capabilities?collection=${cid}`, { token: boss });
+  expect(own.status).toBe(200);
+  expect(own.json.collection).toBe(cid);
+  expect(own.json.storage.multipart).toBe(true);
+
+  expect((await api(handle, 'GET', `/api/capabilities?collection=${cid}`, { token: outsider })).status).toBe(403);
+});

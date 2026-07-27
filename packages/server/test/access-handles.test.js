@@ -25,6 +25,58 @@ async function drive(extra = {}) {
 
 const lease = (server, deps) => server.engineContainer.use(deps, (r) => r);
 
+const methodsOf = (handle) =>
+  Object.keys(handle).filter((k) => typeof handle[k] === 'function').sort();
+
+// --- the whole surface, written down ----------------------------------------
+//
+// A method under the wrong capability is silent: the handle simply lacks it, and
+// nothing says so until a route calls it. That is how `listTrash` shipped under
+// `read` while every trash route asks for `delete` — GET /api/trash threw
+// "listTrash is not a function" in a browser, not in a test.
+//
+// So the surface is pinned. Adding a method means adding it here, which means
+// deciding which grant it belongs to instead of defaulting into one.
+
+const NODE_SURFACE = {
+  read: ['backlinks', 'download', 'read', 'subscribe', 'unsubscribe', 'view'],
+  write: ['comment', 'contribute', 'deleteComment', 'editComment', 'react', 'removeTag', 'rename', 'setTag'],
+  delete: ['remove', 'restore'],
+};
+const COLLECTION_SURFACE = {
+  read: ['list', 'storage', 'usage'],
+  write: ['createUpload', 'writeFile'],
+  delete: ['listTrash', 'purgeTrash'],
+};
+
+for (const [capability, expected] of Object.entries(NODE_SURFACE)) {
+  test(`a node handle for "${capability}" has exactly its own methods`, async () => {
+    const { server, item } = await drive();
+    const { node } = await lease(server, { node: { id: item.id, capability } });
+    expect(methodsOf(node)).toEqual([...expected].sort());
+    await server.close();
+  });
+}
+
+for (const [capability, expected] of Object.entries(COLLECTION_SURFACE)) {
+  test(`a collection handle for "${capability}" has exactly its own methods`, async () => {
+    const { server } = await drive();
+    const { collection } = await lease(server, { collection: { id: 'default', capability } });
+    expect(methodsOf(collection)).toEqual([...expected].sort());
+    await server.close();
+  });
+}
+
+test('admin is the union, and the system grant matches it', async () => {
+  const { server, item } = await drive();
+  const all = Object.values(NODE_SURFACE).flat().sort();
+  const { node } = await lease(server, { node: { id: item.id, capability: 'admin' } });
+  expect(methodsOf(node)).toEqual(all);
+  const { systemNode } = await lease(server, { systemNode: { id: item.id } });
+  expect(methodsOf(systemNode)).toEqual(all);
+  await server.close();
+});
+
 // --- the grant determines what exists ---------------------------------------
 
 test('a read handle has no way to destroy anything', async () => {

@@ -90,18 +90,21 @@ function nodeHandle(vfs, sidecar, node, held) {
     granted,
   };
 
-  if (permits('read')) {
-    handle.read = (opts) => vfs.readStream(node.id, opts);
-    handle.download = (opts) => vfs.getDownload(node.id, opts);
-    handle.backlinks = (opts) => vfs.backlinks(node.id, opts);
-  }
   // Conversations and tags live in the sidecar, not the vfs — but they are still
   // operations ON THIS NODE, so the same grant has to reach them. Fronting only
   // the vfs would have left eight routes asserting a capability and then working
   // through an unrestricted service, which is the shape this exists to remove.
-  handle.view = () => requireSidecar(sidecar).view(node.id);
-  handle.subscribe = (principal, muted) => requireSidecar(sidecar).subscribe(node.id, principal, muted);
-  handle.unsubscribe = (principal) => requireSidecar(sidecar).unsubscribe(node.id, principal);
+  //
+  // Reading a file's conversation is reading the file: the comments on it are as
+  // much its content as its bytes are.
+  if (permits('read')) {
+    handle.read = (opts) => vfs.readStream(node.id, opts);
+    handle.download = (opts) => vfs.getDownload(node.id, opts);
+    handle.backlinks = (opts) => vfs.backlinks(node.id, opts);
+    handle.view = () => requireSidecar(sidecar).view(node.id);
+    handle.subscribe = (principal, muted) => requireSidecar(sidecar).subscribe(node.id, principal, muted);
+    handle.unsubscribe = (principal) => requireSidecar(sidecar).unsubscribe(node.id, principal);
+  }
 
   if (permits('write')) {
     handle.rename = (newName) => vfs.rename(node.id, newName);
@@ -138,7 +141,6 @@ function collectionHandle(vfs, collectionId, held) {
     handle.list = (opts) => vfs.list(collectionId, opts);
     handle.usage = () => vfs.storageUsage(collectionId);
     handle.storage = () => vfs.storageFor(collectionId);
-    handle.listTrash = (opts) => vfs.listTrash(collectionId, opts);
   }
 
   if (permits('write')) {
@@ -147,6 +149,10 @@ function collectionHandle(vfs, collectionId, held) {
   }
 
   if (permits('delete')) {
+    // The trash follows `delete`, not `read`. Seeing what you deleted and undoing it
+    // are not lesser rights than deleting — and its contents are items that are no
+    // longer part of the drive, which a reader has no business enumerating.
+    handle.listTrash = (opts) => vfs.listTrash(collectionId, opts);
     // Scoped by listing THIS collection's trash and destroying those rows.
     //
     // `vfs.purgeTrash` is the retention sweeper: it takes `{ before, limit }` and no
