@@ -7,8 +7,14 @@
   "exports": {
     ".": "./src/index.js",
     "./adapters/node.js": "./src/adapters/node.js",
-    "./adapters/worker.js": "./src/adapters/worker.js"
+    "./adapters/bun.js": "./src/adapters/bun.js",
+    "./adapters/worker.js": "./src/adapters/worker.js",
+    "./adapters/worker-tasks.js": "./src/adapters/worker-tasks.js",
+    "./package.json": "./package.json"
   },
+  "files": [
+    "src/"
+  ],
   "dependencies": {
     "@trove/core": "0.0.1"
   },

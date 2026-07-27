@@ -11,9 +11,9 @@ import http from 'node:http';
 import fs, { readFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
+import { findWebDist } from './webDist.js';
 
 // A JWKS held in a file rather than inlined in the environment: multi-line JSON is
 // awkward in env vars and shows up in `docker inspect`, while a mounted secret file
@@ -29,9 +29,9 @@ if (process.env.TROVE_JWT_JWKS_FILE && !process.env.TROVE_JWT_JWKS) {
 const PORT = Number(process.env.TROVE_PORT || process.env.PORT || 8787);
 const HOST = process.env.TROVE_HOST || process.env.HOST || '0.0.0.0';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Built web assets (packages/web/dist) if the app has been built.
-const WEB_DIST = process.env.TROVE_WEB_DIST || path.resolve(__dirname, '../../../web/dist');
+// Built web assets, if the app has been built — see webDist.js for why this is a
+// resolution rather than a relative path.
+const { dir: WEB_DIST, source: WEB_DIST_SOURCE } = findWebDist();
 
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
@@ -89,7 +89,7 @@ async function writeWebResponse(res, webRes) {
   }
 }
 
-const hasWeb = fs.existsSync(WEB_DIST);
+const hasWeb = !!WEB_DIST;
 const envConfig = configFromEnv();
 warnOnOpenAccess(envConfig);
 const { handle, close } = await createServer({
@@ -110,7 +110,7 @@ const server = http.createServer(async (nodeReq, nodeRes) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Trove server on http://${HOST}:${PORT}  (web assets: ${hasWeb ? WEB_DIST : 'none — run npm run build:web'})`);
+  console.log(`Trove server on http://${HOST}:${PORT}  (web assets: ${hasWeb ? WEB_DIST : `none — ${WEB_DIST_SOURCE}; run npm run build:web`})`);
 });
 
 // Graceful shutdown: stop accepting connections, then flush notifications, dispose

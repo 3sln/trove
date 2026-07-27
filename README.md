@@ -440,7 +440,7 @@ the same values as config fields instead.
 | `TROVE_MAX_JSON_BYTES` | `4 MiB` | JSON body cap (uploads stream, so bound those at the proxy) |
 | `TROVE_MAX_PAGE` | `1000` | ceiling on any client-supplied `limit` |
 | `TROVE_PORT` / `TROVE_HOST` | `8787` / `0.0.0.0` | |
-| `TROVE_WEB_DIST` | `packages/web/dist` | built web app to serve |
+| `TROVE_WEB_DIST` | resolved from `@trove/web` | built web app to serve; unset serves API only |
 | `TROVE_CORS_ORIGIN` | off | `*` or an allowlist; the app is same-origin (MCP follows it too) |
 | `TROVE_PUBLIC_URL` | detected | the drive's public origin, for sign-in discovery |
 | `TROVE_TRUST_PROXY` | `false` | honour `X-Forwarded-Proto/Host` — only behind a real proxy |

@@ -14,7 +14,8 @@
     "./metadata/*": "./src/metadata/*",
     "./search/*": "./src/search/*",
     "./indexers/*": "./src/indexers/*",
-    "./plugins/*": "./src/plugins/*"
+    "./plugins/*": "./src/plugins/*",
+    "./package.json": "./package.json"
   },
   "files": [
     "src/"
