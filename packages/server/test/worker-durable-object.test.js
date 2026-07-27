@@ -195,3 +195,42 @@ test('the cron slice runs inside the object, not the isolate that received it', 
   expect(Array.isArray(await edge.tasks.list({}))).toBe(true);
   await state.settle();
 });
+
+// --- the HTTP surface, against a registry that lives somewhere else ----------------
+
+test('every task-shaped answer over HTTP survives the registry being remote', async () => {
+  // The failure this class of bug has: a registry call that is not awaited. In one
+  // process `list()` returns an array and nothing notices; against the object it
+  // returns a promise, which `JSON.stringify` renders as `{}`. The client adopts an
+  // empty task list and the work it just started disappears from the UI.
+  //
+  // So every route that reports tasks is driven here through the REMOTE registry, and
+  // the shape of what comes back over the wire is what is checked.
+  const { edge, state } = await drive({ objects: 3 });
+  const json = async (path, init) => {
+    const res = await edge.handle(new Request(`http://t${path}`, init));
+    return { status: res.status, body: await res.json() };
+  };
+
+  const started = await json('/api/collections/default/scan', { method: 'POST' });
+  expect(started.status).toBe(200);
+  expect(started.body.task?.kind).toBe('scan');
+
+  const listed = await json('/api/tasks');
+  expect(Array.isArray(listed.body.tasks)).toBe(true);
+  expect(listed.body.tasks.map((t) => t.id)).toContain(started.body.task.id);
+
+  // The retry route hands the task list back so a client can adopt it without a round
+  // trip — an unawaited promise here is silently `{}`.
+  const issue = await edge.issues.raise({
+    kind: 'reindex-node',
+    title: 'x could not be indexed',
+    collectionId: 'default',
+    retry: { nodeId: 'nope' },
+  });
+  const retried = await json(`/api/issues/${issue.id}/retry`, { method: 'POST' });
+  expect(retried.status).toBe(200);
+  expect(Array.isArray(retried.body.tasks)).toBe(true);
+
+  await state.settle();
+});

@@ -360,7 +360,13 @@ export function coreProviders(config, lifecycleState) {
           indexers: r.indexerRuntime
             ? new PluginIndexers({ vfs: r.vfs, runtime: r.indexerRuntime, packages: r.packageStore })
             : null,
-          isAdmin: (principal) => (r.collections ? r.collections.isAdmin(principal) : !!principal),
+          // Who may install a plugin. With no ACL layer configured there is no admin
+          // list to consult and any authenticated caller qualifies — decided from
+          // config, not from whether `collections` happens to be here, so a graph that
+          // failed to build cannot silently promote everyone.
+          isAdmin: (principal) => (config.collections === false
+            ? !!principal
+            : r.collections.isAdmin(principal)),
           maxPackageBytes: config.maxUploadBytes ?? undefined,
           strict: config.enforcePluginCaps === true,
         });

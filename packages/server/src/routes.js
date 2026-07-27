@@ -530,7 +530,10 @@ export function createRouter() {
     // so being allowed to retry one issue must not hand back the drive-wide list.
     return {
       ok: true,
-      tasks: ctx.tasks.list({
+      // Awaited, like every other call through `ctx.tasks`. Where the registry is a
+      // Durable Object this returns a promise, and an unawaited one serialises to `{}`
+      // — a client that adopted "the new task list" would replace it with nothing.
+      tasks: await ctx.tasks.list({
         collectionIds: await readableCollectionIds(ctx),
         includeGlobal: await canWholeDrive(ctx),
       }),
