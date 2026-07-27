@@ -27,7 +27,7 @@ export function dialog(state, ui) {
       d.body ? div({ className: 'body' }, d.body) : null,
       d.kind === 'prompt'
         ? div({ className: 'field' },
-            d.label ? span({ $styling: { fontSize: '12px', color: 'var(--text-dim)' } }, d.label) : null,
+            d.label ? span({ $styling: { 'font-size': '12px', color: 'var(--text-dim)' } }, d.label) : null,
             input({ className: 'input', value: d.value ?? '', placeholder: d.placeholder || '', autofocus: true })
               .on({
                 input: (e) => { value = e.target.value; },
@@ -108,7 +108,7 @@ function collectionDialog(d, ui) {
     if (form.driver === 'filesystem' && form.prefix) store.prefix = form.prefix;
     d.onSubmit?.({ name: form.name, description: form.description, store });
   };
-  const field = (lbl, k, ph = '') => div({ className: 'field', $styling: { marginBottom: '10px' } },
+  const field = (lbl, k, ph = '') => div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
     label(lbl), input({ className: 'input', placeholder: ph }).on({ input: set(k) }));
   return div({},
     div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
@@ -116,7 +116,7 @@ function collectionDialog(d, ui) {
       h3('New collection'),
       div({ className: 'body' }, 'A collection is a backing store you own. Configure where its files live.'),
       field('Name', 'name', 'Team Vault'),
-      div({ className: 'field', $styling: { marginBottom: '10px' } },
+      div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
         label('Backing store'),
         select({ className: 'input' },
           option({ value: 'filesystem', selected: form.driver === 'filesystem' }, 'Filesystem / NAS'),
@@ -132,7 +132,7 @@ function collectionDialog(d, ui) {
   );
 }
 function storeFields(form, set) {
-  const f = (lbl, k, ph = '', type = 'text') => div({ className: 'field', $styling: { marginBottom: '10px' } },
+  const f = (lbl, k, ph = '', type = 'text') => div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
     label(lbl), input({ className: 'input', placeholder: ph, type, autocomplete: 'off' }).on({ input: set(k) }));
   if (form.driver === 'filesystem') return div({}, f('Root directory', 'root', './data/team'), f('Prefix (optional)', 'prefix'));
   if (form.driver === 's3') {
@@ -145,7 +145,7 @@ function storeFields(form, set) {
       f('Secret access key', 'secretAccessKey', '', 'password'),
     );
   }
-  return div({ className: 'body', $styling: { fontSize: '12px' } }, 'Ephemeral — data is lost on restart. Good for testing.');
+  return div({ className: 'body', $styling: { 'font-size': '12px' } }, 'Ephemeral — data is lost on restart. Good for testing.');
 }
 
 // ---- Context menu ----------------------------------------------------------
@@ -207,7 +207,7 @@ export function transferTray(state, ui) {
   return div({ className: 'tray' },
     div({ className: 'head' },
       icon('upload', { size: 14 }),
-      span({ $styling: { marginLeft: '6px' } }, 'Transfers'),
+      span({ $styling: { 'margin-left': '6px' } }, 'Transfers'),
       div({ className: 'actions' },
         button({ className: 'iconbtn', title: 'Clear finished' }, icon('check', { size: 14 }))
           .on({ click: () => ui.app.transfers.clearDone() }),
@@ -225,8 +225,8 @@ export function transferTray(state, ui) {
           ),
           t.status === 'active'
             ? div({ className: 'progress' }, div({ $styling: { width: `${Math.round(t.ratio * 100)}%` } }))
-            : t.error ? div({ $styling: { fontSize: '11px', color: 'var(--danger)', marginTop: '4px' } }, t.error) : null,
-          t.status === 'active' ? div({ className: 'pct', $styling: { marginTop: '4px' } }, `${bytes(t.loaded)} / ${bytes(t.total)}`) : null,
+            : t.error ? div({ $styling: { 'font-size': '11px', color: 'var(--danger)', 'margin-top': '4px' } }, t.error) : null,
+          t.status === 'active' ? div({ className: 'pct', $styling: { 'margin-top': '4px' } }, `${bytes(t.loaded)} / ${bytes(t.total)}`) : null,
         ).key(t.id),
       ),
     ),

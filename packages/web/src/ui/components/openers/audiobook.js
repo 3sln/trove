@@ -202,7 +202,7 @@ function coverPane(s, ctrl, curCh) {
       m.narrator ? div({ className: 'narrator' }, 'Narrated by ' + m.narrator) : null,
       s.chapters.length ? div({ className: 'narrator' }, `${s.chapters.length} chapters`) : null,
     ),
-    s.error ? div({ $styling: { color: 'var(--danger)', fontSize: '12px' } }, s.error) : null,
+    s.error ? div({ $styling: { color: 'var(--danger)', 'font-size': '12px' } }, s.error) : null,
     transport(s, ctrl, curCh),
   );
 }
@@ -210,7 +210,7 @@ function coverPane(s, ctrl, curCh) {
 function transport(s, ctrl, curCh) {
   const chapter = s.chapters[curCh];
   return div({ className: 'transport' },
-    chapter ? div({ $styling: { textAlign: 'center', fontSize: '12px', color: 'var(--text-dim)' } }, chapter.title) : null,
+    chapter ? div({ $styling: { 'text-align': 'center', 'font-size': '12px', color: 'var(--text-dim)' } }, chapter.title) : null,
     div({ className: 'scrub' },
       span({ className: 'time' }, duration(s.current)),
       input({
@@ -226,7 +226,7 @@ function transport(s, ctrl, curCh) {
       button({ className: 'skip', title: 'Forward 30s' }, icon('fwd-30', { size: 20 })).on({ click: () => ctrl.skip(30) }),
       button({ className: 'skip', title: 'Next chapter' }, icon('skip-forward', { size: 18 })).on({ click: () => ctrl.nextChapter() }),
     ),
-    div({ $styling: { display: 'flex', justifyContent: 'center' } },
+    div({ $styling: { display: 'flex', 'justify-content': 'center' } },
       button({ className: 'rate', title: 'Playback speed' }, `${s.rate}×`).on({ click: () => ctrl.cycleRate() }),
     ),
   );

@@ -90,6 +90,15 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+/* No grey flash on tap. Mobile WebKit and Chrome paint a translucent block over any
+   element it considers clickable the moment a finger lands on it — a rectangle that
+   ignores border-radius, so a round icon button flashes square, and a row flashes
+   before its own :active styling has a chance to say anything. Every control here
+   already answers a press with its own hover/active vocabulary, so the browser's
+   version is a second, uglier one. Set on the elements themselves rather than just
+   the root: the property inherits, but a UA stylesheet rule on buttons and links
+   overrides an inherited value. */
+* , *::before, *::after { -webkit-tap-highlight-color: transparent; }
 body {
   font-family: var(--font-ui);
   font-size: 13px;
@@ -752,6 +761,9 @@ kbd {
 .ip-file .ip-name { font-weight: 600; }
 .ip-file .ip-path { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
 .ip-section { padding: 12px; border-bottom: 1px solid var(--border); }
+/* A divider separates two sections. The last one has nothing under it but the panel's
+   empty tail, so its rule was a line drawn across open space. */
+.ip-body > :last-child { border-bottom: 0; }
 .ip-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); margin-bottom: 9px; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 4px 3px 9px; border-radius: 14px; background: var(--bg-selected); border: 1px solid var(--border); font-size: 12px; }
@@ -1191,6 +1203,51 @@ kbd {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
 }
+
+/* ONE indicator, not two. The rule above is a blanket over every focusable element, and
+   the base stylesheet spent its whole focus section REPLACING rings with each control's
+   own vocabulary — a field whose box lights up, a row that gets an accent edge. Stacked,
+   both drew: the search box showed its lit border AND a hard rectangle around the input
+   sitting inside it, and the selected row showed its accent edge AND a ring.
+
+   On a TV the ring wins — it is what carries three metres — so the bespoke indicators
+   stand down here rather than the other way round. Each control gets exactly one. */
+.shell.tv .launch-item:focus-visible,
+.shell.tv .sheet-row:focus-visible,
+.shell.tv .inbox-item:focus-visible,
+.shell.tv .activitybar .item:focus-visible,
+.shell.tv .activitybar .brand-mark:focus-visible,
+.shell.tv .statusbar .seg:focus-visible,
+.shell.tv .pb-tab:focus-visible,
+.shell.tv .btn:focus-visible,
+.shell.tv .iconbtn:focus-visible,
+.shell.tv .act-action:focus-visible,
+.shell.tv .launch-clear:focus-visible,
+.shell.tv .vn-back:focus-visible,
+.shell.tv .c-link:focus-visible,
+.shell.tv .react:focus-visible,
+.shell.tv .lh-example:focus-visible,
+.shell.tv .kbd-edit:focus-visible { box-shadow: none; }
+/* The rail's accent bar is the "active" mark; letting focus draw one too put a second
+   bar beside the ring. */
+.shell.tv .activitybar .item:focus-visible::before { content: none; }
+
+/* The search box is the control; the input inside it is not. The base rule already says
+   so (`.launch-input:focus-visible { outline: none }`) and the blanket above out-specified
+   it, which is where the inner rectangle came from. Ring the box, and drop its halo so
+   the ring is not doubled by a glow 3px underneath it. */
+.shell.tv .launch-input:focus,
+.shell.tv .launch-input:focus-visible { outline: none; }
+.shell.tv .launch-box:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  /* The base rule lights the border AND lays a halo under it, which next to the ring
+     reads as three concentric lines. On a TV the ring alone is the indicator, so the
+     border stays the colour it always was. */
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+}
+
 .shell.tv .launch-item:focus,
 .shell.tv .sheet-row:focus { background: var(--bg-selected); }
 /* The launcher keeps its OWN selection while focus stays in the search box — up/down
@@ -1203,6 +1260,9 @@ kbd {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
   background: var(--bg-selected);
+  /* The base row draws an inset accent edge for "selected". Here the ring says it, and
+     an edge tucked inside a ring is the same message twice. */
+  box-shadow: none;
 }
 /* …but only while the search box still holds focus. Once the remote has moved INTO the
    list, the focused row IS the cursor, and the standing selection drawing an identical

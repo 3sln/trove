@@ -78,7 +78,7 @@ function capRow(cap, isAdmin, checked, onToggle) {
   return label({ className: `cap-row ${blocked ? 'blocked' : ''}` },
     input({ type: 'checkbox', checked: checked && !blocked, disabled: blocked }).on({ change: () => !blocked && onToggle() }),
     div({ className: 'cap-info' },
-      div({ className: 'cap-name' }, cap.id, cap.adminOnly ? span({ className: 'pf-badge', $styling: { color: 'var(--warn)', marginLeft: '6px' } }, 'admin only') : null),
+      div({ className: 'cap-name' }, cap.id, cap.adminOnly ? span({ className: 'pf-badge', $styling: { color: 'var(--warn)', 'margin-left': '6px' } }, 'admin only') : null),
       div({ className: 'cap-desc' }, cap.description + (blocked ? ' — requires an administrator' : '')),
     ),
   );
@@ -147,5 +147,5 @@ function section(title, content) {
   return div({ className: 'review-section' }, div({ className: 'rs-title' }, title), content);
 }
 function muted(t) {
-  return div({ className: 'muted', $styling: { fontSize: '12.5px' } }, t);
+  return div({ className: 'muted', $styling: { 'font-size': '12.5px' } }, t);
 }

@@ -129,7 +129,7 @@ function imageOpener(node, ui) {
 
 function audioOpener(node, ui) {
   return mediaWithError(node, ui, (onError) =>
-    div({ className: 'viewer', $styling: { display: 'grid', placeItems: 'center', gap: '16px', padding: '40px' } },
+    div({ className: 'viewer', $styling: { display: 'grid', 'place-items': 'center', gap: '16px', padding: '40px' } },
       icon('file-audio', { size: 48 }),
       span({ $styling: { color: 'var(--text-dim)' } }, node.name),
       audio({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { width: 'min(520px, 90%)' } }).on({ error: onError }),
@@ -139,8 +139,8 @@ function audioOpener(node, ui) {
 
 function videoOpener(node, ui) {
   return mediaWithError(node, ui, (onError) =>
-    div({ className: 'viewer', $styling: { display: 'grid', placeItems: 'center', background: '#000' } },
-      video({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { maxWidth: '100%', maxHeight: '100%' } }).on({ error: onError }),
+    div({ className: 'viewer', $styling: { display: 'grid', 'place-items': 'center', background: '#000' } },
+      video({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { 'max-width': '100%', 'max-height': '100%' } }).on({ error: onError }),
     ),
   );
 }
@@ -149,9 +149,9 @@ function fallbackOpener(node, ui, reason) {
   return div({ className: 'viewer' },
     div({ className: 'fallback' },
       icon(reason ? 'warn' : 'file', { size: 44 }),
-      span({ $styling: { fontWeight: 600 } }, node.name),
+      span({ $styling: { 'font-weight': 600 } }, node.name),
       span(`${node.contentType || 'Unknown type'} · ${bytes(node.size)}`),
-      span({ $styling: { color: 'var(--text-faint)', maxWidth: '340px' } },
+      span({ $styling: { color: 'var(--text-faint)', 'max-width': '340px' } },
         reason || 'No preview available for this file type. Install a plugin that handles it, or download the file.'),
       button({ className: 'btn primary' }, icon('download', { size: 15 }), 'Download')
         .on({ click: () => ui.exec('explorer.download', node) }),

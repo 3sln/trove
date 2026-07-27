@@ -156,6 +156,39 @@ const ring = await page.evaluate(() => {
 check('the focused item wears a thick outline', parseFloat(ring.width) >= 3 && ring.style !== 'none',
   JSON.stringify(ring));
 
+// ONE indicator, not two. The TV ring is a blanket over every focusable element, and
+// the base stylesheet gives most controls their own vocabulary instead of a ring — a
+// field whose box lights, a row with an accent edge. Both drew at once: the search box
+// had its lit border AND a hard rectangle around the input inside it, and the selected
+// row had its accent edge AND a ring. A ring plus a second indicator is not "extra
+// clear", it is two answers to "where am I".
+const doubled = await page.evaluate(() => {
+  const ringed = (el) => { const s = getComputedStyle(el); return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0; };
+  // A drop shadow is not an indicator; a ring-shaped one (0 blur, 0 offset, spread) is.
+  const haloed = (el) => (getComputedStyle(el).boxShadow || '').split(/,(?![^(]*\))/)
+    .some((part) => /(?:^|\s)0px 0px 0px \d/.test(part) || /inset/.test(part));
+  const out = [];
+  for (const el of document.querySelectorAll('.launch-item, .launch-box, .activitybar .item, .statusbar .seg')) {
+    if (ringed(el) && haloed(el)) out.push(`${el.className}: ${getComputedStyle(el).boxShadow}`);
+  }
+  const input = document.querySelector('.launch-input');
+  if (input && ringed(input) && ringed(input.closest('.launch-box'))) out.push('launch-input ringed inside a ringed .launch-box');
+  return out;
+});
+check('and nothing wears a ring AND a second focus indicator', doubled.length === 0, doubled.join(' | '));
+
+// Tap highlight: a phone/TV browser paints its own grey block over anything tappable,
+// ignoring border-radius. Every control here already answers a press itself.
+const tap = await page.evaluate(() => {
+  const seen = new Set();
+  for (const el of document.querySelectorAll('button, a, .launch-item, input, body')) {
+    seen.add(getComputedStyle(el).webkitTapHighlightColor);
+  }
+  return [...seen];
+});
+check('the browser tap highlight is off everywhere',
+  tap.every((c) => /rgba\(0, 0, 0, 0\)|transparent/.test(c)), tap.join(' | '));
+
 // …and it is the ONLY thing wearing one. Two rows ringed identically — the remote's
 // focus on one, the launcher's standing selection on another — reads as two equally
 // chosen rows when only one of them will open.

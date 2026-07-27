@@ -18,7 +18,7 @@ export default function pluginsView(state, ui) {
             .on({ click: () => ui.exec('plugins.installFromUrl') }),
         ),
         plugins.length
-          ? div({ $styling: { display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '14px' } }, ...plugins.map((pl) => installedCard(pl, state, ui)))
+          ? div({ $styling: { display: 'flex', 'flex-direction': 'column', gap: '12px', 'margin-top': '14px' } }, ...plugins.map((pl) => installedCard(pl, state, ui)))
           : div({ className: 'empty', $styling: { padding: '48px' } }, icon('plug', { size: 30 }), span('No plugins installed yet.')),
       ),
     ),
@@ -32,8 +32,8 @@ function installedCard(pl, state, ui) {
     div({ className: 'top' },
       div({ className: 'avatar' }, (pl.name || '?')[0].toUpperCase()),
       div({ $styling: { flex: '1' } },
-        div({ className: 'name' }, pl.name, pl.version ? span({ $styling: { color: 'var(--text-faint)', fontWeight: '400', marginLeft: '6px' } }, 'v' + pl.version) : null),
-        div({ $styling: { fontSize: '11px', color: 'var(--text-faint)' } }, pl.id),
+        div({ className: 'name' }, pl.name, pl.version ? span({ $styling: { color: 'var(--text-faint)', 'font-weight': '400', 'margin-left': '6px' } }, 'v' + pl.version) : null),
+        div({ $styling: { 'font-size': '11px', color: 'var(--text-faint)' } }, pl.id),
       ),
       trustBadge(pl.trust),
       span({ className: `status ${pl.status}` }, pl.status),
@@ -41,7 +41,7 @@ function installedCard(pl, state, ui) {
     pl.error ? div({ className: 'desc', $styling: { color: 'var(--danger)' } }, pl.error) : null,
     div({ className: 'caps' }, ...(pl.capabilities || []).map((c) => span({ className: 'cap' }, c))),
     (pl.endpoints || []).length
-      ? div({ className: 'plugin-endpoints', $styling: { fontSize: '11px', color: 'var(--text-faint)', marginTop: '2px' } },
+      ? div({ className: 'plugin-endpoints', $styling: { 'font-size': '11px', color: 'var(--text-faint)', 'margin-top': '2px' } },
           icon('plug', { size: 11 }), ' Network: ', (pl.endpoints || []).map((e) => e.host).join(', '))
       : null,
     pl.status === 'active'
@@ -49,7 +49,7 @@ function installedCard(pl, state, ui) {
           div({ className: 'pf-head' }, span(`Features · ${connectivity}`), span({ className: 'muted' }, `${features.filter((f) => f.available).length}/${features.length} available`)),
           features.length
             ? div({ className: 'pf-list' }, ...features.map(featureRow))
-            : div({ className: 'muted', $styling: { fontSize: '12px' } }, pl.responsive ? 'No contributions announced.' : 'No manifest received — the plugin may not be running.'),
+            : div({ className: 'muted', $styling: { 'font-size': '12px' } }, pl.responsive ? 'No contributions announced.' : 'No manifest received — the plugin may not be running.'),
         )
       : null,
     (pl.settingsSchema || []).length ? settingsSection(pl, ui) : null,
@@ -70,7 +70,7 @@ function installedCard(pl, state, ui) {
 function settingsSection(pl, ui) {
   return div({ className: 'plugin-features' },
     div({ className: 'pf-head' }, span('Settings')),
-    div({ $styling: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+    div({ $styling: { display: 'flex', 'flex-direction': 'column', gap: '8px' } },
       ...pl.settingsSchema.map((s) => settingRow(pl, s, ui)),
     ),
   );

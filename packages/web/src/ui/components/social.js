@@ -42,7 +42,7 @@ function inboxDropdown(state, ui) {
   const items = state.so.notifications.items;
   const social = ui.app.social;
   return div({},
-    div({ className: 'scrim', $styling: { background: 'transparent', zIndex: '54' } }).on({ click: () => social.toggleInbox(false) }),
+    div({ className: 'scrim', $styling: { background: 'transparent', 'z-index': '54' } }).on({ click: () => social.toggleInbox(false) }),
     div({ className: 'inbox' },
       div({ className: 'inbox-head' },
         span('Notifications'),
@@ -115,7 +115,7 @@ function fileHeader(node, state, ui) {
     // Secondary, not primary. Pinning a file for offline is a useful thing to be able
     // to do and not the thing you came to this panel for — as the brightest element on
     // screen it out-shouted the file's own links, tags and conversation.
-    button({ className: `btn small ${pinned ? 'on' : ''}`, $styling: { marginTop: '10px' } },
+    button({ className: `btn small ${pinned ? 'on' : ''}`, $styling: { 'margin-top': '10px' } },
       icon(pinned ? 'check' : 'download', { size: 14 }),
       pinned ? 'Available offline' : 'Make available offline',
     ).on({ click: () => (pinned ? ui.exec('offline.unpin', node) : ui.exec('offline.pin', node)) }),
@@ -139,7 +139,7 @@ function linkSection(node, state, ui) {
       ? button({ className: 'ip-uri', title: 'Copy this item’s link' }, icon('link', { size: 12 }), span(uri))
         .on({ click: () => copyLink(ui, uri) })
       : null,
-    div({ className: 'ip-label', $styling: { marginTop: '10px' } }, 'Linked from'),
+    div({ className: 'ip-label', $styling: { 'margin-top': '10px' } }, 'Linked from'),
     mine?.loading
       ? div({ className: 'ip-muted' }, 'Loading…')
       : mine?.error
@@ -194,7 +194,7 @@ function conversationSection(state, sc, ui) {
   const body = sc?.error
     ? div({ className: 'conv-empty' },
         span(`Couldn't load the conversation: ${sc.error}`),
-        button({ className: 'btn', $styling: { marginTop: '8px' } }, 'Retry').on({ click: () => ui.app.social.loadSidecar(sc.nodeId) }))
+        button({ className: 'btn', $styling: { 'margin-top': '8px' } }, 'Retry').on({ click: () => ui.app.social.loadSidecar(sc.nodeId) }))
     : comments.length
       ? div({ className: 'thread' }, ...comments.map((c) => commentNode(c, state, ui, 0)))
       : div({ className: 'conv-empty' }, 'No comments yet. Start the discussion — use @ to mention someone.');
