@@ -11,6 +11,7 @@
 // readable instead of blank.
 
 import { boot, checker } from './harness.mjs';
+import { buildPackage } from '../pluginFixture.mjs';
 
 const { check, done } = checker();
 
@@ -54,12 +55,29 @@ check('a picture-heavy collection draws as tiles without being asked', (await co
 // leaves the element in the DOM and the tile showing its icon, which is the graceful
 // half — but it would also make a broken thumbnail pipeline look exactly like a working
 // one from here.
-const decoded = await page.evaluate(() => {
-  const imgs = [...document.querySelectorAll('.grid-tile .gt-img')];
-  return { total: imgs.length, loaded: imgs.filter((i) => i.naturalWidth > 0).length };
+//
+// Only the tiles ON SCREEN, and after waiting: the images are lazy, so the ones below
+// the fold are *supposed* to be un-fetched, and asserting on them would be asserting the
+// opposite of what this view is for.
+const onScreen = () => page.evaluate(() => {
+  const visible = [...document.querySelectorAll('.grid-tile .gt-img')].filter((i) => {
+    const r = i.getBoundingClientRect();
+    return r.bottom > 0 && r.top < innerHeight;
+  });
+  return { total: visible.length, loaded: visible.filter((i) => i.naturalWidth > 0).length };
 });
-check('and the pictures are really fetched and decoded, not just their icons drawn',
-  decoded.total >= 12 && decoded.loaded === decoded.total, JSON.stringify(decoded));
+await page.waitForFunction(() => [...document.querySelectorAll('.grid-tile .gt-img')]
+  .filter((i) => { const r = i.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; })
+  .every((i) => i.complete), null, { timeout: 8000 }).catch(() => {});
+const decoded = await onScreen();
+check('and the pictures on screen are really fetched and decoded, not just icons drawn',
+  decoded.total >= 5 && decoded.loaded === decoded.total, JSON.stringify(decoded));
+// The half that makes a grid of a thousand photographs affordable without a thumbnail
+// service: the browser fetches what is on screen and nothing else. Losing this attribute
+// would not change how the page looks — it would change how much of the drive it pulls.
+check('every tile image is lazy, so a big drive is not fetched all at once',
+  await page.evaluate(() => [...document.querySelectorAll('.gt-img')]
+    .every((i) => i.getAttribute('loading') === 'lazy')));
 // The thing a gallery must not cost you: the group header carries Upload, Empty trash
 // and Retry. A view that dropped it would take those off the screen.
 check('the group header — and its Upload button — survive the switch to tiles',
@@ -135,29 +153,48 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(700);
 
-// --- 6. A view belonging to a plugin that isn't there is not drawn -------------
-// Availability is checked the same way an opener's is, so a view from a plugin that is
-// uninstalled, offline or not answering never gets asked to draw. It also never leaves
-// the drive blank: something else has to.
-const absent = await page.evaluate(async () => {
+// --- 6. A view is the host's, and only the host's ------------------------------
+// A view owns the whole results area — the header's Upload button is in it, and so is
+// the selection `explorer.delete` acts on. So it is host-only, refused at the registry
+// as well as at manifest parse. Checked in the running app, not just in a unit test,
+// because the registry is the door the launcher actually reads through.
+// See docs/design/views.md.
+const hostOnly = await page.evaluate(async () => {
   const t = window.__trove;
-  t.platform.contributions.register('trove+contrib:acme.com/demo/gallery', {
-    pluginId: 'acme.com/demo', type: 'view', title: 'Gallery', icon: 'grid', priority: 98,
-    entry: 'src/views/gallery.js',
-  });
-  t.platform.settings.set('explorer.view', 'trove+contrib:acme.com/demo/gallery');
-  t.platform.workbench.touch();
-  await new Promise((r) => setTimeout(r, 400));
+  const refused = (uri, extra) => {
+    try {
+      t.platform.contributions.register(uri, { type: 'view', title: 'Gallery', render: () => null, ...extra });
+      return false;
+    } catch { return true; }
+  };
   return {
-    offered: t.platform.contributions.ofType('view').some((v) => v.title === 'Gallery'),
-    available: t.platform.plugins.isAvailable({ pluginId: 'acme.com/demo' }),
-    switcher: document.querySelectorAll('.vs-btn').length,
-    drawn: document.querySelectorAll('.grid-tile, .launch-item').length,
+    owned: refused('trove+contrib:acme.com/demo/gallery', { pluginId: 'acme.com/demo' }),
+    unowned: refused('trove+contrib:acme.com/demo/gallery', {}),
+    smuggled: refused('core.view.gallery', { pluginId: 'acme.com/demo' }),
+    views: t.platform.contributions.ofType('view').map((v) => v.id),
   };
 });
-check('a view whose plugin is not installed is registered but not offered',
-  absent.offered && !absent.available && absent.switcher === 2, JSON.stringify(absent));
-check('and choosing it does not leave the drive blank', absent.drawn >= 13, JSON.stringify(absent));
+check('a plugin cannot register a view, however it is addressed',
+  hostOnly.owned && hostOnly.unowned && hostOnly.smuggled, JSON.stringify(hostOnly));
+check('and the host\'s own two are all that is registered',
+  JSON.stringify(hostOnly.views) === JSON.stringify(['core.view.list', 'core.view.grid']),
+  JSON.stringify(hostOnly.views));
+
+// The other door: a real package that declares a view must FAIL TO INSTALL, not install
+// with the view quietly dropped. The install review is what the user approved, so a
+// package that gets to run with one of its declarations ignored has been misrepresented.
+const { zip } = await buildPackage({
+  manifest: { contributes: { gallery: { type: 'view', title: 'Gallery', match: { mime: ['image/*'] } } } },
+});
+const parsed = await page.evaluate((data) => {
+  const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+  try {
+    window.__trove.test.parsePackage(bytes);
+    return { ok: true, message: '' };
+  } catch (err) { return { ok: false, message: err.message }; }
+}, Buffer.from(zip).toString('base64'));
+check('a package declaring a view does not parse, so it never reaches install',
+  !parsed.ok && /only the host may provide/i.test(parsed.message), JSON.stringify(parsed));
 
 // --- 7. A view that throws degrades to the list, not to nothing ----------------
 // A view is the WHOLE results area. One that throws takes the drive's contents off the
@@ -185,7 +222,7 @@ check('and says which view failed rather than failing silently',
 // --- 8. One view left means no switcher at all ---------------------------------
 const alone = await page.evaluate(async () => {
   const t = window.__trove;
-  for (const id of ['core.view.broken', 'trove+contrib:acme.com/demo/gallery', 'core.view.grid']) {
+  for (const id of ['core.view.broken', 'core.view.grid']) {
     t.platform.contributions.unregister(id);
   }
   t.platform.settings.set('explorer.view', undefined);

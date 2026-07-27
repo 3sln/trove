@@ -7,7 +7,8 @@ import {
   isValidDomain, isValidName,
 } from '../src/plugins/identity.js';
 import {
-  declaredContributions, contributionsOfType, serverIndexers, parseKeymap, CONTRIBUTION_TYPES,
+  declaredContributions, contributionsOfType, serverIndexers, parseKeymap,
+  CONTRIBUTION_TYPES, MANIFEST_CONTRIBUTION_TYPES,
 } from '../src/plugins/contributions.js';
 
 const M = {
@@ -122,25 +123,25 @@ test('the type list is the single source of truth for what may be declared', () 
   expect(CONTRIBUTION_TYPES.sort()).toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem', 'view']);
 });
 
-test('a view declares a match hint and a priority, and needs no entry to be valid', () => {
-  // A view is how a LIST is drawn, so unlike an opener it can be a pure in-process
-  // render function — which is what every built-in view is. `needsEntry` would make the
-  // built-ins undeclarable.
-  const [v] = declaredContributions({
-    ...M,
-    contributes: {
-      // `mime` as a bare string, to confirm a view goes through the same selector
-      // coercion as an opener — an uncoerced one throws `.some is not a function` at
-      // selection time, which here would mean no results drawn at all.
-      gallery: { type: 'view', title: 'Gallery', icon: 'grid', priority: 70, match: { mime: 'image/*' } },
-    },
-  });
-  expect(v).toMatchObject({
-    type: 'view', title: 'Gallery', icon: 'grid', priority: 70,
-    match: { mime: ['image/*'] }, when: null, offline: false,
-  });
-  expect(v.uri).toBe('trove+contrib:acme.com/docs/gallery');
-  // A view can be a pure in-process render function — which is what every built-in
-  // view is — so it must not inherit the manifest's entry the way an opener does.
-  expect(v.entry).toBeUndefined();
+test('a package cannot declare a host-only contribution, and does not install if it tries', () => {
+  // A view owns the whole results area — the host's own Upload/Retry buttons live in it,
+  // and the selection `explorer.delete` acts on comes out of it. See docs/design/views.md.
+  // Throwing is the point: the alternative is a package that installs and has one of its
+  // declared contributions silently ignored.
+  const withView = { ...M, contributes: { gallery: { type: 'view', title: 'Gallery' } } };
+  expect(() => declaredContributions(withView)).toThrow(/only the host may provide/i);
+
+  // The two lists are not the same question. The registry knows `view`; a manifest may
+  // not ask for one.
+  expect(CONTRIBUTION_TYPES).toContain('view');
+  expect(MANIFEST_CONTRIBUTION_TYPES).not.toContain('view');
+  expect(MANIFEST_CONTRIBUTION_TYPES.sort())
+    .toEqual(['command', 'indexer', 'keymap', 'opener', 'register', 'statusItem']);
+
+  // And an unknown type is told what it MAY declare — naming a type that would then be
+  // refused is worse than not mentioning it.
+  let msg = '';
+  try { declaredContributions({ ...M, contributes: { x: { type: 'nope' } } }); } catch (e) { msg = e.message; }
+  expect(msg).toContain('opener');
+  expect(msg).not.toContain('view');
 });

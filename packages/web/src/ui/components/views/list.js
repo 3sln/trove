@@ -1,9 +1,9 @@
 // The list view: one row per item, which is what a drive looks like unless you ask
 // for something else.
 //
-// It is also the fallback for every other view — a view that throws, and a plugin view
-// this build cannot draw, both land here — so it must not depend on anything beyond the
-// contract itself. No settings, no capabilities, no network.
+// It is also the fallback for every other view: one that throws lands here, and views
+// are host code with no sandbox to catch them first. So it must not depend on anything
+// beyond the contract itself — no settings, no capabilities, no network.
 
 import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';

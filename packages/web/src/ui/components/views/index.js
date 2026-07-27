@@ -5,8 +5,15 @@
 // contribution rather than an edit to the launcher — which is the whole point: the
 // launcher should not have to know how many ways there are to look at a drive.
 //
-// A built-in supplies a `render` function and runs in the host. A plugin supplies an
-// `entry` module and runs in its own sandboxed frame, exactly as openers do.
+// Unlike an opener, a view is HOST-ONLY: the built-ins, plus whatever a build passes to
+// `createWorkbench({ views })`. A plugin cannot declare one, and the reasons are in
+// docs/design/views.md — briefly, the results area is where the host's own controls live
+// and where the selection that `explorer.delete` acts on comes from, so it is not a
+// surface to hand across a sandbox for a feature nobody has asked for yet.
+//
+// That is also why the contract below is a dodo vnode and not something serializable.
+// It is in-process code either way; pretending otherwise would buy a portability nobody
+// can use and cost the group headers their host-owned buttons.
 //
 // The contract is one function:
 //
@@ -46,11 +53,17 @@ export function registerBuiltinViews(platform) {
 
 const SETTING = 'explorer.view';
 
-/** Every view that could draw these results, best first. */
+/**
+ * Every view that could draw these results, best first.
+ *
+ * No availability check, unlike openers: a view is host code, so there is no "its
+ * provider isn't answering" state to be in. A when-clause is the only gate, and it is
+ * the same one every other contribution answers to.
+ */
 export function availableViews(platform) {
   return platform.contributions
     .ofType('view')
-    .filter((v) => (!v.when || platform.context.evaluate(v.when)) && platform.plugins.isAvailable(v))
+    .filter((v) => !v.when || platform.context.evaluate(v.when))
     .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
@@ -127,7 +140,6 @@ export function viewMove(view, key, ctx) {
 export function renderView(view, ctx) {
   try {
     if (typeof view?.render === 'function') return view.render(ctx);
-    if (view?.pluginId) return pluginViewFrame(view, ctx);
   } catch (err) {
     console.error(`view "${view?.id}" failed`, err);
     return div({},
@@ -136,21 +148,6 @@ export function renderView(view, ctx) {
       listView(ctx));
   }
   return listView(ctx);
-}
-
-/**
- * A plugin's view, in its own sandboxed frame.
- *
- * Not implemented yet, and it renders as a message rather than an empty panel so the
- * gap is visible. The frame plumbing is the opener's (see pluginOpenerView) and the
- * hard part is not the frame — it is that keyboard navigation and selection live on
- * this side of the boundary, so the protocol has to carry them both ways.
- */
-function pluginViewFrame(view, ctx) {
-  return div({},
-    div({ className: 'view-error' }, icon('warn', { size: 13 }),
-      span(`“${view.title || view.id}” is a plugin view, which this build cannot draw yet.`)),
-    listView(ctx));
 }
 
 export { listView, gridView };

@@ -7,8 +7,6 @@
 //                  "match": { "ext": [".demo"] }, "entry": "src/openers/player.js" },
 //     "pdf":     { "type": "indexer",    "match": { "ext": [".pdf"] }, "entry": "src/indexers/pdf.js" },
 //     "tap":     { "type": "command",    "title": "Demo: Tap" },
-//     "gallery": { "type": "view",       "title": "Gallery", "icon": "grid",
-//                  "match": { "mime": ["image/*"] }, "entry": "src/views/gallery.js" },
 //     "status":  { "type": "statusItem", "slot": "right" },
 //     "busy":    { "type": "register",   "default": false },
 //     "keys":    { "type": "keymap",     "path": "keymaps/default.json" }
@@ -22,6 +20,10 @@
 // Each contribution's `entry` (openers, indexers) points into the plugin's ONE module
 // tree — they are not nested sub-packages, so everything in a plugin shares modules
 // and code. What gets opened or indexed depends only on which entry module runs.
+//
+// Not every type here is declarable. `view` is the host's own — it is in the table so
+// the registry can validate it, and refused from a manifest. See MANIFEST_CONTRIBUTION_TYPES
+// below and docs/design/views.md for why.
 
 import { TroveError } from '../errors.js';
 import { contribUri, isValidName, pluginId } from './identity.js';
@@ -55,7 +57,15 @@ const TYPES = {
   //
   // `match` is a hint, not a gate: a view that suits pictures says so and is offered
   // first for a collection full of them, but nothing stops someone picking the list.
+  //
+  // HOST-ONLY, and deliberately so — see docs/design/views.md. A view owns the entire
+  // results area, which is where the host's own controls live (Upload, Empty trash,
+  // Retry) and where the selection that `explorer.delete` acts on comes from. That is
+  // not a surface to hand across a sandbox boundary for the sake of a feature nobody
+  // has asked for yet. Built-ins and a build's own views register directly with the
+  // host registry; a manifest that declares one does not install.
   view: {
+    hostOnly: true,
     normalize: (c) => ({
       title: c.title || null, icon: c.icon || null, priority: c.priority ?? 50,
       match: normalizeMatch(c.match), when: c.when || null, offline: !!c.offline,
@@ -85,7 +95,17 @@ const TYPES = {
   },
 };
 
+/** Every type the contribution registry knows, including the host's own. */
 export const CONTRIBUTION_TYPES = Object.keys(TYPES);
+
+/**
+ * The types a PACKAGE may declare — the registry's vocabulary minus the host-only ones.
+ *
+ * Two lists, because they answer different questions. "Is this a contribution type?" is
+ * the registry's; "may a package ask for this?" is the install review's, and conflating
+ * them is how a host-only surface quietly becomes a plugin API.
+ */
+export const MANIFEST_CONTRIBUTION_TYPES = CONTRIBUTION_TYPES.filter((t) => !TYPES[t].hostOnly);
 
 /**
  * Every contribution a manifest declares, normalized and addressed by URI.
@@ -104,8 +124,13 @@ export function declaredContributions(manifest) {
     if (!raw || typeof raw !== 'object') throw TroveError.invalid(`Contribution "${name}" must be an object`);
     if (!isValidName(name)) throw TroveError.invalid(`Invalid contribution name "${name}"`);
     const spec = TYPES[raw.type];
+    // The message names only what a package MAY declare — telling someone about a type
+    // that will then be refused is worse than not mentioning it.
     if (!spec) {
-      throw TroveError.invalid(`Contribution "${name}" has unknown type ${JSON.stringify(raw.type)} (expected one of ${CONTRIBUTION_TYPES.join(', ')})`);
+      throw TroveError.invalid(`Contribution "${name}" has unknown type ${JSON.stringify(raw.type)} (expected one of ${MANIFEST_CONTRIBUTION_TYPES.join(', ')})`);
+    }
+    if (spec.hostOnly) {
+      throw TroveError.invalid(`Contribution "${name}" is of type "${raw.type}", which only the host may provide`);
     }
     const entry = raw.entry || manifest.entry;
     if (spec.needsEntry && !entry) throw TroveError.invalid(`Contribution "${name}" (${raw.type}) needs an "entry" module`);

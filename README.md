@@ -62,7 +62,10 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
   collection that is mostly photographs opens as a grid without being asked. A gallery,
   a map or a table is a `view` contribution, not a patch to the launcher — the
   launcher still owns the items, the highlight and the keyboard, so every view
-  navigates the same way.
+  navigates the same way. Views are **host-only**: unlike an opener, a view owns the
+  whole results area, including the host's own buttons and the selection that
+  *delete* acts on, so a plugin cannot contribute one
+  ([why, and what would change it](docs/design/views.md)).
 - **Build your own drive** — `createWorkbench({ openers, views })` is the entry point,
   so a bespoke or hosted build ships its own first-party openers and views through the
   same registry plugins use. No fork of `@trove/web`.

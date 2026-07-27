@@ -21,13 +21,21 @@
 //   statusItem  { slot:'left'|'right', render:'html', order?, when?, offline? }
 //   register    { default?, description? }         (a context value slot)
 //   keymap      { bindings:[{key, command, when?, args?}] }
+//   view        { title, icon?, match?, priority?, render, move? }   HOST-ONLY
 
 import { cell, derive } from '../runtime.js';
 import { selectorMatches } from '@trove/core/util.js';
 import { parseContribUri, coreUri, CONTRIB_SCHEME } from '@trove/core/plugins/identity.js';
-import { CONTRIBUTION_TYPES } from '@trove/core/plugins/contributions.js';
+import { CONTRIBUTION_TYPES, MANIFEST_CONTRIBUTION_TYPES } from '@trove/core/plugins/contributions.js';
 
-export { CONTRIBUTION_TYPES };
+export { CONTRIBUTION_TYPES, MANIFEST_CONTRIBUTION_TYPES };
+
+// Types only the host may provide, checked here as well as at manifest parse. Two
+// checks because they guard different doors: the manifest check stops a package
+// INSTALLING, this one stops a contribution being REGISTERED — and the registry is what
+// the launcher actually reads. Derived from the same list, so a type can never be
+// host-only in one place and not the other.
+const HOST_ONLY = new Set(CONTRIBUTION_TYPES.filter((t) => !MANIFEST_CONTRIBUTION_TYPES.includes(t)));
 
 /**
  * Address normalization — the one rule: a bare name belongs to the host's reserved
@@ -63,13 +71,21 @@ export class ContributionRegistry {
     const uri = toUri(nameOrUri);
     const parsed = parseContribUri(uri);
     if (!parsed) throw new Error(`Not a contribution URI: ${uri}`);
+    const pluginId = contribution.pluginId ?? (parsed.domain === 'core' ? null : parsed.pluginId);
+    // A host-only type belongs to the host: the reserved `core` domain and no owning
+    // plugin. Both halves matter — an unowned contribution under someone else's domain
+    // is a name they can later claim, and an owned one under `core` is a plugin wearing
+    // the host's identity.
+    if (HOST_ONLY.has(type) && (pluginId || parsed.domain !== 'core')) {
+      throw new Error(`Contributions of type "${type}" can only be provided by the host (${uri})`);
+    }
     const entry = {
       ...contribution, uri, type,
       // `id` is the short name the workbench uses to address it (bare for built-ins,
       // the URI for plugin contributions, which are only ever addressed fully).
       id: parsed.domain === 'core' ? parsed.name : uri,
       name: parsed.name,
-      pluginId: contribution.pluginId ?? (parsed.domain === 'core' ? null : parsed.pluginId),
+      pluginId,
     };
     this.items.set(uri, entry);
     this.#emit();
