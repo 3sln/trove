@@ -38,7 +38,7 @@ class GatedStorage extends MemoryStorage {
     return super.list(opts);
   }
 }
-import worker from '../src/adapters/worker.js';
+import worker, { getServer } from '../src/adapters/worker.js';
 import { createServer, configFromEnv } from '../src/index.js';
 
 const ENV = { TROVE_STORAGE: 'memory' };
@@ -162,4 +162,22 @@ test('a resumed scan does not report the items it has not reached as orphaned', 
   const partial = await vfs.scanCollection('default', { cursor: 'some-cursor', shouldStop: () => false });
   expect(partial.orphaned).toBe(0);
   expect(partial.resumed).toBe(true);
+});
+
+test('the front-line server and the object\'s own server are different servers', async () => {
+  // Two callers want opposite things from one function. `worker.fetch` wants a server
+  // that HANDS scans to the Durable Object; the object's own boot wants one that RUNS
+  // them. A single cache slot serves whichever asked first — and a delegating server
+  // handed back inside the object would have it forward work to itself, forever.
+  const namespace = { idFromName: (n) => n, get: () => ({ fetch: async () => new Response('{}') }) };
+  const env = { ...ENV, TASKS: namespace };
+
+  const edge = await getServer(env);
+  const inside = await getServer(env, undefined, { delegate: false });
+  expect(inside).not.toBe(edge);
+
+  // And each is still cached, which is the whole reason this is a module-level map:
+  // a Worker isolate builds its server once and reuses it across requests.
+  expect(await getServer(env)).toBe(edge);
+  expect(await getServer(env, undefined, { delegate: false })).toBe(inside);
 });

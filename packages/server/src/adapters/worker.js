@@ -19,7 +19,13 @@ import { D1SqliteProvider } from '@trove/core';
 import { createServer, configFromEnv } from '../index.js';
 import { createTaskHost, remoteBackground } from './worker-tasks.js';
 
-let cached = null;
+// Two DIFFERENT servers can be asked for here: the front-line one, which hands long
+// work to the Durable Object, and the one INSIDE that object, which does it. Keyed,
+// because they cannot share a slot — a delegating server handed back inside the object
+// would have it forward work to itself. Cloudflare gives a Durable Object its own
+// isolate today, so this has not been reachable; an invariant that costs one line to
+// state is cheaper than one that holds by luck.
+const cached = new Map();
 
 /**
  * @param {object} env Worker env bindings
@@ -28,7 +34,8 @@ let cached = null;
  *   background work (inside the Durable Object) rather than one that hands it off
  */
 async function getServer(env, buildVfs, { delegate = true } = {}) {
-  if (cached) return cached;
+  const slot = delegate ? 'edge' : 'worker';
+  if (cached.has(slot)) return cached.get(slot);
   const config = configFromEnv(env);
   if (buildVfs) config.vfs = buildVfs(env);
   // D1 → metadata, kv, plugin installs, and the keyword half of search. Without this a
@@ -75,9 +82,10 @@ async function getServer(env, buildVfs, { delegate = true } = {}) {
     // Timers do not survive a request here, and the object has its own alarm loop.
     config.startFlusher = false;
   }
-  cached = await createServer(config);
-  cached.maintain = config.maintain || null;
-  return cached;
+  const server = await createServer(config);
+  server.maintain = config.maintain || null;
+  cached.set(slot, server);
+  return server;
 }
 
 /**

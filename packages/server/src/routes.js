@@ -618,13 +618,17 @@ export function createRouter() {
 
   // --- identity --------------------------------------------------------------
 
-  r.get('/api/me', ['collections'], ({ principal, collections }) => ({
-    principal: principal || null,
+  r.get('/api/me', ['collections'], (ctx) => ({
+    principal: ctx.principal || null,
     // Authenticated means SOMEONE signed in — not merely that a principal object
     // exists. The shared anonymous user is a stand-in for "no identity configured", and
     // reporting it as authenticated would have the client show a profile for nobody.
-    authenticated: !!principal && !principal.anonymous,
-    admin: collections ? collections.isAdmin(principal) : !!principal,
+    authenticated: !!ctx.principal && !ctx.principal.anonymous,
+    // From config like every other answer about the ACL layer. This one only decides
+    // which UI the client offers — the routes enforce regardless — but a `collections`
+    // that went missing would tell every visitor they were an administrator, which is
+    // a worse lie than an error.
+    admin: collectionsEnabled(ctx) ? ctx.collections.isAdmin(ctx.principal) : !!ctx.principal,
   }));
 
   // --- conversations, tags, sidecar (per file) -------------------------------
