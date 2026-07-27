@@ -58,15 +58,32 @@ export class Router {
     this.routes = [];
   }
 
-  add(method, pattern, handler) {
+  /**
+   * @param {string} method
+   * @param {string} pattern
+   * @param {string[]|Function} depsOrHandler  the resources this route needs, by
+   *   name — or the handler, for a route that needs none.
+   * @param {Function} [maybeHandler]
+   *
+   * Declaring dependencies is the point. Every handler used to receive one
+   * object carrying the whole server: vfs, collections, kv, sqlite, plugins,
+   * tasks, issues, sidecar, notifications, identity, mcp. That is a service
+   * locator — nothing recorded what a route used, so nothing stopped it reaching
+   * for more, and "what does this endpoint touch" could only be answered by
+   * reading it. Named here, the answer is in the route table, and a route that
+   * did not ask for `plugins` does not get `plugins`.
+   */
+  add(method, pattern, depsOrHandler, maybeHandler) {
+    const handler = maybeHandler ?? depsOrHandler;
+    const deps = maybeHandler ? depsOrHandler : [];
     const segs = pattern.split('/').filter(Boolean);
-    this.routes.push({ method, segs, handler });
+    this.routes.push({ method, segs, handler, deps });
     return this;
   }
-  get(p, h) { return this.add('GET', p, h); }
-  post(p, h) { return this.add('POST', p, h); }
-  put(p, h) { return this.add('PUT', p, h); }
-  delete(p, h) { return this.add('DELETE', p, h); }
+  get(p, d, h) { return this.add('GET', p, d, h); }
+  post(p, d, h) { return this.add('POST', p, d, h); }
+  put(p, d, h) { return this.add('PUT', p, d, h); }
+  delete(p, d, h) { return this.add('DELETE', p, d, h); }
 
   #match(method, pathname) {
     const parts = pathname.split('/').filter(Boolean);
@@ -114,16 +131,55 @@ export class Router {
     if (!found) return cors(json({ error: { code: 'not_found', message: 'No such route' } }, 404), origin);
 
     const query = Object.fromEntries(url.searchParams);
+    // Exactly what the route declared, leased for exactly the request. Released
+    // in `finally`, so a handler that throws still gives its resources back.
+    let lease = null;
     try {
-      const result = await found.route.handler({ req, params: found.params, query, url, ...ctx });
+      lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;
+      const result = await found.route.handler(guarded({
+        req, params: found.params, query, url, ...ctx, ...(lease?.resources || {}),
+      }, ctx.container));
       const res = result instanceof Response ? result : json(result ?? { ok: true });
       return cors(res, origin);
     } catch (raw) {
       const err = raw instanceof TroveError ? raw : wrapError(raw);
       if (err.code === ErrorCode.INTERNAL) console.error('Unhandled:', err.cause || err);
       return cors(json(err.toJSON(), err.status), origin);
+    } finally {
+      await lease?.release();
     }
   }
+}
+
+/**
+ * Make reaching for an undeclared resource throw instead of yielding undefined.
+ *
+ * Several guards in the route layer are written to stand down when a service is
+ * switched off -- `if (!ctx.plugins) return;` means "no install records to check
+ * against, so nothing to enforce". That is correct for a service an operator
+ * disabled, and catastrophic for one that is merely undeclared: the check does
+ * not fail, it silently passes. Exactly that turned an ownership check on
+ * contributor namespaces into a no-op the first time these declarations were
+ * written.
+ *
+ * So a name the container COULD have provided, that this route did not ask for,
+ * is an error rather than an absence. Names the container knows nothing about
+ * are left alone, since undefined is an ordinary answer for those.
+ */
+function guarded(bag, container) {
+  if (!container?.has) return bag;
+  return new Proxy(bag, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string' && !(prop in target) && container.has(prop)) {
+        throw new Error(
+          `This route reads "${prop}" but does not declare it. Add it to the route's `
+          + 'dependency list — an undeclared resource is undefined, and a guard that '
+          + 'stands down when a service is absent would silently stop enforcing.',
+        );
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 // Resolve the Access-Control-Allow-Origin value: null (no CORS) unless configured.

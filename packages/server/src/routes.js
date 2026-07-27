@@ -139,10 +139,10 @@ export function createRouter() {
   const r = new Router();
 
   // Liveness: the process is up and serving.
-  r.get('/api/health', () => ({ ok: true, service: 'trove', time: Date.now() }));
+  r.get('/api/health', [], () => ({ ok: true, service: 'trove', time: Date.now() }));
 
   // Readiness: the backing store actually answers — for load-balancer / k8s gating.
-  r.get('/api/ready', async ({ sqlite }) => {
+  r.get('/api/ready', ['sqlite'], async ({ sqlite }) => {
     try {
       if (sqlite) { const db = await sqlite.obtain({ key: 'metadata' }); await db.get('SELECT 1'); }
       return { ok: true };
@@ -151,7 +151,7 @@ export function createRouter() {
     }
   });
 
-  r.get('/api/capabilities', async (ctx) => {
+  r.get('/api/capabilities', ['auth', 'collections', 'notifications', 'sidecar', 'vfs'], async (ctx) => {
     const { vfs, config, sidecar, notifications, principal, query, auth, mcp } = ctx;
     // Storage is per-collection, so report the backend for the requested collection
     // (else the client picks the wrong upload strategy on a non-default collection).
@@ -209,30 +209,30 @@ export function createRouter() {
 
   // --- collections -----------------------------------------------------------
 
-  r.get('/api/collections', async ({ collections, principal }) => {
+  r.get('/api/collections', ['collections'], async ({ collections, principal }) => {
     if (!collections) return { collections: [{ id: 'default', name: 'My Drive', capabilities: ['read', 'write', 'delete', 'admin'] }] };
     return { collections: await collections.list(principal), canCreate: collections.canCreate(principal) };
   });
 
-  r.get('/api/collections/:id', async ({ collections, principal, params }) => {
+  r.get('/api/collections/:id', ['collections'], async ({ collections, principal, params }) => {
     if (!collections) return { collection: { id: 'default', name: 'My Drive' } };
     const c = await collections.assert(principal, params.id, 'read');
     return { collection: collections.describe(c, principal) };
   });
 
-  r.post('/api/collections', async ({ collections, principal, req }) => {
+  r.post('/api/collections', ['collections'], async ({ collections, principal, req }) => {
     if (!collections) throw TroveError.unsupported('Collections are not enabled');
     const b = await body(req);
     return { collection: await collections.create(b, principal) };
   });
 
-  r.post('/api/collections/:id', async ({ collections, principal, params, req }) => {
+  r.post('/api/collections/:id', ['collections'], async ({ collections, principal, params, req }) => {
     if (!collections) throw TroveError.unsupported('Collections are not enabled');
     const b = await body(req);
     return { collection: await collections.update(params.id, b, principal) };
   });
 
-  r.delete('/api/collections/:id', async ({ collections, vfs, principal, params }) => {
+  r.delete('/api/collections/:id', ['collections', 'vfs'], async ({ collections, vfs, principal, params }) => {
     if (!collections) throw TroveError.unsupported('Collections are not enabled');
     // A collection record is the only thing that knows where its items' BYTES live, so
     // deleting it while items still reference it stranded every one of them: `storageFor`
@@ -251,7 +251,7 @@ export function createRouter() {
     return collections.remove(params.id, principal);
   });
 
-  r.post('/api/collections/:id/grants', async ({ collections, principal, params, req }) => {
+  r.post('/api/collections/:id/grants', ['collections'], async ({ collections, principal, params, req }) => {
     if (!collections) throw TroveError.unsupported('Collections are not enabled');
     const b = await body(req);
     return { collection: await collections.setGrant(params.id, b, principal) };
@@ -267,7 +267,7 @@ export function createRouter() {
 
   // Every item in a collection. There is nothing to descend into — a drive is browsed
   // by search and by following links, and this is the "show me everything" fallback.
-  r.get('/api/items', async (ctx) => {
+  r.get('/api/items', ['collections', 'vfs'], async (ctx) => {
     const { vfs, query } = ctx;
     const collectionId = collectionOf(query);
     await assertCap(ctx, collectionId, 'read');
@@ -288,7 +288,7 @@ export function createRouter() {
   });
 
   // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.
-  r.get('/api/items/resolve', async (ctx) => {
+  r.get('/api/items/resolve', ['collections', 'vfs'], async (ctx) => {
     const { query } = ctx;
     const ref = query.id || query.uri || query.name;
     if (!ref) throw TroveError.invalid('id, name or uri is required');
@@ -299,7 +299,7 @@ export function createRouter() {
 
   // What links to this item — the inverse of the links its own content declares, and
   // what replaces "which folder is it in?".
-  r.get('/api/items/backlinks', async (ctx) => {
+  r.get('/api/items/backlinks', ['collections', 'vfs'], async (ctx) => {
     const node = await nodeWithCap(ctx, ctx.query.id, 'read');
     // Scoped in the query, not filtered after: backlinks cross collections, so a limit
     // spent on unreadable rows would report "nothing links here" while something the
@@ -311,7 +311,7 @@ export function createRouter() {
     return { items };
   });
 
-  r.post('/api/items/rename', async (ctx) => {
+  r.post('/api/items/rename', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id || !b.newName) throw TroveError.invalid('id and newName are required');
     const node = await ctx.vfs.stat(b.id);
@@ -319,7 +319,7 @@ export function createRouter() {
     return { node: await ctx.vfs.rename(b.id, b.newName) };
   });
 
-  r.post('/api/items/delete', async (ctx) => {
+  r.post('/api/items/delete', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
     const node = await ctx.vfs.stat(b.id);
@@ -329,7 +329,7 @@ export function createRouter() {
 
   // --- download (presign redirect or range-aware proxy) ----------------------
 
-  r.get('/api/items/download', async (ctx) => {
+  r.get('/api/items/download', ['collections', 'vfs'], async (ctx) => {
     const { vfs, query, req } = ctx;
     const id = query.id;
     if (!id) throw TroveError.invalid('id is required');
@@ -366,7 +366,7 @@ export function createRouter() {
 
   // --- uploads ---------------------------------------------------------------
 
-  r.post('/api/uploads', async (ctx) => {
+  r.post('/api/uploads', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
     const collectionId = collectionOf(b);
@@ -378,36 +378,36 @@ export function createRouter() {
     return uploadDescriptor(plan);
   });
 
-  r.get('/api/uploads/:id/status', async (ctx) => {
+  r.get('/api/uploads/:id/status', ['collections', 'vfs'], async (ctx) => {
     await assertUploadCap(ctx, ctx.params.id, 'write');
     return ctx.vfs.uploadStatus(ctx.params.id);
   });
 
-  r.post('/api/uploads/:id/parts/:n/sign', async (ctx) => {
+  r.post('/api/uploads/:id/parts/:n/sign', ['collections', 'vfs'], async (ctx) => {
     await assertUploadCap(ctx, ctx.params.id, 'write');
     return { url: await ctx.vfs.signUploadPart(ctx.params.id, Number(ctx.params.n)) };
   });
 
-  r.post('/api/uploads/:id/parts/:n/report', async (ctx) => {
+  r.post('/api/uploads/:id/parts/:n/report', ['collections', 'vfs'], async (ctx) => {
     await assertUploadCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
     return ctx.vfs.reportUploadPart(ctx.params.id, Number(ctx.params.n), b.etag);
   });
 
   // Direct part upload — raw body streamed to storage.
-  r.put('/api/uploads/:id/parts/:n', async (ctx) => {
+  r.put('/api/uploads/:id/parts/:n', ['collections', 'vfs'], async (ctx) => {
     await assertUploadCap(ctx, ctx.params.id, 'write');
     const res = await ctx.vfs.uploadPart(ctx.params.id, Number(ctx.params.n), ctx.req.body ?? new Uint8Array(0));
     return json(res);
   });
 
-  r.post('/api/uploads/:id/complete', async (ctx) => {
+  r.post('/api/uploads/:id/complete', ['collections', 'vfs'], async (ctx) => {
     await assertUploadCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
     return { node: await ctx.vfs.completeUpload(ctx.params.id, b.parts) };
   });
 
-  r.delete('/api/uploads/:id', async (ctx) => {
+  r.delete('/api/uploads/:id', ['collections', 'vfs'], async (ctx) => {
     await assertUploadCap(ctx, ctx.params.id, 'write');
     await ctx.vfs.abortUpload(ctx.params.id);
     return { ok: true };
@@ -415,7 +415,7 @@ export function createRouter() {
 
   // --- search & indexing -----------------------------------------------------
 
-  r.get('/api/search', async (ctx) => {
+  r.get('/api/search', ['collections', 'vfs'], async (ctx) => {
     const { vfs, query } = ctx;
     if (!query.q) throw TroveError.invalid('q is required');
     const collectionIds = await readableCollectionIds(ctx, query.collection);
@@ -431,7 +431,7 @@ export function createRouter() {
   // parses `#tag` syntax; a plugged-in one may use an LLM), then dispatched. Returns
   // the results AND the `resolved` query (what was actually searched) so the client
   // can honestly show it.
-  r.post('/api/query', async (ctx) => {
+  r.post('/api/query', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (typeof b.q !== 'string' || !b.q.trim()) throw TroveError.invalid('q is required');
     const collectionIds = await readableCollectionIds(ctx, b.collection);
@@ -442,7 +442,7 @@ export function createRouter() {
   });
 
   // Drive-wide tag/property filter (the launcher's `#tag` / `#key:op:value`).
-  r.post('/api/tags/search', async (ctx) => {
+  r.post('/api/tags/search', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     const filters = Array.isArray(b.filters) ? b.filters : [];
     const collectionIds = await readableCollectionIds(ctx, b.collection);
@@ -452,7 +452,7 @@ export function createRouter() {
     return { items };
   });
 
-  r.get('/api/indexers', ({ vfs }) => ({ indexers: vfs.indexers.list() }));
+  r.get('/api/indexers', ['vfs'], ({ vfs }) => ({ indexers: vfs.indexers.list() }));
 
   // Plugin indexers push a namespaced contribution here (semanticTexts / tags /
   // metadata; legacy documents/facet accepted). The namespace is the path param,
@@ -462,7 +462,7 @@ export function createRouter() {
   // all, and namespace ownership says you may speak AS this contributor. Without the
   // second, anyone who can write anywhere could overwrite `core.links` and quietly
   // break every backlink, or impersonate another plugin's index.
-  r.post('/api/index/:indexerId', async (ctx) => {
+  r.post('/api/index/:indexerId', ['collections', 'plugins', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.nodeId) throw TroveError.invalid('nodeId is required');
     await assertContributorOwned(ctx, ctx.params.indexerId);
@@ -491,7 +491,7 @@ export function createRouter() {
   // outlives a request — the same calls cross a boundary. Awaiting costs nothing in
   // the first case and is the difference between working and not in the second.
 
-  r.get('/api/tasks', async (ctx) => {
+  r.get('/api/tasks', ['collections', 'tasks'], async (ctx) => {
     const collectionIds = await readableCollectionIds(ctx);
     return {
       tasks: await ctx.tasks.list({
@@ -503,18 +503,18 @@ export function createRouter() {
     };
   });
 
-  r.post('/api/tasks/:id/cancel', async (ctx) => {
+  r.post('/api/tasks/:id/cancel', ['collections', 'tasks'], async (ctx) => {
     await assertTaskAccess(ctx, await ctx.tasks.get(ctx.params.id), 'cancel');
     return { cancelled: await ctx.tasks.cancel(ctx.params.id) };
   });
 
-  r.delete('/api/tasks/:id', async (ctx) => {
+  r.delete('/api/tasks/:id', ['collections', 'tasks'], async (ctx) => {
     await assertTaskAccess(ctx, await ctx.tasks.get(ctx.params.id), 'dismiss');
     await ctx.tasks.dismiss(ctx.params.id);
     return { ok: true };
   });
 
-  r.get('/api/issues', async (ctx) => {
+  r.get('/api/issues', ['collections', 'issues'], async (ctx) => {
     const collectionIds = await readableCollectionIds(ctx);
     const admin = await canWholeDrive(ctx);
     const issues = await ctx.issues.list({ collectionIds, includeGlobal: admin });
@@ -527,7 +527,7 @@ export function createRouter() {
   // Retrying starts a task and returns it immediately — the fix may take minutes, and
   // holding the request open for it would just time out. The issue is NOT cleared here;
   // it clears when the work actually succeeds.
-  r.post('/api/issues/:id/retry', async (ctx) => {
+  r.post('/api/issues/:id/retry', ['collections', 'issues', 'tasks'], async (ctx) => {
     const issue = await ctx.issues.get(ctx.params.id);
     if (!issue) throw TroveError.notFound('Issue');
     await assertIssueAccess(ctx, issue, 'write');
@@ -548,7 +548,7 @@ export function createRouter() {
   // Dismissing is not fixing. Allowed because a problem can become irrelevant (the file
   // was deleted, the plugin uninstalled) and a list you can't clear stops being read —
   // but if the underlying failure recurs, it comes straight back.
-  r.delete('/api/issues/:id', async (ctx) => {
+  r.delete('/api/issues/:id', ['collections', 'issues'], async (ctx) => {
     const issue = await ctx.issues.get(ctx.params.id);
     if (!issue) return { ok: true };
     await assertIssueAccess(ctx, issue, 'write');
@@ -559,7 +559,7 @@ export function createRouter() {
   // Rebuild the search index on demand. Admin-only: it re-reads every object in the
   // drive, so it is a real load, and it is drive-wide rather than scoped to anything
   // the caller owns. Returns the task, which is how the caller watches it.
-  r.post('/api/reindex', async (ctx) => {
+  r.post('/api/reindex', ['collections', 'tasks'], async (ctx) => {
     await requireWholeDrive(ctx, 'rebuild the search index');
     if (!ctx.beginReindex) throw TroveError.unsupported('Reindexing is not available on this deployment');
     // Two concurrent full rebuilds would double the work to reach the same place, so
@@ -579,13 +579,13 @@ export function createRouter() {
   // `delete` on the collection, the same capability the delete itself needed — seeing
   // what you deleted, and undoing it, are not lesser rights than deleting.
 
-  r.get('/api/trash', async (ctx) => {
+  r.get('/api/trash', ['collections', 'vfs'], async (ctx) => {
     const collectionId = collectionOf(ctx.query);
     await assertCap(ctx, collectionId, 'delete');
     return { items: await ctx.vfs.listTrash(collectionId, { limit: clampLimit(ctx.query.limit, 200) }), collectionId };
   });
 
-  r.post('/api/trash/restore', async (ctx) => {
+  r.post('/api/trash/restore', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.id) throw TroveError.invalid('id is required');
     const node = await ctx.vfs.metadata.getById(b.id);
@@ -596,7 +596,7 @@ export function createRouter() {
 
   // Destroy for real. Separate from DELETE /api/items so that emptying the trash can
   // never be something you reach by accident from the ordinary delete path.
-  r.post('/api/trash/purge', async (ctx) => {
+  r.post('/api/trash/purge', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (b.id) {
       const node = await ctx.vfs.metadata.getById(b.id);
@@ -618,7 +618,7 @@ export function createRouter() {
   // Reconcile a collection against the bytes actually in its store — how files added,
   // replaced, or removed by anything other than Trove get noticed. Needs `write` on the
   // collection, because a scan can create items in it.
-  r.post('/api/collections/:id/scan', async (ctx) => {
+  r.post('/api/collections/:id/scan', ['collections', 'tasks'], async (ctx) => {
     await assertCap(ctx, ctx.params.id, 'write');
     if (!ctx.beginScan) throw TroveError.unsupported('Scanning is not available on this deployment');
     const { task, alreadyRunning } = await ctx.beginScan(ctx.params.id, { reason: 'Started manually' });
@@ -632,7 +632,7 @@ export function createRouter() {
 
   // --- identity --------------------------------------------------------------
 
-  r.get('/api/me', ({ principal, collections }) => ({
+  r.get('/api/me', ['collections'], ({ principal, collections }) => ({
     principal: principal || null,
     // Authenticated means SOMEONE signed in — not merely that a principal object
     // exists. The shared anonymous user is a stand-in for "no identity configured", and
@@ -644,13 +644,13 @@ export function createRouter() {
   // --- conversations, tags, sidecar (per file) -------------------------------
   // The :id is a file node id; the sidecar is that file's CRDT document.
 
-  r.get('/api/items/:id/sidecar', async (ctx) => {
+  r.get('/api/items/:id/sidecar', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     await nodeWithCap(ctx, ctx.params.id, 'read'); // 404 if the file is gone
     return ctx.sidecar.view(ctx.params.id);
   });
 
-  r.post('/api/items/:id/comments', async (ctx) => {
+  r.post('/api/items/:id/comments', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write');
@@ -658,7 +658,7 @@ export function createRouter() {
     return { comment: await ctx.sidecar.addComment(ctx.params.id, { body: b.body, parentId: b.parentId, mentions: b.mentions }, ctx.principal) };
   });
 
-  r.post('/api/items/:id/comments/:cid/edit', async (ctx) => {
+  r.post('/api/items/:id/comments/:cid/edit', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
@@ -666,14 +666,14 @@ export function createRouter() {
     return { comment: await ctx.sidecar.editComment(ctx.params.id, ctx.params.cid, b.body, ctx.principal) };
   });
 
-  r.delete('/api/items/:id/comments/:cid', async (ctx) => {
+  r.delete('/api/items/:id/comments/:cid', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write'); // + authorship checked in the service
     return ctx.sidecar.deleteComment(ctx.params.id, ctx.params.cid, ctx.principal);
   });
 
-  r.post('/api/items/:id/comments/:cid/react', async (ctx) => {
+  r.post('/api/items/:id/comments/:cid/react', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'write');
@@ -682,7 +682,7 @@ export function createRouter() {
     return { comment: await ctx.sidecar.react(ctx.params.id, ctx.params.cid, b.emoji, b.on !== false, ctx.principal) };
   });
 
-  r.post('/api/items/:id/tags', async (ctx) => {
+  r.post('/api/items/:id/tags', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     await nodeWithCap(ctx, ctx.params.id, 'write');
     const b = await body(ctx.req);
@@ -691,7 +691,7 @@ export function createRouter() {
     return ctx.vfs.setTag(ctx.params.id, b.name, b.value, ctx.principal);
   });
 
-  r.delete('/api/items/:id/tags/:name', async (ctx) => {
+  r.delete('/api/items/:id/tags/:name', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     // Removing a tag is a write — enforce the same per-collection ACL as adding one,
     // or a read-only user could strip tags off files they can't modify.
@@ -699,14 +699,14 @@ export function createRouter() {
     return ctx.vfs.removeTag(ctx.params.id, ctx.params.name, ctx.principal);
   });
 
-  r.post('/api/items/:id/subscribe', async (ctx) => {
+  r.post('/api/items/:id/subscribe', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'read');
     const b = await body(ctx.req);
     return ctx.sidecar.subscribe(ctx.params.id, ctx.principal, !!b.muted);
   });
-  r.delete('/api/items/:id/subscribe', async (ctx) => {
+  r.delete('/api/items/:id/subscribe', ['collections', 'sidecar', 'vfs'], async (ctx) => {
     requireSidecar(ctx.sidecar);
     requirePrincipal(ctx.principal);
     await nodeWithCap(ctx, ctx.params.id, 'read');
@@ -715,27 +715,27 @@ export function createRouter() {
 
   // --- notifications & web push ----------------------------------------------
 
-  r.get('/api/notifications', async ({ notifications, principal }) => {
+  r.get('/api/notifications', ['notifications'], async ({ notifications, principal }) => {
     requireNotifications(notifications);
     requirePrincipal(principal);
     return notifications.inbox(principal.id);
   });
-  r.post('/api/notifications/read', async ({ notifications, principal, req }) => {
+  r.post('/api/notifications/read', ['notifications'], async ({ notifications, principal, req }) => {
     requireNotifications(notifications);
     requirePrincipal(principal);
     const b = await body(req);
     return notifications.markRead(principal.id, b.ids);
   });
 
-  r.get('/api/push/vapid', ({ notifications }) => ({ publicKey: notifications?.vapidPublicKey() || null }));
+  r.get('/api/push/vapid', ['notifications'], ({ notifications }) => ({ publicKey: notifications?.vapidPublicKey() || null }));
 
-  r.post('/api/push/subscribe', async ({ notifications, principal, req }) => {
+  r.post('/api/push/subscribe', ['notifications'], async ({ notifications, principal, req }) => {
     requireNotifications(notifications);
     requirePrincipal(principal);
     const b = await body(req);
     return notifications.subscribePush(principal.id, b.subscription);
   });
-  r.delete('/api/push/subscribe', async ({ notifications, principal, req }) => {
+  r.delete('/api/push/subscribe', ['notifications'], async ({ notifications, principal, req }) => {
     requireNotifications(notifications);
     requirePrincipal(principal);
     const b = await body(req);
@@ -745,7 +745,7 @@ export function createRouter() {
   // --- plugins: domain verification proxy + per-plugin server storage --------
 
   // Fetch a plugin domain's assetlinks doc server-side (avoids browser CORS).
-  r.get('/api/plugins/assetlinks', async ({ query, principal }) => {
+  r.get('/api/plugins/assetlinks', [], async ({ query, principal }) => {
     requirePrincipal(principal); // don't expose an open fetch proxy to the world
     const domain = String(query.domain || '');
     if (!/^[a-z0-9.-]+$/i.test(domain) || !domain.includes('.')) throw TroveError.invalid('Invalid domain');
@@ -771,7 +771,7 @@ export function createRouter() {
   // Install: upload the raw package zip; grants via ?grants=files,storage. The server
   // re-parses + validates and gates on scope (admin for server indexers / shared
   // resources), then stores the blob (deduped by digest) + the install record.
-  r.post('/api/plugins/install', async ({ plugins, principal, req, query }) => {
+  r.post('/api/plugins/install', ['plugins'], async ({ plugins, principal, req, query }) => {
     requirePlugins(plugins);
     requirePrincipal(principal);
     const bytes = await readBytesCapped(req, plugins.maxPackageBytes || 32 * 1024 * 1024);
@@ -780,14 +780,14 @@ export function createRouter() {
   });
 
   // List this account's server-installed plugins (for cross-device sync).
-  r.get('/api/plugins/installed', async ({ plugins, principal }) => {
+  r.get('/api/plugins/installed', ['plugins'], async ({ plugins, principal }) => {
     requirePlugins(plugins);
     requirePrincipal(principal);
     return { plugins: await plugins.list(principal) };
   });
 
   // Download a plugin's package blob so another device can enable it locally.
-  r.get('/api/plugins/:pluginId/package', async ({ plugins, principal, params }) => {
+  r.get('/api/plugins/:pluginId/package', ['plugins'], async ({ plugins, principal, params }) => {
     requirePlugins(plugins);
     requirePrincipal(principal);
     const { stream, size } = await plugins.getPackage(principal, params.pluginId);
@@ -799,7 +799,7 @@ export function createRouter() {
   });
 
   // Account uninstall: drop the record + blob, then wipe the plugin-private store.
-  r.delete('/api/plugins/:pluginId/install', async ({ plugins, sqlite, principal, params }) => {
+  r.delete('/api/plugins/:pluginId/install', ['plugins', 'sqlite'], async ({ plugins, sqlite, principal, params }) => {
     requirePlugins(plugins);
     requirePrincipal(principal);
     const res = await plugins.remove(principal, params.pluginId);
@@ -833,7 +833,7 @@ export function createRouter() {
     }
   };
 
-  r.post('/api/plugins/:pluginId/sql', async ({ sqlite, plugins, principal, params, req }) => {
+  r.post('/api/plugins/:pluginId/sql', ['plugins', 'sqlite'], async ({ sqlite, plugins, principal, params, req }) => {
     requirePluginStore(sqlite, principal);
     // Authoritative capability check when the plugin is server-installed (transitional:
     // allowed if there's no install record — device plugins predate this).
@@ -859,7 +859,7 @@ export function createRouter() {
 
   // Uninstall cleanup: wipe the plugin-private scope. The domain scope is shared
   // across a vendor's plugins and deliberately outlives any single uninstall.
-  r.delete('/api/plugins/:pluginId/data', async ({ sqlite, plugins, principal, params }) => {
+  r.delete('/api/plugins/:pluginId/data', ['plugins', 'sqlite'], async ({ sqlite, plugins, principal, params }) => {
     requirePluginStore(sqlite, principal);
     // Same gate as the /sql route. Without it this was destroy-any-plugin's-data for
     // anyone who could reach the app origin — the one route in the pair that checked

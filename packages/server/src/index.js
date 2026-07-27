@@ -258,7 +258,18 @@ export async function createServer(config = {}) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return withChallenge(new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } }), req);
       }
-      const res = await router.handle(req, { vfs, config, principal, sidecar, notifications, identity, collections, kv, sqlite: sqliteProvider, plugins, tasks, issues, startReindex, startScan, beginReindex: routeBeginReindex, beginScan: routeBeginScan, mcp, auth });
+      const res = await router.handle(req, {
+        // Per-request, and nothing else: the resources a route needs come from
+        // the container, by the names that route declared. Handing over `vfs`,
+        // `plugins`, `kv`, `sqlite` and the rest to every handler was a service
+        // locator — nothing recorded what a route used, so nothing stopped it
+        // reaching for more.
+        container: engine.container,
+        config, principal, auth, mcp,
+        // Verbs rather than resources: which process actually runs the work is
+        // a deployment fact (see engine/providers), so these stay injected.
+        startReindex, startScan, beginReindex: routeBeginReindex, beginScan: routeBeginScan,
+      });
       // A route can refuse on its own (a token that verified but names nobody we know,
       // a session that expired between calls). Whatever refused, the answer to "so
       // where do I sign in" is the same one, so it is attached in one place rather
