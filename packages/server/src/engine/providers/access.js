@@ -100,6 +100,11 @@ function nodeHandle(vfs, sidecar, node, held) {
   if (permits('read')) {
     handle.read = (opts) => vfs.readStream(node.id, opts);
     handle.download = (opts) => vfs.getDownload(node.id, opts);
+    // Minting a URL that carries its own grant is an exercise of `read` — you are
+    // delegating the read you hold, to something that cannot present credentials. So it
+    // hangs off the read handle like everything else, and a caller without `read`
+    // cannot mint one because there is no method to call.
+    handle.mintUrl = (opts) => vfs.mintUrl(node.id, opts);
     handle.backlinks = (opts) => vfs.backlinks(node.id, opts);
     handle.view = () => requireSidecar(sidecar).view(node.id);
     handle.subscribe = (principal, muted) => requireSidecar(sidecar).subscribe(node.id, principal, muted);
@@ -180,14 +185,15 @@ function collectionHandle(vfs, collectionId, held) {
  * never runs — when the node is missing or the capability is not held.
  */
 export class NodeAccessProvider extends Provider {
-  static deps = ['vfs', 'sidecar', 'collections', 'config'];
+  static deps = ['vfs', 'sidecar', 'collections', 'config', 'signedUrls'];
 
-  constructor({ vfs, sidecar, collections, config }) {
+  constructor({ vfs, sidecar, collections, config, signedUrls }) {
     super();
     this.vfs = vfs;
     this.sidecar = sidecar;
     this.collections = collections;
     this.config = config;
+    this.signedUrls = signedUrls;
   }
 
   // `id` is anything `stat` resolves: a node id, a `trove:` URI, or a name — and a
@@ -198,12 +204,36 @@ export class NodeAccessProvider extends Provider {
   // cannot see — restoring and permanently deleting are the only operations on items
   // that are no longer part of the drive. It widens WHAT IS VISIBLE, never what is
   // permitted: the capability is asserted exactly the same way afterwards.
-  async obtain({ principal, id, collectionId, trashed = false, capability = 'read' } = {}) {
+  async obtain({ principal, id, collectionId, trashed = false, capability = 'read', signature = null } = {}) {
     if (!id) throw TroveError.invalid('A node id is required');
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
     const sidecar = await this.sidecar.obtain();
     const node = trashed ? await vfs.statAny(id, collectionId) : await vfs.stat(id, collectionId);
+
+    // A signature IS the grant.
+    //
+    // It was minted by someone who held `read` on this node, and it says so in a way
+    // this server can check without asking anyone. So a request carrying a valid one is
+    // served without a principal — which is the entire point, because the things that
+    // need this (an <img src>, a <video src>, cache.add(), an external API an indexer
+    // handed a URL to) cannot send credentials at all.
+    //
+    // It yields `read` and only `read`, on the one node it names. The capability the
+    // CALLER asked for is intersected in, so a signed request can never reach a route
+    // that wanted `write` — it fails to obtain rather than quietly acting with less.
+    if (signature) {
+      // Refused, not narrowed. On the ordinary path `collections.assert` throws when the
+      // capability is not held, and the intersect below is a second narrowing on top of
+      // it — so intersecting alone here would have answered `capability: 'admin'` with a
+      // quiet read handle instead of a denial, and a route that asked for admin would
+      // have believed it had it.
+      if (capability !== 'read') throw TroveError.forbidden('This link only grants reading');
+      const signer = await this.signedUrls.obtain();
+      const verdict = await signer.check({ ...signature, id: node.id });
+      if (!verdict.ok) throw TroveError.forbidden(`This link is no longer valid (${verdict.reason})`);
+      return nodeHandle(vfs, sidecar, node, new Set(['read']));
+    }
 
     const config = await this.config.obtain();
     if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, requested(capability));

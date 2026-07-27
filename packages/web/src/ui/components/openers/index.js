@@ -6,6 +6,7 @@ import { dd, cell, fromAsync, watch } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { bytes } from '../../format.js';
 import { markdownOpener } from './markdown.js';
+import { attachMedia } from '../../media.js';
 
 const { div, pre, img, span, button, video, audio } = dd;
 
@@ -108,16 +109,29 @@ function textOpener(node, ui) {
 const MEDIA_ERR = "This file couldn't be loaded — it may be missing or in an unsupported format.";
 function mediaWithError(node, ui, makeEl) {
   const state = cell({ error: null });
-  const onError = () => state.setValue({ error: MEDIA_ERR });
+  const onError = (msg) => state.setValue({ error: msg || MEDIA_ERR });
   const el = makeEl(onError);
   return dd.alias(() =>
     watch(state, (s) => (s.error ? fallbackOpener(node, ui, s.error) : el)),
   )();
 }
 
+/**
+ * The `src` is not set here.
+ *
+ * It is minted — a URL that carries its own grant, because a media element fetches
+ * without our Authorization header — and then KEPT current: it expires, and a paused
+ * film resumed the next morning has to swap its source without losing its place. All of
+ * that is `attachMedia`; see ui/media.js.
+ */
+const sourced = (el, node, ui, onError) => el.on({
+  $attach: (dom) => { dom._detachMedia = attachMedia(dom, node, ui, { onError }); },
+  $detach: (dom) => { dom._detachMedia?.(); dom._detachMedia = null; },
+}).opaque();
+
 function imageOpener(node, ui) {
   return mediaWithError(node, ui, (onError) =>
-    div({ className: 'viewer image' }, img({ src: ui.platform.api.downloadUrl(node.id), alt: node.name }).on({ error: onError })),
+    div({ className: 'viewer image' }, sourced(img({ alt: node.name }), node, ui, onError)),
   );
 }
 
@@ -126,7 +140,7 @@ function audioOpener(node, ui) {
     div({ className: 'viewer', $styling: { display: 'grid', 'place-items': 'center', gap: '16px', padding: '40px' } },
       icon('file-audio', { size: 48 }),
       span({ $styling: { color: 'var(--text-dim)' } }, node.name),
-      audio({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { width: 'min(520px, 90%)' } }).on({ error: onError }),
+      sourced(audio({ controls: true, $styling: { width: 'min(520px, 90%)' } }), node, ui, onError),
     ),
   );
 }
@@ -134,7 +148,7 @@ function audioOpener(node, ui) {
 function videoOpener(node, ui) {
   return mediaWithError(node, ui, (onError) =>
     div({ className: 'viewer', $styling: { display: 'grid', 'place-items': 'center', background: '#000' } },
-      video({ src: ui.platform.api.downloadUrl(node.id), controls: true, $styling: { 'max-width': '100%', 'max-height': '100%' } }).on({ error: onError }),
+      sourced(video({ controls: true, $styling: { 'max-width': '100%', 'max-height': '100%' } }), node, ui, onError),
     ),
   );
 }

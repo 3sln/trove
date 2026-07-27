@@ -25,7 +25,7 @@ export class IndexingCoordinator {
    * @param {import('./issues.js').IssueRegistry} [deps.issues] where a failure to index
    *   becomes a standing, retryable problem instead of a console line nobody reads
    */
-  constructor({ metadata, search, indexers, storageFor, maxIndexBytes, caps, issues }) {
+  constructor({ metadata, search, indexers, storageFor, maxIndexBytes, caps, issues, mintUrl = null }) {
     this.metadata = metadata;
     this.search = search ?? null;
     this.indexers = indexers;
@@ -33,6 +33,9 @@ export class IndexingCoordinator {
     this.maxIndexBytes = maxIndexBytes;
     this.caps = { ...DEFAULT_CAPS, ...caps };
     this.issues = issues ?? null;
+    // How a time-limited read URL is made. Not this file's business any more — it is one
+    // caller of a general primitive (see signedUrls.js), not the owner of a private one.
+    this.mintUrl = mintUrl;
   }
 
   /**
@@ -175,13 +178,13 @@ export class IndexingCoordinator {
       readBytes: async () => readAll((await readRange()).stream),
       readText: async () => new TextDecoder().decode(await readAll((await readRange()).stream)),
       // A time-limited URL a remote/isolated indexer can fetch the bytes from. S3-class
-      // backends presign directly; otherwise it's unsupported here (a self-managed,
-      // token-scoped server URL is a follow-up — see the design doc).
-      presignRead: async ({ expiresIn = 300 } = {}) => {
-        if (!storage.capabilities?.presignDownload) {
-          throw TroveError.unsupported('This collection cannot presign reads for indexers');
-        }
-        return storage.presignGet(node.storageKey, { expiresIn, responseContentType: node.contentType });
+      // backends presign; everything else gets a URL this server signed. Either way it
+      // must be ABSOLUTE — whoever receives it is not in this browser and not on this
+      // box, so a relative URL would be a link to nowhere.
+      presignRead: async ({ expiresIn } = {}) => {
+        if (!this.mintUrl) throw TroveError.unsupported('This server cannot mint read URLs for indexers');
+        const { url } = await this.mintUrl(node.id, { op: 'index', expiresIn, absolute: true });
+        return url;
       },
     };
   }

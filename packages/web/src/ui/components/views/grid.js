@@ -16,14 +16,11 @@
 import { dd } from '../../../runtime.js';
 import { icon, iconForNode } from '../../icon.js';
 import { groupHeader, menuButton, openRowMenu } from './parts.js';
+import { attachMedia } from '../../media.js';
 
 const { div, span, img } = dd;
 
 export function gridView({ groups, index, handlers, ui }) {
-  // A bearer-token deployment cannot authenticate an <img src> — there is no way to put
-  // an Authorization header on one — so every tile would fetch, 401, and show a broken
-  // glyph. Ask once and draw icons instead of firing a few hundred doomed requests.
-  const thumbs = !ui.platform.api.token?.();
   let gi = -1;
   return div({ className: 'launch-view view-grid' },
     ...groups.map((group) => div({ className: 'launch-group' },
@@ -34,7 +31,7 @@ export function gridView({ groups, index, handlers, ui }) {
           return tile(it, at === index, {
             hover: () => handlers.hover(at),
             select: () => handlers.select(at),
-          }, ui, thumbs);
+          }, ui);
         }))
         : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
     )),
@@ -81,9 +78,9 @@ function columns() {
   return n || 1;
 }
 
-function tile(it, active, { hover, select }, ui, thumbs) {
+function tile(it, active, { hover, select }, ui) {
   const node = it.node;
-  const pictorial = thumbs && (node?.contentType || '').startsWith('image/');
+  const pictorial = (node?.contentType || '').startsWith('image/');
   return div({ className: `grid-tile ${active ? 'active' : ''}`, title: it.detail ? `${it.title} — ${it.detail}` : it.title },
     div({ className: 'gt-media' },
       // The icon is drawn underneath, always. When the image loads it covers it; when
@@ -91,14 +88,20 @@ function tile(it, active, { hover, select }, ui, thumbs) {
       // hiding the <img> uncovers exactly what the list would have shown, rather than
       // leaving the browser's broken-image glyph in a gallery.
       icon(node ? iconForNode(node) : it.icon, { size: 26 }),
+      // The `src` is minted rather than built — a tile fetches without our Authorization
+      // header, so the URL has to carry its own grant. Minting is batched (see
+      // platform/mediaUrls.js), so a wall of tiles costs one request, not one each.
       pictorial
-        ? img({
-          className: 'gt-img',
-          src: ui.platform.api.downloadUrl(node.id),
-          alt: '',
-          loading: 'lazy',
-          decoding: 'async',
-        }).on({ error: (e) => { e.currentTarget.style.display = 'none'; } })
+        ? img({ className: 'gt-img', alt: '', loading: 'lazy', decoding: 'async' }).on({
+          $attach: (dom) => {
+            dom._detachMedia = attachMedia(dom, node, ui, {
+              // Uncovering the icon underneath is exactly what the list would have shown,
+              // and better than the browser's broken-image glyph in a gallery.
+              onError: () => { dom.style.display = 'none'; },
+            });
+          },
+          $detach: (dom) => { dom._detachMedia?.(); dom._detachMedia = null; },
+        }).opaque()
         : null,
       it.badge ? span({ className: 'gt-badge' }, it.badge) : null,
       menuButton(it, ui, select),

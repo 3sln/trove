@@ -78,11 +78,20 @@ export class OfflineService {
   async pin(node) {
     if (!node?.id) return;
     try {
-      const url = this.api.downloadUrl(node.id);
-      // Cache the bytes for offline opening (SW serves them cache-first).
+      // Two URLs, deliberately. The KEY is the plain route URL — stable, so `unpin` and
+      // the service worker's cache-first lookup both find what `pin` stored. The FETCH
+      // may need a minted one, because `cache.add` sends no Authorization header and
+      // would 401 on a token-authenticated deployment. Keying on the minted URL instead
+      // would have worked exactly once: it carries a signature, so the next session's
+      // `unpin` looks for a string that was never there and the bytes are never reclaimed.
       if ('caches' in window) {
         const cache = await caches.open(FILES_CACHE);
-        await cache.add(url);
+        const urls = this.platform.mediaUrls;
+        const key = urls.cacheKey(node.id);
+        const { url } = await urls.url(node.id, { op: 'download' });
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Couldn't fetch the file (${res.status})`);
+        await cache.put(new Request(key), res);
       }
       // Index text content for offline search.
       let chunks = [];
@@ -108,7 +117,8 @@ export class OfflineService {
     const pin = this.state.pins.find((p) => p.id === id);
     if (pin && 'caches' in window) {
       const cache = await caches.open(FILES_CACHE);
-      await cache.delete(this.api.downloadUrl(id), { ignoreVary: true }).catch(() => {});
+      // The same stable key `pin` stored under — never a freshly minted URL.
+      await cache.delete(this.platform.mediaUrls.cacheKey(id), { ignoreVary: true }).catch(() => {});
     }
     await idbDelete(this.db, 'pins', id);
     await this.#refreshPins();

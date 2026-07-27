@@ -18,6 +18,14 @@ import { extname } from './util.js';
 import { IndexingCoordinator } from './indexing.js';
 import { parseTroveUri, troveUrisFor } from './links.js';
 import { CollectionScanner } from './scan.js';
+import { URL_PURPOSES } from './signedUrls.js';
+
+/** The same cap the signer applies, so a storage presign and ours agree on lifetime. */
+function clampAge(op, expiresIn) {
+  const purpose = URL_PURPOSES[op];
+  if (!purpose) throw TroveError.invalid(`Unknown signed-URL purpose "${op}"`);
+  return Math.min(Math.max(1, expiresIn || purpose.defaultAge), purpose.maxAge);
+}
 
 const CONTENT_TYPES = {
   '.txt': 'text/plain', '.md': 'text/markdown', '.html': 'text/html', '.css': 'text/css',
@@ -29,7 +37,7 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null, uploadPartSize = undefined }) {
+  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, signedUrls = null, publicUrl = '', maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null, uploadPartSize = undefined }) {
     if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage; // primary backend (default collection + capability reporting)
@@ -47,9 +55,15 @@ export class Vfs {
     // Where a failure to index becomes a standing, retryable problem rather than a
     // console line. Optional — core works without one, it just can't report.
     this.issues = issues ?? null;
+    // Signing for the backends that cannot presign. Optional: without it, a filesystem
+    // collection simply has no signed URLs, exactly as before — it does not break, it
+    // declines. Which is also why `presignRead` still checks rather than assumes.
+    this.signedUrls = signedUrls;
+    this.publicUrl = publicUrl || '';
     this.indexing = new IndexingCoordinator({
       metadata: this.metadata, search: this.search, indexers: this.indexers,
       storageFor: (cid) => this.storageFor(cid), maxIndexBytes, issues: this.issues,
+      mintUrl: (id, opts) => this.mintUrl(id, opts),
     });
   }
 
@@ -396,6 +410,48 @@ export class Vfs {
       return { mode: 'redirect', url, node };
     }
     return { mode: 'proxy', node };
+  }
+
+  /**
+   * A URL that carries its own authorization, for one object, for a while.
+   *
+   * The two implementations of the same promise — see docs/design/signed-urls.md. Where
+   * the backend can presign, the bytes never touch this server; where it cannot, we sign
+   * a grant against our own download route. The CALLER cannot tell the difference, which
+   * is the point: an `<img src>` works on S3 and on a NAS, and an indexer can hand a file
+   * to an external API either way.
+   *
+   * Returns `{ url, expiresAt, node }`. `url` is relative for the self-signed case unless
+   * the deployment configured a `publicUrl` — a relative URL is right for a browser
+   * subresource and useless to an external service, so a caller that needs an absolute
+   * one has to ask for it (`absolute: true`) and gets a clear failure rather than a URL
+   * nothing off-box can fetch.
+   */
+  async mintUrl(id, { op = 'download', expiresIn, download = false, absolute = false } = {}) {
+    const node = await this.resolve(id);
+    if (!node.storageKey) throw TroveError.notFound('File content');
+    const storage = await this.storageFor(node.collectionId);
+    if (storage.capabilities.presignDownload) {
+      const seconds = clampAge(op, expiresIn);
+      const url = await storage.presignGet(node.storageKey, {
+        expiresIn: seconds, responseContentType: node.contentType,
+        downloadName: download ? node.name : undefined,
+      });
+      return { url, expiresAt: Date.now() + seconds * 1000, node, signed: 'storage' };
+    }
+    if (!this.signedUrls) {
+      throw TroveError.unsupported('This server cannot mint signed URLs (no signing secret configured)');
+    }
+    if (absolute && !this.publicUrl) {
+      throw TroveError.unsupported(
+        'An absolute signed URL needs the server\'s public address — set TROVE_PUBLIC_URL',
+      );
+    }
+    const g = await this.signedUrls.grant(node.id, { op, expiresIn });
+    const q = new URLSearchParams({ id: g.id, op: g.op, exp: String(g.exp), sig: g.sig });
+    if (download) q.set('disposition', 'attachment');
+    const base = absolute ? this.publicUrl.replace(/\/+$/, '') : '';
+    return { url: `${base}/api/items/download?${q}`, expiresAt: g.expiresAt, node, signed: 'trove' };
   }
 
   async readStream(id, { range, signal } = {}) {

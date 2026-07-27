@@ -14,6 +14,9 @@ const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
 const MAX_JSON_BYTES = Number(ENV.TROVE_MAX_JSON_BYTES || 4 * 1024 * 1024);
 // Clamp any client-supplied result limit to a sane ceiling (DoS via huge scans).
 const MAX_PAGE = Number(ENV.TROVE_MAX_PAGE || 1000);
+// How many signed URLs one request may mint. A gallery asks for what it is about to
+// draw, not for the whole drive — and each one costs an authorization check.
+const URL_MINT_BATCH = Number(ENV.TROVE_URL_BATCH || 200);
 
 async function body(req) {
   const text = await readCapped(req, MAX_JSON_BYTES);
@@ -328,7 +331,12 @@ export function createRouter() {
   r.get('/api/items/download', [], async (ctx) => {
     const { query, req } = ctx;
     if (!query.id) throw TroveError.invalid('id is required');
-    const node = await ctx.access.node(query.id, 'read');
+    // A signed URL brings its own grant, because the things that need one — an <img
+    // src>, a <video src>, cache.add(), an external service an indexer handed a URL to
+    // — cannot send an Authorization header at all. It grants `read` on exactly the node
+    // it names; see engine/providers/access.js and docs/design/signed-urls.md.
+    const signature = query.sig ? { op: query.op, exp: query.exp, sig: query.sig } : null;
+    const node = await ctx.access.node(query.id, 'read', { signature });
     const ct = node.contentType || 'application/octet-stream';
     // Force a download for anything not safe to render inline in our own origin
     // (HTML/SVG/etc. would otherwise be same-origin XSS when opened directly).
@@ -357,6 +365,33 @@ export function createRouter() {
       return new Response(stream, { status: 206, headers });
     }
     return new Response(stream, { status: 200, headers });
+  });
+
+  // Mint URLs that carry their own authorization, for the things that cannot send a
+  // header. Batched on purpose: a gallery draws hundreds of tiles, and per-object
+  // signing is right for scoping but hopeless as one round trip each.
+  //
+  // Every id is authorized individually — the batch is a transport convenience, never a
+  // widening. An id the caller may not read is simply absent from the answer, with its
+  // reason alongside, so a partly-visible batch still returns the visible part.
+  r.post('/api/items/urls', [], async (ctx) => {
+    const b = await body(ctx.req);
+    const ids = Array.isArray(b.ids) ? b.ids.filter((i) => typeof i === 'string' && i) : [];
+    if (!ids.length) throw TroveError.invalid('ids is required');
+    if (ids.length > URL_MINT_BATCH) throw TroveError.invalid(`At most ${URL_MINT_BATCH} ids at a time`);
+    const op = b.op === 'media' || b.op === 'download' ? b.op : 'download';
+    const urls = {};
+    const failed = {};
+    for (const id of new Set(ids)) {
+      try {
+        const node = await ctx.access.node(id, 'read');
+        const { url, expiresAt } = await node.mintUrl({ op, download: op === 'download' });
+        urls[id] = { url, expiresAt };
+      } catch (err) {
+        failed[id] = err.code || 'internal';
+      }
+    }
+    return { urls, failed, op };
   });
 
   // --- uploads ---------------------------------------------------------------

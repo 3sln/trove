@@ -39,6 +39,7 @@ import {
   TaskRegistry, IssueRegistry,
   Vfs, TroveError,
   resolveAuthDiscovery,
+  SignedUrls, resolveUrlSecret,
 } from '@trove/core';
 import { Provider } from '@3sln/ngin';
 import { need } from '../lazy.js';
@@ -238,6 +239,23 @@ export function coreProviders(config, lifecycleState) {
       { deps: ['sqlite', 'metadata'] },
     ),
 
+    // Signing for URLs that carry their own authorization — an <img src>, a <video src>,
+    // an indexer handing a file to an external API. See docs/design/signed-urls.md.
+    //
+    // The secret is configured, or generated once and kept in the KV store. Generated is
+    // safe rather than merely convenient BECAUSE it lives in the KV store: a per-process
+    // random secret would work perfectly on one machine and reject half the URLs in
+    // flight the moment a second instance answered a request.
+    signedUrls: Provider.fromLazySingleton(
+      async (deps) => {
+        const { kv } = await need(deps, ['kv']);
+        if (config.signedUrls instanceof SignedUrls) return config.signedUrls;
+        return new SignedUrls({ secret: await resolveUrlSecret({ configured: config.urlSecret, kv }) });
+      },
+      null,
+      { deps: ['kv'] },
+    ),
+
     // The two halves of "tell the user what's going on", split by lifetime:
     //
     //   tasks   in-flight work, in memory, per-process. A reindex that was running
@@ -322,14 +340,21 @@ export function coreProviders(config, lifecycleState) {
       async (deps) => {
         const r = await need(deps, [
           'storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections',
-          'searchTransformer', 'issues',
+          'searchTransformer', 'issues', 'signedUrls',
         ]);
-        const vfs = new Vfs({ ...r, maxUploadBytes: config.maxUploadBytes ?? null });
+        const vfs = new Vfs({
+          ...r,
+          maxUploadBytes: config.maxUploadBytes ?? null,
+          // Where this server can be reached from outside, for the URLs that leave the
+          // browser (an indexer hands one to an external API). Absent, those are refused
+          // rather than handed out as links to nowhere.
+          publicUrl: config.publicUrl || '',
+        });
         await vfs.init();
         return vfs;
       },
       null,
-      { deps: ['storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections', 'searchTransformer', 'issues'] },
+      { deps: ['storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections', 'searchTransformer', 'issues', 'signedUrls'] },
     ),
 
     // Bulk plugin package blobs. Defaults to the primary storage under a prefix;

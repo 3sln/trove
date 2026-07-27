@@ -34,6 +34,7 @@ import { parsePackage } from './platform/pluginPackage.js';
 import workbenchComposition from './ui/compositions/workbench.js';
 import { registerBuiltinOpeners } from './ui/components/openers/index.js';
 import { registerBuiltinViews } from './ui/components/views/index.js';
+import { attachMedia } from './ui/media.js';
 
 /**
  * Build the platform, mount the workbench, and wire the cross-cutting behaviours that
@@ -137,6 +138,9 @@ export function createWorkbench({
       assessTrust: (pkg) => platform.plugins.assessTrust(pkg),
       install: (pkg, opts) => platform.plugins.install(pkg, opts),
       NavigateAction,
+      // Keeping a media element pointed at a URL that still works is the half of signed
+      // URLs that only shows up over time, so it is drivable from a probe.
+      attachMedia,
     },
   };
 

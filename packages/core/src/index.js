@@ -44,6 +44,7 @@ export { VectorizeVectorStore } from './search/vectorize.js';
 
 // Server-side key/value store (subscriptions, inboxes, profiles).
 export { KeyValueStore, MemoryKV, SqliteKV } from './kv.js';
+export { SignedUrls, resolveUrlSecret, URL_PURPOSES } from './signedUrls.js';
 export { SqliteDatabase, SqliteProvider, LocalSqliteProvider, assertSafePluginSql, stripSqlLiterals } from './sqlite.js';
 // SQLite on Cloudflare D1, so a Worker deployment has a metadata store that exists.
 export { D1SqliteProvider } from './sqlite-d1.js';

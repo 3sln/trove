@@ -251,6 +251,15 @@ export class TroveApiClient {
   }
 
   /**
+   * Mint URLs that carry their own authorization, for the things that cannot send a
+   * header — an <img src>, a <video src>, cache.add(). Batched: a gallery asks for what
+   * it is about to draw, in one request. See platform/mediaUrls.js.
+   */
+  mintUrls(ids, op = 'media') {
+    return this.request('POST', '/api/items/urls', { body: { ids, op } });
+  }
+
+  /**
    * Start a download in the browser.
    *
    * With no bearer token this is a plain navigation to the download URL — the browser

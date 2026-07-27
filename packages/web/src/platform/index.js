@@ -18,6 +18,7 @@ import { WorkbenchService } from './workbench.js';
 import { ViewportService } from './viewport.js';
 import { SpatialNavigationService } from './spatialNav.js';
 import { VoiceSearchService } from './voiceSearch.js';
+import { MediaUrlService } from './mediaUrls.js';
 
 /**
  * The bearer token for this browser, if any.
@@ -73,6 +74,7 @@ export function createPlatform({ baseUrl = '' } = {}) {
     capabilities: null,
     openPluginPanel: null, // set by the workbench UI
   };
+  platform.mediaUrls = new MediaUrlService({ api: platform.api, settings });
   platform.plugins = new PluginHost(platform);
   // Commands consult the plugin host to hide/disable plugin commands that aren't
   // available right now (offline, or the plugin isn't responding).
@@ -115,6 +117,11 @@ function registerDefaults(p) {
     // purpose: unset means "you decide", and the launcher then offers the grid by itself
     // for a collection full of pictures. Picking one in the switcher pins it.
     { key: 'explorer.view', type: 'string', hidden: true, title: 'Results view' },
+    // Whether media fetches use a URL that carries its own grant (see
+    // platform/mediaUrls.js). `auto` mints only where the browser cannot authenticate
+    // itself, which is the right answer almost everywhere — hence hidden.
+    { key: 'media.signedUrls', type: 'enum', enum: ['auto', 'always', 'never'], default: 'auto',
+      hidden: true, title: 'Signed media URLs' },
   ]);
 
   // --- the built-in keymap (commands themselves are registered in ../bl) -----
