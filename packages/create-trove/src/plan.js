@@ -42,7 +42,7 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
     { value: 'bun', label: 'Bun', hint: 'recommended for self-hosting' },
     { value: 'node', label: 'Node', hint: 'identical behaviour, a little slower' },
     { value: 'workers', label: 'Cloudflare Workers', hint: 'no disk — D1, Vectorize and R2 do the work' },
-  ], { default: 'bun' });
+  ], { key: 'runtime', default: 'bun' });
 
   const isWorkers = runtime === 'workers';
   const plan = { name, version, runtime, sections: [], workers: null, server: null, skipped: [], warnings: [] };
@@ -56,7 +56,7 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   // Workers has no disk, so `filesystem` is not offered there — and R2 is reached
   // through the S3 API rather than a binding because that is what lets presigned
   // uploads go straight to the bucket instead of through the Worker's CPU time.
-  if (await prompter.section('Object storage', {
+  if (await prompter.section('Object storage', { key: 'storage.enabled',
     blurb: isWorkers
       ? 'Where file bytes live. On Workers this is R2 through its S3-compatible API.'
       : 'Where file bytes live.',
@@ -68,24 +68,24 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
       { value: 'filesystem', label: 'Filesystem or NAS mount' },
       { value: 's3', label: 'S3-compatible', hint: 'AWS, R2, MinIO, B2' },
       { value: 'memory', label: 'In memory', hint: 'nothing is kept — demos only' },
-    ], { default: isWorkers ? 's3' : 'filesystem' });
+    ], { key: 'storage.driver', default: isWorkers ? 's3' : 'filesystem' });
 
     const entries = [entry('TROVE_STORAGE', driver)];
     if (driver === 'filesystem') {
-      entries.push(entry('TROVE_FS_ROOT', await prompter.text('  Object root', { default: './data/objects' }),
+      entries.push(entry('TROVE_FS_ROOT', await prompter.text('  Object root', { key: 'storage.root', default: './data/objects' }),
         { comment: 'the backend creates objects/ under this, sharded two levels deep' }));
     }
     if (driver === 's3') {
-      entries.push(entry('TROVE_S3_BUCKET', await prompter.text('  Bucket', { default: 'trove' })));
-      entries.push(entry('TROVE_S3_REGION', await prompter.text('  Region', { default: isWorkers ? 'auto' : 'us-east-1' }),
+      entries.push(entry('TROVE_S3_BUCKET', await prompter.text('  Bucket', { key: 'storage.bucket', default: 'trove' })));
+      entries.push(entry('TROVE_S3_REGION', await prompter.text('  Region', { key: 'storage.region', default: isWorkers ? 'auto' : 'us-east-1' }),
         { comment: 'R2 uses "auto"' }));
-      entries.push(entry('TROVE_S3_ENDPOINT', await prompter.text('  Endpoint', {
+      entries.push(entry('TROVE_S3_ENDPOINT', await prompter.text('  Endpoint', { key: 'storage.endpoint',
         default: isWorkers ? 'https://<account-id>.r2.cloudflarestorage.com' : '',
         hint: 'leave blank for AWS S3',
       }), { comment: 'omit for AWS' }));
-      entries.push(entry('TROVE_S3_ACCESS_KEY_ID', await prompter.text('  Access key id', { default: '' }), { secret: true }));
-      entries.push(entry('TROVE_S3_SECRET_ACCESS_KEY', await prompter.text('  Secret access key', { default: '' }), { secret: true }));
-      if (!isWorkers && await prompter.confirm('  Path-style addressing?', { default: false })) {
+      entries.push(entry('TROVE_S3_ACCESS_KEY_ID', await prompter.text('  Access key id', { key: 'storage.accessKeyId', default: '' }), { secret: true }));
+      entries.push(entry('TROVE_S3_SECRET_ACCESS_KEY', await prompter.text('  Secret access key', { key: 'storage.secretAccessKey', default: '' }), { secret: true }));
+      if (!isWorkers && await prompter.confirm('  Path-style addressing?', { key: 'storage.pathStyle', default: false })) {
         entries.push(entry('TROVE_S3_PATH_STYLE', 'true', { comment: 'MinIO and most custom endpoints' }));
       }
     }
@@ -104,14 +104,14 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   // On Workers this is D1, which is a binding rather than a variable, so the question
   // moves to the bindings block below.
   if (!isWorkers) {
-    if (await prompter.section('Metadata', { blurb: 'The file tree, collections, plugin installs and keyword index.' })) {
+    if (await prompter.section('Metadata', { key: 'metadata.enabled', blurb: 'The file tree, collections, plugin installs and keyword index.' })) {
       const driver = await prompter.choice('  Store', [
         { value: 'sqlite', label: 'SQLite file', hint: 'one file, backed up with a VACUUM INTO snapshot' },
         { value: 'memory', label: 'In memory', hint: 'lost on restart' },
-      ], { default: 'sqlite' });
+      ], { key: 'metadata.driver', default: 'sqlite' });
       const entries = [entry('TROVE_METADATA', driver)];
       if (driver === 'sqlite') {
-        entries.push(entry('TROVE_DB_PATH', await prompter.text('  Database path', { default: './data/trove.db' })));
+        entries.push(entry('TROVE_DB_PATH', await prompter.text('  Database path', { key: 'metadata.path', default: './data/trove.db' })));
       }
       add('Metadata', entries);
     } else {
@@ -123,19 +123,19 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   }
 
   // --- search ----------------------------------------------------------------
-  if (await prompter.section('Semantic search', {
+  if (await prompter.section('Semantic search', { key: 'search.enabled',
     blurb: 'Embeddings turn text into vectors; the vector store holds them. Both have working defaults.',
   })) {
     const entries = [];
     const embed = await prompter.choice('  Embeddings', [
       { value: 'builtin', label: 'Built-in hash embedding', hint: 'offline, no API key, weaker results' },
       { value: 'http', label: 'An HTTP embeddings API', hint: 'OpenAI-compatible' },
-    ], { default: 'builtin' });
+    ], { key: 'search.embeddings', default: 'builtin' });
     if (embed === 'http') {
-      entries.push(entry('TROVE_EMBEDDINGS_URL', await prompter.text('  Embeddings URL', { default: 'https://api.openai.com/v1/embeddings' })));
-      entries.push(entry('TROVE_EMBEDDINGS_API_KEY', await prompter.text('  API key', { default: '' }), { secret: true }));
-      entries.push(entry('TROVE_EMBEDDINGS_MODEL', await prompter.text('  Model', { default: 'text-embedding-3-small' })));
-      entries.push(entry('TROVE_EMBEDDINGS_DIM', await prompter.text('  Dimensions', { default: '1536' }),
+      entries.push(entry('TROVE_EMBEDDINGS_URL', await prompter.text('  Embeddings URL', { key: 'search.embeddingsUrl', default: 'https://api.openai.com/v1/embeddings' })));
+      entries.push(entry('TROVE_EMBEDDINGS_API_KEY', await prompter.text('  API key', { key: 'search.embeddingsApiKey', default: '' }), { secret: true }));
+      entries.push(entry('TROVE_EMBEDDINGS_MODEL', await prompter.text('  Model', { key: 'search.embeddingsModel', default: 'text-embedding-3-small' })));
+      entries.push(entry('TROVE_EMBEDDINGS_DIM', await prompter.text('  Dimensions', { key: 'search.embeddingsDim', default: '1536' }),
         { comment: 'must match the model, and changing it means a reindex' }));
     }
 
@@ -147,12 +147,12 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
       const vector = await prompter.choice('  Vector store', [
         { value: 'memory', label: 'In process', hint: 'sqlite-vec if available, rebuilt on restart otherwise' },
         { value: 'qdrant', label: 'Qdrant' },
-      ], { default: 'memory' });
+      ], { key: 'search.vector', default: 'memory' });
       entries.push(entry('TROVE_VECTOR', vector));
       if (vector === 'qdrant') {
-        entries.push(entry('TROVE_QDRANT_URL', await prompter.text('  Qdrant URL', { default: 'http://localhost:6333' })));
-        entries.push(entry('TROVE_QDRANT_COLLECTION', await prompter.text('  Collection', { default: 'trove' })));
-        entries.push(entry('TROVE_QDRANT_API_KEY', await prompter.text('  API key', { default: '' }), { secret: true }));
+        entries.push(entry('TROVE_QDRANT_URL', await prompter.text('  Qdrant URL', { key: 'search.qdrantUrl', default: 'http://localhost:6333' })));
+        entries.push(entry('TROVE_QDRANT_COLLECTION', await prompter.text('  Collection', { key: 'search.qdrantCollection', default: 'trove' })));
+        entries.push(entry('TROVE_QDRANT_API_KEY', await prompter.text('  API key', { key: 'search.qdrantApiKey', default: '' }), { secret: true }));
       }
     }
     add('Semantic search', entries);
@@ -166,7 +166,7 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   // --- identity --------------------------------------------------------------
   // The one section where declining is genuinely dangerous, so the warning is attached
   // to the plan rather than left to the reader to infer.
-  if (await prompter.section('Identity', {
+  if (await prompter.section('Identity', { key: 'identity.enabled',
     blurb: 'Trove ships no login — it verifies what an IdP or proxy already established.',
   })) {
     const driver = await prompter.choice('  Verify identity via', [
@@ -174,23 +174,23 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
       { value: 'jwt', label: 'A JWT from any OIDC provider', hint: 'verified against a JWKS' },
       { value: 'header', label: 'A header set by a verifying proxy' },
       { value: 'anonymous', label: 'Nobody', hint: 'everyone is the same anonymous user' },
-    ], { default: isWorkers ? 'cloudflare-access' : 'anonymous' });
+    ], { key: 'identity.driver', default: isWorkers ? 'cloudflare-access' : 'anonymous' });
 
     const entries = [entry('TROVE_AUTH', driver)];
     if (driver === 'cloudflare-access') {
-      entries.push(entry('TROVE_CF_ACCESS_TEAM', await prompter.text('  Access team name', { default: '', hint: 'the <team> in <team>.cloudflareaccess.com' })));
-      entries.push(entry('TROVE_CF_ACCESS_AUD', await prompter.text('  Application AUD tag', { default: '' })));
+      entries.push(entry('TROVE_CF_ACCESS_TEAM', await prompter.text('  Access team name', { key: 'identity.team', default: '', hint: 'the <team> in <team>.cloudflareaccess.com' })));
+      entries.push(entry('TROVE_CF_ACCESS_AUD', await prompter.text('  Application AUD tag', { key: 'identity.aud', default: '' })));
       // cloudflare-access is the one driver that requires auth unless told otherwise.
       entries.push(entry('TROVE_AUTH_REQUIRED', 'true', { comment: 'the default for this driver; "false" falls back to anonymous' }));
     } else if (driver === 'jwt') {
-      entries.push(entry('TROVE_JWKS_URL', await prompter.text('  JWKS URL', { default: '' })));
-      entries.push(entry('TROVE_JWT_ISSUER', await prompter.text('  Issuer', { default: '' })));
-      entries.push(entry('TROVE_JWT_AUDIENCE', await prompter.text('  Audience', { default: '' })));
-      entries.push(entry('TROVE_AUTH_REQUIRED', String(await prompter.confirm('  Reject unauthenticated requests?', { default: true }))));
+      entries.push(entry('TROVE_JWKS_URL', await prompter.text('  JWKS URL', { key: 'identity.jwksUrl', default: '' })));
+      entries.push(entry('TROVE_JWT_ISSUER', await prompter.text('  Issuer', { key: 'identity.issuer', default: '' })));
+      entries.push(entry('TROVE_JWT_AUDIENCE', await prompter.text('  Audience', { key: 'identity.audience', default: '' })));
+      entries.push(entry('TROVE_AUTH_REQUIRED', String(await prompter.confirm('  Reject unauthenticated requests?', { key: 'identity.required', default: true }))));
     } else if (driver === 'header') {
-      entries.push(entry('TROVE_AUTH_ID_HEADER', await prompter.text('  Identity header', { default: 'cf-access-authenticated-user-email' }),
+      entries.push(entry('TROVE_AUTH_ID_HEADER', await prompter.text('  Identity header', { key: 'identity.header', default: 'cf-access-authenticated-user-email' }),
         { comment: 'only safe behind a proxy that sets this and strips it from client requests' }));
-      entries.push(entry('TROVE_AUTH_REQUIRED', String(await prompter.confirm('  Reject unauthenticated requests?', { default: true }))));
+      entries.push(entry('TROVE_AUTH_REQUIRED', String(await prompter.confirm('  Reject unauthenticated requests?', { key: 'identity.required', default: true }))));
     }
     if (driver === 'anonymous') plan.warnings.push('anonymous');
     // Naming a driver whose settings were left blank is worse than naming none: the
@@ -213,9 +213,9 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   }
 
   // --- access control --------------------------------------------------------
-  if (await prompter.section('Access control', { blurb: 'Who is an admin, and whether the default collection is open to everyone.' })) {
-    const admins = await prompter.text('  Admin principal ids', { default: '', hint: 'comma-separated, usually email addresses' });
-    const open = await prompter.confirm('  Give everyone full access to the default collection?', { default: false });
+  if (await prompter.section('Access control', { key: 'access.enabled', blurb: 'Who is an admin, and whether the default collection is open to everyone.' })) {
+    const admins = await prompter.text('  Admin principal ids', { key: 'access.admins', default: '', hint: 'comma-separated, usually email addresses' });
+    const open = await prompter.confirm('  Give everyone full access to the default collection?', { key: 'access.defaultOpen', default: false });
     add('Access control', [
       entry('TROVE_ADMINS', admins),
       entry('TROVE_DEFAULT_OPEN', String(open), { comment: 'false means the default collection is not world-writable' }),
@@ -234,19 +234,19 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   // this is the one place a self-hoster gets to put their own name on the thing their
   // users install. Off by default: it is the only optional section here, and a drive
   // called "Trove" is a perfectly good drive.
-  if (await prompter.section('Installed app name', {
+  if (await prompter.section('Installed app name', { key: 'app.enabled',
     blurb: 'What the browser calls this when someone installs it. Defaults to Trove.',
     default: false,
   })) {
-    const appName = await prompter.text('  App name', { default: 'Trove' });
+    const appName = await prompter.text('  App name', { key: 'app.name', default: 'Trove' });
     const entries = [entry('TROVE_APP_NAME', appName)];
-    const short = await prompter.text('  Short name', { default: '', hint: 'for a home-screen label; defaults to the app name' });
+    const short = await prompter.text('  Short name', { key: 'app.shortName', default: '', hint: 'for a home-screen label; defaults to the app name' });
     if (short) entries.push(entry('TROVE_APP_SHORT_NAME', short));
-    entries.push(entry('TROVE_APP_THEME_COLOR', await prompter.text('  Theme colour', { default: '#181a1f' })));
-    const icon = await prompter.text('  Icon URL', { default: '', hint: 'leave blank for the built-in mark' });
+    entries.push(entry('TROVE_APP_THEME_COLOR', await prompter.text('  Theme colour', { key: 'app.themeColor', default: '#181a1f' })));
+    const icon = await prompter.text('  Icon URL', { key: 'app.icon', default: '', hint: 'leave blank for the built-in mark' });
     if (icon) {
       entries.push(entry('TROVE_APP_ICON', icon));
-      entries.push(entry('TROVE_APP_ICON_SIZES', await prompter.text('  Icon size', {
+      entries.push(entry('TROVE_APP_ICON_SIZES', await prompter.text('  Icon size', { key: 'app.iconSizes',
         default: icon.endsWith('.svg') ? 'any' : '512x512',
         hint: 'a raster icon claiming "any" gets scaled badly',
       })));
@@ -265,9 +265,9 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
     plan.workers = await askWorkers(prompter);
   } else {
     plan.server = { port: '8787', host: '0.0.0.0' };
-    if (await prompter.section('Server', { blurb: 'Port and bind address.', default: false })) {
-      plan.server.port = await prompter.text('  Port', { default: '8787' });
-      plan.server.host = await prompter.text('  Host', { default: '0.0.0.0' });
+    if (await prompter.section('Server', { key: 'server.enabled', blurb: 'Port and bind address.', default: false })) {
+      plan.server.port = await prompter.text('  Port', { key: 'server.port', default: '8787' });
+      plan.server.host = await prompter.text('  Host', { key: 'server.host', default: '0.0.0.0' });
     }
   }
 
@@ -289,37 +289,37 @@ async function askWorkers(prompter) {
     compatibilityDate: '2024-09-23',
   };
 
-  if (await prompter.section('D1 (metadata)', {
+  if (await prompter.section('D1 (metadata)', { key: 'workers.d1.enabled',
     blurb: 'Bind DB or the drive runs entirely in memory — fine until the isolate recycles, then everything is gone.',
   })) {
     w.d1 = {
-      name: await prompter.text('  Database name', { default: 'trove' }),
-      id: await prompter.text('  Database id', { default: '', hint: 'from `wrangler d1 create` — leave blank to fill in after' }),
+      name: await prompter.text('  Database name', { key: 'workers.d1.name', default: 'trove' }),
+      id: await prompter.text('  Database id', { key: 'workers.d1.id', default: '', hint: 'from `wrangler d1 create` — leave blank to fill in after' }),
     };
-    if (await prompter.confirm('  Bind a second D1 for server-side plugin storage?', { default: false })) {
+    if (await prompter.confirm('  Bind a second D1 for server-side plugin storage?', { key: 'workers.pluginDb.enabled', default: false })) {
       w.pluginDb = {
-        name: await prompter.text('  Plugin database name', { default: 'trove-plugins' }),
-        id: await prompter.text('  Plugin database id', { default: '' }),
+        name: await prompter.text('  Plugin database name', { key: 'workers.pluginDb.name', default: 'trove-plugins' }),
+        id: await prompter.text('  Plugin database id', { key: 'workers.pluginDb.id', default: '' }),
       };
     }
   }
 
-  if (await prompter.section('Vectorize (semantic search)', {
+  if (await prompter.section('Vectorize (semantic search)', { key: 'workers.vectorize.enabled',
     blurb: 'sqlite-vec is a native artifact and cannot load here, so semantic search needs Vectorize.',
   })) {
     w.vectorize = {
-      index: await prompter.text('  Index name', { default: 'trove' }),
-      dimensions: await prompter.text('  Dimensions', { default: '1536', hint: 'must match your embedding model' }),
+      index: await prompter.text('  Index name', { key: 'workers.vectorize.index', default: 'trove' }),
+      dimensions: await prompter.text('  Dimensions', { key: 'workers.vectorize.dimensions', default: '1536', hint: 'must match your embedding model' }),
       metric: await prompter.choice('  Distance metric', [
         { value: 'cosine', label: 'cosine' },
         { value: 'euclidean', label: 'euclidean' },
         { value: 'dot-product', label: 'dot-product' },
-      ], { default: 'cosine' }),
+      ], { key: 'workers.vectorize.metric', default: 'cosine' }),
     };
   }
 
-  w.ai = await prompter.confirm('\nBind Workers AI for natural-language search queries?', { default: false });
-  w.tasks = await prompter.confirm('Bind the TroveTasks Durable Object for scans and reindexes?', { default: true });
+  w.ai = await prompter.confirm('\nBind Workers AI for natural-language search queries?', { key: 'workers.ai', default: false });
+  w.tasks = await prompter.confirm('Bind the TroveTasks Durable Object for scans and reindexes?', { key: 'workers.tasks', default: true });
 
   return w;
 }
