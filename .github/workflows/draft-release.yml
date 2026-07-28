@@ -4,9 +4,12 @@ name: Draft Release
 # it. Nothing is tagged or published at this point — the tag is created by GitHub
 # when you publish the draft, which is what triggers publish.yml.
 #
-# The root package.json is the only version that matters: Trove ships as one
-# package (@3sln/trove) with the built web app inside it, so `packages/*` are
-# workspace members for development rather than separately released artifacts.
+# The root package.json is the version for both published packages — @3sln/trove
+# and @3sln/create-trove go out together at the same number, so the scaffolder can
+# pin the exact drive it was released alongside. Bumping this without bumping
+# packages/create-trove/package.json is caught twice: by a unit test on every push
+# (packages/create-trove/test/wizard.test.js) and again by publish.yml before it
+# reaches the registry.
 
 on:
   push:

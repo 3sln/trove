@@ -1,15 +1,25 @@
 name: Publish to npm
 
-# Publishing a release (draft or otherwise) creates its tag and publishes the
-# package. Tests run first, so a red build cannot reach the registry.
+# Publishing a release (draft or otherwise) creates its tag and publishes both
+# packages. Tests run first, so a red build cannot reach the registry.
 #
-# Trove ships as ONE package: the web app is built here and travels inside the
-# tarball, so a consumer runs the server and gets the workbench with it — no
-# build step on their side, and no second package to keep in version lockstep.
-# That is the thing most of the preflight below is protecting, because every way
-# it can go wrong is silent: a tarball missing `dist/` installs perfectly and
-# then serves a 404 on `/`, and an unresolvable dependency only fails on someone
-# else's machine.
+# Two packages, one version:
+#
+#   @3sln/trove         the drive — server, core, plugin SDK, and the web app
+#                       already built, so a consumer never runs a build step.
+#   @3sln/create-trove  the scaffolder — asks where the drive will run and
+#                       writes a Bun, Node or Workers project for it.
+#
+# They are released together and carry the same version, which is what lets the
+# scaffolder pin an exact `@3sln/trove` without looking anything up: its own
+# version IS that version. Publishing one without the other, or with a different
+# number, breaks that — so the lockstep check below runs before anything else and
+# there is no path that publishes only one.
+#
+# Most of the rest of the preflight is protecting against silent failures: a
+# tarball missing `dist/` installs perfectly and then serves a 404 on `/`, an
+# unresolvable dependency only fails on someone else's machine, and a `bin`
+# without a shebang only fails when somebody runs it.
 #
 # Requires an `NPM_TOKEN` repository secret — an npm automation token with
 # publish rights on the @3sln scope.
@@ -61,40 +71,56 @@ jobs:
           fi
           echo "$TAG matches package.json."
 
+      - name: Check the two packages are in lockstep
+        run: |
+          set -euo pipefail
+          trove="$(node -p "require('./package.json').version")"
+          creator="$(node -p "require('./packages/create-trove/package.json').version")"
+          if [ "$trove" != "$creator" ]; then
+            echo "::error::@3sln/trove is $trove but @3sln/create-trove is $creator."
+            echo 'The scaffolder pins the exact version it was released alongside, so a'
+            echo 'mismatch means it would scaffold projects against a different drive.'
+            exit 1
+          fi
+          echo "Both at $trove."
+
       # Everything checked here is invisible at publish time and only surfaces on
       # a consumer's machine, which is the worst place to find it.
-      - name: Check the manifest can be published
+      - name: Check the manifests can be published
         run: |
           set -euo pipefail
           cat > /tmp/preflight.mjs <<'NODE'
           import { readFileSync } from 'node:fs';
 
-          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const MANIFESTS = ['package.json', 'packages/create-trove/package.json'];
           const problems = [];
 
-          if (pkg.private) {
-            problems.push('"private": true — npm refuses to publish this. Remove it.');
-          }
-          if (!/^@3sln\//.test(pkg.name || '')) {
-            // An unscoped `trove` is a different package owned by someone else.
-            problems.push(`name is "${pkg.name}" — expected the @3sln scope.`);
-          }
-          if (pkg.publishConfig?.access !== 'public') {
-            problems.push('publishConfig.access is not "public" — a scoped package defaults to restricted.');
-          }
+          for (const path of MANIFESTS) {
+            const pkg = JSON.parse(readFileSync(path, 'utf8'));
+            const at = (msg) => problems.push(`${path}: ${msg}`);
 
-          // A dependency that is not a registry range does not install for anyone
-          // who is not this repository: a git URL needs GitHub reachable and
-          // authenticated at install time, and workspace:/file:/link: resolve to
-          // nothing at all once the tarball is unpacked somewhere else.
-          const BAD_PROTOCOL = /^(github:|git\+|git:|file:|link:|workspace:|portal:)/;
-          for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
-            for (const [name, range] of Object.entries(pkg[field] || {})) {
-              if (BAD_PROTOCOL.test(String(range))) {
-                problems.push(`${field}.${name} is "${range}" — publish a release of it and depend on a version range.`);
-              }
-              if (name.startsWith('@trove/')) {
-                problems.push(`${field}.${name} is a workspace-only name that is not on the registry.`);
+            if (pkg.private) at('"private": true — npm refuses to publish this. Remove it.');
+            if (!/^@3sln\//.test(pkg.name || '')) {
+              // An unscoped `trove` is a different package owned by someone else.
+              at(`name is "${pkg.name}" — expected the @3sln scope.`);
+            }
+            if (pkg.publishConfig?.access !== 'public') {
+              at('publishConfig.access is not "public" — a scoped package defaults to restricted.');
+            }
+
+            // A dependency that is not a registry range does not install for anyone
+            // who is not this repository: a git URL needs GitHub reachable and
+            // authenticated at install time, and workspace:/file:/link: resolve to
+            // nothing at all once the tarball is unpacked somewhere else.
+            const BAD_PROTOCOL = /^(github:|git\+|git:|file:|link:|workspace:|portal:)/;
+            for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+              for (const [name, range] of Object.entries(pkg[field] || {})) {
+                if (BAD_PROTOCOL.test(String(range))) {
+                  at(`${field}.${name} is "${range}" — publish a release of it and depend on a version range.`);
+                }
+                if (name.startsWith('@trove/')) {
+                  at(`${field}.${name} is a workspace-only name that is not on the registry.`);
+                }
               }
             }
           }
@@ -104,7 +130,7 @@ jobs:
             console.log('\nThe package would install broken. Nothing was published.');
             process.exit(1);
           }
-          console.log(`${pkg.name}@${pkg.version} looks publishable.`);
+          console.log('Both manifests look publishable.');
           NODE
           node /tmp/preflight.mjs
 
@@ -124,42 +150,77 @@ jobs:
       # lands in the same stream as `--json`, so the report parses as a syntax error
       # instead of a file list.
       - name: Show what will be published
-        run: npm pack --dry-run --ignore-scripts
+        run: |
+          npm pack --dry-run --ignore-scripts
+          (cd packages/create-trove && npm pack --dry-run --ignore-scripts)
 
       # `npm pack` decides what to include from `files`/`.npmignore`/`.gitignore`,
       # and `dist/` is gitignored — exactly the kind of interaction that quietly
       # drops the built app from the tarball. So ask the tarball itself rather
       # than trusting the configuration that produced it.
-      - name: Check the built web app is actually in the tarball
+      - name: Check both tarballs contain what makes them work
         run: |
           set -euo pipefail
-          npm pack --dry-run --ignore-scripts --json > /tmp/pack.json
+          npm pack --dry-run --ignore-scripts --json > /tmp/pack-trove.json
+          (cd packages/create-trove && npm pack --dry-run --ignore-scripts --json) > /tmp/pack-creator.json
           cat > /tmp/contents.mjs <<'NODE'
           import { readFileSync } from 'node:fs';
 
           // Defensive even with --ignore-scripts: npm has a long history of writing
           // notices to stdout alongside --json output.
-          const raw = readFileSync('/tmp/pack.json', 'utf8');
-          const [tarball] = JSON.parse(raw.slice(raw.indexOf('[')));
-          const files = (tarball.files || []).map((f) => f.path);
+          const read = (p) => {
+            const raw = readFileSync(p, 'utf8');
+            return JSON.parse(raw.slice(raw.indexOf('[')))[0];
+          };
 
-          // The entry point, the thing it loads, and the hashed assets it names.
-          const required = ['packages/web/dist/index.html'];
-          const missing = required.filter((f) => !files.includes(f));
-          const assets = files.filter((f) => /^packages\/web\/dist\/(assets\/)?.*\.(js|css)$/.test(f));
+          const problems = [];
+          const trove = read('/tmp/pack-trove.json');
+          const troveFiles = (trove.files || []).map((f) => f.path);
 
-          if (missing.length || assets.length === 0) {
-            for (const f of missing) console.log(`::error::${f} is not in the tarball.`);
-            if (!assets.length) console.log('::error::No built JS/CSS under packages/web/dist.');
-            console.log('\nThe server would install fine and serve a 404 on `/`. Nothing was published.');
-            console.log(`Tarball has ${files.length} files.`);
+          if (!troveFiles.includes('packages/web/dist/index.html')) {
+            problems.push('@3sln/trove: packages/web/dist/index.html is not in the tarball.');
+          }
+          const assets = troveFiles.filter((f) => /^packages\/web\/dist\/assets\/.*\.(js|css)$/.test(f));
+          if (!assets.length) problems.push('@3sln/trove: no built JS/CSS under packages/web/dist/assets.');
+          // The scaffolder points wrangler's [assets] at this exact path, and a Workers
+          // deploy with nothing there serves the API and a blank page.
+          if (troveFiles.some((f) => f.startsWith('packages/create-trove/'))) {
+            problems.push('@3sln/trove: the scaffolder leaked into the drive tarball.');
+          }
+
+          const creator = read('/tmp/pack-creator.json');
+          const creatorFiles = (creator.files || []).map((f) => f.path);
+          if (!creatorFiles.includes('src/cli.js')) {
+            problems.push('@3sln/create-trove: src/cli.js is not in the tarball — `npm create` has nothing to run.');
+          }
+
+          if (problems.length) {
+            for (const p of problems) console.log(`::error::${p}`);
+            console.log('\nNothing was published.');
             process.exit(1);
           }
-          console.log(`Tarball: ${files.length} files, ${assets.length} built asset(s), ${(tarball.unpackedSize / 1e6).toFixed(1)} MB unpacked.`);
+          console.log(`@3sln/trove: ${troveFiles.length} files, ${assets.length} built asset(s), ${(trove.unpackedSize / 1e6).toFixed(1)} MB unpacked.`);
+          console.log(`@3sln/create-trove: ${creatorFiles.length} files.`);
           NODE
           node /tmp/contents.mjs
 
-      - name: Publish
+      # The bin is the entire interface of `npm create`. Without a shebang it runs
+      # under the shell rather than node, which fails on the first import line.
+      - name: Check the scaffolder is executable
+        run: |
+          set -euo pipefail
+          head -1 packages/create-trove/src/cli.js | grep -q '^#!/usr/bin/env node' \
+            || { echo '::error::packages/create-trove/src/cli.js has no node shebang.'; exit 1; }
+          node packages/create-trove/src/cli.js --help > /dev/null
+          echo 'Scaffolder runs.'
+
+      - name: Publish @3sln/trove
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @3sln/create-trove
+        working-directory: packages/create-trove
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -169,5 +230,13 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           version="$(node -p "require('./package.json').version")"
-          name="$(node -p "require('./package.json').name")"
-          echo "Published $name@$version from $TAG." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Published from $TAG:"
+            echo ""
+            echo "- \`@3sln/trove@$version\`"
+            echo "- \`@3sln/create-trove@$version\`"
+            echo ""
+            echo '```sh'
+            echo "npm create @3sln/trove my-drive"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

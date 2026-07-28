@@ -188,11 +188,26 @@ thin and there is no runtime-specific code below it. Pick a row:
 | **Node** | filesystem / S3 | SQLite file | identical behaviour, a little slower |
 | **Workers** | R2 (S3 API) | D1 + Vectorize | no local disk, so both must be bound |
 
+### Scaffold one
+
+```sh
+npm create @3sln/trove my-drive
+```
+
+Asks where the drive will run — Bun, Node or Cloudflare Workers — and writes a project
+configured for it: storage, metadata, search, identity, access control, and on Workers
+the whole binding set (D1, Vectorize, R2, the `TroveTasks` Durable Object) plus the
+`wrangler` commands that create each of them. Any section can be declined, and declining
+still writes the keys, commented, with a line saying what they are for.
+
+Credentials never land in a committed file: on Workers they become `wrangler secret put`
+steps and a gitignored `.dev.vars`; everywhere else a gitignored `.env`.
+
 ### From npm
 
-Trove publishes as a single package with the web app already built inside it, so there
-is no build step here and nothing to keep in version lockstep — the server and the
-workbench it serves are the same release by construction.
+Trove publishes as one package with the web app already built inside it, so there is no
+build step here — the server and the workbench it serves are the same release by
+construction.
 
 ```sh
 npm install @3sln/trove
@@ -1096,6 +1111,8 @@ packages/
   server/       @3sln/trove/server — Request→Response API + Bun / Node / Worker adapters
   web/          @3sln/trove/web — the workbench (dodo + ngin)
   plugin-sdk/   @3sln/trove/plugin-sdk — the iframe-side plugin API + RPC
+  create-trove/ @3sln/create-trove — the scaffolder; the one directory that is
+                its own published package rather than part of @3sln/trove
 ```
 
 ## Tests

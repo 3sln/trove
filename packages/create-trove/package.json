@@ -1,0 +1,36 @@
+{
+  "name": "@3sln/create-trove",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Scaffold a Trove deployment — Bun, Node, or Cloudflare Workers — with the bindings, environment and secrets each one needs.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3sln/trove.git",
+    "directory": "packages/create-trove"
+  },
+  "license": "MIT",
+  "author": "Ray Stubbs",
+  "keywords": [
+    "trove",
+    "scaffold",
+    "create",
+    "cloudflare workers",
+    "self-hosted"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "create-trove": "./src/cli.js"
+  },
+  "exports": {
+    "./plan": "./src/plan.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
