@@ -10,10 +10,10 @@
 import http from 'node:http';
 import fs, { readFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
-import path from 'node:path';
 import { Readable } from 'node:stream';
 import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
 import { findWebDist } from './webDist.js';
+import { createStaticAssets } from './staticAssets.js';
 
 // A JWKS held in a file rather than inlined in the environment: multi-line JSON is
 // awkward in env vars and shows up in `docker inspect`, while a mounted secret file
@@ -33,36 +33,24 @@ const HOST = process.env.TROVE_HOST || process.env.HOST || '0.0.0.0';
 // resolution rather than a relative path.
 const { dir: WEB_DIST, source: WEB_DIST_SOURCE } = findWebDist();
 
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
-  '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.map': 'application/json', '.webmanifest': 'application/manifest+json',
-};
-
-async function staticAssets(req) {
-  const url = new URL(req.url);
-  let rel = decodeURIComponent(url.pathname);
-  if (rel === '/') rel = '/index.html';
-  const filePath = path.join(WEB_DIST, path.normalize(rel));
-  if (!filePath.startsWith(WEB_DIST)) return null; // traversal guard
-  try {
-    const stat = await fsp.stat(filePath);
-    if (stat.isDirectory()) return null;
-    const stream = Readable.toWeb(fs.createReadStream(filePath));
-    return new Response(stream, { headers: { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream' } });
-  } catch {
-    // SPA fallback: serve index.html for unknown non-API GET routes.
-    if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
-      try {
-        const html = await fsp.readFile(path.join(WEB_DIST, 'index.html'));
-        return new Response(html, { headers: { 'content-type': 'text/html' } });
-      } catch {
-        return null;
-      }
+// Where to look, what to refuse and what to say about caching is shared with the Bun
+// adapter — see staticAssets.js. All that differs here is how a file is read.
+const staticAssets = WEB_DIST && createStaticAssets({
+  dir: WEB_DIST,
+  read: async (filePath) => {
+    try {
+      const stat = await fsp.stat(filePath);
+      if (!stat.isFile()) return null;
+      return {
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        open: () => Readable.toWeb(fs.createReadStream(filePath)),
+      };
+    } catch {
+      return null;
     }
-    return null;
-  }
-}
+  },
+});
 
 async function toWebRequest(nodeReq) {
   const url = `http://${nodeReq.headers.host || 'localhost'}${nodeReq.url}`;

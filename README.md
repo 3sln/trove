@@ -486,6 +486,17 @@ the same values as config fields instead.
 | `TROVE_PUBLIC_URL` | detected | the drive's public origin, for sign-in discovery |
 | `TROVE_TRUST_PROXY` | `false` | honour `X-Forwarded-Proto/Host` — only behind a real proxy |
 | `TROVE_CSP` | off | opt-in shell CSP (see `SAMPLE_CSP`) |
+| **installed app** | | served at `/manifest.webmanifest`, generated from these |
+| `TROVE_APP_NAME` | `Trove` | what the installed app is called |
+| `TROVE_APP_SHORT_NAME` | the app name | home-screen label |
+| `TROVE_APP_DESCRIPTION` | the stock one | |
+| `TROVE_APP_THEME_COLOR` | `#181a1f` | |
+| `TROVE_APP_BACKGROUND_COLOR` | the theme colour | splash background |
+| `TROVE_APP_DISPLAY` | `standalone` | `fullscreen`, `minimal-ui`, `browser` |
+| `TROVE_APP_START_URL` | `/` | |
+| `TROVE_APP_ICON` | `/icon.svg` | any URL the browser can reach |
+| `TROVE_APP_ICON_SIZES` | `any` | state the real size for a raster icon |
+| `TROVE_APP_ICONS` | — | the full icon array, for maskable or multi-size sets |
 | **plugins** | | |
 | `TROVE_SERVER_INDEXERS` | on | `false` disables server-side plugin indexers |
 | `TROVE_ENFORCE_PLUGIN_CAPS` | `false` | strict capability enforcement |
@@ -652,6 +663,34 @@ Restoring is putting both back and starting up: verified end to end on a
 downloadable. And if the search index is ever lost on its own, Trove notices at
 startup and rebuilds it. `/api/health` is a liveness check; `/api/ready` probes
 the store for readiness gating.
+
+### Caching, and why a deploy doesn't strand a browser
+
+Two kinds of URL, and only one of them is safe to keep:
+
+| | | |
+| --- | --- | --- |
+| `/assets/*` | `public, max-age=31536000, immutable` | content-addressed — the filename changes whenever the bytes do, so nothing ever needs invalidating |
+| everything else | `no-cache` | `index.html`, `sw.js`, the manifest, the icon: stable names whose contents change |
+
+Getting that backwards is the classic way to ship a blank page. `index.html` is the
+entry point, so a browser holding a cached copy goes on importing hashed modules from a
+build that no longer exists — a link-time failure, which kills the whole graph before a
+line runs. `no-cache` means "revalidate", not "don't cache": responses carry an `ETag`,
+so a revalidation that finds nothing changed is a 304 rather than a re-download.
+
+A miss under `/assets/` is a **404**, deliberately, rather than the SPA fallback. Any
+other answer is a stale reference to a retired build, and answering it with `index.html`
+at status 200 is what let a service worker cache HTML under a `.js` URL — permanently,
+since a cache hit never asks the network again. The worker refuses a response whose type
+contradicts the request as well, and its shell cache is named for the build
+(`trove-shell-<hash>`), so activating a new worker retires the old shell instead of
+inheriting it. The caches holding API responses and files pinned for offline use are
+*not* named per build — rotating those would throw away someone's offline library on
+every deploy.
+
+If you put a CDN or reverse proxy in front, let these headers through rather than
+replacing them.
 
 ## Background work and standing problems
 

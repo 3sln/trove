@@ -146,6 +146,41 @@ test('every resource named in the config also has a command to create it', async
   expect(cmds.at(-1)).toBe('npx wrangler deploy');
 });
 
+test('a host can put its own name on the installed app', async () => {
+  const { files } = await plan([
+    ['Where will this run?', 'bun'],
+    ['Object storage', false], ['Metadata', false], ['Semantic search', false],
+    ['Identity', false], ['Access control', false],
+    ['Installed app name', true], ['  App name', 'Acme Files'], ['  Short name', 'Files'],
+    ['  Theme colour', '#0b5cff'], ['  Icon URL', '/brand/logo.png'], ['  Icon size', '512x512'],
+    ['Server', false],
+  ]);
+  const env = fileNamed(files, '.env').contents;
+  expect(env).toContain('TROVE_APP_NAME=Acme Files');
+  expect(env).toContain('TROVE_APP_SHORT_NAME=Files');
+  expect(env).toContain('TROVE_APP_THEME_COLOR=#0b5cff');
+  expect(env).toContain('TROVE_APP_ICON=/brand/logo.png');
+  // A raster icon has to say its real size — "any" is a claim the browser believes.
+  expect(env).toContain('TROVE_APP_ICON_SIZES=512x512');
+});
+
+test('branding is off unless asked for, and a blank short name is not written', async () => {
+  const { plan: p, files } = await plan([
+    ['Where will this run?', 'node'],
+    ['Object storage', false], ['Metadata', false], ['Semantic search', false],
+    ['Identity', false], ['Access control', false],
+    ['Installed app name', true], ['  App name', 'Acme Files'], ['  Short name', ''],
+    ['  Theme colour', '#181a1f'], ['  Icon URL', ''],
+    ['Server', false],
+  ]);
+  const env = fileNamed(files, '.env').contents;
+  // Unset rather than empty: the server falls back to the app name, and an empty
+  // string would override that with nothing.
+  expect(env).not.toContain('TROVE_APP_SHORT_NAME=');
+  expect(env).not.toContain('TROVE_APP_ICON=');
+  expect(p.skipped).not.toContain('Installed app name');
+});
+
 // --- skipping -------------------------------------------------------------------
 
 test('a skipped section still documents itself, commented', async () => {

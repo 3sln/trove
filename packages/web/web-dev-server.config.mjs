@@ -20,9 +20,14 @@ export default {
   plugins: [textModulePlugin({ rootDir })],
   middleware: [
     sqlWasmMiddleware(),
-    // Minimal /api proxy to the backend (dev only; prod serves both from one origin).
+    // Minimal proxy to the backend (dev only; prod serves both from one origin).
+    //
+    // The manifest goes through too, even though it is not under /api: it is generated
+    // from the operator's configuration rather than served from a file, so there is
+    // nothing in public/ for the dev server to hand back. Proxying it is what keeps one
+    // document rather than a static development copy that drifts from the real one.
     async (ctx, next) => {
-      if (!ctx.path.startsWith('/api')) return next();
+      if (!ctx.path.startsWith('/api') && ctx.path !== '/manifest.webmanifest') return next();
       const hasBody = ctx.method !== 'GET' && ctx.method !== 'HEAD';
       const res = await fetch(API_TARGET + ctx.url, {
         method: ctx.method,

@@ -229,6 +229,37 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
     ], { skipped: true });
   }
 
+  // --- branding --------------------------------------------------------------
+  // The manifest is generated from configuration rather than served from a file, so
+  // this is the one place a self-hoster gets to put their own name on the thing their
+  // users install. Off by default: it is the only optional section here, and a drive
+  // called "Trove" is a perfectly good drive.
+  if (await prompter.section('Installed app name', {
+    blurb: 'What the browser calls this when someone installs it. Defaults to Trove.',
+    default: false,
+  })) {
+    const appName = await prompter.text('  App name', { default: 'Trove' });
+    const entries = [entry('TROVE_APP_NAME', appName)];
+    const short = await prompter.text('  Short name', { default: '', hint: 'for a home-screen label; defaults to the app name' });
+    if (short) entries.push(entry('TROVE_APP_SHORT_NAME', short));
+    entries.push(entry('TROVE_APP_THEME_COLOR', await prompter.text('  Theme colour', { default: '#181a1f' })));
+    const icon = await prompter.text('  Icon URL', { default: '', hint: 'leave blank for the built-in mark' });
+    if (icon) {
+      entries.push(entry('TROVE_APP_ICON', icon));
+      entries.push(entry('TROVE_APP_ICON_SIZES', await prompter.text('  Icon size', {
+        default: icon.endsWith('.svg') ? 'any' : '512x512',
+        hint: 'a raster icon claiming "any" gets scaled badly',
+      })));
+    }
+    add('Installed app name', entries);
+  } else {
+    add('Installed app name', [
+      placeholder('TROVE_APP_NAME', 'what the installed app is called; defaults to Trove'),
+      placeholder('TROVE_APP_THEME_COLOR', 'defaults to #181a1f'),
+      placeholder('TROVE_APP_ICON', 'defaults to the built-in mark'),
+    ], { skipped: true });
+  }
+
   // --- runtime specifics -----------------------------------------------------
   if (isWorkers) {
     plan.workers = await askWorkers(prompter);
