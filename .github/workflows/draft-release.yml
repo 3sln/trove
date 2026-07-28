@@ -4,12 +4,15 @@ name: Draft Release
 # it. Nothing is tagged or published at this point — the tag is created by GitHub
 # when you publish the draft, which is what triggers publish.yml.
 #
-# The root package.json is the version for both published packages — @3sln/trove
-# and @3sln/create-trove go out together at the same number, so the scaffolder can
-# pin the exact drive it was released alongside. Bumping this without bumping
-# packages/create-trove/package.json is caught twice: by a unit test on every push
-# (packages/create-trove/test/wizard.test.js) and again by publish.yml before it
-# reaches the registry.
+# The root package.json is the version for both published packages — @3sln/trove and
+# @3sln/create-trove go out together at the same number, so the scaffolder can pin the
+# exact drive it was released alongside.
+#
+# Bump with `npm version patch|minor|major`, which carries the other manifest with it:
+# the `version` lifecycle script runs scripts/sync-version.mjs and stages the result, so
+# both land in one commit and there is no second edit to remember. A hand-edit that
+# forgets is caught by a unit test on every pull request, and again by publish.yml
+# before it can reach the registry.
 
 on:
   push:

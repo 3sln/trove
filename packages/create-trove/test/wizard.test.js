@@ -29,12 +29,22 @@ test('create-trove and trove carry the same version', () => {
   // it was built alongside without looking anything up. If these ever drift, a
   // scaffolded project pairs a server with a workbench from a different release — the
   // whole failure mode that shipping one package was meant to end.
+  //
+  // `npm version` keeps them together on its own (the `version` lifecycle script runs
+  // scripts/sync-version.mjs and stages the result), so this is here for the hand-edit
+  // — which is exactly the case where nothing else would notice.
   const here = path.resolve(import.meta.dir, '..');
   const mine = JSON.parse(readFileSync(path.join(here, 'package.json'), 'utf8'));
   const trove = JSON.parse(readFileSync(path.resolve(here, '../../package.json'), 'utf8'));
   expect(mine.name).toBe('@3sln/create-trove');
   expect(trove.name).toBe('@3sln/trove');
-  expect(mine.version).toBe(trove.version);
+  if (mine.version !== trove.version) {
+    throw new Error(
+      `@3sln/create-trove is ${mine.version} but @3sln/trove is ${trove.version}.\n`
+      + 'They are released together and the scaffolder pins the drive by its own version.\n'
+      + 'Fix it with:  npm run sync-version',
+    );
+  }
 });
 
 test('the pin is exact, not a range', async () => {

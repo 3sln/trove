@@ -1154,6 +1154,28 @@ packages/
                 its own published package rather than part of @3sln/trove
 ```
 
+## Releasing
+
+Two packages, one version:
+
+```sh
+npm version patch      # or minor / major — bumps BOTH manifests in one commit
+git push --follow-tags
+```
+
+`@3sln/trove` and `@3sln/create-trove` are released together and carry the same number,
+which is what lets the scaffolder pin the exact drive it shipped alongside by reading its
+own version. npm has no way to share a version between manifests, so the root is the
+source of truth and the `version` lifecycle script copies it down
+(`scripts/sync-version.mjs`) and stages the result — there is no second edit to remember.
+`npm run sync-version` does it on demand after a hand-edit; a unit test catches drift on
+every pull request, and `publish.yml` checks again before the registry.
+
+Pushing the bump to `main` opens a **draft** release. Publishing that draft creates the
+tag and runs `publish.yml`, which tests, builds the web app, verifies both tarballs
+actually contain what makes them work, and publishes each package — skipping either one
+that is already on the registry, so a half-failed release can simply be published again.
+
 ## Tests
 
 ```sh

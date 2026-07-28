@@ -46,7 +46,9 @@
     "test": "bun test",
     "test:browser": "web-test-runner --config packages/web/web-test-runner.config.mjs",
     "backup": "bun scripts/backup.mjs",
-    "prepack": "bun run build:web"
+    "prepack": "bun run build:web",
+    "sync-version": "node scripts/sync-version.mjs",
+    "version": "npm run sync-version && git add packages/create-trove/package.json"
   },
   "engines": {
     "node": ">=20",
