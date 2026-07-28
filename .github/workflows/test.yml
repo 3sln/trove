@@ -1,7 +1,12 @@
 name: Test
 
 on:
+  # Pushes to main, and pull requests. Not every push: a branch with a PR open matches
+  # both triggers, so a bare `push:` runs the whole suite twice for every commit and
+  # reports two identical checks on the PR.
   push:
+    branches:
+      - main
   pull_request:
 
 # A branch that gets pushed again mid-run does not need the older run finished.
