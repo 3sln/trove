@@ -1,6 +1,6 @@
 {
   "name": "@3sln/create-trove",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "Scaffold a Trove deployment — Bun, Node, or Cloudflare Workers — with the bindings, environment and secrets each one needs.",
   "repository": {
@@ -24,7 +24,10 @@
     "create-trove": "./src/cli.js"
   },
   "exports": {
+    ".": "./src/index.js",
     "./plan": "./src/plan.js",
+    "./render": "./src/render.js",
+    "./prompt": "./src/prompt.js",
     "./package.json": "./package.json"
   },
   "files": [

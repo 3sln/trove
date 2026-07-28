@@ -203,6 +203,41 @@ still writes the keys, commented, with a line saying what they are for.
 Credentials never land in a committed file: on Workers they become `wrangler secret put`
 steps and a gitignored `.dev.vars`; everywhere else a gitignored `.env`.
 
+#### Without a person
+
+Every question has a stable key, so the whole thing can be driven by a script or an
+agent. Keys are a flat namespace rather than the text of a question — rewording a hint
+should not break a caller.
+
+```sh
+npm create @3sln/trove -- --describe        # every key, its type and its default
+
+npm create @3sln/trove drive -- --runtime=workers --json \
+  --set storage.bucket=acme-objects \
+  --set identity.driver=cloudflare-access --set identity.team=acme \
+  --set workers.d1.id=db-abc
+```
+
+`--json` puts one parseable object on stdout — files written, commands to run next,
+warnings, and anything skipped — with every human word on stderr. `--config file.json`
+takes the same keys in bulk and `--set` overrides it. `--dry-run` answers "what would
+you do" without writing.
+
+An answer that is never asked for is an **error**, not a shrug: it means either a typo or
+a setting another answer ruled out (`storage.bucket` when the backend is `filesystem`),
+and a caller that thinks it configured a bucket should not get a drive without one.
+
+The same thing is available as a library, which is what `--describe` is generated from:
+
+```js
+import { createProject, describeQuestions } from '@3sln/create-trove';
+
+const { files, steps, unused } = await createProject({
+  name: 'drive', version: '0.0.3', runtime: 'node',
+  answers: { 'storage.root': '/srv/objects', 'identity.driver': 'header' },
+});
+```
+
 ### From npm
 
 Trove publishes as one package with the web app already built inside it, so there is no

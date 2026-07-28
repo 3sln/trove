@@ -111,6 +111,105 @@ export function createPrompter({ input = process.stdin, output = process.stdout,
   };
 }
 
+// --- non-interactive drivers -------------------------------------------------
+//
+// Everything below is the same interface, which is the point: the wizard does not know
+// whether a person, a test transcript, a `--set` flag or nobody at all is answering it.
+//
+// These two are what make the tool usable by something that is not a human. An agent
+// cannot read a blurb and type a bucket name, so it supplies answers up front by key —
+// `storage.bucket`, not "  Bucket". Keys are stable; the wording of a question is not,
+// and pinning an interface to prose means rewording a hint breaks callers.
+
+const TRUE = new Set(['true', 'yes', 'y', '1', 'on']);
+const FALSE = new Set(['false', 'no', 'n', '0', 'off']);
+
+function toBool(raw, key) {
+  const v = String(raw).trim().toLowerCase();
+  if (TRUE.has(v)) return true;
+  if (FALSE.has(v)) return false;
+  throw new Error(`${key}: expected a boolean, got "${raw}"`);
+}
+
+/**
+ * Answer from a map of keys, and ask `inner` about anything not supplied.
+ *
+ * Unused keys are an error rather than a shrug — see `unused()`. A key that was never
+ * consumed is either a typo or a setting that the other answers made unreachable
+ * (`storage.bucket` when the backend is `filesystem`), and both are things the caller
+ * wants told to them rather than silently dropped.
+ *
+ * @param {Record<string, string|number|boolean>} answers
+ * @param {object} inner the prompter to fall back to
+ */
+export function presetPrompter(answers, inner) {
+  const supplied = new Map(Object.entries(answers ?? {}).map(([k, v]) => [k, v]));
+  const used = new Set();
+
+  const take = (key) => {
+    if (key === undefined || !supplied.has(key)) return undefined;
+    used.add(key);
+    return supplied.get(key);
+  };
+
+  return {
+    close: () => inner.close(),
+    heading: (t) => inner.heading(t),
+    note: (t) => inner.note(t),
+    /** Keys that were given but never asked for. */
+    unused: () => [...supplied.keys()].filter((k) => !used.has(k)),
+
+    async text(label, opts = {}) {
+      const v = take(opts.key);
+      return v === undefined ? inner.text(label, opts) : String(v);
+    },
+    async choice(label, options, opts = {}) {
+      const v = take(opts.key);
+      if (v === undefined) return inner.choice(label, options, opts);
+      const wanted = String(v);
+      if (!options.some((o) => o.value === wanted)) {
+        throw new Error(`${opts.key}: "${wanted}" is not one of ${options.map((o) => o.value).join(', ')}`);
+      }
+      return wanted;
+    },
+    async confirm(label, opts = {}) {
+      const v = take(opts.key);
+      return v === undefined ? inner.confirm(label, opts) : toBool(v, opts.key);
+    },
+    async section(title, opts = {}) {
+      const v = take(opts.key);
+      return v === undefined ? inner.section(title, opts) : toBool(v, opts.key);
+    },
+  };
+}
+
+/**
+ * Ask nothing, answer with defaults, and write down every question it was asked.
+ *
+ * This is how `--describe` works. The interview branches on its own answers, so there is
+ * no static schema to print — but running it with a recorder produces the questions that
+ * are actually reachable, which is the honest version of the same thing and cannot drift
+ * from the code the way a hand-kept list would.
+ */
+export function recordingPrompter() {
+  const seen = [];
+  const record = (kind, label, opts, value, options) => {
+    if (opts.key) seen.push({ key: opts.key, kind, label: label.trim(), default: value, ...(options ? { options } : {}) });
+    return value;
+  };
+  return {
+    close() {}, heading() {}, note() {},
+    questions: () => seen,
+    async text(label, opts = {}) { return record('text', label, opts, opts.default ?? ''); },
+    async choice(label, options, opts = {}) {
+      return record('choice', label, opts, opts.default ?? options[0].value,
+        options.map((o) => ({ value: o.value, label: o.label })));
+    },
+    async confirm(label, opts = {}) { return record('boolean', label, opts, opts.default ?? true); },
+    async section(title, opts = {}) { return record('boolean', title, opts, opts.default ?? true); },
+  };
+}
+
 /**
  * A prompter that reads from a list instead of a person.
  *
