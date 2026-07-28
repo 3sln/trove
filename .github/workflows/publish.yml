@@ -71,18 +71,12 @@ jobs:
           fi
           echo "$TAG matches package.json."
 
+      # `npm version` syncs the two on its own — the `version` lifecycle script runs
+      # scripts/sync-version.mjs and stages the result — and a unit test catches a
+      # hand-edit on every pull request. This is the last of the three, on the one path
+      # where being wrong is published rather than merely committed.
       - name: Check the two packages are in lockstep
-        run: |
-          set -euo pipefail
-          trove="$(node -p "require('./package.json').version")"
-          creator="$(node -p "require('./packages/create-trove/package.json').version")"
-          if [ "$trove" != "$creator" ]; then
-            echo "::error::@3sln/trove is $trove but @3sln/create-trove is $creator."
-            echo 'The scaffolder pins the exact version it was released alongside, so a'
-            echo 'mismatch means it would scaffold projects against a different drive.'
-            exit 1
-          fi
-          echo "Both at $trove."
+        run: node scripts/sync-version.mjs --check
 
       # Everything checked here is invisible at publish time and only surfaces on
       # a consumer's machine, which is the worst place to find it.
@@ -214,14 +208,36 @@ jobs:
           node packages/create-trove/src/cli.js --help > /dev/null
           echo 'Scaffolder runs.'
 
+      # Each package is published only if that exact version is not already on the
+      # registry. Under lockstep both bump together so both are normally new — the case
+      # this is for is a re-run: if the second publish failed the first time (a network
+      # blip, an expired token), the release can simply be published again instead of
+      # needing someone to work out which half landed. npm would otherwise refuse the
+      # already-published one and take the whole job down with it.
       - name: Publish @3sln/trove
-        run: npm publish --access public --provenance
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if npm view "@3sln/trove@$version" version >/dev/null 2>&1; then
+            echo "@3sln/trove@$version is already published — nothing to do."
+            echo "@3sln/trove@$version was already on the registry." >> "$GITHUB_STEP_SUMMARY"
+          else
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @3sln/create-trove
         working-directory: packages/create-trove
-        run: npm publish --access public --provenance
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if npm view "@3sln/create-trove@$version" version >/dev/null 2>&1; then
+            echo "@3sln/create-trove@$version is already published — nothing to do."
+            echo "@3sln/create-trove@$version was already on the registry." >> "$GITHUB_STEP_SUMMARY"
+          else
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
