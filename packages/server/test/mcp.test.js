@@ -334,7 +334,13 @@ test('an agent is exactly as privileged as the person whose token it holds', asy
   const priv = await collections.create({ name: 'Private', store: { driver: 'memory' } }, admin);
   const shared = await collections.create({ name: 'Shared', store: { driver: 'memory' } }, admin);
   await collections.setGrant(shared.id, { type: 'user', subject: 'bob@example.com', capabilities: ['read'] }, admin);
-  await vfs.writeFile('secret.txt', 'the combination is 1234', { collectionId: priv.id, contentType: 'text/plain' });
+  // The secret is a word rather than a number on purpose. It was `1234`, and every id
+  // in a response is 32 hex characters — so a run where an ALLOWED item happened to be
+  // minted as `itm_…d84961234` failed this test with nothing wrong: the results held
+  // only public.txt, and `not.toContain('1234')` matched the id of the very file Bob is
+  // supposed to see. Roughly one run in a couple of thousand, which is often enough to
+  // land on a release. A sentinel containing anything outside [0-9a-f] cannot collide.
+  await vfs.writeFile('secret.txt', 'the combination is swordfish', { collectionId: priv.id, contentType: 'text/plain' });
   await vfs.writeFile('public.txt', 'anyone here may read this', { collectionId: shared.id, contentType: 'text/plain' });
 
   const bob = await sign({ sub: 'bob@example.com', email: 'bob@example.com' });
@@ -348,13 +354,13 @@ test('an agent is exactly as privileged as the person whose token it holds', asy
   // if it were told the file exists.
   const denied = await callTool(handle, 'read_file', { file: 'secret.txt', collection: priv.id }, { token: bob });
   expect(denied.isError).toBe(true);
-  expect(denied.text).not.toContain('1234');
+  expect(denied.text).not.toContain('swordfish');
 
   // And search does not leak it either, which is the subtler hole: search runs across
   // collections by design, so it has to be scoped before it runs, not filtered after.
   const searched = await callTool(handle, 'search_files', { query: 'combination' }, { token: bob });
   expect(searched.text).not.toContain('secret.txt');
-  expect(searched.text).not.toContain('1234');
+  expect(searched.text).not.toContain('swordfish');
 
   // What he can read, he can read.
   const allowed = await callTool(handle, 'read_file', { file: 'public.txt', collection: shared.id }, { token: bob });
@@ -491,11 +497,11 @@ test('an ACL layer that cannot answer refuses the agent rather than serving it',
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
     authServer: 'https://auth.example.com',
   });
-  await vfs.writeFile('secret.txt', 'the combination is 1234', { contentType: 'text/plain' });
+  await vfs.writeFile('secret.txt', 'the combination is swordfish', { contentType: 'text/plain' });
   collections.assert = () => { throw new Error('service unavailable'); };
 
   const bob = await sign({ sub: 'bob@example.com', email: 'bob@example.com' });
   const read = await callTool(handle, 'read_file', { file: 'secret.txt' }, { token: bob });
   expect(read.isError).toBe(true);
-  expect(read.text).not.toContain('1234');
+  expect(read.text).not.toContain('swordfish');
 });

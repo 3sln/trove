@@ -62,7 +62,10 @@ test('a user with nothing readable gets nothing, not everything', async () => {
     const res = await post(handle, path, payload, mallory);
     const text = await res.text();
     expect(text).not.toContain('salaries.csv');
-    expect(text).not.toContain('999999');
+    // With the comma, because ids are 32 hex characters and a bare run of digits can
+    // occur inside one — see the note in mcp.test.js, where exactly that turned a
+    // passing security check into a failed release.
+    expect(text).not.toContain('alice,999999');
   }
 });
 
