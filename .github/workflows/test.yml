@@ -1,12 +1,14 @@
 name: Test
 
 on:
-  # Pushes to main, and pull requests. Not every push: a branch with a PR open matches
-  # both triggers, so a bare `push:` runs the whole suite twice for every commit and
-  # reports two identical checks on the PR.
-  push:
-    branches:
-      - main
+  # Pull requests only. A bare `push:` also matches a branch with a PR open, so the
+  # suite ran twice for every commit and reported two identical checks; and a `push` to
+  # main would only re-run what the PR had just proven a moment earlier.
+  #
+  # Nothing tests main directly as a result. The gap that leaves is a merge of two
+  # separately-green PRs that conflict semantically — publish.yml is what catches it,
+  # since it runs the full suite against the released tag before anything reaches the
+  # registry. A broken main is possible; a broken release is not.
   pull_request:
 
 # A branch that gets pushed again mid-run does not need the older run finished.
