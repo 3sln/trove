@@ -20,7 +20,7 @@
 
 import { dd, fromAsync } from '../../../runtime.js';
 import { icon } from '../../icon.js';
-import { parseTroveUri } from '@trove/core/links.js';
+import { parseTroveUri } from '@3sln/trove/core/links.js';
 import { openTroveLink } from '../../../bl/links.js';
 
 const { div, span, h1, h2, h3, p, ul, ol, li, pre, code, a, em, strong, blockquote, hr, br } = dd;

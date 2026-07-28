@@ -1,0 +1,41 @@
+name: Test
+
+on:
+  # Pull requests only. A bare `push:` also matches a branch with a PR open, so the
+  # suite ran twice for every commit and reported two identical checks; and a `push` to
+  # main would only re-run what the PR had just proven a moment earlier.
+  #
+  # Nothing tests main directly as a result. The gap that leaves is a merge of two
+  # separately-green PRs that conflict semantically — publish.yml is what catches it,
+  # since it runs the full suite against the released tag before anything reaches the
+  # registry. A broken main is possible; a broken release is not.
+  pull_request:
+
+# A branch that gets pushed again mid-run does not need the older run finished.
+concurrency:
+  group: "test-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Not an optimisation, and not only about shipping: the suite itself needs
+      # the built app. `web-dist.test.js` asserts that `findWebDist()` resolves
+      # `@trove/web` rather than guessing at the directory layout, and resolution
+      # is only reported as found when `dist/` exists — so without this step two
+      # tests fail for a reason that has nothing to do with the change under test.
+      - name: Build the web app
+        run: bun run build:web
+
+      - name: Test
+        run: bun test

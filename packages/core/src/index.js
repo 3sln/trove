@@ -1,4 +1,4 @@
-// @trove/core — runtime-agnostic building blocks for a self-hostable drive.
+// @3sln/trove/core — runtime-agnostic building blocks for a self-hostable drive.
 // Import the pieces directly, or use `createVfs` to wire a sensible default.
 
 export { TroveError, ErrorCode, wrapError, isRetryable, isOutOfSpace } from './errors.js';

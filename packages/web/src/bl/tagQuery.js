@@ -6,7 +6,7 @@
 // Values may be "quoted" to include spaces. Comparisons are numeric when both
 // sides parse as numbers, otherwise case-insensitive string comparisons.
 
-import { matchTagFilters } from '@trove/core/search/tagMatch.js';
+import { matchTagFilters } from '@3sln/trove/core/search/tagMatch.js';
 
 const TOKEN = /#([\w.-]+)(?::(<=|>=|!=|=|<|>)?("[^"]*"|[^#\s]+)?)?/g;
 

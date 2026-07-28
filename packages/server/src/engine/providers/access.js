@@ -21,7 +21,7 @@
 // dispatcher only, so a query would have escaped one entirely.
 
 import { Provider } from '@3sln/ngin';
-import { TroveError } from '@trove/core';
+import { TroveError } from '@3sln/trove/core';
 
 /**
  * The one place that decides whether this deployment enforces ACLs at all.

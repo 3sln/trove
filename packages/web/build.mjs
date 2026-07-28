@@ -11,6 +11,7 @@
 import { rm, mkdir, cp, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,21 @@ async function bundle(entry, label, opts = {}) {
   const out = await Bun.build({
     entrypoints: [path.join(root, entry)],
     outdir: dist,
-    naming: 'assets/[name]-[hash].[ext]',
+    // All three, spelled out. A bare string sets the ENTRY pattern only, so split
+    // chunks kept the default and landed at the dist root — hashed, but sitting beside
+    // index.html and sw.js, which are not. That matters because the cache policy is a
+    // path rule: `/assets/*` is immutable because everything under it is
+    // content-addressed, and a 40 kB chunk outside that prefix is either served
+    // uncached or drags the rule out to cover files that must stay revalidated.
+    // Chunks keep their own prefix rather than reusing [name]: a chunk split out of
+    // main.js is also called "main", so sharing the pattern puts two unrelated
+    // `main-<hash>.js` next to each other, one of them the entry point and nothing in
+    // the name to say which.
+    naming: {
+      entry: 'assets/[name]-[hash].[ext]',
+      chunk: 'assets/chunk-[hash].[ext]',
+      asset: 'assets/[name]-[hash].[ext]',
+    },
     minify: true,
     sourcemap: 'linked',
     target: 'browser',
@@ -57,4 +72,29 @@ let html = await readFile(path.join(root, 'index.html'), 'utf8');
 html = html.replace('/src/styles.css', cssPath).replace('/src/main.js', jsPath);
 await writeFile(path.join(dist, 'index.html'), html);
 
-console.log(`built ${jsPath} + ${cssPath}`);
+// The service worker keeps its stable URL — that is how a browser finds a new one — but
+// its SHELL cache is named for this build, so activating a new worker retires the
+// previous shell instead of letting two builds share one cache. The name was a
+// hardcoded `trove-shell-v1`, which meant the `activate` handler's sweep of caches "not
+// in KEEP" never had anything to sweep: the set it compared against never changed.
+//
+// Only the shell rotates. `trove-api` is data rather than code, and `trove-files` holds
+// the bytes of files the user pinned for offline use — rotating that would silently
+// throw away someone's offline library on every deploy.
+const buildId = createHash('sha256')
+  .update([...js.outputs, ...css.outputs].map((o) => rel(o)).sort().join('\n'))
+  .digest('hex')
+  .slice(0, 10);
+
+const swPath = path.join(dist, 'sw.js');
+const sw = await readFile(swPath, 'utf8');
+const stamped = sw.replace(/const SHELL = '[^']*';/, `const SHELL = 'trove-shell-${buildId}';`);
+if (stamped === sw) {
+  // Loud, because the failure is otherwise invisible: the build succeeds, the worker
+  // ships, and every deploy from here on silently reuses one stale shell cache.
+  console.error('Could not stamp SHELL in public/sw.js — the declaration moved.');
+  process.exit(1);
+}
+await writeFile(swPath, stamped);
+
+console.log(`built ${jsPath} + ${cssPath}  (shell trove-shell-${buildId})`);

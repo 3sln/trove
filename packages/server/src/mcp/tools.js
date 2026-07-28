@@ -12,8 +12,8 @@
 // that this drive has no folders, because every model assumes otherwise and will
 // otherwise spend its turns looking for a path that does not exist.
 
-import { TroveError } from '@trove/core';
-import { troveUri } from '@trove/core/links.js';
+import { TroveError } from '@3sln/trove/core';
+import { troveUri } from '@3sln/trove/core/links.js';
 import { toolText } from './protocol.js';
 
 // A file read has to fit in a context window and in memory. Past this the tool returns

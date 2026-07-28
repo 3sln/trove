@@ -56,7 +56,13 @@ test('a zip bomb is refused before it is inflated', async () => {
   expect(res.status).toBe(413);
   expect((await res.json()).error.message).toMatch(/expands to more than/i);
   expect(Date.now() - t0).toBeLessThan(4000);
-});
+  // Building the bomb is 200 MB of allocation and a deflate, and it happens BEFORE t0 —
+  // the budget this test actually asserts is the one above, on the request. The default
+  // 5s covers the fixture too, which left about twice the headroom locally and none at
+  // all on a shared CI runner, where the same work takes ~6.5s. Raising it here rather
+  // than passing --timeout to the whole suite: one test is expensive, and hiding that
+  // behind a global would also hide the next test that gets slow for a real reason.
+}, 60_000);
 
 test('an oversized body is refused while streaming, not after buffering', async () => {
   const { handle } = await createServer();

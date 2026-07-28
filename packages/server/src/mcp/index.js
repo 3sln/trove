@@ -13,7 +13,7 @@
 // same place, subject to the same verification and the same collection permissions. It
 // is not a second access-control system to keep in sync with the first.
 
-import { TroveError, challengeHeaders, protectedResourceMetadata } from '@trove/core';
+import { TroveError, challengeHeaders, protectedResourceMetadata } from '@3sln/trove/core';
 import { McpServer, rpcError, JSONRPC_ERRORS } from './protocol.js';
 import { registerTroveTools } from './tools.js';
 import { mcpConfigFromEnv, mcpResourceUri } from './auth.js';

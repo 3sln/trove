@@ -9,7 +9,7 @@
 
 import { test, expect } from 'bun:test';
 import { createServer } from '../src/index.js';
-import { MemoryStorage } from '@trove/core';
+import { MemoryStorage } from '@3sln/trove/core';
 
 class PresigningStorage extends MemoryStorage {
   get capabilities() {

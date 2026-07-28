@@ -5,7 +5,7 @@
 // they update flow straight back into the UI via `watch`.
 
 import { Action } from '@3sln/ngin';
-import { newId } from '@trove/core/util.js';
+import { newId } from '@3sln/trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
 import { availableOpeners, rememberedOpenerId } from './openers.js';
 

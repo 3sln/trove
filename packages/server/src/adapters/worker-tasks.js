@@ -26,7 +26,7 @@
 // cursor is persisted, `pending:` says the collection is not finished, and the alarm
 // brings the object back to continue. Losing the isolate costs a slice, not the scan.
 
-import { TaskRegistry } from '@trove/core';
+import { TaskRegistry } from '@3sln/trove/core';
 
 /** How long one scan slice may run before it yields and stores its cursor. */
 const DEFAULT_SLICE_MS = 20_000;

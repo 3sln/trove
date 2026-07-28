@@ -10,9 +10,9 @@
 // Every frame — the plugin's primary (background) instance and each viewer/panel —
 // comes from `spawn()`, so they all share the same wiring and capabilities.
 
-import { RpcChannel } from '@trove/plugin-sdk/rpc.js';
-import SDK_SOURCE from '@trove/plugin-sdk/browser.js' with { type: 'text' };
-import { PROTOCOL_VERSION, isCompatible } from '@trove/plugin-sdk/protocol.js';
+import { RpcChannel } from '@3sln/trove/plugin-sdk/rpc.js';
+import SDK_SOURCE from '@3sln/trove/plugin-sdk/browser.js' with { type: 'text' };
+import { PROTOCOL_VERSION, isCompatible } from '@3sln/trove/plugin-sdk/protocol.js';
 import { buildModuleGraph, isModuleEntry } from './pluginModules.js';
 
 const HANDSHAKE_TIMEOUT_MS = 15000;

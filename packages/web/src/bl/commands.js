@@ -9,7 +9,7 @@ import {
   SearchAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
-import { troveUri } from '@trove/core/links.js';
+import { troveUri } from '@3sln/trove/core/links.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;

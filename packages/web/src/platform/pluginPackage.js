@@ -5,8 +5,8 @@
 
 import { unzipSync } from 'fflate';
 import { parseEndpoint, endpointSummary } from './pluginNet.js';
-import { assertIdentity, pluginId, ownsUri, parseContribUri } from '@trove/core/plugins/identity.js';
-import { declaredContributions } from '@trove/core/plugins/contributions.js';
+import { assertIdentity, pluginId, ownsUri, parseContribUri } from '@3sln/trove/core/plugins/identity.js';
+import { declaredContributions } from '@3sln/trove/core/plugins/contributions.js';
 
 const CAP_DESCRIPTIONS = {
   files: 'Read your files, folders, and search index (via the host).',

@@ -12,11 +12,11 @@
 // Reactive: the workbench watches `online`, the pinned set, and the queue depth.
 
 import { cell } from '../runtime.js';
-import { LocalHashEmbedding } from '@trove/core/search/embeddings.js';
+import { LocalHashEmbedding } from '@3sln/trove/core/search/embeddings.js';
 // Chunking and tokenizing must MATCH the server's — offline results are compared
 // against embeddings the server produced, so a local variant would quietly skew them.
-import { chunkText } from '@trove/core/indexers/registry.js';
-import { tokenize } from '@trove/core/search/keywordStore.js';
+import { chunkText } from '@3sln/trove/core/indexers/registry.js';
+import { tokenize } from '@3sln/trove/core/search/keywordStore.js';
 import { isTexty } from './fileType.js';
 
 const DB = 'trove-offline';

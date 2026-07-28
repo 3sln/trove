@@ -8,7 +8,7 @@
 // goes through the same registry a plugin's does, so there was never a technical reason
 // for that; there was only a hard-coded list.
 //
-//   import { createWorkbench } from '@trove/web/src/workbench.js';
+//   import { createWorkbench } from '@3sln/trove/web/workbench.js';
 //
 //   createWorkbench({
 //     openers: [{ id: 'acme.player', title: 'Player', priority: 60,

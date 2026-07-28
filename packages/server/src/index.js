@@ -15,10 +15,12 @@ import {
   VectorStore, KeywordStore, IndexerRegistry,
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
-} from '@trove/core';
+} from '@3sln/trove/core';
 import { createRouter } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';
+import { cacheControlFor } from './cachePolicy.js';
+import { MANIFEST_PATH, webManifest, manifestFromEnv } from './manifest.js';
 
 // Every backend is pluggable. Each field of `config` accepts EITHER a ready
 // provider instance (pass your own class) OR a `{ driver, ... }` config object
@@ -241,6 +243,24 @@ export async function createServer(config = {}) {
       });
     }
 
+    // The installed-app identity, generated rather than served from a file so an
+    // operator can put their own name on it (see manifest.js). Ahead of the assets for
+    // the obvious reason and unauthenticated for the same reason as the icon: a browser
+    // fetches it before anyone has signed in, and a 401 here just means the app cannot
+    // be installed.
+    if (url.pathname === MANIFEST_PATH) {
+      return new Response(JSON.stringify(webManifest(config.manifest), null, 2), {
+        status: 200,
+        headers: {
+          'content-type': 'application/manifest+json',
+          // A stable name whose contents change with configuration — exactly the case
+          // `immutable` must never be claimed for.
+          'cache-control': cacheControlFor(url.pathname),
+          'x-content-type-options': 'nosniff',
+        },
+      });
+    }
+
     // Before the API check: the MCP endpoint and its discovery document live outside
     // /api/ because an agent is given ONE URL and everything it needs must hang off it.
     if (mcp) {
@@ -274,7 +294,7 @@ export async function createServer(config = {}) {
     }
     if (config.assets) {
       const asset = await config.assets(req);
-      if (asset) return hardenAsset(asset, config);
+      if (asset) return hardenAsset(asset, config, req);
     }
     return new Response('Not found', { status: 404 });
   }
@@ -416,11 +436,22 @@ export function warnOnOpenAccess(config = {}) {
 }
 
 /** Add security headers to a static/app-shell response (CSP only if configured). */
-function hardenAsset(res, config = {}) {
+function hardenAsset(res, config = {}, req) {
   res.headers.set('x-content-type-options', 'nosniff');
   res.headers.set('x-frame-options', 'SAMEORIGIN');
   res.headers.set('referrer-policy', 'no-referrer');
   if (typeof config.csp === 'string') res.headers.set('content-security-policy', config.csp);
+
+  // A floor, not an override. The Node and Bun file server already decides this per
+  // request — it has to, because an index.html served as an SPA fallback must be
+  // revalidated even though the file it came from could not be. What is left is the
+  // Workers path, where assets come from a binding that applies Cloudflare's defaults
+  // rather than the /assets/ convention this repository's build guarantees.
+  if (req && !res.headers.has('cache-control')) {
+    try {
+      res.headers.set('cache-control', cacheControlFor(decodeURIComponent(new URL(req.url).pathname)));
+    } catch { /* a path that will not decode names nothing worth caching */ }
+  }
   return res;
 }
 
@@ -647,6 +678,11 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // App-shell CSP is opt-in (see SAMPLE_CSP) — provide a full policy string to
   // enable it. Off by default because sandboxed plugin iframes can't satisfy one.
   if (env.TROVE_CSP && env.TROVE_CSP !== 'off') config.csp = env.TROVE_CSP;
+
+  // What the installed app calls itself. Every field is optional and every default
+  // reproduces the document that used to be a static file, so a drive that sets none of
+  // these is unchanged — see manifest.js.
+  config.manifest = manifestFromEnv(env);
 
   // The MCP endpoint reads its own settings out of here (mcpConfigFromEnv), and this
   // was never populated — so `TROVE_MCP=off`, `TROVE_MCP_REQUIRE_AUTH=true`,

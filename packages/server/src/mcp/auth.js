@@ -11,7 +11,7 @@
 // token's audience should match. That is about which resource, not about which
 // authorization server, so it stays here.
 
-import { publicOrigin } from '@trove/core';
+import { publicOrigin } from '@3sln/trove/core';
 
 /** Read MCP settings out of the process environment. */
 export function mcpConfigFromEnv(env = {}) {

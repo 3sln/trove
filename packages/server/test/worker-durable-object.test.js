@@ -11,7 +11,7 @@
 // both are ours.
 
 import { test, expect } from 'bun:test';
-import { MemoryKV, MemoryStorage } from '@trove/core';
+import { MemoryKV, MemoryStorage } from '@3sln/trove/core';
 
 import { createTaskHost, remoteBackground } from '../src/adapters/worker-tasks.js';
 import { createServer, configFromEnv } from '../src/index.js';

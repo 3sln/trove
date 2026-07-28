@@ -19,7 +19,7 @@ import { createServer } from '../src/index.js';
 import {
   CollectionService, MemoryKV, MemoryStorage,
   metadataUrl, protectedResourceMetadata, challengeHeaders, resolveAuthDiscovery,
-} from '@trove/core';
+} from '@3sln/trove/core';
 import { mcpResourceUri } from '../src/mcp/auth.js';
 
 // --- helpers -----------------------------------------------------------------

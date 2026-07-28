@@ -11,12 +11,12 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  @trove/web         search-first workbench (dodo · ngin)       │
+│  @3sln/trove/web     search-first workbench (dodo · ngin)      │
 │   contributions · commands · keymaps · settings · plugin host  │
 ├──────────────────────────────────────────────────────────────┤
-│  @trove/server         Request → Response  (Node · Worker)     │
+│  @3sln/trove/server  Request → Response  (Node · Worker)       │
 ├──────────────────────────────────────────────────────────────┤
-│  @trove/core     Vfs · Storage · Metadata · Uploads · Search   │
+│  @3sln/trove/core  Vfs · Storage · Metadata · Uploads · Search │
 │   S3 / filesystem / NAS   ·   SQLite / memory   ·   embeddings │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -68,7 +68,7 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
   and a view you picked yourself still wins.
 - **Build your own drive** — `createWorkbench({ openers, views })` is the entry point,
   so a bespoke or hosted build ships its own first-party openers and views through the
-  same registry plugins use. No fork of `@trove/web`.
+  same registry plugins use. No fork of `@3sln/trove/web`.
 - **Sandboxed plugins** — plugins are **self-contained ZIP packages** (a
   `manifest.json`, an entry script, and any assets) installed by **URL or file
   upload** — no central catalogue. Each runs in a **hidden, sandboxed iframe on an
@@ -187,6 +187,37 @@ thin and there is no runtime-specific code below it. Pick a row:
 | **Bun** | filesystem / S3 | SQLite file | recommended for self-hosting |
 | **Node** | filesystem / S3 | SQLite file | identical behaviour, a little slower |
 | **Workers** | R2 (S3 API) | D1 + Vectorize | no local disk, so both must be bound |
+
+### Scaffold one
+
+```sh
+npm create @3sln/trove my-drive
+```
+
+Asks where the drive will run — Bun, Node or Cloudflare Workers — and writes a project
+configured for it: storage, metadata, search, identity, access control, and on Workers
+the whole binding set (D1, Vectorize, R2, the `TroveTasks` Durable Object) plus the
+`wrangler` commands that create each of them. Any section can be declined, and declining
+still writes the keys, commented, with a line saying what they are for.
+
+Credentials never land in a committed file: on Workers they become `wrangler secret put`
+steps and a gitignored `.dev.vars`; everywhere else a gitignored `.env`.
+
+### From npm
+
+Trove publishes as one package with the web app already built inside it, so there is no
+build step here — the server and the workbench it serves are the same release by
+construction.
+
+```sh
+npm install @3sln/trove
+TROVE_STORAGE=filesystem TROVE_FS_ROOT=./data/objects \
+TROVE_METADATA=sqlite TROVE_DB_PATH=./data/trove.db \
+node node_modules/@3sln/trove/packages/server/src/adapters/node.js
+```
+
+Bun works the same way — swap `node` for `bun` and `node.js` for `bun.js`. Building is
+only for working *on* Trove, which is what the rest of this section covers.
 
 ### Bun (recommended)
 
@@ -450,11 +481,22 @@ the same values as config fields instead.
 | `TROVE_MAX_JSON_BYTES` | `4 MiB` | JSON body cap (uploads stream, so bound those at the proxy) |
 | `TROVE_MAX_PAGE` | `1000` | ceiling on any client-supplied `limit` |
 | `TROVE_PORT` / `TROVE_HOST` | `8787` / `0.0.0.0` | |
-| `TROVE_WEB_DIST` | resolved from `@trove/web` | built web app to serve; unset serves API only |
+| `TROVE_WEB_DIST` | resolved from the package | built web app to serve; unset serves API only |
 | `TROVE_CORS_ORIGIN` | off | `*` or an allowlist; the app is same-origin (MCP follows it too) |
 | `TROVE_PUBLIC_URL` | detected | the drive's public origin, for sign-in discovery |
 | `TROVE_TRUST_PROXY` | `false` | honour `X-Forwarded-Proto/Host` — only behind a real proxy |
 | `TROVE_CSP` | off | opt-in shell CSP (see `SAMPLE_CSP`) |
+| **installed app** | | served at `/manifest.webmanifest`, generated from these |
+| `TROVE_APP_NAME` | `Trove` | what the installed app is called |
+| `TROVE_APP_SHORT_NAME` | the app name | home-screen label |
+| `TROVE_APP_DESCRIPTION` | the stock one | |
+| `TROVE_APP_THEME_COLOR` | `#181a1f` | |
+| `TROVE_APP_BACKGROUND_COLOR` | the theme colour | splash background |
+| `TROVE_APP_DISPLAY` | `standalone` | `fullscreen`, `minimal-ui`, `browser` |
+| `TROVE_APP_START_URL` | `/` | |
+| `TROVE_APP_ICON` | `/icon.svg` | any URL the browser can reach |
+| `TROVE_APP_ICON_SIZES` | `any` | state the real size for a raster icon |
+| `TROVE_APP_ICONS` | — | the full icon array, for maskable or multi-size sets |
 | **plugins** | | |
 | `TROVE_SERVER_INDEXERS` | on | `false` disables server-side plugin indexers |
 | `TROVE_ENFORCE_PLUGIN_CAPS` | `false` | strict capability enforcement |
@@ -621,6 +663,34 @@ Restoring is putting both back and starting up: verified end to end on a
 downloadable. And if the search index is ever lost on its own, Trove notices at
 startup and rebuilds it. `/api/health` is a liveness check; `/api/ready` probes
 the store for readiness gating.
+
+### Caching, and why a deploy doesn't strand a browser
+
+Two kinds of URL, and only one of them is safe to keep:
+
+| | | |
+| --- | --- | --- |
+| `/assets/*` | `public, max-age=31536000, immutable` | content-addressed — the filename changes whenever the bytes do, so nothing ever needs invalidating |
+| everything else | `no-cache` | `index.html`, `sw.js`, the manifest, the icon: stable names whose contents change |
+
+Getting that backwards is the classic way to ship a blank page. `index.html` is the
+entry point, so a browser holding a cached copy goes on importing hashed modules from a
+build that no longer exists — a link-time failure, which kills the whole graph before a
+line runs. `no-cache` means "revalidate", not "don't cache": responses carry an `ETag`,
+so a revalidation that finds nothing changed is a 304 rather than a re-download.
+
+A miss under `/assets/` is a **404**, deliberately, rather than the SPA fallback. Any
+other answer is a stale reference to a retired build, and answering it with `index.html`
+at status 200 is what let a service worker cache HTML under a `.js` URL — permanently,
+since a cache hit never asks the network again. The worker refuses a response whose type
+contradicts the request as well, and its shell cache is named for the build
+(`trove-shell-<hash>`), so activating a new worker retires the old shell instead of
+inheriting it. The caches holding API responses and files pinned for offline use are
+*not* named per build — rotating those would throw away someone's offline library on
+every deploy.
+
+If you put a CDN or reverse proxy in front, let these headers through rather than
+replacing them.
 
 ## Background work and standing problems
 
@@ -886,8 +956,8 @@ Every backend is a provider you inject into the server (or `createVfs`) — pass
 class instance, or a `{ driver, ... }` config the server builds for you:
 
 ```js
-import { createServer } from '@trove/server';
-import { S3Storage, SqliteStore, HttpEmbedding, QdrantVectorStore } from '@trove/core';
+import { createServer } from '@3sln/trove';
+import { S3Storage, SqliteStore, HttpEmbedding, QdrantVectorStore } from '@3sln/trove/core';
 
 const { handle } = await createServer({
   storage:     new S3Storage({ bucket, region, accessKeyId, secretAccessKey }),
@@ -917,8 +987,8 @@ wins.
 | shared small state | `KeyValueStore` | `get` `set` `delete` `list` |
 
 ```js
-import { createServer } from '@trove/server';
-import { VectorStore } from '@trove/core';
+import { createServer } from '@3sln/trove';
+import { VectorStore } from '@3sln/trove/core';
 
 class PgVectorStore extends VectorStore {
   constructor(pool, { dimensions }) { super(); this.pool = pool; this.dimensions = dimensions; }
@@ -977,7 +1047,7 @@ vector index rather than refusing to start.
 The lower-level `createVfs` helper does the same wiring for library use:
 
 ```js
-import { createVfs } from '@trove/core';
+import { createVfs } from '@3sln/trove/core';
 const vfs = await createVfs({ storage, metadata, embeddings, vectorStore });
 await vfs.writeFile('root', 'note.txt', 'hello');
 const hits = await vfs.searchQuery('greeting');
@@ -1027,7 +1097,7 @@ my-plugin.zip
 └─ assets/banner.png      # read via ctx.resources, not importable
 ```
 
-The host injects `@trove/plugin-sdk` into the sandboxed frame; the entry script
+The host injects `@3sln/trove/plugin-sdk` into the sandboxed frame; the entry script
 calls `trove.activate` (or `import { activate } from 'trove'`):
 
 ```js
@@ -1068,7 +1138,7 @@ package.
 
 Inside the sandbox the host injects the SDK and exposes it as the global `trove`.
 When you build or bundle your plugin outside the sandbox, `import { activate } from
-'@trove/plugin-sdk'` resolves to the **same implementation** — the package entry is
+'@3sln/trove/plugin-sdk'` resolves to the **same implementation** — the package entry is
 a thin re-export of the injected build, so there's no drift between what you import
 and what actually runs.
 
@@ -1076,10 +1146,12 @@ and what actually runs.
 
 ```
 packages/
-  core/         @trove/core — Vfs, storage/metadata/search backends, uploads (runtime-agnostic)
-  server/       @trove/server — Request→Response API + Bun / Node / Worker adapters
-  web/          @trove/web — the workbench (dodo + ngin)
-  plugin-sdk/   @trove/plugin-sdk — the iframe-side plugin API + RPC
+  core/         @3sln/trove/core — Vfs, storage/metadata/search backends, uploads (runtime-agnostic)
+  server/       @3sln/trove/server — Request→Response API + Bun / Node / Worker adapters
+  web/          @3sln/trove/web — the workbench (dodo + ngin)
+  plugin-sdk/   @3sln/trove/plugin-sdk — the iframe-side plugin API + RPC
+  create-trove/ @3sln/create-trove — the scaffolder; the one directory that is
+                its own published package rather than part of @3sln/trove
 ```
 
 ## Tests

@@ -1,26 +1,34 @@
 // Where the built web app is.
 //
-// This used to be one line in each of the Node and Bun adapters:
+// This was once a guess about the shape of the tree three levels above the file doing
+// the guessing:
 //
 //   path.resolve(__dirname, '../../../web/dist')
 //
-// which is a guess about the shape of the tree three levels above the file doing the
-// guessing. Inside this repo it lands on `packages/web/dist` and is right. Installed as
-// a package it lands on `node_modules/@trove/web/dist` and is *also* right — but by
-// coincidence, not because anything arranged it: it holds only while `@trove/server`
-// and `@trove/web` are siblings under the same `@trove/` directory, which is a fact
-// about a particular installer's layout rather than anything either package promises.
-// Nest the install, vendor one of them, or hoist differently and the drive silently
-// serves no web app, with a 404 on `/` as the only clue.
+// It was right inside the repo and right again when installed, but only while
+// `@trove/server` and `@trove/web` happened to land as siblings under one `@trove/`
+// directory — a fact about a particular installer's layout rather than anything either
+// package promised. Nest the install, vendor one of them, or hoist differently and the
+// drive silently served no web app, with a 404 on `/` as the only clue.
 //
-// Module resolution answers the same question without guessing, and answers it in both
-// worlds at once — in a workspace `node_modules/@trove/web` is a symlink to
-// `packages/web`, so the resolver finds the same directory the relative path did.
+// Trove now ships as a single package with the built app inside it, which retires the
+// problem rather than working around it: server and web are no longer two things an
+// installer arranges relative to each other, they are two directories in one tarball,
+// and their arrangement is fixed by the package that contains both. So the relative
+// path below is no longer a guess — it is the layout this package's own `files` field
+// guarantees.
+//
+// Resolution is still tried first, because it is the one that keeps working when this
+// file is *not* where it thinks it is: a bundler that flattened the tree, or a copy
+// vendored somewhere else. The two answers agree whenever both are available, and each
+// covers the other's failure mode.
 
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+
+const WEB_DIST_IN_PACKAGE = 'packages/web/dist';
 
 /**
  * Locate the built web assets, or null when the app has not been built.
@@ -41,18 +49,21 @@ export function findWebDist(envDist = process.env.TROVE_WEB_DIST) {
       : { dir: null, source: `TROVE_WEB_DIST=${envDist} (no such directory)` };
   }
 
-  // The package, wherever the resolver says it is. `@trove/web` declares no `exports`,
-  // so a deep path to its manifest resolves; if that ever changes this throws and we
-  // fall through, which is why it is wrapped rather than trusted.
+  // The package root, wherever the resolver says it is. A package can reference itself
+  // by name, so this resolves both from a checkout and from inside `node_modules` —
+  // and it reaches the manifest because `./package.json` is one of the subpaths
+  // `exports` names. If that ever stops being true this throws rather than returning
+  // something wrong, which is why it is wrapped.
   try {
     const require = createRequire(import.meta.url);
-    const dir = path.join(path.dirname(require.resolve('@trove/web/package.json')), 'dist');
-    if (existsSync(dir)) return { dir, source: '@trove/web' };
-  } catch { /* not installed, or not resolvable from here */ }
+    const root = path.dirname(require.resolve('@3sln/trove/package.json'));
+    const dir = path.join(root, WEB_DIST_IN_PACKAGE);
+    if (existsSync(dir)) return { dir, source: '@3sln/trove' };
+  } catch { /* not resolvable from here — fall through to the layout we ship */ }
 
-  // Last resort, and the only one that works when this file has been copied out of a
-  // package tree entirely — a vendored checkout, a bundler that flattened everything.
-  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../web/dist');
+  // Four levels up from packages/server/src/adapters/ is the package root.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const dir = path.resolve(here, '../../../..', WEB_DIST_IN_PACKAGE);
   if (existsSync(dir)) return { dir, source: 'relative to this file' };
 
   return { dir: null, source: 'not built' };

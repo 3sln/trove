@@ -8,10 +8,10 @@
 //   TROVE_METADATA=sqlite TROVE_DB_PATH=./data/trove.db \
 //   bun packages/server/src/adapters/bun.js
 
-import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
 import { findWebDist } from './webDist.js';
+import { createStaticAssets } from './staticAssets.js';
 
 // A JWKS held in a file rather than inlined in the environment: multi-line JSON is
 // awkward in env vars and shows up in `docker inspect`, while a mounted secret file
@@ -31,30 +31,16 @@ const HOST = process.env.TROVE_HOST || process.env.HOST || '0.0.0.0';
 // resolution rather than a relative path.
 const { dir: WEB_DIST, source: WEB_DIST_SOURCE } = findWebDist();
 
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
-  '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.map': 'application/json', '.webmanifest': 'application/manifest+json',
-};
-
-async function staticAssets(req) {
-  const url = new URL(req.url);
-  let rel = decodeURIComponent(url.pathname);
-  if (rel === '/') rel = '/index.html';
-  const filePath = path.join(WEB_DIST, path.normalize(rel));
-  if (!filePath.startsWith(WEB_DIST)) return null; // traversal guard
-
-  const file = Bun.file(filePath);
-  if (await file.exists()) {
-    return new Response(file, { headers: { 'content-type': MIME[path.extname(filePath)] || file.type || 'application/octet-stream' } });
-  }
-  // SPA fallback: serve index.html for unknown non-API GET routes.
-  if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
-    const index = Bun.file(path.join(WEB_DIST, 'index.html'));
-    if (await index.exists()) return new Response(index, { headers: { 'content-type': 'text/html' } });
-  }
-  return null;
-}
+// Where to look, what to refuse and what to say about caching is shared with the Node
+// adapter — see staticAssets.js. All that differs here is how a file is read.
+const staticAssets = WEB_DIST && createStaticAssets({
+  dir: WEB_DIST,
+  read: async (filePath) => {
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return null;
+    return { size: file.size, mtime: file.lastModified, type: file.type, open: () => file };
+  },
+});
 
 const hasWeb = !!WEB_DIST;
 const envConfig = configFromEnv();

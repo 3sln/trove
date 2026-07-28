@@ -1,7 +1,7 @@
-// @trove/plugin-sdk — the ESM entry a plugin author imports when building or
+// @3sln/trove/plugin-sdk — the ESM entry a plugin author imports when building or
 // bundling a plugin outside the sandbox:
 //
-//   import { activate } from '@trove/plugin-sdk';
+//   import { activate } from '@3sln/trove/plugin-sdk';
 //   activate(async (ctx) => {
 //     ctx.commands.register('hello.world', () => ctx.ui.toast('Hi from a plugin!'));
 //   });

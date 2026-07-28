@@ -22,8 +22,8 @@ import { PluginRegistry } from './pluginStore.js';
 import { ClientSqlProvider } from './pluginClientDb.js';
 import { assessTrust } from './pluginSigning.js';
 import { ADMIN_ONLY_CAPS, capabilityList, networkEndpoints, grantedStorageScopes, parsePackage, displayName, canExecuteCommand } from './pluginPackage.js';
-import { declaredContributions, parseKeymap, serverIndexers } from '@trove/core/plugins/contributions.js';
-import { pluginId, contribUri } from '@trove/core/plugins/identity.js';
+import { declaredContributions, parseKeymap, serverIndexers } from '@3sln/trove/core/plugins/contributions.js';
+import { pluginId, contribUri } from '@3sln/trove/core/plugins/identity.js';
 import { endpointSummary } from './pluginNet.js';
 import { MediaController } from './pluginMedia.js';
 import { FrameDock } from './pluginDock.js';
@@ -31,7 +31,7 @@ import { FrameManager } from './pluginFrames.js';
 import { PluginRpcRouter } from './pluginRpc.js';
 // The canonical capability list lives in core (the server's authority); import it so
 // client and server can't drift when a capability is added.
-import { ALL_CAPABILITIES } from '@trove/core/plugins/package.js';
+import { ALL_CAPABILITIES } from '@3sln/trove/core/plugins/package.js';
 
 export class PluginHost {
   constructor(platform, { heartbeatMs = 20000 } = {}) {

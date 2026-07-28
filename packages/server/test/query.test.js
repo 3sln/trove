@@ -4,7 +4,7 @@
 
 import { test, expect } from 'bun:test';
 import { createServer } from '../src/index.js';
-import { SearchTransformer } from '@trove/core';
+import { SearchTransformer } from '@3sln/trove/core';
 
 async function jsonReq(handle, method, path, body) {
   const res = await handle(new Request(`http://t${path}`, {

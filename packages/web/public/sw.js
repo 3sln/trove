@@ -10,6 +10,14 @@
 // and replays them (CRDT-merge) on reconnect. On push (bodyless) we pull the
 // inbox and notify.
 
+// The build stamps SHELL with a hash of the emitted assets (see build.mjs), so a deploy
+// gives the new worker a new shell cache and `activate` below retires the old one. It
+// was `trove-shell-v1` and never changed, which made that sweep a no-op — two builds
+// shared one cache and whichever entry landed first won.
+//
+// API and FILES deliberately do NOT rotate. API is data, not code, and FILES holds the
+// bytes of files the user pinned for offline use — naming it per build would throw away
+// someone's offline library every time the app was redeployed.
 const SHELL = 'trove-shell-v1';
 const API = 'trove-api-v1';
 const FILES = 'trove-files-v1';
@@ -109,11 +117,33 @@ async function networkFirst(req) {
   }
 }
 
+// What a request asked to BE, against what came back. The server no longer answers a
+// miss under /assets/ with index.html, which is what used to produce this — but the
+// consequence was bad enough to be worth refusing here as well. A 200 whose body is
+// HTML, stored under a .js URL, is a module that fails to link on every load from then
+// on; and because a cache hit is served without ever asking the network again, it does
+// not heal. Nothing else in this worker is load-bearing enough to leave that to one
+// check in another process.
+const EXPECTED_TYPE = {
+  script: /javascript|ecmascript/i,
+  style: /text\/css/i,
+  font: /font/i,
+  image: /^image\//i,
+};
+
+function typeMatches(req, res) {
+  const want = EXPECTED_TYPE[req.destination];
+  if (!want) return true; // documents, and anything the browser has no opinion about
+  return want.test(res.headers.get('content-type') || '');
+}
+
 async function staleWhileRevalidate(req) {
   const cache = await caches.open(SHELL);
   const cached = await cache.match(req, { ignoreSearch: true });
   const network = fetch(req).then((res) => {
-    if (res.ok) cache.put(req, res.clone());
+    // Let a mismatch through — the browser's own error is clearer than anything we
+    // could synthesise — but never keep it.
+    if (res.ok && typeMatches(req, res)) cache.put(req, res.clone());
     return res;
   }).catch(() => null);
   return cached || (await network) || new Response('Offline', { status: 504 });
