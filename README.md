@@ -11,12 +11,12 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  @trove/web         search-first workbench (dodo · ngin)       │
+│  @3sln/trove/web     search-first workbench (dodo · ngin)      │
 │   contributions · commands · keymaps · settings · plugin host  │
 ├──────────────────────────────────────────────────────────────┤
-│  @trove/server         Request → Response  (Node · Worker)     │
+│  @3sln/trove/server  Request → Response  (Node · Worker)       │
 ├──────────────────────────────────────────────────────────────┤
-│  @trove/core     Vfs · Storage · Metadata · Uploads · Search   │
+│  @3sln/trove/core  Vfs · Storage · Metadata · Uploads · Search │
 │   S3 / filesystem / NAS   ·   SQLite / memory   ·   embeddings │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -68,7 +68,7 @@ Built on the [3sln stack](https://github.com/3sln/stack): **ngin** (DI / CQRS) a
   and a view you picked yourself still wins.
 - **Build your own drive** — `createWorkbench({ openers, views })` is the entry point,
   so a bespoke or hosted build ships its own first-party openers and views through the
-  same registry plugins use. No fork of `@trove/web`.
+  same registry plugins use. No fork of `@3sln/trove/web`.
 - **Sandboxed plugins** — plugins are **self-contained ZIP packages** (a
   `manifest.json`, an entry script, and any assets) installed by **URL or file
   upload** — no central catalogue. Each runs in a **hidden, sandboxed iframe on an
@@ -187,6 +187,22 @@ thin and there is no runtime-specific code below it. Pick a row:
 | **Bun** | filesystem / S3 | SQLite file | recommended for self-hosting |
 | **Node** | filesystem / S3 | SQLite file | identical behaviour, a little slower |
 | **Workers** | R2 (S3 API) | D1 + Vectorize | no local disk, so both must be bound |
+
+### From npm
+
+Trove publishes as a single package with the web app already built inside it, so there
+is no build step here and nothing to keep in version lockstep — the server and the
+workbench it serves are the same release by construction.
+
+```sh
+npm install @3sln/trove
+TROVE_STORAGE=filesystem TROVE_FS_ROOT=./data/objects \
+TROVE_METADATA=sqlite TROVE_DB_PATH=./data/trove.db \
+node node_modules/@3sln/trove/packages/server/src/adapters/node.js
+```
+
+Bun works the same way — swap `node` for `bun` and `node.js` for `bun.js`. Building is
+only for working *on* Trove, which is what the rest of this section covers.
 
 ### Bun (recommended)
 
@@ -450,7 +466,7 @@ the same values as config fields instead.
 | `TROVE_MAX_JSON_BYTES` | `4 MiB` | JSON body cap (uploads stream, so bound those at the proxy) |
 | `TROVE_MAX_PAGE` | `1000` | ceiling on any client-supplied `limit` |
 | `TROVE_PORT` / `TROVE_HOST` | `8787` / `0.0.0.0` | |
-| `TROVE_WEB_DIST` | resolved from `@trove/web` | built web app to serve; unset serves API only |
+| `TROVE_WEB_DIST` | resolved from the package | built web app to serve; unset serves API only |
 | `TROVE_CORS_ORIGIN` | off | `*` or an allowlist; the app is same-origin (MCP follows it too) |
 | `TROVE_PUBLIC_URL` | detected | the drive's public origin, for sign-in discovery |
 | `TROVE_TRUST_PROXY` | `false` | honour `X-Forwarded-Proto/Host` — only behind a real proxy |
@@ -886,8 +902,8 @@ Every backend is a provider you inject into the server (or `createVfs`) — pass
 class instance, or a `{ driver, ... }` config the server builds for you:
 
 ```js
-import { createServer } from '@trove/server';
-import { S3Storage, SqliteStore, HttpEmbedding, QdrantVectorStore } from '@trove/core';
+import { createServer } from '@3sln/trove';
+import { S3Storage, SqliteStore, HttpEmbedding, QdrantVectorStore } from '@3sln/trove/core';
 
 const { handle } = await createServer({
   storage:     new S3Storage({ bucket, region, accessKeyId, secretAccessKey }),
@@ -917,8 +933,8 @@ wins.
 | shared small state | `KeyValueStore` | `get` `set` `delete` `list` |
 
 ```js
-import { createServer } from '@trove/server';
-import { VectorStore } from '@trove/core';
+import { createServer } from '@3sln/trove';
+import { VectorStore } from '@3sln/trove/core';
 
 class PgVectorStore extends VectorStore {
   constructor(pool, { dimensions }) { super(); this.pool = pool; this.dimensions = dimensions; }
@@ -977,7 +993,7 @@ vector index rather than refusing to start.
 The lower-level `createVfs` helper does the same wiring for library use:
 
 ```js
-import { createVfs } from '@trove/core';
+import { createVfs } from '@3sln/trove/core';
 const vfs = await createVfs({ storage, metadata, embeddings, vectorStore });
 await vfs.writeFile('root', 'note.txt', 'hello');
 const hits = await vfs.searchQuery('greeting');
@@ -1027,7 +1043,7 @@ my-plugin.zip
 └─ assets/banner.png      # read via ctx.resources, not importable
 ```
 
-The host injects `@trove/plugin-sdk` into the sandboxed frame; the entry script
+The host injects `@3sln/trove/plugin-sdk` into the sandboxed frame; the entry script
 calls `trove.activate` (or `import { activate } from 'trove'`):
 
 ```js
@@ -1068,7 +1084,7 @@ package.
 
 Inside the sandbox the host injects the SDK and exposes it as the global `trove`.
 When you build or bundle your plugin outside the sandbox, `import { activate } from
-'@trove/plugin-sdk'` resolves to the **same implementation** — the package entry is
+'@3sln/trove/plugin-sdk'` resolves to the **same implementation** — the package entry is
 a thin re-export of the injected build, so there's no drift between what you import
 and what actually runs.
 
@@ -1076,10 +1092,10 @@ and what actually runs.
 
 ```
 packages/
-  core/         @trove/core — Vfs, storage/metadata/search backends, uploads (runtime-agnostic)
-  server/       @trove/server — Request→Response API + Bun / Node / Worker adapters
-  web/          @trove/web — the workbench (dodo + ngin)
-  plugin-sdk/   @trove/plugin-sdk — the iframe-side plugin API + RPC
+  core/         @3sln/trove/core — Vfs, storage/metadata/search backends, uploads (runtime-agnostic)
+  server/       @3sln/trove/server — Request→Response API + Bun / Node / Worker adapters
+  web/          @3sln/trove/web — the workbench (dodo + ngin)
+  plugin-sdk/   @3sln/trove/plugin-sdk — the iframe-side plugin API + RPC
 ```
 
 ## Tests

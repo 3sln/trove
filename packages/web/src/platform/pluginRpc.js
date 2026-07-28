@@ -11,8 +11,8 @@
 import { networkEndpoints, canExecuteCommand, displayName } from './pluginPackage.js';
 import { isAllowedUrl } from './pluginNet.js';
 import { isSourceModule } from './pluginModules.js';
-import { contribUri, parseContribUri } from '@trove/core/plugins/identity.js';
-import { assertSafePluginSql } from '@trove/core/plugins/sql.js';
+import { contribUri, parseContribUri } from '@3sln/trove/core/plugins/identity.js';
+import { assertSafePluginSql } from '@3sln/trove/core/plugins/sql.js';
 
 // Response bodies larger than this are refused, so a plugin can't exhaust host
 // memory through the brokered fetch.

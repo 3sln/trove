@@ -13,8 +13,8 @@
 //
 // Uploads use XMLHttpRequest because fetch can't report upload progress.
 
-import { withRetry } from '@trove/core/retry.js';
-import { TroveError } from '@trove/core/errors.js';
+import { withRetry } from '@3sln/trove/core/retry.js';
+import { TroveError } from '@3sln/trove/core/errors.js';
 
 export class TroveApiClient {
   /**

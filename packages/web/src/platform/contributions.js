@@ -14,7 +14,7 @@
 // So a plugin's opener, status slot, register and command may all be called "status"
 // without colliding — with each other, or with another plugin's.
 //
-// Contribution types (see @trove/core/plugins/contributions.js for the manifest form):
+// Contribution types (see @3sln/trove/core/plugins/contributions.js for the manifest form):
 //   command     { title, category?, icon?, when?, offline?, palette? }
 //   opener      { title, match:{ext,mime}, entry, priority?, offline?, dock? }
 //   indexer     { title, match, entry }            (declared here; the SERVER runs it)
@@ -24,9 +24,9 @@
 //   view        { title, icon?, match?, priority?, render, move? }
 
 import { cell, derive } from '../runtime.js';
-import { selectorMatches } from '@trove/core/util.js';
-import { parseContribUri, coreUri, CONTRIB_SCHEME } from '@trove/core/plugins/identity.js';
-import { CONTRIBUTION_TYPES as PACKAGE_TYPES } from '@trove/core/plugins/contributions.js';
+import { selectorMatches } from '@3sln/trove/core/util.js';
+import { parseContribUri, coreUri, CONTRIB_SCHEME } from '@3sln/trove/core/plugins/identity.js';
+import { CONTRIBUTION_TYPES as PACKAGE_TYPES } from '@3sln/trove/core/plugins/contributions.js';
 
 // Everything a package can declare, plus the workbench's own. `view` — how a list of
 // results is drawn — is the second kind: it is not part of the package format, so core

@@ -1,30 +1,73 @@
 {
-  "name": "trove",
-  "private": true,
+  "name": "@3sln/trove",
   "version": "0.0.1",
   "type": "module",
-  "description": "Trove \u2014 a self-hostable, plugin-extensible Google Drive. Semantic search, pluggable storage (S3 / filesystem / NAS), and a VS Code-style contribution system with sandboxed plugins.",
-  "workspaces": [
-    "packages/*"
+  "description": "Trove — a self-hostable, plugin-extensible Google Drive. Semantic search, pluggable storage (S3 / filesystem / NAS), and a VS Code-style contribution system with sandboxed plugins.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3sln/trove.git"
+  },
+  "license": "MIT",
+  "author": "Ray Stubbs",
+  "keywords": [
+    "drive",
+    "file storage",
+    "semantic search",
+    "self-hosted",
+    "plugins",
+    "s3"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./packages/server/src/index.js",
+    "./server": "./packages/server/src/index.js",
+    "./server/*": "./packages/server/src/*",
+    "./core": "./packages/core/src/index.js",
+    "./core/*": "./packages/core/src/*",
+    "./plugin-sdk": "./packages/plugin-sdk/src/index.js",
+    "./plugin-sdk/*": "./packages/plugin-sdk/src/*",
+    "./web/*": "./packages/web/src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "packages/core/src",
+    "packages/server/src",
+    "packages/plugin-sdk/src",
+    "packages/web/src",
+    "packages/web/dist"
   ],
   "scripts": {
-    "dev": "cd packages/web && npm run dev",
-    "build:web": "cd packages/web && npm run build",
+    "dev": "web-dev-server --config packages/web/web-dev-server.config.mjs",
+    "build:web": "cd packages/web && bun build.mjs",
     "serve": "bun packages/server/src/adapters/bun.js",
     "serve:node": "node packages/server/src/adapters/node.js",
     "test": "bun test",
-    "backup": "bun scripts/backup.mjs"
+    "test:browser": "web-test-runner --config packages/web/web-test-runner.config.mjs",
+    "backup": "bun scripts/backup.mjs",
+    "prepack": "bun run build:web"
   },
   "engines": {
     "node": ">=20",
     "bun": ">=1.1.0"
   },
-  "license": "MIT",
-  "author": "Ray Stubbs",
+  "dependencies": {
+    "@3sln/ngin": "^0.0.4",
+    "fflate": "^0.8.3"
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "^0.1.9"
+  },
   "devDependencies": {
+    "@3sln/dodo": "^0.0.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@web/dev-server": "^1.0.0",
+    "@web/test-runner": "^1.0.0",
     "aws4": "^1.13.2",
+    "es-module-lexer": "^1.7.0",
     "playwright-core": "^1.61.1",
-    "s3rver": "^3.7.1"
+    "s3rver": "^3.7.1",
+    "sql.js": "^1.14.1"
   }
 }

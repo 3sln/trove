@@ -3,7 +3,7 @@
 // the user can make an informed decision before any plugin code runs.
 
 import { parsePackage, fetchPackage, reviewSummary, displayName } from '../platform/pluginPackage.js';
-import { pluginId } from '@trove/core/plugins/identity.js';
+import { pluginId } from '@3sln/trove/core/plugins/identity.js';
 
 export async function beginInstallFromFile(app, file) {
   try {

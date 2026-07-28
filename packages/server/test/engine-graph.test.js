@@ -92,7 +92,7 @@ test('a cycle is refused by name rather than producing undefined', () => {
 test('an injected instance is still exactly what comes out', async () => {
   // The property every existing test rests on: `createServer({ storage })` means
   // what it always did, container or not.
-  const { MemoryStorage, TaskRegistry } = await import('@trove/core');
+  const { MemoryStorage, TaskRegistry } = await import('@3sln/trove/core');
   const storage = new MemoryStorage();
   const tasks = new TaskRegistry();
   const server = await createServer({ ...configFromEnv(ENV), storage, tasks });

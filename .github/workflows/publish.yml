@@ -119,8 +119,12 @@ jobs:
       - name: Test
         run: bun test
 
+      # --ignore-scripts throughout: the `prepack` hook builds the web app, which is
+      # both redundant (the step above did it) and actively harmful here — its stdout
+      # lands in the same stream as `--json`, so the report parses as a syntax error
+      # instead of a file list.
       - name: Show what will be published
-        run: npm pack --dry-run
+        run: npm pack --dry-run --ignore-scripts
 
       # `npm pack` decides what to include from `files`/`.npmignore`/`.gitignore`,
       # and `dist/` is gitignored — exactly the kind of interaction that quietly
@@ -129,11 +133,14 @@ jobs:
       - name: Check the built web app is actually in the tarball
         run: |
           set -euo pipefail
-          npm pack --dry-run --json > /tmp/pack.json
+          npm pack --dry-run --ignore-scripts --json > /tmp/pack.json
           cat > /tmp/contents.mjs <<'NODE'
           import { readFileSync } from 'node:fs';
 
-          const [tarball] = JSON.parse(readFileSync('/tmp/pack.json', 'utf8'));
+          // Defensive even with --ignore-scripts: npm has a long history of writing
+          // notices to stdout alongside --json output.
+          const raw = readFileSync('/tmp/pack.json', 'utf8');
+          const [tarball] = JSON.parse(raw.slice(raw.indexOf('[')));
           const files = (tarball.files || []).map((f) => f.path);
 
           // The entry point, the thing it loads, and the hashed assets it names.

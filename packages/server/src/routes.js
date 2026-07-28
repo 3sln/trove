@@ -5,8 +5,8 @@
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
-} from '@trove/core';
-import { parseContribUri, CORE_DOMAIN } from '@trove/core/plugins/identity.js';
+} from '@3sln/trove/core';
+import { parseContribUri, CORE_DOMAIN } from '@3sln/trove/core/plugins/identity.js';
 
 const ENV = typeof process !== 'undefined' ? (process.env || {}) : {};
 // Cap JSON request bodies so a giant payload can't exhaust server memory. Uploads

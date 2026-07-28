@@ -11,7 +11,7 @@
 // registered in, so on Workers those simply never fire.
 
 import { test, expect } from 'bun:test';
-import { MemoryKV, MemoryStorage } from '@trove/core';
+import { MemoryKV, MemoryStorage } from '@3sln/trove/core';
 
 /**
  * Storage whose first `list()` waits until the test lets it go.

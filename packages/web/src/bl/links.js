@@ -10,7 +10,7 @@
 // and renaming breaks them. It has to say so clearly, and say WHY, because "nothing
 // happened" is the worst possible response to a click.
 
-import { parseTroveUri } from '@trove/core/links.js';
+import { parseTroveUri } from '@3sln/trove/core/links.js';
 import { OpenFileAction } from './actions.js';
 
 /**

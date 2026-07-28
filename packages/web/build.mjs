@@ -23,7 +23,21 @@ async function bundle(entry, label, opts = {}) {
   const out = await Bun.build({
     entrypoints: [path.join(root, entry)],
     outdir: dist,
-    naming: 'assets/[name]-[hash].[ext]',
+    // All three, spelled out. A bare string sets the ENTRY pattern only, so split
+    // chunks kept the default and landed at the dist root — hashed, but sitting beside
+    // index.html and sw.js, which are not. That matters because the cache policy is a
+    // path rule: `/assets/*` is immutable because everything under it is
+    // content-addressed, and a 40 kB chunk outside that prefix is either served
+    // uncached or drags the rule out to cover files that must stay revalidated.
+    // Chunks keep their own prefix rather than reusing [name]: a chunk split out of
+    // main.js is also called "main", so sharing the pattern puts two unrelated
+    // `main-<hash>.js` next to each other, one of them the entry point and nothing in
+    // the name to say which.
+    naming: {
+      entry: 'assets/[name]-[hash].[ext]',
+      chunk: 'assets/chunk-[hash].[ext]',
+      asset: 'assets/[name]-[hash].[ext]',
+    },
     minify: true,
     sourcemap: 'linked',
     target: 'browser',

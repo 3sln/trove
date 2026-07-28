@@ -5,7 +5,7 @@
 // version could not do, or did by hand and got wrong once.
 
 import { test, expect } from 'bun:test';
-import { MemoryKV, MemoryStorage, StorageBackend } from '@trove/core';
+import { MemoryKV, MemoryStorage, StorageBackend } from '@3sln/trove/core';
 import { createServer, configFromEnv } from '../src/index.js';
 import { createDriveEngine, ScanCollection } from '../src/engine/index.js';
 

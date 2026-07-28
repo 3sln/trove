@@ -7,7 +7,7 @@
 
 import { test, expect } from 'bun:test';
 import { createServer } from '../src/index.js';
-import { CollectionService, MemoryKV, MemoryStorage, assertSafePluginSql } from '@trove/core';
+import { CollectionService, MemoryKV, MemoryStorage, assertSafePluginSql } from '@3sln/trove/core';
 
 const ORIGIN = 'http://drive.test';
 const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);

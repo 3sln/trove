@@ -5,7 +5,7 @@
 // one place so a TroveError becomes the right status + JSON body, and anything
 // unexpected becomes a clean 500 without leaking internals.
 
-import { TroveError, wrapError, ErrorCode, publicOrigin } from '@trove/core';
+import { TroveError, wrapError, ErrorCode, publicOrigin } from '@3sln/trove/core';
 import { leaseScope } from './scope.js';
 
 // Methods that change state. A GET is safe by definition, so it isn't checked.

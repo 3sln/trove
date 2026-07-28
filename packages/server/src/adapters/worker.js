@@ -15,7 +15,7 @@
 //   [[durable_objects.bindings]] name = "TASKS" class_name = "TroveTasks"
 //                                            -> owns scans and reindexes (see below)
 
-import { D1SqliteProvider } from '@trove/core';
+import { D1SqliteProvider } from '@3sln/trove/core';
 import { createServer, configFromEnv } from '../index.js';
 import { createTaskHost, remoteBackground } from './worker-tasks.js';
 

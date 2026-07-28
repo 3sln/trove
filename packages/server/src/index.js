@@ -15,7 +15,7 @@ import {
   VectorStore, KeywordStore, IndexerRegistry,
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
-} from '@trove/core';
+} from '@3sln/trove/core';
 import { createRouter } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';

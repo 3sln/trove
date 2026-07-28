@@ -6,7 +6,7 @@
 
 import { test, expect } from 'bun:test';
 import { createServer, configFromEnv } from '../src/index.js';
-import { SignedUrls } from '@trove/core';
+import { SignedUrls } from '@3sln/trove/core';
 
 const ENV = { TROVE_STORAGE: 'memory' };
 

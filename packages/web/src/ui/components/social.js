@@ -6,7 +6,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
 import { OpenFileAction } from '../../bl/actions.js';
-import { troveUri } from '@trove/core/links.js';
+import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
 

@@ -40,7 +40,7 @@ import {
   Vfs, TroveError,
   resolveAuthDiscovery,
   SignedUrls, resolveUrlSecret,
-} from '@trove/core';
+} from '@3sln/trove/core';
 import { Provider } from '@3sln/ngin';
 import { need } from '../lazy.js';
 
