@@ -141,8 +141,26 @@ test('credentials never reach wrangler.toml', async () => {
   const cmds = steps.map((s) => s.cmd);
   expect(cmds).toContain('npx wrangler secret put TROVE_S3_ACCESS_KEY_ID');
   expect(cmds).toContain('npx wrangler secret put TROVE_S3_SECRET_ACCESS_KEY');
-  expect(fileNamed(files, '.dev.vars.example').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY=sekrit');
+  // The answered credential goes to the GITIGNORED file, and only there. `.gitignore`
+  // covers `.dev.vars` but not `.dev.vars.example`, so a value written into the example
+  // is a value committed — the same failure this test is named for, one file over.
+  expect(fileNamed(files, '.dev.vars').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY=sekrit');
+  expect(fileNamed(files, '.dev.vars.example').contents).not.toContain('sekrit');
+  expect(fileNamed(files, '.dev.vars.example').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY');
   expect(fileNamed(files, '.gitignore').contents).toContain('.dev.vars');
+});
+
+test('the committed example never carries a value, even when one was given', async () => {
+  const { files } = await plan([...WORKERS_SCRIPT], 'workers');
+  const example = fileNamed(files, '.dev.vars.example').contents;
+  // Every line that assigns something is either a local-development override or a
+  // throwaway for the local bucket. Nothing here came from an answer.
+  const assigned = example.split('\n').filter((l) => /^[A-Z][A-Z0-9_]*=/.test(l));
+  expect(assigned.length).toBeGreaterThan(0);
+  for (const line of assigned) {
+    expect(line).not.toContain('sekrit');
+    expect(line).not.toContain('AKIAEXAMPLE');
+  }
 });
 
 test('every resource named in the config also has a command to create it', async () => {
