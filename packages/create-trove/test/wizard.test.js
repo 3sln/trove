@@ -399,3 +399,28 @@ test('declining push still documents the keys', async () => {
   expect(toml).toContain('# TROVE_VAPID_PUBLIC_KEY');
   expect(toml).toContain('Push notifications  (skipped)');
 });
+
+test('the README never tells you to overwrite a .dev.vars that was written', async () => {
+  // The two were computed independently: renderWorkers wrote .dev.vars when a key pair
+  // was generated OR a secret was answered, and the README asked whether a secret was
+  // answered. Generate a pair without answering a secret and the README instructed a
+  // `cp` over the only copy of the local private key.
+  const script = (push) => [
+    ['Object storage', false], ['Semantic search', false], ['Identity', false],
+    ['Access control', false],
+    ['Push notifications', push], ...(push ? [['  Production public key', '']] : []),
+    ['Installed app name', false],
+    ['D1 (metadata)', false], ['Vectorize (semantic search)', false],
+    ['Bind Workers AI', false], ['Bind the TroveTasks', false],
+  ];
+
+  // A generated pair, no answered credential — the case that broke.
+  const generated = await plan(script(true), 'workers');
+  expect(fileNamed(generated.files, '.dev.vars')).toBeTruthy();
+  expect(fileNamed(generated.files, 'README.md').contents).not.toContain('cp .dev.vars.example .dev.vars');
+
+  // Nothing to preserve: copying the example is exactly right, and still advised.
+  const bare = await plan(script(false), 'workers');
+  expect(fileNamed(bare.files, '.dev.vars')).toBeUndefined();
+  expect(fileNamed(bare.files, 'README.md').contents).toContain('cp .dev.vars.example .dev.vars');
+});
