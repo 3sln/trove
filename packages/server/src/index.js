@@ -341,9 +341,19 @@ export async function createServer(config = {}) {
    * does, so it does as much as it can and stores where it got to.
    */
   async function runMaintenance({ budgetMs = 20_000, scan = true } = {}) {
-    const out = { swept: false, purged: 0, scans: [] };
+    const out = { swept: false, purged: 0, scans: [], notified: 0 };
     await vfs.uploads.sweepExpired(Date.now());
     await sidecar.sweep();
+    // Mentions are batched and drained on an interval — a timer, and a timer registered
+    // during a request does not outlive it on Workers, where the adapter switches the
+    // flusher off for exactly that reason. Nothing else called flush, so on that runtime
+    // mentions piled up in the pending store and were never delivered at all: no inbox
+    // entry, no push, no error. Maintenance runs from a cron there, which is the one
+    // thing that does fire. Harmless where the timer works — concurrent drains collapse.
+    out.notified = await notifications.flush().catch((e) => {
+      console.error('[trove] mention flush failed', e);
+      return 0;
+    });
     const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     if (trashMs > 0) out.purged = (await vfs.purgeTrash({ before: Date.now() - trashMs }))?.purged || 0;
     out.swept = true;

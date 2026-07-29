@@ -59,3 +59,34 @@ test('single mention gets a personalised title', async () => {
   await nc.flush();
   expect((await nc.inbox('z')).items[0].title).toBe('Kate mentioned you');
 });
+
+// --- the drain has more than one driver now ------------------------------------
+
+test('concurrent flushes deliver a batch once, not twice', async () => {
+  // Two things drive the drain: the interval timer, and maintenance on a runtime whose
+  // timers do not survive a request. Both can be live at once, and the read of the
+  // pending batch and the delete of it are not one operation — so an unguarded pair of
+  // drains put the same mentions in the inbox twice and pushed twice.
+  const kv = new MemoryKV();
+  const push = new FakePush();
+  const nc = new NotificationCenter({ kv, push });
+  await nc.subscribePush('bob', { endpoint: 'https://push/bob-1' });
+  await nc.enqueue([{ userId: 'bob', by: { name: 'Alice' }, excerpt: 'hi' }]);
+
+  const [a, b] = await Promise.all([nc.flush(), nc.flush()]);
+
+  // One of them did the work; both saw the same answer.
+  expect(a).toBe(b);
+  expect((await nc.inbox('bob')).items.length).toBe(1);
+  expect(push.sent).toEqual(['https://push/bob-1']);
+});
+
+test('a drain that finished does not block the next one', async () => {
+  const kv = new MemoryKV();
+  const nc = new NotificationCenter({ kv });
+  await nc.enqueue([{ userId: 'u', by: { name: 'A' }, excerpt: '1' }]);
+  expect(await nc.flush()).toBe(1);
+  await nc.enqueue([{ userId: 'u', by: { name: 'A' }, excerpt: '2' }]);
+  expect(await nc.flush()).toBe(1);
+  expect((await nc.inbox('u')).items.length).toBe(2);
+});

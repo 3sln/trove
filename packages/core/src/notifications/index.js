@@ -45,8 +45,25 @@ import { assertPublicUrl } from '../util.js';
     }
   }
 
-  /** Drain all pending batches: inbox + push. Returns how many users notified. */
+  /**
+   * Drain all pending batches: inbox + push. Returns how many users notified.
+   *
+   * Concurrent calls collapse onto one drain. There are two callers — the interval
+   * timer, and maintenance on a runtime whose timers do not survive a request — and
+   * both can be live at once. Two drains reading the same pending batch would deliver
+   * it twice, because the read and the delete are not one operation.
+   *
+   * This makes one PROCESS safe, not a cluster: two servers over a shared KV can still
+   * both read a batch before either deletes it. That race predates this and wants a
+   * claim in the store to fix properly.
+   */
   async flush(now = Date.now()) {
+    if (this._draining) return this._draining;
+    this._draining = this.#drain(now).finally(() => { this._draining = null; });
+    return this._draining;
+  }
+
+  async #drain(now) {
     const pendingUsers = await this.kv.list(NS_PENDING);
     let notified = 0;
     for (const { key: userId, value: mentions } of pendingUsers) {

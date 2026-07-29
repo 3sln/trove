@@ -139,3 +139,31 @@ test('list_files returns what its description promises', async () => {
   // confidently wrong.
   expect(payload.items.map((i) => i.name)).toEqual(['mango.txt', 'apple.txt', 'zebra.txt']);
 });
+
+// --- maintenance drives the mention drain ---------------------------------------
+
+test('runMaintenance flushes pending mentions', async () => {
+  // The drain had exactly one caller: a setInterval inside NotificationCenter. On
+  // Workers the adapter turns that flusher off, because a timer registered during a
+  // request does not outlive it — and nothing else called flush. Mentions accumulated
+  // in the pending store and were never delivered: no inbox entry, no push, no error,
+  // for the entire life of the deployment. Maintenance runs from a cron there, so it
+  // is what has to drive this.
+  const srv = await createServer(configFromEnv({
+    TROVE_STORAGE: 'memory', TROVE_MCP: 'off',
+  }));
+  await srv.notifications.enqueue([
+    { userId: 'bob', nodeId: 'f1', by: { id: 'alice', name: 'Alice' }, excerpt: 'look at this', at: 1 },
+  ]);
+
+  // Nothing has run yet: the mention is queued, the inbox is empty.
+  expect((await srv.notifications.inbox('bob')).items.length).toBe(0);
+
+  const out = await srv.runMaintenance({ scan: false });
+
+  expect(out.notified).toBe(1);
+  const inbox = await srv.notifications.inbox('bob');
+  expect(inbox.items.length).toBe(1);
+  expect(inbox.items[0].title).toBe('Alice mentioned you');
+  await srv.close?.();
+});
