@@ -17,7 +17,17 @@
 //   step on Workers and an untracked `.env` line elsewhere — it never lands in a file
 //   that belongs in version control. `secret: true` on an entry is what carries that.
 
+import { generateVapidKeys } from './vapid.js';
+
 export const RUNTIMES = ['bun', 'node', 'workers'];
+
+// LocalHashEmbedding's dimension (see core/src/search/embeddings.js). Not a default
+// anyone should be asked to confirm: with the built-in embedding this IS the number, and
+// a Vectorize index created at any other size accepts the deploy and then rejects every
+// vector write — so search returns nothing, forever, without a single error anywhere a
+// user would look. The wizard knows which embedding was chosen, so it derives this
+// rather than asking a question whose wrong answer is invisible.
+export const BUILTIN_EMBEDDING_DIM = '256';
 
 /** An environment/config entry. `secret` keeps it out of anything committed. */
 const entry = (key, value, { comment, secret = false, commented = false } = {}) =>
@@ -35,9 +45,13 @@ const placeholder = (key, comment) => entry(key, '', { comment, commented: true 
  * @param {string} opts.version the @3sln/trove version to pin (this package's own —
  *   the two are released together, so they are the same number by construction)
  * @param {string} [opts.runtime] pre-answered by --runtime
+ * @param {() => Promise<{publicKey: string, privateKey: string}>} [opts.generateKeys]
+ *   how a local VAPID pair is minted. Injected so this stays the pure, transcript-driven
+ *   function it is elsewhere — a real key pair is random, and a test asserting on the
+ *   plan cannot assert on randomness.
  * @returns {Promise<object>} the plan
  */
-export async function askPlan(prompter, { name, version, runtime: preset }) {
+export async function askPlan(prompter, { name, version, runtime: preset, generateKeys = generateVapidKeys }) {
   const runtime = preset ?? await prompter.choice('Where will this run?', [
     { value: 'bun', label: 'Bun', hint: 'recommended for self-hosting' },
     { value: 'node', label: 'Node', hint: 'identical behaviour, a little slower' },
@@ -45,7 +59,11 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   ], { key: 'runtime', default: 'bun' });
 
   const isWorkers = runtime === 'workers';
-  const plan = { name, version, runtime, sections: [], workers: null, server: null, skipped: [], warnings: [] };
+  const plan = {
+    name, version, runtime, sections: [], workers: null, server: null, skipped: [], warnings: [],
+    // Overwritten only if an HTTP embedding names its own size.
+    embeddingDim: BUILTIN_EMBEDDING_DIM,
+  };
 
   const add = (title, entries, { skipped = false } = {}) => {
     plan.sections.push({ title, entries, skipped });
@@ -135,7 +153,8 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
       entries.push(entry('TROVE_EMBEDDINGS_URL', await prompter.text('  Embeddings URL', { key: 'search.embeddingsUrl', default: 'https://api.openai.com/v1/embeddings' })));
       entries.push(entry('TROVE_EMBEDDINGS_API_KEY', await prompter.text('  API key', { key: 'search.embeddingsApiKey', default: '' }), { secret: true }));
       entries.push(entry('TROVE_EMBEDDINGS_MODEL', await prompter.text('  Model', { key: 'search.embeddingsModel', default: 'text-embedding-3-small' })));
-      entries.push(entry('TROVE_EMBEDDINGS_DIM', await prompter.text('  Dimensions', { key: 'search.embeddingsDim', default: '1536' }),
+      plan.embeddingDim = await prompter.text('  Dimensions', { key: 'search.embeddingsDim', default: '1536' });
+      entries.push(entry('TROVE_EMBEDDINGS_DIM', plan.embeddingDim,
         { comment: 'must match the model, and changing it means a reindex' }));
     }
 
@@ -229,6 +248,50 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
     ], { skipped: true });
   }
 
+  // --- notifications ---------------------------------------------------------
+  // Off by default, and harmless to decline: mentions reach the in-app inbox either
+  // way. What VAPID adds is the ping — a browser waking a service worker while the
+  // drive is closed. The push carries no text (the worker fetches the inbox over its
+  // own authenticated connection), so declining costs a banner and nothing else.
+  if (await prompter.section('Push notifications', { key: 'notify.enabled',
+    blurb: 'Web push when someone @mentions you. The in-app inbox works without it.',
+    default: false,
+  })) {
+    // A LOCAL pair, minted here, written only to the gitignored .dev.vars. VAPID keys
+    // are self-issued — no account, no network — so unlike an R2 credential there is
+    // nothing to go and fetch, and making the developer find a way to produce a P-256
+    // point before they can try the feature is friction with nothing on the other side
+    // of it.
+    //
+    // Separate from production on purpose. A key identifies an application server, and
+    // these are two different servers; keeping them apart also means the value sitting
+    // on a laptop is worth nothing if it leaks.
+    plan.devVapid = await generateKeys();
+
+    // The production PUBLIC key only. The private half is never asked for: the answer
+    // would be written to disk by a program whose whole job is writing files, and a
+    // production signing key has no business in a scaffolder's output. It goes straight
+    // from `npm run vapid` into `wrangler secret put`, and the step for that is emitted
+    // whether or not this is filled in — see the blank-secret entry below.
+    const publicKey = await prompter.text('  Production public key', { key: 'notify.publicKey', default: '',
+      hint: 'leave blank — `npm run vapid` prints a pair once the project is installed',
+    });
+    add('Push notifications', [
+      entry('TROVE_VAPID_PUBLIC_KEY', publicKey,
+        { comment: 'must be the pair of the TROVE_VAPID_PRIVATE_KEY secret' }),
+      entry('TROVE_VAPID_PRIVATE_KEY', '', { secret: true }),
+      entry('TROVE_VAPID_SUBJECT', await prompter.text('  Contact subject', { key: 'notify.subject', default: 'mailto:admin@example.com',
+        hint: 'mailto: or https URL — how a push service reaches you about your own traffic',
+      })),
+    ]);
+  } else {
+    add('Push notifications', [
+      placeholder('TROVE_VAPID_PUBLIC_KEY', 'both keys set enables web push; the inbox works either way'),
+      placeholder('TROVE_VAPID_PRIVATE_KEY', 'a credential — set it with `wrangler secret put`, not here'),
+      placeholder('TROVE_VAPID_SUBJECT', 'mailto: or https URL; defaults to mailto:admin@example.com'),
+    ], { skipped: true });
+  }
+
   // --- branding --------------------------------------------------------------
   // The manifest is generated from configuration rather than served from a file, so
   // this is the one place a self-hoster gets to put their own name on the thing their
@@ -262,7 +325,7 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
 
   // --- runtime specifics -----------------------------------------------------
   if (isWorkers) {
-    plan.workers = await askWorkers(prompter);
+    plan.workers = await askWorkers(prompter, { embeddingDim: plan.embeddingDim });
   } else {
     plan.server = { port: '8787', host: '0.0.0.0' };
     if (await prompter.section('Server', { key: 'server.enabled', blurb: 'Port and bind address.', default: false })) {
@@ -283,10 +346,12 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
  * the single most common way a first Workers deploy fails, and it fails at request time
  * rather than at deploy time.
  */
-async function askWorkers(prompter) {
+async function askWorkers(prompter, { embeddingDim }) {
   const w = {
     d1: null, pluginDb: null, vectorize: null, ai: false, tasks: true,
-    compatibilityDate: '2024-09-23',
+    // nodejs_compat v2 needs 2024-09-23 or later; that exact floor was also the hardcoded
+    // value, which made it two years stale on the day it shipped.
+    compatibilityDate: '2026-07-01',
   };
 
   if (await prompter.section('D1 (metadata)', { key: 'workers.d1.enabled',
@@ -309,7 +374,9 @@ async function askWorkers(prompter) {
   })) {
     w.vectorize = {
       index: await prompter.text('  Index name', { key: 'workers.vectorize.index', default: 'trove' }),
-      dimensions: await prompter.text('  Dimensions', { key: 'workers.vectorize.dimensions', default: '1536', hint: 'must match your embedding model' }),
+      // Derived, not asked. It has exactly one correct value — the dimension of the
+      // embedding chosen above — and getting it wrong fails silently.
+      dimensions: embeddingDim,
       metric: await prompter.choice('  Distance metric', [
         { value: 'cosine', label: 'cosine' },
         { value: 'euclidean', label: 'euclidean' },

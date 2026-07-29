@@ -66,9 +66,11 @@ export {
 export { SidecarService, SidecarStore, SidecarManager } from './sidecar/index.js';
 export * as sidecarOps from './sidecar/document.js';
 
-// Notifications: mention batching + web push.
+// Notifications: mention batching and the inbox, plus the channels that deliver.
+// `NotificationChannel` is the extension point — subclass it for email or chat.
 export { NotificationCenter } from './notifications/index.js';
-export { WebPushService, generateVapidKeys } from './notifications/webpush.js';
+export { NotificationChannel } from './notifications/channel.js';
+export { WebPushService, WebPushChannel, generateVapidKeys } from './notifications/webpush.js';
 
 import { Vfs } from './vfs.js';
 import { MemoryStorage } from './storage/memory.js';

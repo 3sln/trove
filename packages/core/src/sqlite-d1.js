@@ -23,6 +23,19 @@ import { SqliteDatabase, SqliteProvider } from './sqlite.js';
 // The keys the server co-locates in one database — see LocalSqliteProvider.
 const CORE_KEYS = new Set(['metadata', 'kv', 'plugins', 'search']);
 
+// D1 answers `PRAGMA journal_mode = WAL` with SQLITE_AUTH: setting a pragma is not
+// something a D1 client may do. The shared metadata schema opens with two of them, and
+// that runs in SqliteStore.init() — so the first request a Workers drive ever served
+// died, and every one after it, on a statement that is pure local-file housekeeping and
+// means nothing here. Dropped rather than made conditional at the call site: this is the
+// one place that knows it is talking to D1.
+//
+// Only ASSIGNMENTS. `PRAGMA table_info(nodes)` is a query, D1 supports it, and the trash
+// migration reads it to decide whether it has already run — filtering that too would
+// silently re-run migrations.
+const PRAGMA_ASSIGNMENT = /^\s*PRAGMA\s+[\w.]+\s*=/i;
+const notAPragmaAssignment = (statement) => !PRAGMA_ASSIGNMENT.test(statement);
+
 /** Split a multi-statement DDL script into individual statements. */
 function splitStatements(sql) {
   // Good enough for the schema DDL Trove ships, which contains no semicolons inside
@@ -51,7 +64,7 @@ class D1Database extends SqliteDatabase {
     // D1's own exec() is documented as slow and unsuitable for anything hot; it is also
     // inconsistent about multi-statement input across versions. Batching prepared
     // statements is both faster and atomic, which is what schema setup wants.
-    const statements = splitStatements(sql);
+    const statements = splitStatements(sql).filter(notAPragmaAssignment);
     if (!statements.length) return;
     if (statements.length === 1) {
       await this.d1.prepare(statements[0]).run();

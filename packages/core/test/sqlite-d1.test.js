@@ -12,7 +12,7 @@
 // wrong the failure surfaces the way it would in production.
 
 import { test, expect } from 'bun:test';
-import { D1SqliteProvider, splitStatements } from '../src/sqlite-d1.js';
+import { D1SqliteProvider, D1Database, splitStatements } from '../src/sqlite-d1.js';
 import { LocalSqliteProvider, SqliteStore, SqliteKV, TroveError } from '../src/index.js';
 
 /**
@@ -169,4 +169,27 @@ test('a bound scope works, and dropping it empties that database only', async ()
 
 test('a missing binding is refused at construction, not at first query', async () => {
   expect(() => new D1SqliteProvider({})).toThrow(/requires a D1 binding/);
+});
+
+test('a pragma assignment is dropped, because D1 refuses it', async () => {
+  // The shared metadata schema opens with `PRAGMA journal_mode = WAL; PRAGMA
+  // foreign_keys = ON;` — local-file housekeeping that means nothing on D1, which
+  // answers SQLITE_AUTH. That runs in SqliteStore.init(), so it took down the FIRST
+  // request a Workers drive ever served, and every one after it.
+  const seen = [];
+  const fake = {
+    prepare: (sql) => ({ sql, run: async () => { seen.push(sql); }, bind: () => ({ sql, run: async () => { seen.push(sql); } }) }),
+    batch: async (stmts) => { for (const s of stmts) seen.push(s.sql); },
+  };
+  const db = new D1Database(fake);
+
+  await db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; CREATE TABLE t (a);');
+  expect(seen).toEqual(['CREATE TABLE t (a)']);
+
+  // Only assignments. `PRAGMA table_info(...)` is a query D1 supports, and the trash
+  // migration reads it to decide whether it has already run — dropping that would
+  // silently re-run migrations.
+  seen.length = 0;
+  await db.exec('PRAGMA table_info(nodes)');
+  expect(seen).toEqual(['PRAGMA table_info(nodes)']);
 });

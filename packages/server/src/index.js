@@ -16,7 +16,7 @@ import {
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
 } from '@3sln/trove/core';
-import { createRouter } from './routes.js';
+import { createRouter, routeHelpers } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';
 import { cacheControlFor } from './cachePolicy.js';
@@ -210,6 +210,17 @@ export async function createServer(config = {}) {
 
   const router = createRouter();
 
+  // Routes contributed by delivery channels — the endpoints a client uses to REGISTER
+  // with one, of which a VAPID key and a push subscription are the obvious example.
+  // Mounted here rather than declared in routes.js so the drive's API reflects what is
+  // actually configured: no web push, no /api/push/*. Added after the core table, so a
+  // channel cannot shadow a built-in route by claiming its path.
+  for (const channel of notifications?.channels || []) {
+    for (const route of channel.routes?.(routeHelpers) || []) {
+      router.add(route.method, route.path, route.deps || [], route.handler);
+    }
+  }
+
   // Said at boot, because that is when someone is looking and can still fix it. The
   // alternative is discovering it from a client that can't sign in and a 401 that
   // doesn't say why.
@@ -341,9 +352,19 @@ export async function createServer(config = {}) {
    * does, so it does as much as it can and stores where it got to.
    */
   async function runMaintenance({ budgetMs = 20_000, scan = true } = {}) {
-    const out = { swept: false, purged: 0, scans: [] };
+    const out = { swept: false, purged: 0, scans: [], notified: 0 };
     await vfs.uploads.sweepExpired(Date.now());
     await sidecar.sweep();
+    // Mentions are batched and drained on an interval — a timer, and a timer registered
+    // during a request does not outlive it on Workers, where the adapter switches the
+    // flusher off for exactly that reason. Nothing else called flush, so on that runtime
+    // mentions piled up in the pending store and were never delivered at all: no inbox
+    // entry, no push, no error. Maintenance runs from a cron there, which is the one
+    // thing that does fire. Harmless where the timer works — concurrent drains collapse.
+    out.notified = await notifications.flush().catch((e) => {
+      console.error('[trove] mention flush failed', e);
+      return 0;
+    });
     const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     if (trashMs > 0) out.purged = (await vfs.purgeTrash({ before: Date.now() - trashMs }))?.purged || 0;
     out.swept = true;

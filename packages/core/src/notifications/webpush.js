@@ -18,6 +18,8 @@
 
 import { TroveError } from '../errors.js';
 import { withRetry } from '../retry.js';
+import { assertPublicUrl } from '../util.js';
+import { NotificationChannel } from './channel.js';
 
 const enc = new TextEncoder();
 
@@ -213,5 +215,113 @@ export class WebPushService {
       },
       { signal },
     );
+  }
+}
+
+// --- as a notification channel --------------------------------------------------
+
+const NS_SUBS = 'push-subs'; // userId -> [subscription]
+
+/**
+ * Web push, as one way of reaching someone.
+ *
+ * Owns the subscriptions as well as the sending, because they are the same concern:
+ * a subscription is a push endpoint and means nothing to any other channel. It also
+ * owns the endpoints a browser uses to register one — the VAPID public key and the
+ * subscribe/unsubscribe pair — so a drive with no push configured does not answer on
+ * `/api/push/*` at all, rather than answering with a null.
+ */
+export class WebPushChannel extends NotificationChannel {
+  /**
+   * @param {object} o
+   * @param {import('../kv.js').KeyValueStore} o.kv where subscriptions live
+   * @param {WebPushService} [o.service] a ready service; otherwise built from the keys
+   * @param {string} [o.publicKey]
+   * @param {string} [o.privateKey]
+   * @param {string} [o.subject]
+   */
+  constructor({ kv, service, publicKey, privateKey, subject } = {}) {
+    super();
+    if (!kv) throw TroveError.invalid('WebPushChannel requires a kv store');
+    this.kv = kv;
+    this.service = service ?? new WebPushService({ publicKey, privateKey, subject });
+  }
+
+  get id() { return 'web-push'; }
+
+  /** The application server key a browser needs to subscribe. */
+  get publicKey() { return this.service.publicKey; }
+
+  async deliver(userId, note) {
+    const subs = (await this.kv.get(NS_SUBS, userId)) || [];
+    const alive = [];
+    for (const sub of subs) {
+      try {
+        const res = await this.service.send(sub, { topic: 'mentions', urgency: 'normal' });
+        if (!res.gone) alive.push(sub);
+      } catch {
+        alive.push(sub); // transient — keep the subscription, retry next drain
+      }
+    }
+    if (alive.length !== subs.length) await this.kv.set(NS_SUBS, userId, alive);
+  }
+
+  async subscribe(userId, subscription) {
+    if (!subscription?.endpoint) throw TroveError.invalid('Invalid push subscription');
+    // The server POSTs to this endpoint, from inside its own network, on every drain.
+    // Left unchecked it is a request forgery primitive any user can register — cloud
+    // instance metadata being the obvious target. A real push service is on the public
+    // internet, so nothing legitimate is lost by refusing the rest.
+    assertPublicUrl(subscription.endpoint, 'Push endpoint');
+    const subs = (await this.kv.get(NS_SUBS, userId)) || [];
+    if (!subs.some((s) => s.endpoint === subscription.endpoint)) {
+      subs.push(subscription);
+      await this.kv.set(NS_SUBS, userId, subs);
+    }
+    return { ok: true };
+  }
+
+  async unsubscribe(userId, endpoint) {
+    const subs = (await this.kv.get(NS_SUBS, userId)) || [];
+    await this.kv.set(NS_SUBS, userId, subs.filter((s) => s.endpoint !== endpoint));
+    return { ok: true };
+  }
+
+  /**
+   * The registration endpoints, owned here rather than by the core route table.
+   *
+   * They exist only when this channel does, which is the improvement over declaring
+   * them centrally: a drive with no VAPID keys used to answer `/api/push/vapid` with
+   * `{ publicKey: null }` and accept subscriptions it could never send to. Now there is
+   * no route at all, and a client that asks gets a 404 meaning what it says.
+   *
+   * The paths are unchanged, because the shipped web app calls them by name.
+   */
+  routes({ body, requirePrincipal }) {
+    return [
+      {
+        method: 'GET',
+        path: '/api/push/vapid',
+        handler: () => ({ publicKey: this.publicKey }),
+      },
+      {
+        method: 'POST',
+        path: '/api/push/subscribe',
+        handler: async ({ principal, req }) => {
+          requirePrincipal(principal);
+          const b = await body(req);
+          return this.subscribe(principal.id, b.subscription);
+        },
+      },
+      {
+        method: 'DELETE',
+        path: '/api/push/subscribe',
+        handler: async ({ principal, req }) => {
+          requirePrincipal(principal);
+          const b = await body(req);
+          return this.unsubscribe(principal.id, b.endpoint);
+        },
+      },
+    ];
   }
 }

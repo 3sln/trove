@@ -139,3 +139,86 @@ test('list_files returns what its description promises', async () => {
   // confidently wrong.
   expect(payload.items.map((i) => i.name)).toEqual(['mango.txt', 'apple.txt', 'zebra.txt']);
 });
+
+// --- maintenance drives the mention drain ---------------------------------------
+
+test('runMaintenance flushes pending mentions', async () => {
+  // The drain had exactly one caller: a setInterval inside NotificationCenter. On
+  // Workers the adapter turns that flusher off, because a timer registered during a
+  // request does not outlive it — and nothing else called flush. Mentions accumulated
+  // in the pending store and were never delivered: no inbox entry, no push, no error,
+  // for the entire life of the deployment. Maintenance runs from a cron there, so it
+  // is what has to drive this.
+  const srv = await createServer(configFromEnv({
+    TROVE_STORAGE: 'memory', TROVE_MCP: 'off',
+  }));
+  await srv.notifications.enqueue([
+    { userId: 'bob', nodeId: 'f1', by: { id: 'alice', name: 'Alice' }, excerpt: 'look at this', at: 1 },
+  ]);
+
+  // Nothing has run yet: the mention is queued, the inbox is empty.
+  expect((await srv.notifications.inbox('bob')).items.length).toBe(0);
+
+  const out = await srv.runMaintenance({ scan: false });
+
+  expect(out.notified).toBe(1);
+  const inbox = await srv.notifications.inbox('bob');
+  expect(inbox.items.length).toBe(1);
+  expect(inbox.items[0].title).toBe('Alice mentioned you');
+  await srv.close?.();
+});
+
+// --- channels own their registration endpoints ----------------------------------
+
+const get = (handle, path) => handle(new Request(`http://t${path}`));
+
+test('no web push configured means no /api/push/* at all', async () => {
+  // It used to answer regardless: /api/push/vapid returned { publicKey: null } and
+  // subscribe accepted endpoints the drive could never send to. A route table that
+  // advertises a transport nobody configured is a route table describing something
+  // other than this drive.
+  const srv = await createServer(configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }));
+  expect((await get(srv.handle, '/api/push/vapid')).status).toBe(404);
+  expect((await post(srv.handle, '/api/push/subscribe', { subscription: {} })).status).toBe(404);
+  // The inbox is not a channel and is always there.
+  expect((await get(srv.handle, '/api/notifications')).status).toBe(200);
+  await srv.close?.();
+});
+
+test('configuring VAPID mounts the channel’s routes', async () => {
+  const { generateVapidKeys } = await import('@3sln/trove/core');
+  const keys = await generateVapidKeys();
+  const srv = await createServer({
+    ...configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }),
+    vapid: { ...keys, subject: 'mailto:admin@example.com' },
+  });
+
+  const res = await get(srv.handle, '/api/push/vapid');
+  expect(res.status).toBe(200);
+  expect((await res.json()).publicKey).toBe(keys.publicKey);
+
+  // And the drive still reports the capability from the same place it always did.
+  const caps = await (await get(srv.handle, '/api/capabilities')).json();
+  expect(caps.features.webPush).toBe(true);
+  await srv.close?.();
+});
+
+test('a channel cannot shadow a built-in route', async () => {
+  // Contributions are added after the core table, and the router matches in order.
+  const { NotificationChannel } = await import('@3sln/trove/core');
+  class Greedy extends NotificationChannel {
+    get id() { return 'greedy'; }
+    async deliver() {}
+    routes() {
+      return [{ method: 'GET', path: '/api/health', handler: () => ({ hijacked: true }) }];
+    }
+  }
+  const srv = await createServer({
+    ...configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }),
+    notificationChannels: [new Greedy()],
+  });
+  const health = await (await get(srv.handle, '/api/health')).json();
+  expect(health.hijacked).toBeUndefined();
+  expect(health.ok).toBe(true);
+  await srv.close?.();
+});

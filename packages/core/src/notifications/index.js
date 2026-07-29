@@ -1,17 +1,25 @@
-// NotificationCenter — batches @mentions and flushes them on a configurable
-// interval, exactly as requested: as conversations mutate, mentions accumulate
-// per user; every `flushIntervalMs` we drain the batch, drop it into each user's
-// inbox, and fire a (bodyless) web push so their service worker wakes and pulls
-// the inbox. Push subscriptions, pending batches, and inboxes live in the
-// pluggable KeyValueStore, so this survives restarts and works multi-instance.
+// NotificationCenter — batches @mentions and drains them on a configurable
+// interval: as conversations mutate, mentions accumulate per user; every
+// `flushIntervalMs` we drain the batch, collapse it into one notification, drop that
+// into the user's inbox, and hand it to each delivery channel. Pending batches and
+// inboxes live in the pluggable KeyValueStore, so this survives restarts and works
+// multi-instance.
 //
-// Bodyless push (see webpush.js) means we never put mention text on a third-party
-// push service — the client fetches /api/notifications over its authenticated
-// channel instead.
+// The split worth keeping straight: the INBOX is the record, and it is written whether
+// or not anything can be delivered — /api/notifications serves it and a drive with no
+// channels configured still notifies people perfectly well. A CHANNEL is the part that
+// goes and tells someone, and it is allowed to fail. Web push is one channel (see
+// webpush.js); email or a chat workspace would be others, and nothing here knows the
+// difference between them.
+//
+// Bodyless push means mention text never reaches a third-party push service — the
+// client fetches /api/notifications over its authenticated channel instead. That is a
+// property of the web-push channel rather than of this file, but it is the reason the
+// inbox has to exist independently of delivery.
 
-import { assertPublicUrl } from '../util.js';
+import { TroveError } from '../errors.js';
+import { WebPushChannel } from './webpush.js';
 
-const NS_SUBS = 'push-subs'; // userId -> [subscription]
 const NS_PENDING = 'mentions-pending'; // userId -> [mention]
 const NS_INBOX = 'notifications-inbox'; // userId -> [notification]
 
@@ -19,21 +27,31 @@ export class NotificationCenter {
   /**
    * @param {object} deps
    * @param {import('../kv.js').KeyValueStore} deps.kv
-import { assertPublicUrl } from '../util.js';
-   * @param {import('./webpush.js').WebPushService} [deps.push]
+   * @param {import('./channel.js').NotificationChannel[]} [deps.channels] delivery
+   * @param {import('./webpush.js').WebPushService} [deps.push] the pre-channel
+   *   spelling of "web push": a bare service, wrapped into a channel here so there is
+   *   still exactly one delivery path.
    * @param {number} [deps.flushIntervalMs] default 30s
    * @param {number} [deps.inboxCap] keep at most N per user (default 200)
    */
-  constructor({ kv, push, flushIntervalMs = 30_000, inboxCap = 200 }) {
+  constructor({ kv, push, channels, flushIntervalMs = 30_000, inboxCap = 200 }) {
     this.kv = kv;
-    this.push = push || null;
+    this.channels = [
+      ...(channels || []),
+      ...(push ? [new WebPushChannel({ kv, service: push })] : []),
+    ];
     this.flushIntervalMs = flushIntervalMs;
     this.inboxCap = inboxCap;
     this._timer = null;
   }
 
+  /** A channel by id, for the callers that need a specific one. */
+  channel(id) {
+    return this.channels.find((c) => c.id === id) || null;
+  }
+
   vapidPublicKey() {
-    return this.push?.publicKey || null;
+    return this.channel('web-push')?.publicKey || null;
   }
 
   /** Queue mention events (from SidecarService.onMentions). */
@@ -45,8 +63,25 @@ import { assertPublicUrl } from '../util.js';
     }
   }
 
-  /** Drain all pending batches: inbox + push. Returns how many users notified. */
+  /**
+   * Drain all pending batches: inbox + push. Returns how many users notified.
+   *
+   * Concurrent calls collapse onto one drain. There are two callers — the interval
+   * timer, and maintenance on a runtime whose timers do not survive a request — and
+   * both can be live at once. Two drains reading the same pending batch would deliver
+   * it twice, because the read and the delete are not one operation.
+   *
+   * This makes one PROCESS safe, not a cluster: two servers over a shared KV can still
+   * both read a batch before either deletes it. That race predates this and wants a
+   * claim in the store to fix properly.
+   */
   async flush(now = Date.now()) {
+    if (this._draining) return this._draining;
+    this._draining = this.#drain(now).finally(() => { this._draining = null; });
+    return this._draining;
+  }
+
+  async #drain(now) {
     const pendingUsers = await this.kv.list(NS_PENDING);
     let notified = 0;
     for (const { key: userId, value: mentions } of pendingUsers) {
@@ -70,47 +105,41 @@ import { assertPublicUrl } from '../util.js';
       inbox.unshift(note);
       await this.kv.set(NS_INBOX, userId, inbox.slice(0, this.inboxCap));
       await this.kv.delete(NS_PENDING, userId);
-      await this.#pushTo(userId, note);
+      await this.#deliver(userId, note);
       notified++;
     }
     return notified;
   }
 
-  async #pushTo(userId, note) {
-    if (!this.push) return;
-    const subs = (await this.kv.get(NS_SUBS, userId)) || [];
-    const alive = [];
-    for (const sub of subs) {
+  /**
+   * Hand one notification to every channel.
+   *
+   * Sequential and forgiving: a channel that throws is logged and the others still run.
+   * The inbox was written above, so a failed send costs the ping and not the
+   * notification — which is the whole reason the inbox is not itself a channel.
+   */
+  async #deliver(userId, note) {
+    for (const channel of this.channels) {
       try {
-        const res = await this.push.send(sub, { topic: 'mentions', urgency: 'normal' });
-        if (!res.gone) alive.push(sub);
-      } catch {
-        alive.push(sub); // transient — keep the subscription, retry next flush
+        await channel.deliver(userId, note);
+      } catch (err) {
+        console.error(`[trove] notification channel "${channel.id}" failed for ${userId}`, err);
       }
     }
-    if (alive.length !== subs.length) await this.kv.set(NS_SUBS, userId, alive);
   }
 
   // --- subscriptions & inbox (called by routes) ------------------------------
 
   async subscribePush(userId, subscription) {
-    if (!subscription?.endpoint) throw new Error('Invalid push subscription');
-    // The server POSTs to this endpoint, from inside its own network, on every flush.
-    // Left unchecked it is a request forgery primitive any user can register — cloud
-    // instance metadata being the obvious target. A real push service is on the public
-    // internet, so nothing legitimate is lost by refusing the rest.
-    assertPublicUrl(subscription.endpoint, 'Push endpoint');
-    const subs = (await this.kv.get(NS_SUBS, userId)) || [];
-    if (!subs.some((s) => s.endpoint === subscription.endpoint)) {
-      subs.push(subscription);
-      await this.kv.set(NS_SUBS, userId, subs);
-    }
-    return { ok: true };
+    const channel = this.channel('web-push');
+    if (!channel) throw TroveError.unsupported('Web push is not configured');
+    return channel.subscribe(userId, subscription);
   }
+
   async unsubscribePush(userId, endpoint) {
-    const subs = (await this.kv.get(NS_SUBS, userId)) || [];
-    await this.kv.set(NS_SUBS, userId, subs.filter((s) => s.endpoint !== endpoint));
-    return { ok: true };
+    const channel = this.channel('web-push');
+    if (!channel) throw TroveError.unsupported('Web push is not configured');
+    return channel.unsubscribe(userId, endpoint);
   }
 
   async inbox(userId) {

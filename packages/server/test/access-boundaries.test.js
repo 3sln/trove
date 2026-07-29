@@ -7,7 +7,7 @@
 
 import { test, expect } from 'bun:test';
 import { createServer } from '../src/index.js';
-import { CollectionService, MemoryKV, MemoryStorage, assertSafePluginSql } from '@3sln/trove/core';
+import { CollectionService, MemoryKV, MemoryStorage, assertSafePluginSql, generateVapidKeys } from '@3sln/trove/core';
 
 const ORIGIN = 'http://drive.test';
 const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
@@ -29,6 +29,11 @@ async function drive() {
   const server = await createServer({
     rebuildIndexOnStart: false, collections,
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
+    // Push endpoints belong to the web-push channel, and the channel only exists when
+    // VAPID does — a drive with no keys has no /api/push/* to attack. Configured here
+    // so the subscribe route is actually reachable and the SSRF guard below is tested
+    // rather than skipped by a 404.
+    vapid: { ...(await generateVapidKeys()), subject: 'mailto:admin@example.com' },
   });
   const boss = { id: 'boss@example.com', email: 'boss@example.com', roles: [] };
   const priv = await collections.create({ name: 'Private', store: { driver: 'memory' } }, boss);

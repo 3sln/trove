@@ -158,6 +158,7 @@ async function main() {
     let rendered;
     try {
       plan = await askPlan(prompter, { name, version, runtime: opts.runtime });
+      plan.inPlace = target === process.cwd();
       rendered = renderProject(plan);
     } catch (err) {
       // A bad --set value: name the key rather than making someone map a stack trace

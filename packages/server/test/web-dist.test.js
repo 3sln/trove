@@ -55,7 +55,11 @@ test('falls back to the shipped layout when the package name will not resolve', 
   // anything that answers to `@3sln/trove`, so resolution by name throws. The layout is
   // still the layout, though, and it is this package's own — so it is a fallback that
   // can be relied on rather than a guess about somebody else's install.
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trove-vendored-'));
+  // realpath, because on macOS os.tmpdir() is `/var/folders/…`, a symlink to
+  // `/private/var/folders/…`. findWebDist resolves its own module path and so reports the
+  // latter; comparing against the unresolved form fails on macOS and nowhere else, which
+  // is a difference in the test rather than in the thing it is testing.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'trove-vendored-')));
   const adapters = path.join(root, 'packages/server/src/adapters');
   fs.mkdirSync(adapters, { recursive: true });
   fs.mkdirSync(path.join(root, 'packages/web/dist'), { recursive: true });
