@@ -53,7 +53,13 @@ async function getServer(env, buildVfs, { delegate = true } = {}) {
     config.metadata = { driver: 'sqlite' };
   }
   // Cloudflare Vectorize binding → first-class vector store (no REST creds needed).
-  if (env.VECTORIZE) {
+  //
+  // An explicit TROVE_VECTOR wins. The binding used to be taken unconditionally, which
+  // left no way to opt out: `wrangler dev` against a real Vectorize index is the only
+  // shape a local run could have, and setting TROVE_VECTOR=memory in .dev.vars did
+  // nothing. Naming a store and being given a different one is the kind of override that
+  // should never be silent.
+  if (env.VECTORIZE && (!env.TROVE_VECTOR || env.TROVE_VECTOR === 'vectorize')) {
     config.vectorStore = { driver: 'vectorize', binding: env.VECTORIZE };
   }
   // Cloudflare Workers AI binding → LLM-assisted search transformer (human text →

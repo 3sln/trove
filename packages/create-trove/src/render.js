@@ -18,10 +18,16 @@ const pin = (version) => version;
 
 const isSet = (e) => !e.commented && e.value !== '' && e.value != null;
 
+/** `cd` only when there is somewhere to go — scaffolding into `.` is already there. */
+const enter = (plan) => (plan.inPlace ? '' : `cd ${plan.name} && `);
+
 export function renderProject(plan) {
   const files = [];
   const steps = [];
-  const secrets = plan.sections.flatMap((s) => s.entries.filter((e) => e.secret && isSet(e)));
+  // Not `isSet`: leaving credentials blank is the common case at scaffold time — you
+  // rarely have R2 keys yet — and that is precisely when you need to be told which
+  // secrets the drivers you picked are going to want.
+  const secrets = plan.sections.flatMap((s) => s.entries.filter((e) => e.secret));
 
   if (plan.runtime === 'workers') renderWorkers(plan, files, steps, secrets);
   else renderServer(plan, files, steps);
@@ -101,7 +107,7 @@ import '@3sln/trove/server/adapters/${adapter}';
   files.push({ path: '.env', contents: envHeader(plan) + renderEnv(plan.sections) + serverVars(server) });
   files.push({ path: '.gitignore', contents: gitignore(['data/']) });
 
-  steps.push({ cmd: `cd ${name} && npm install`, why: 'pulls @3sln/trove — the web app is already built inside it' });
+  steps.push({ cmd: `${enter(plan)}npm install`, why: 'pulls @3sln/trove — the web app is already built inside it' });
   steps.push({ cmd: `npm start`, why: `serves the API and the workbench on :${server?.port ?? '8787'}` });
 }
 
@@ -127,7 +133,7 @@ function renderWorkers(plan, files, steps, secrets) {
       type: 'module',
       scripts: { dev: 'wrangler dev', deploy: 'wrangler deploy' },
       dependencies: { '@3sln/trove': pin(version) },
-      devDependencies: { wrangler: '^3.90.0' },
+      devDependencies: { wrangler: '^4.0.0' },
     }, null, 2) + '\n',
   });
 
@@ -146,16 +152,20 @@ export { default, TroveTasks } from '@3sln/trove/server/adapters/worker.js';
   files.push({ path: 'wrangler.toml', contents: wranglerToml(plan) });
   files.push({ path: '.gitignore', contents: gitignore(['.wrangler/']) });
 
-  const devVars = renderEnv(plan.sections, { secretsOnly: true });
-  if (devVars.trim()) {
+  // `.dev.vars.example` rather than `.dev.vars`: the real file is gitignored, so
+  // generating it produces something the next person on the project cannot see. The
+  // example is committed and says what to copy it to. Only emitted when there is at
+  // least one secret to put in it — otherwise it was a file of nothing but comments.
+  if (secrets.length) {
     files.push({
-      path: '.dev.vars',
-      contents: `# Credentials for \`wrangler dev\`. Gitignored, and NOT uploaded by \`wrangler deploy\` —\n`
-        + `# the deployed Worker reads these from secrets, which the README lists as commands.\n\n${devVars}`,
+      path: '.dev.vars.example',
+      contents: '# Copy to .dev.vars (gitignored) for `wrangler dev`. NOT uploaded by `wrangler deploy` —\n'
+        + '# the deployed Worker reads these from secrets; see README.md for the commands.\n\n'
+        + `${renderEnv(plan.sections, { secretsOnly: true })}`,
     });
   }
 
-  steps.push({ cmd: `cd ${name} && npm install`, why: 'wrangler, and @3sln/trove for the app assets' });
+  steps.push({ cmd: `${enter(plan)}npm install`, why: 'wrangler, and @3sln/trove for the app assets' });
   if (w?.d1) {
     steps.push({
       cmd: `npx wrangler d1 create ${w.d1.name}`,
@@ -174,7 +184,10 @@ export { default, TroveTasks } from '@3sln/trove/server/adapters/worker.js';
   const bucket = plan.sections.flatMap((s) => s.entries).find((e) => e.key === 'TROVE_S3_BUCKET' && isSet(e));
   if (bucket) steps.push({ cmd: `npx wrangler r2 bucket create ${bucket.value}`, why: 'object bytes' });
   for (const s of secrets) {
-    steps.push({ cmd: `npx wrangler secret put ${s.key}`, why: 'not in wrangler.toml — secrets never belong in a committed file' });
+    steps.push({
+      cmd: `npx wrangler secret put ${s.key}`,
+      why: isSet(s) ? 'in .dev.vars for local runs; set it here for the deployed Worker' : 'required by the drivers you chose',
+    });
   }
   steps.push({ cmd: 'npx wrangler deploy', why: '' });
 }
@@ -189,7 +202,12 @@ function wranglerToml(plan) {
   L.push('');
   L.push('name = ' + q(plan.name));
   L.push('main = "src/worker.js"');
-  L.push(`compatibility_date = ${q(w?.compatibilityDate ?? '2024-09-23')}`);
+  L.push(`compatibility_date = ${q(w?.compatibilityDate ?? '2026-07-01')}`);
+  L.push('');
+  L.push('# core/index.js re-exports FilesystemStorage, which imports node:fs, node:path and');
+  L.push('# node:stream at the top level — so they are in the bundle whether or not a Workers');
+  L.push('# deployment could ever use that backend. Without this the build does not link.');
+  L.push('compatibility_flags = ["nodejs_compat"]');
   L.push('');
 
   L.push('# The built web app, served straight from the installed package — no build step');
@@ -275,6 +293,13 @@ function wranglerToml(plan) {
     L.push('');
   }
 
+  L.push('# Maintenance. A timer registered inside a request does not outlive the request, so');
+  L.push('# on Workers there is no periodic work at all without a cron: expired uploads are');
+  L.push('# never swept, trash retention never applies, and collection scans never advance.');
+  L.push('# Each firing runs one time-boxed slice (TROVE_CRON_BUDGET_MS, default 20s).');
+  L.push('[triggers]');
+  L.push('crons = ["*/5 * * * *"]');
+  L.push('');
   L.push('[vars]');
   L.push('# Configuration only. Credentials are secrets — see README.md.');
   for (const section of sections) {

@@ -149,12 +149,14 @@ export function createTaskHost(getServer) {
  * gets the truth without knowing where it lives.
  */
 export class RemoteTasks extends TaskRegistry {
+  /** @param {() => object} stub resolves the Durable Object stub — see remoteBackground
+   *  for why this is a function and not the stub itself. */
   constructor(stub) {
     super();
     this.stub = stub;
   }
   async #rpc(path, payload) {
-    const res = await this.stub.fetch(`https://trove.tasks${path}`, {
+    const res = await this.stub().fetch(`https://trove.tasks${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload || {}),
@@ -181,8 +183,16 @@ export function remoteBackground(namespace) {
   // One instance for the whole drive, by name. Tasks are few and long, so there is no
   // throughput argument for sharding — and one instance is what makes GET /api/tasks a
   // complete answer rather than a per-shard sample.
-  const stub = namespace.get(namespace.idFromName('trove-tasks'));
-  const begin = (payload) => stub
+  //
+  // Resolved per call, never held. A stub belongs to the I/O context of the request that
+  // created it, and the server that owns this one is cached at module scope for the life
+  // of the isolate — so the stub outlived its request and every later use threw. The
+  // first request worked and the second did not, which reads like a fluke and is not:
+  // GET /api/tasks was broken for the entire life of every isolate after its first
+  // request. `idFromName` is a pure hash, so re-deriving it costs nothing and always
+  // names the same object.
+  const stub = () => namespace.get(namespace.idFromName('trove-tasks'));
+  const begin = (payload) => stub()
     .fetch('https://trove.tasks/begin', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -195,7 +205,7 @@ export function remoteBackground(namespace) {
       beginScan: (collectionId, { reason } = {}) => begin({ kind: 'scan', collectionId, reason }),
       beginReindex: ({ reason } = {}) => begin({ kind: 'index', reason }),
     },
-    maintain: (budgetMs) => stub
+    maintain: (budgetMs) => stub()
       .fetch('https://trove.tasks/maintain', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

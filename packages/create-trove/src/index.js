@@ -35,13 +35,14 @@ export { createPrompter, presetPrompter, recordingPrompter, scripted } from './p
 /** Somewhere for headings to go that is not a caller's stdout. */
 const SILENT = { write() {}, isTTY: false };
 
-export async function createProject({ name, version, runtime, answers = {}, prompter } = {}) {
+export async function createProject({ name, version, runtime, answers = {}, prompter, inPlace = false } = {}) {
   // Silent unless the caller hands over a prompter that wants to talk. A library that
   // prints section headings to stdout cannot be used inside anything that emits
   // structured output — which is most of what would want to call this.
   const base = prompter ?? createPrompter({ assumeDefaults: true, output: SILENT });
   const preset = presetPrompter(answers, base);
   const plan = await askPlan(preset, { name, version, runtime: runtime ?? undefined });
+  plan.inPlace = inPlace;
   const { files, steps } = renderProject(plan);
   return { plan, files, steps, unused: preset.unused() };
 }

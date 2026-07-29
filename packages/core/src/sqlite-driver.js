@@ -22,9 +22,19 @@ export async function openDatabase(pathOrMemory = ':memory:') {
   return db;
 }
 
+// Held in a variable so a bundler cannot read it.
+//
+// `await import('bun:sqlite')` behind a `typeof Bun` guard still fails to BUILD for
+// Workers: esbuild resolves a literal specifier statically, and a guard is a runtime
+// thing that says nothing about what the bundler does with the module graph. The result
+// was a wrangler build that could not link, from an import that would never have run.
+// A non-literal specifier is not resolvable at build time, so it survives as a runtime
+// import — which the guard then never reaches.
+const BUN_SQLITE = 'bun:sqlite';
+
 async function open(pathOrMemory) {
   if (typeof Bun !== 'undefined') {
-    const { Database } = await import('bun:sqlite');
+    const { Database } = await import(BUN_SQLITE);
     return new Database(pathOrMemory);
   }
   try {

@@ -62,7 +62,7 @@ test('answers by key configure the project, and the rest take defaults', async (
   expect(toml).toContain('database_id = "db-abc"');
   // The rule that has to survive every other path into this code.
   expect(toml).not.toContain('shh');
-  expect(fileNamed(files, '.dev.vars').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY=shh');
+  expect(fileNamed(files, '.dev.vars.example').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY=shh');
 
   // A fully configured identity is not warned about; the default one is.
   expect(plan.warnings).toEqual([]);

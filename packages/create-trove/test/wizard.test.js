@@ -101,7 +101,7 @@ const WORKERS_SCRIPT = [
   ['  Give everyone full access', false],
   ['D1 (metadata)', true], ['  Database name', 'trove'], ['  Database id', 'db-123'],
   ['  Bind a second D1', false],
-  ['Vectorize (semantic search)', true], ['  Index name', 'trove'], ['  Dimensions', '1536'],
+  ['Vectorize (semantic search)', true], ['  Index name', 'trove'],
   ['  Distance metric', 'cosine'],
   ['Bind Workers AI', true], ['Bind the TroveTasks', true],
 ];
@@ -141,7 +141,7 @@ test('credentials never reach wrangler.toml', async () => {
   const cmds = steps.map((s) => s.cmd);
   expect(cmds).toContain('npx wrangler secret put TROVE_S3_ACCESS_KEY_ID');
   expect(cmds).toContain('npx wrangler secret put TROVE_S3_SECRET_ACCESS_KEY');
-  expect(fileNamed(files, '.dev.vars').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY=sekrit');
+  expect(fileNamed(files, '.dev.vars.example').contents).toContain('TROVE_S3_SECRET_ACCESS_KEY=sekrit');
   expect(fileNamed(files, '.gitignore').contents).toContain('.dev.vars');
 });
 
@@ -151,7 +151,9 @@ test('every resource named in the config also has a command to create it', async
   // The most common way a first Workers deploy fails is a binding pointing at something
   // that was never created — which deploys fine and breaks at request time.
   expect(cmds).toContain('npx wrangler d1 create trove');
-  expect(cmds).toContain('npx wrangler vectorize create trove --dimensions=1536 --metric=cosine');
+  // 256, not 1536: the built-in embedding was chosen, and an index of any other size
+  // accepts the deploy then rejects every write. See BUILTIN_EMBEDDING_DIM.
+  expect(cmds).toContain('npx wrangler vectorize create trove --dimensions=256 --metric=cosine');
   expect(cmds).toContain('npx wrangler r2 bucket create trove-objects');
   expect(cmds.at(-1)).toBe('npx wrangler deploy');
 });
@@ -250,4 +252,65 @@ test('choosing anonymous explicitly warns just the same', async () => {
     ['Access control', false], ['Server', false],
   ]);
   expect(p.warnings).toContain('anonymous');
+});
+
+// --- what the Workers template has to get right ---------------------------------
+
+test('the Vectorize index is sized to the embedding, not to a guess', async () => {
+  // The failure this prevents is silent. A 1536 index built for the 256-dimension
+  // built-in embedding deploys clean and then rejects every vector write, so search
+  // returns nothing and nothing anywhere says why. It was a question with a default;
+  // there is exactly one correct answer, so it is derived.
+  const builtin = await plan([...WORKERS_SCRIPT], 'workers');
+  expect(builtin.plan.workers.vectorize.dimensions).toBe('256');
+  expect(builtin.steps.map((s) => s.cmd))
+    .toContain('npx wrangler vectorize create trove --dimensions=256 --metric=cosine');
+
+  // With an HTTP embedding the two cannot disagree either: the index takes the size the
+  // model was told to produce.
+  const http = await plan([
+    ...WORKERS_SCRIPT.filter(([m]) => m !== '  Embeddings'),
+    ['  Embeddings', 'http'], ['  Embeddings URL', 'https://api.openai.com/v1/embeddings'],
+    ['  API key', 'k'], ['  Model', 'text-embedding-3-large'], ['  Dimensions', '3072'],
+  ], 'workers');
+  expect(http.plan.workers.vectorize.dimensions).toBe('3072');
+  expect(http.steps.map((s) => s.cmd)).toContain('npx wrangler vectorize create trove --dimensions=3072 --metric=cosine');
+});
+
+test('a cron is emitted, because nothing periodic runs on Workers without one', async () => {
+  // setInterval does not outlive the request that registered it, so with no cron the
+  // upload sweep, trash retention and collection scans never run at all.
+  const { files } = await plan([...WORKERS_SCRIPT], 'workers');
+  const toml = fileNamed(files, 'wrangler.toml').contents;
+  expect(toml).toContain('[triggers]');
+  expect(toml).toContain('crons = ["*/5 * * * *"]');
+});
+
+test('the build is given what it needs to link', async () => {
+  const { files } = await plan([...WORKERS_SCRIPT], 'workers');
+  const toml = fileNamed(files, 'wrangler.toml').contents;
+  // core/index.js re-exports FilesystemStorage, which imports node:fs at the top level.
+  expect(toml).toContain('compatibility_flags = ["nodejs_compat"]');
+  // nodejs_compat v2 needs a date at or after 2024-09-23; the old hardcoded value was
+  // exactly that floor and two years stale.
+  const date = /compatibility_date = "([\d-]+)"/.exec(toml)[1];
+  expect(Date.parse(date)).toBeGreaterThan(Date.parse('2024-09-23'));
+});
+
+test('secrets are listed even when they were left blank', async () => {
+  // Not having R2 keys at scaffold time is the normal case, and it is exactly when the
+  // list of what to set is worth having.
+  const { steps, files } = await plan([
+    ['Object storage', true], ['  Backend', 's3'], ['  Bucket', 'b'],
+    ['  Access key id', ''], ['  Secret access key', ''],
+    ['Semantic search', false], ['Identity', false], ['Access control', false],
+    ['D1 (metadata)', false], ['Vectorize (semantic search)', false],
+    ['Bind Workers AI', false], ['Bind the TroveTasks', false],
+  ], 'workers');
+  const cmds = steps.map((s) => s.cmd);
+  expect(cmds).toContain('npx wrangler secret put TROVE_S3_ACCESS_KEY_ID');
+  expect(cmds).toContain('npx wrangler secret put TROVE_S3_SECRET_ACCESS_KEY');
+  // The example is committed and says what to copy it to; the real .dev.vars is not.
+  expect(fileNamed(files, '.dev.vars.example')).toBeTruthy();
+  expect(fileNamed(files, '.dev.vars')).toBeUndefined();
 });

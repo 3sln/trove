@@ -19,6 +19,14 @@
 
 export const RUNTIMES = ['bun', 'node', 'workers'];
 
+// LocalHashEmbedding's dimension (see core/src/search/embeddings.js). Not a default
+// anyone should be asked to confirm: with the built-in embedding this IS the number, and
+// a Vectorize index created at any other size accepts the deploy and then rejects every
+// vector write — so search returns nothing, forever, without a single error anywhere a
+// user would look. The wizard knows which embedding was chosen, so it derives this
+// rather than asking a question whose wrong answer is invisible.
+export const BUILTIN_EMBEDDING_DIM = '256';
+
 /** An environment/config entry. `secret` keeps it out of anything committed. */
 const entry = (key, value, { comment, secret = false, commented = false } = {}) =>
   ({ key, value, comment, secret, commented });
@@ -45,7 +53,11 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
   ], { key: 'runtime', default: 'bun' });
 
   const isWorkers = runtime === 'workers';
-  const plan = { name, version, runtime, sections: [], workers: null, server: null, skipped: [], warnings: [] };
+  const plan = {
+    name, version, runtime, sections: [], workers: null, server: null, skipped: [], warnings: [],
+    // Overwritten only if an HTTP embedding names its own size.
+    embeddingDim: BUILTIN_EMBEDDING_DIM,
+  };
 
   const add = (title, entries, { skipped = false } = {}) => {
     plan.sections.push({ title, entries, skipped });
@@ -135,7 +147,8 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
       entries.push(entry('TROVE_EMBEDDINGS_URL', await prompter.text('  Embeddings URL', { key: 'search.embeddingsUrl', default: 'https://api.openai.com/v1/embeddings' })));
       entries.push(entry('TROVE_EMBEDDINGS_API_KEY', await prompter.text('  API key', { key: 'search.embeddingsApiKey', default: '' }), { secret: true }));
       entries.push(entry('TROVE_EMBEDDINGS_MODEL', await prompter.text('  Model', { key: 'search.embeddingsModel', default: 'text-embedding-3-small' })));
-      entries.push(entry('TROVE_EMBEDDINGS_DIM', await prompter.text('  Dimensions', { key: 'search.embeddingsDim', default: '1536' }),
+      plan.embeddingDim = await prompter.text('  Dimensions', { key: 'search.embeddingsDim', default: '1536' });
+      entries.push(entry('TROVE_EMBEDDINGS_DIM', plan.embeddingDim,
         { comment: 'must match the model, and changing it means a reindex' }));
     }
 
@@ -262,7 +275,7 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
 
   // --- runtime specifics -----------------------------------------------------
   if (isWorkers) {
-    plan.workers = await askWorkers(prompter);
+    plan.workers = await askWorkers(prompter, { embeddingDim: plan.embeddingDim });
   } else {
     plan.server = { port: '8787', host: '0.0.0.0' };
     if (await prompter.section('Server', { key: 'server.enabled', blurb: 'Port and bind address.', default: false })) {
@@ -283,10 +296,12 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
  * the single most common way a first Workers deploy fails, and it fails at request time
  * rather than at deploy time.
  */
-async function askWorkers(prompter) {
+async function askWorkers(prompter, { embeddingDim }) {
   const w = {
     d1: null, pluginDb: null, vectorize: null, ai: false, tasks: true,
-    compatibilityDate: '2024-09-23',
+    // nodejs_compat v2 needs 2024-09-23 or later; that exact floor was also the hardcoded
+    // value, which made it two years stale on the day it shipped.
+    compatibilityDate: '2026-07-01',
   };
 
   if (await prompter.section('D1 (metadata)', { key: 'workers.d1.enabled',
@@ -309,7 +324,9 @@ async function askWorkers(prompter) {
   })) {
     w.vectorize = {
       index: await prompter.text('  Index name', { key: 'workers.vectorize.index', default: 'trove' }),
-      dimensions: await prompter.text('  Dimensions', { key: 'workers.vectorize.dimensions', default: '1536', hint: 'must match your embedding model' }),
+      // Derived, not asked. It has exactly one correct value — the dimension of the
+      // embedding chosen above — and getting it wrong fails silently.
+      dimensions: embeddingDim,
       metric: await prompter.choice('  Distance metric', [
         { value: 'cosine', label: 'cosine' },
         { value: 'euclidean', label: 'euclidean' },

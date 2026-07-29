@@ -442,6 +442,14 @@ export function createRouter() {
 
   // --- search & indexing -----------------------------------------------------
 
+  // Raw search: the query string is passed through as text, with NO transformer.
+  //
+  // Which means the `#tag` grammar does not apply here. `/api/capabilities` advertises a
+  // searchPrompt telling people `#tag` narrows by tag, and against this endpoint that
+  // degrades into a text search for the literal string "#tag" — no error, just quietly
+  // different results. POST /api/query is the one that runs the transformer and is what
+  // the workbench uses; this stays as the lower-level endpoint for callers that have
+  // already resolved their own query.
   r.get('/api/search', ['collections', 'vfs'], async (ctx) => {
     const { vfs, query } = ctx;
     if (!query.q) throw TroveError.invalid('q is required');
