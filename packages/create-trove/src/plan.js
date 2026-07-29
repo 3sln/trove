@@ -17,6 +17,8 @@
 //   step on Workers and an untracked `.env` line elsewhere — it never lands in a file
 //   that belongs in version control. `secret: true` on an entry is what carries that.
 
+import { generateVapidKeys } from './vapid.js';
+
 export const RUNTIMES = ['bun', 'node', 'workers'];
 
 // LocalHashEmbedding's dimension (see core/src/search/embeddings.js). Not a default
@@ -43,9 +45,13 @@ const placeholder = (key, comment) => entry(key, '', { comment, commented: true 
  * @param {string} opts.version the @3sln/trove version to pin (this package's own —
  *   the two are released together, so they are the same number by construction)
  * @param {string} [opts.runtime] pre-answered by --runtime
+ * @param {() => Promise<{publicKey: string, privateKey: string}>} [opts.generateKeys]
+ *   how a local VAPID pair is minted. Injected so this stays the pure, transcript-driven
+ *   function it is elsewhere — a real key pair is random, and a test asserting on the
+ *   plan cannot assert on randomness.
  * @returns {Promise<object>} the plan
  */
-export async function askPlan(prompter, { name, version, runtime: preset }) {
+export async function askPlan(prompter, { name, version, runtime: preset, generateKeys = generateVapidKeys }) {
   const runtime = preset ?? await prompter.choice('Where will this run?', [
     { value: 'bun', label: 'Bun', hint: 'recommended for self-hosting' },
     { value: 'node', label: 'Node', hint: 'identical behaviour, a little slower' },
@@ -251,11 +257,29 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
     blurb: 'Web push when someone @mentions you. The in-app inbox works without it.',
     default: false,
   })) {
+    // A LOCAL pair, minted here, written only to the gitignored .dev.vars. VAPID keys
+    // are self-issued — no account, no network — so unlike an R2 credential there is
+    // nothing to go and fetch, and making the developer find a way to produce a P-256
+    // point before they can try the feature is friction with nothing on the other side
+    // of it.
+    //
+    // Separate from production on purpose. A key identifies an application server, and
+    // these are two different servers; keeping them apart also means the value sitting
+    // on a laptop is worth nothing if it leaks.
+    plan.devVapid = await generateKeys();
+
+    // The production PUBLIC key only. The private half is never asked for: the answer
+    // would be written to disk by a program whose whole job is writing files, and a
+    // production signing key has no business in a scaffolder's output. It goes straight
+    // from `npm run vapid` into `wrangler secret put`, and the step for that is emitted
+    // whether or not this is filled in — see the blank-secret entry below.
+    const publicKey = await prompter.text('  Production public key', { key: 'notify.publicKey', default: '',
+      hint: 'leave blank — `npm run vapid` prints a pair once the project is installed',
+    });
     add('Push notifications', [
-      entry('TROVE_VAPID_PUBLIC_KEY', await prompter.text('  VAPID public key', { key: 'notify.publicKey', default: '',
-        hint: 'a P-256 pair — generate one with generateVapidKeys() from @3sln/trove/core',
-      })),
-      entry('TROVE_VAPID_PRIVATE_KEY', await prompter.text('  VAPID private key', { key: 'notify.privateKey', default: '' }), { secret: true }),
+      entry('TROVE_VAPID_PUBLIC_KEY', publicKey,
+        { comment: 'must be the pair of the TROVE_VAPID_PRIVATE_KEY secret' }),
+      entry('TROVE_VAPID_PRIVATE_KEY', '', { secret: true }),
       entry('TROVE_VAPID_SUBJECT', await prompter.text('  Contact subject', { key: 'notify.subject', default: 'mailto:admin@example.com',
         hint: 'mailto: or https URL — how a push service reaches you about your own traffic',
       })),

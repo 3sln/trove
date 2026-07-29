@@ -16,9 +16,15 @@ import { renderProject } from '../src/render.js';
 const VERSION = '9.9.9';
 const fileNamed = (files, p) => files.find((f) => f.path === p);
 
-async function plan(script, runtime) {
+// A fixed pair, so a test can assert on the key that was minted. The real generator is
+// random by definition, which is exactly what a transcript-driven test cannot hold.
+const FAKE_KEYS = { publicKey: 'dev-public-half', privateKey: 'dev-private-half' };
+
+async function plan(script, runtime, opts = {}) {
   const p = scripted(script);
-  const result = await askPlan(p, { name: 'my-drive', version: VERSION, runtime });
+  const result = await askPlan(p, {
+    name: 'my-drive', version: VERSION, runtime, generateKeys: async () => FAKE_KEYS, ...opts,
+  });
   return { plan: result, ...renderProject(result), unanswered: p.unanswered() };
 }
 
@@ -333,28 +339,57 @@ test('secrets are listed even when they were left blank', async () => {
   expect(fileNamed(files, '.dev.vars')).toBeUndefined();
 });
 
-test('VAPID keys are askable, and the private one is a secret', async () => {
+test('a local VAPID pair is generated, and never the production one', async () => {
   // Web push was implemented in the server the whole time and unreachable from a
-  // scaffolded drive, because the wizard never asked — so nobody saw the settings and
-  // the feature looked unbuilt.
+  // scaffolded drive, because the wizard never asked. Asking is not enough on its own,
+  // though: a P-256 pair is not something anyone has lying around, and the first
+  // version of this question pointed at a helper inside a package that is not installed
+  // until after the wizard has exited.
   const { files, steps } = await plan([
     ['Object storage', false], ['Semantic search', false], ['Identity', false],
     ['Access control', false],
     ['Push notifications', true],
-    ['  VAPID public key', 'vapid-pub-key'], ['  VAPID private key', 'vapid-priv-key'],
+    ['  Production public key', 'prod-public-half'],
     ['Installed app name', false],
     ['D1 (metadata)', false], ['Vectorize (semantic search)', false],
     ['Bind Workers AI', false], ['Bind the TroveTasks', false],
   ], 'workers');
 
   const toml = fileNamed(files, 'wrangler.toml').contents;
-  expect(toml).toContain('TROVE_VAPID_PUBLIC_KEY = "vapid-pub-key"');
+  expect(toml).toContain('TROVE_VAPID_PUBLIC_KEY = "prod-public-half"');
   expect(toml).toContain('TROVE_VAPID_SUBJECT = "mailto:admin@example.com"');
-  // The private key is a credential and follows the same path every other one does.
-  expect(toml).not.toContain('vapid-priv-key');
+
+  // The production PRIVATE key is never asked for and never written. It goes from
+  // `npm run vapid` into `wrangler secret put` without passing through a file.
   expect(steps.map((s) => s.cmd)).toContain('npx wrangler secret put TROVE_VAPID_PRIVATE_KEY');
-  expect(fileNamed(files, '.dev.vars').contents).toContain('TROVE_VAPID_PRIVATE_KEY=vapid-priv-key');
-  expect(fileNamed(files, '.dev.vars.example').contents).not.toContain('vapid-priv-key');
+  expect(toml).not.toContain('TROVE_VAPID_PRIVATE_KEY =');
+
+  // The LOCAL pair is generated and lands only in the gitignored file. A private key in
+  // the committed example is a private key every clone of the repo shares.
+  const devVars = fileNamed(files, '.dev.vars').contents;
+  expect(devVars).toContain('TROVE_VAPID_PUBLIC_KEY=dev-public-half');
+  expect(devVars).toContain('TROVE_VAPID_PRIVATE_KEY=dev-private-half');
+  expect(fileNamed(files, '.dev.vars.example').contents).not.toContain('dev-private-half');
+
+  // And a way to mint the production pair, from inside the project, where the package
+  // it needs actually exists.
+  expect(fileNamed(files, 'dev/vapid.js')).toBeTruthy();
+  expect(JSON.parse(fileNamed(files, 'package.json').contents).scripts.vapid).toBe('node dev/vapid.js');
+});
+
+test('the local key is different from the production one', async () => {
+  // Two application servers, two identities. It also means the value sitting on a
+  // laptop is worth nothing to anyone who takes it.
+  const { files } = await plan([
+    ['Object storage', false], ['Semantic search', false], ['Identity', false],
+    ['Access control', false],
+    ['Push notifications', true], ['  Production public key', 'prod-public-half'],
+    ['Installed app name', false],
+    ['D1 (metadata)', false], ['Vectorize (semantic search)', false],
+    ['Bind Workers AI', false], ['Bind the TroveTasks', false],
+  ], 'workers');
+  expect(fileNamed(files, 'wrangler.toml').contents).not.toContain('dev-public-half');
+  expect(fileNamed(files, '.dev.vars').contents).toContain('dev-public-half');
 });
 
 test('declining push still documents the keys', async () => {

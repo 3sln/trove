@@ -11,7 +11,7 @@
 // mechanism — there is no second list to keep in sync.
 
 import { LOCAL_S3 } from './templates/localS3.js';
-
+import { VAPID_SCRIPT } from './templates/vapid.js';
 const RULE = '─'.repeat(58);
 
 /** The exact version, not a range: the two packages are released together, and a drive
@@ -138,6 +138,9 @@ function renderWorkers(plan, files, steps, secrets) {
   // Object, which is another, so every item fails to index and search stays empty.
   const bucket = valueOf(plan.sections, 'TROVE_S3_BUCKET');
   const localS3 = valueOf(plan.sections, 'TROVE_STORAGE') === 's3' && bucket;
+  // Push was configured if the section ran, whether or not a production key was pasted
+  // in — the point of `npm run vapid` is that it usually was not.
+  const push = plan.sections.some((sec) => sec.title === 'Push notifications' && !sec.skipped);
 
   files.push({
     path: 'package.json',
@@ -148,6 +151,7 @@ function renderWorkers(plan, files, steps, secrets) {
       scripts: {
         dev: 'wrangler dev',
         ...(localS3 ? { 'dev:s3': 'node dev/local-s3.js' } : {}),
+        ...(push ? { vapid: 'node dev/vapid.js' } : {}),
         deploy: 'wrangler deploy',
       },
       dependencies: { '@3sln/trove': pin(version) },
@@ -166,6 +170,14 @@ function renderWorkers(plan, files, steps, secrets) {
         `const BUCKET = process.env.BUCKET || ${JSON.stringify(bucket)};`,
       ),
     });
+  }
+
+  // Key rotation, and the way to produce the production pair in the first place. It
+  // lives in the generated project rather than in the wizard because the wizard runs
+  // through `npm create`, before this project has a node_modules — a scaffolder cannot
+  // hand you a command that needs a package it has not installed yet.
+  if (push) {
+    files.push({ path: 'dev/vapid.js', contents: VAPID_SCRIPT });
   }
 
   files.push({
@@ -193,7 +205,9 @@ export { default, TroveTasks } from '@3sln/trove/server/adapters/worker.js';
   // Without this the credentials someone just typed would be discarded — the example
   // cannot hold them — and a local run against the real services would mean entering
   // them a second time.
-  const answered = secrets.some(isSet);
+  // A generated dev key counts: it is a value that exists nowhere else, so without
+  // this the pair minted a moment ago would be described and then thrown away.
+  const answered = secrets.some(isSet) || Boolean(plan.devVapid);
   if (devVars && answered) {
     files.push({
       path: '.dev.vars',
@@ -251,7 +265,7 @@ function devVarsExample(plan, { localS3, bucket, withSecrets = false }) {
   const auth = valueOf(sections, 'TROVE_AUTH');
   const needsIdentityOverride = auth && auth !== 'anonymous';
   const secrets = sections.flatMap((s) => s.entries.filter((e) => e.secret));
-  if (!needsIdentityOverride && !localS3 && !w?.vectorize && !secrets.length) return null;
+  if (!needsIdentityOverride && !localS3 && !w?.vectorize && !plan.devVapid && !secrets.length) return null;
 
   L.push(withSecrets
     ? '# Local settings for `wrangler dev`. Gitignored, and NOT uploaded by `wrangler deploy` —'
@@ -299,6 +313,26 @@ function devVarsExample(plan, { localS3, bucket, withSecrets = false }) {
     L.push('');
   }
 
+  if (plan.devVapid) {
+    rule('Push notifications — local only');
+    L.push('# A local key pair, generated when this project was scaffolded. Production uses');
+    L.push('# a different one: a VAPID key identifies an application server, and these are');
+    L.push('# two servers — so this value leaking costs nothing, and a browser that');
+    L.push('# subscribed to your laptop is not subscribed to production.');
+    L.push('#');
+    L.push('# Only in .dev.vars, never in the committed example: it is still a private key,');
+    L.push('# and one shared by every clone of the repo is one nobody can reason about.');
+    L.push('# `npm run vapid` mints another.');
+    if (withSecrets) {
+      L.push(`TROVE_VAPID_PUBLIC_KEY=${plan.devVapid.publicKey}`);
+      L.push(`TROVE_VAPID_PRIVATE_KEY=${plan.devVapid.privateKey}`);
+    } else {
+      L.push('# TROVE_VAPID_PUBLIC_KEY=    # run `npm run vapid` and paste the pair here');
+      L.push('# TROVE_VAPID_PRIVATE_KEY=');
+    }
+    L.push('');
+  }
+
   if (w?.vectorize) {
     rule('Semantic search — local only');
     L.push('# Vectorize has no local emulation: every call fails with "Binding VECTORIZE needs');
@@ -313,7 +347,13 @@ function devVarsExample(plan, { localS3, bucket, withSecrets = false }) {
   // dotenv file is a trap: the commented copy reads like the place to put your real
   // credential, and uncommenting it silently points local runs at a bucket that is not
   // the one `npm run dev:s3` is serving.
-  const overridden = new Set(localS3 ? ['TROVE_S3_ACCESS_KEY_ID', 'TROVE_S3_SECRET_ACCESS_KEY'] : []);
+  const overridden = new Set([
+    ...(localS3 ? ['TROVE_S3_ACCESS_KEY_ID', 'TROVE_S3_SECRET_ACCESS_KEY'] : []),
+    // The local pair above already set this one. Repeating it, commented, reads as the
+    // place to paste the PRODUCTION key — which is a value this file should never hold
+    // and which the wizard deliberately never asks for.
+    ...(plan.devVapid ? ['TROVE_VAPID_PRIVATE_KEY'] : []),
+  ]);
   const remaining = secrets.filter((e) => !overridden.has(e.key));
   if (remaining.length) {
     rule('Credentials');
