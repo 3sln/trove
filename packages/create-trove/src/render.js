@@ -213,6 +213,11 @@ export { default, TroveTasks } from '@3sln/trove/server/adapters/worker.js';
       path: '.dev.vars',
       contents: devVarsExample(plan, { localS3, bucket, withSecrets: true }),
     });
+    // Recorded here rather than worked out again by the README, which is how this went
+    // wrong: the condition was duplicated, a generated VAPID pair was added to one copy
+    // and not the other, and the README then told people to copy the example over a
+    // .dev.vars that already held the only copy of a key.
+    plan.wroteDevVars = true;
   }
 
   steps.push({ cmd: `${enter(plan)}npm install`, why: 'wrangler, and @3sln/trove for the app assets' });
@@ -522,10 +527,10 @@ function readme(plan, steps) {
     const localS3 = plan.sections.flatMap((s) => s.entries)
       .some((e) => e.key === 'TROVE_STORAGE' && e.value === 's3' && !e.commented);
 
-    // A generated `.dev.vars` holds the credentials that were just answered; telling
-    // someone to copy the example over it would throw them away on the first read of
-    // this file.
-    const hasDevVars = plan.sections.flatMap((s) => s.entries).some((e) => e.secret && isSet(e));
+    // Set by renderWorkers when it actually wrote the file. A .dev.vars can hold an
+    // answered credential or a generated key pair, and either way `cp` over it destroys
+    // something — for the key pair, the only copy that exists.
+    const hasDevVars = plan.wroteDevVars;
 
     L.push('## Local development');
     L.push('');
