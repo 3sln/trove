@@ -332,3 +332,35 @@ test('secrets are listed even when they were left blank', async () => {
   expect(fileNamed(files, '.dev.vars.example')).toBeTruthy();
   expect(fileNamed(files, '.dev.vars')).toBeUndefined();
 });
+
+test('VAPID keys are askable, and the private one is a secret', async () => {
+  // Web push was implemented in the server the whole time and unreachable from a
+  // scaffolded drive, because the wizard never asked — so nobody saw the settings and
+  // the feature looked unbuilt.
+  const { files, steps } = await plan([
+    ['Object storage', false], ['Semantic search', false], ['Identity', false],
+    ['Access control', false],
+    ['Push notifications', true],
+    ['  VAPID public key', 'vapid-pub-key'], ['  VAPID private key', 'vapid-priv-key'],
+    ['Installed app name', false],
+    ['D1 (metadata)', false], ['Vectorize (semantic search)', false],
+    ['Bind Workers AI', false], ['Bind the TroveTasks', false],
+  ], 'workers');
+
+  const toml = fileNamed(files, 'wrangler.toml').contents;
+  expect(toml).toContain('TROVE_VAPID_PUBLIC_KEY = "vapid-pub-key"');
+  expect(toml).toContain('TROVE_VAPID_SUBJECT = "mailto:admin@example.com"');
+  // The private key is a credential and follows the same path every other one does.
+  expect(toml).not.toContain('vapid-priv-key');
+  expect(steps.map((s) => s.cmd)).toContain('npx wrangler secret put TROVE_VAPID_PRIVATE_KEY');
+  expect(fileNamed(files, '.dev.vars').contents).toContain('TROVE_VAPID_PRIVATE_KEY=vapid-priv-key');
+  expect(fileNamed(files, '.dev.vars.example').contents).not.toContain('vapid-priv-key');
+});
+
+test('declining push still documents the keys', async () => {
+  const { files } = await plan([...WORKERS_SCRIPT], 'workers');
+  // WORKERS_SCRIPT does not answer the push section, so it takes its default: off.
+  const toml = fileNamed(files, 'wrangler.toml').contents;
+  expect(toml).toContain('# TROVE_VAPID_PUBLIC_KEY');
+  expect(toml).toContain('Push notifications  (skipped)');
+});

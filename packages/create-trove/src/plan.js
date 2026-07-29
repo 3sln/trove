@@ -242,6 +242,32 @@ export async function askPlan(prompter, { name, version, runtime: preset }) {
     ], { skipped: true });
   }
 
+  // --- notifications ---------------------------------------------------------
+  // Off by default, and harmless to decline: mentions reach the in-app inbox either
+  // way. What VAPID adds is the ping — a browser waking a service worker while the
+  // drive is closed. The push carries no text (the worker fetches the inbox over its
+  // own authenticated connection), so declining costs a banner and nothing else.
+  if (await prompter.section('Push notifications', { key: 'notify.enabled',
+    blurb: 'Web push when someone @mentions you. The in-app inbox works without it.',
+    default: false,
+  })) {
+    add('Push notifications', [
+      entry('TROVE_VAPID_PUBLIC_KEY', await prompter.text('  VAPID public key', { key: 'notify.publicKey', default: '',
+        hint: 'a P-256 pair — generate one with generateVapidKeys() from @3sln/trove/core',
+      })),
+      entry('TROVE_VAPID_PRIVATE_KEY', await prompter.text('  VAPID private key', { key: 'notify.privateKey', default: '' }), { secret: true }),
+      entry('TROVE_VAPID_SUBJECT', await prompter.text('  Contact subject', { key: 'notify.subject', default: 'mailto:admin@example.com',
+        hint: 'mailto: or https URL — how a push service reaches you about your own traffic',
+      })),
+    ]);
+  } else {
+    add('Push notifications', [
+      placeholder('TROVE_VAPID_PUBLIC_KEY', 'both keys set enables web push; the inbox works either way'),
+      placeholder('TROVE_VAPID_PRIVATE_KEY', 'a credential — set it with `wrangler secret put`, not here'),
+      placeholder('TROVE_VAPID_SUBJECT', 'mailto: or https URL; defaults to mailto:admin@example.com'),
+    ], { skipped: true });
+  }
+
   // --- branding --------------------------------------------------------------
   // The manifest is generated from configuration rather than served from a file, so
   // this is the one place a self-hoster gets to put their own name on the thing their
