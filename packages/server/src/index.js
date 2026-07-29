@@ -16,7 +16,7 @@ import {
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
 } from '@3sln/trove/core';
-import { createRouter } from './routes.js';
+import { createRouter, routeHelpers } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
 import { createMcpHandler } from './mcp/index.js';
 import { cacheControlFor } from './cachePolicy.js';
@@ -209,6 +209,17 @@ export async function createServer(config = {}) {
   }
 
   const router = createRouter();
+
+  // Routes contributed by delivery channels — the endpoints a client uses to REGISTER
+  // with one, of which a VAPID key and a push subscription are the obvious example.
+  // Mounted here rather than declared in routes.js so the drive's API reflects what is
+  // actually configured: no web push, no /api/push/*. Added after the core table, so a
+  // channel cannot shadow a built-in route by claiming its path.
+  for (const channel of notifications?.channels || []) {
+    for (const route of channel.routes?.(routeHelpers) || []) {
+      router.add(route.method, route.path, route.deps || [], route.handler);
+    }
+  }
 
   // Said at boot, because that is when someone is looking and can still fix it. The
   // alternative is discovering it from a client that can't sign in and a 401 that

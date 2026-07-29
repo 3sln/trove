@@ -756,20 +756,10 @@ export function createRouter() {
     return notifications.markRead(principal.id, b.ids);
   });
 
-  r.get('/api/push/vapid', ['notifications'], ({ notifications }) => ({ publicKey: notifications?.vapidPublicKey() || null }));
-
-  r.post('/api/push/subscribe', ['notifications'], async ({ notifications, principal, req }) => {
-    requireNotifications(notifications);
-    requirePrincipal(principal);
-    const b = await body(req);
-    return notifications.subscribePush(principal.id, b.subscription);
-  });
-  r.delete('/api/push/subscribe', ['notifications'], async ({ notifications, principal, req }) => {
-    requireNotifications(notifications);
-    requirePrincipal(principal);
-    const b = await body(req);
-    return notifications.unsubscribePush(principal.id, b.endpoint);
-  });
+  // /api/push/* is not here. Registering with a delivery channel is the channel's own
+  // business — see WebPushChannel.routes() — so the drive's route table does not carry
+  // endpoints for a transport it may not have configured, and adding email or chat does
+  // not mean editing this file.
 
   // --- plugins: domain verification proxy + per-plugin server storage --------
 
@@ -1072,3 +1062,12 @@ function requirePrincipal(principal) {
 function requireNotifications(n) {
   if (!n) throw TroveError.unsupported('Notifications are not enabled on this server');
 }
+
+/**
+ * The request plumbing handed to routes contributed from outside this file.
+ *
+ * `body` is the capped JSON read — the cap is the reason to share it rather than let a
+ * channel call `req.json()` and accept an unbounded body — and `requirePrincipal` is
+ * the same 401 every route here throws.
+ */
+export const routeHelpers = { body, requirePrincipal };

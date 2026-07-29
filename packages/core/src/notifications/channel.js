@@ -54,9 +54,15 @@ export class NotificationChannel {
    * common case: a channel that reads an address off the identity has nothing to
    * register.
    *
+   * `helpers` is the request plumbing the router owns and a channel should not
+   * reimplement: `body(req)` parses JSON under the server's size cap — the cap is the
+   * point, a channel parsing the body itself is an unbounded read — and
+   * `requirePrincipal(principal)` throws the same 401 every other route throws.
+   *
+   * @param {{body: Function, requirePrincipal: Function}} helpers
    * @returns {Array<{method: string, path: string, deps?: string[], handler: Function}>}
    */
-  routes() {
+  routes(helpers) { // eslint-disable-line no-unused-vars
     return [];
   }
 }

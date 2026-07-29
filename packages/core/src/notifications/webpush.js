@@ -286,4 +286,42 @@ export class WebPushChannel extends NotificationChannel {
     await this.kv.set(NS_SUBS, userId, subs.filter((s) => s.endpoint !== endpoint));
     return { ok: true };
   }
+
+  /**
+   * The registration endpoints, owned here rather than by the core route table.
+   *
+   * They exist only when this channel does, which is the improvement over declaring
+   * them centrally: a drive with no VAPID keys used to answer `/api/push/vapid` with
+   * `{ publicKey: null }` and accept subscriptions it could never send to. Now there is
+   * no route at all, and a client that asks gets a 404 meaning what it says.
+   *
+   * The paths are unchanged, because the shipped web app calls them by name.
+   */
+  routes({ body, requirePrincipal }) {
+    return [
+      {
+        method: 'GET',
+        path: '/api/push/vapid',
+        handler: () => ({ publicKey: this.publicKey }),
+      },
+      {
+        method: 'POST',
+        path: '/api/push/subscribe',
+        handler: async ({ principal, req }) => {
+          requirePrincipal(principal);
+          const b = await body(req);
+          return this.subscribe(principal.id, b.subscription);
+        },
+      },
+      {
+        method: 'DELETE',
+        path: '/api/push/subscribe',
+        handler: async ({ principal, req }) => {
+          requirePrincipal(principal);
+          const b = await body(req);
+          return this.unsubscribe(principal.id, b.endpoint);
+        },
+      },
+    ];
+  }
 }
