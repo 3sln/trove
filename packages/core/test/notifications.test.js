@@ -90,3 +90,70 @@ test('a drain that finished does not block the next one', async () => {
   expect(await nc.flush()).toBe(1);
   expect((await nc.inbox('u')).items.length).toBe(2);
 });
+
+// --- channels ------------------------------------------------------------------
+
+import { NotificationChannel, WebPushChannel } from '../src/index.js';
+
+class RecordingChannel extends NotificationChannel {
+  constructor(id, { fail = false } = {}) { super(); this._id = id; this.fail = fail; this.got = []; }
+  get id() { return this._id; }
+  async deliver(userId, note) {
+    if (this.fail) throw new Error('channel is down');
+    this.got.push({ userId, title: note.title });
+  }
+}
+
+test('every channel gets the notification', async () => {
+  const kv = new MemoryKV();
+  const email = new RecordingChannel('email');
+  const chat = new RecordingChannel('chat');
+  const nc = new NotificationCenter({ kv, channels: [email, chat] });
+
+  await nc.enqueue([{ userId: 'bob', by: { name: 'Alice' }, excerpt: 'hi' }]);
+  await nc.flush();
+
+  expect(email.got).toEqual([{ userId: 'bob', title: 'Alice mentioned you' }]);
+  expect(chat.got).toEqual([{ userId: 'bob', title: 'Alice mentioned you' }]);
+});
+
+test('one channel failing does not stop the others, or lose the notification', async () => {
+  // The inbox is written before anything is delivered, which is what makes a channel
+  // allowed to fail: the notification still exists, only the ping was lost.
+  const kv = new MemoryKV();
+  const broken = new RecordingChannel('broken', { fail: true });
+  const working = new RecordingChannel('working');
+  const nc = new NotificationCenter({ kv, channels: [broken, working] });
+
+  await nc.enqueue([{ userId: 'bob', by: { name: 'Alice' }, excerpt: 'hi' }]);
+  expect(await nc.flush()).toBe(1);
+
+  expect(working.got.length).toBe(1);
+  expect((await nc.inbox('bob')).items.length).toBe(1);
+});
+
+test('a bare push service is still accepted, as one channel among others', async () => {
+  // The pre-channel spelling. Wrapped rather than special-cased, so there is exactly
+  // one delivery path regardless of how it was configured.
+  const kv = new MemoryKV();
+  const push = new FakePush();
+  const email = new RecordingChannel('email');
+  const nc = new NotificationCenter({ kv, push, channels: [email] });
+
+  expect(nc.channel('web-push')).toBeInstanceOf(WebPushChannel);
+  expect(nc.vapidPublicKey()).toBe('PUBKEY');
+
+  await nc.subscribePush('bob', { endpoint: 'https://push/bob-1' });
+  await nc.enqueue([{ userId: 'bob', by: { name: 'Alice' }, excerpt: 'hi' }]);
+  await nc.flush();
+
+  expect(push.sent).toEqual(['https://push/bob-1']);
+  expect(email.got.length).toBe(1);
+});
+
+test('no channels at all still fills the inbox', async () => {
+  const nc = new NotificationCenter({ kv: new MemoryKV() });
+  await nc.enqueue([{ userId: 'bob', by: { name: 'Alice' }, excerpt: 'hi' }]);
+  expect(await nc.flush()).toBe(1);
+  expect((await nc.inbox('bob')).items.length).toBe(1);
+});

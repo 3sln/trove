@@ -32,7 +32,7 @@ import {
   cloudflareAccess,
   KeyValueStore, MemoryKV, SqliteKV,
   SqliteProvider, LocalSqliteProvider,
-  SidecarService, NotificationCenter, WebPushService,
+  SidecarService, NotificationCenter, WebPushService, WebPushChannel, NotificationChannel,
   CollectionService,
   PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
   IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
@@ -285,17 +285,44 @@ export function coreProviders(config, lifecycleState) {
         })
         : null))),
 
-    notifications: Provider.fromLazySingleton(
+    // How notifications actually reach people. A list, because there is no reason for
+    // it to be one: a drive can push to browsers and mail a digest and post into a chat
+    // workspace, and none of those knows about the others. Web push is the default and
+    // only when VAPID is configured, so a drive that sets nothing gets an inbox and no
+    // delivery — which is what it got before.
+    //
+    // `config.notificationChannels` replaces the list wholesale rather than adding to
+    // it, so a caller who wants email INSTEAD of push says so by saying so.
+    notificationChannels: Provider.fromLazySingleton(
       async (deps) => {
         const { kv, push } = await need(deps, ['kv', 'push']);
-        const center = new NotificationCenter({ kv, push, flushIntervalMs: config.mentionFlushMs ?? 30_000 });
+        if (config.notificationChannels) {
+          return config.notificationChannels.filter(Boolean).map((c) => {
+            if (!(c instanceof NotificationChannel)) {
+              throw TroveError.invalid('Every notificationChannels entry must be a NotificationChannel');
+            }
+            return c;
+          });
+        }
+        return push ? [new WebPushChannel({ kv, service: push })] : [];
+      },
+      null,
+      { deps: ['kv', 'push'] },
+    ),
+
+    notifications: Provider.fromLazySingleton(
+      async (deps) => {
+        const { kv, notificationChannels } = await need(deps, ['kv', 'notificationChannels']);
+        const center = new NotificationCenter({
+          kv, channels: notificationChannels, flushIntervalMs: config.mentionFlushMs ?? 30_000,
+        });
         if (config.startFlusher !== false) center.start();
         return center;
       },
       // Stopping the flusher used to be a line in close() that had to remember this
       // existed. Now it is attached to the thing it stops.
       (center) => center.stop(),
-      { deps: ['kv', 'push'] },
+      { deps: ['kv', 'notificationChannels'] },
     ),
 
     sidecar: Provider.fromLazySingleton(
