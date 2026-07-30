@@ -206,3 +206,8 @@ the sync a single action, which needs the flattened result list on the engine si
 
 The three `observe*` calls in the composition are not in this category: they are the shell
 snapshot, and they go when the snapshot does.
+
+Two `ui.app` calls are left, and neither is a mutation. `offline.isPinned(node.id)` and
+`apiKeys.draftScopes()` are READS taken during a render — they want to be part of the slice
+the component already receives, or of an apiKeys view, rather than becoming actions. Turning
+a read into an action would be the same category error as a query handing out a handle.

@@ -11,7 +11,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
-import { CopyTextAction } from '../../bl/actions.js';
+import { CancelTaskAction, CopyTextAction, DismissIssueAction, DismissTaskAction, RetryIssueAction, ToggleActivityPanelAction } from '../../bl/actions.js';
 
 const { div, button, span, h3, p, pre } = dd;
 
@@ -50,9 +50,9 @@ function taskRow(task, ui) {
         task.error ? div({ className: 'act-error' }, task.error) : null,
       ),
       running && task.cancellable
-        ? button({ className: 'act-action', title: 'Cancel' }, icon('close', { size: 12 })).on({ click: () => ui.app.activity.cancel(task.id) })
+        ? button({ className: 'act-action', title: 'Cancel' }, icon('close', { size: 12 })).on({ click: () => ui.go(new CancelTaskAction(task.id)) })
         : !running
-          ? button({ className: 'act-action', title: 'Dismiss' }, icon('close', { size: 12 })).on({ click: () => ui.app.activity.dismiss(task.id) })
+          ? button({ className: 'act-action', title: 'Dismiss' }, icon('close', { size: 12 })).on({ click: () => ui.go(new DismissTaskAction(task.id)) })
           : null,
     ),
     running
@@ -88,10 +88,10 @@ function issueRow(issue, ui) {
       // Retry only when the server said pressing it will actually do something.
       issue.retryable
         ? button({ className: 'btn small act-retry' }, icon('refresh', { size: 12 }), span('Retry'))
-          .on({ click: () => ui.app.activity.retryIssue(issue.id) })
+          .on({ click: () => ui.go(new RetryIssueAction(issue.id)) })
         : null,
       button({ className: 'btn small ghost act-dismiss' }, 'Dismiss')
-        .on({ click: () => ui.app.activity.dismissIssue(issue.id) }),
+        .on({ click: () => ui.go(new DismissIssueAction(issue.id)) }),
     ),
   );
 }
@@ -106,7 +106,7 @@ export default function activityPanel(state, ui) {
     div({ className: 'act-head' },
       h3('Activity'),
       button({ className: 'act-action', title: 'Close' }, icon('close', { size: 13 }))
-        .on({ click: () => ui.app.activity.togglePanel(false) }),
+        .on({ click: () => ui.go(new ToggleActivityPanelAction(false)) }),
     ),
 
     // "Nothing is wrong" and "we couldn't ask" look identical unless one says so. Both

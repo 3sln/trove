@@ -2,6 +2,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
 import { sanitizedVNodes, htmlToText } from '../sanitize.js';
+import { CancelTransferAction, ToggleActivityPanelAction } from '../../bl/actions.js';
 
 const { div, button, span } = dd;
 
@@ -37,7 +38,7 @@ function statusSlot(item, ui) {
 export function activityChips(state, ui) {
   const act = state.act || { tasks: [], issues: [] };
   const running = act.tasks.filter((t) => t.status === 'running');
-  const open = () => ui.app.activity.togglePanel(true);
+  const open = () => ui.go(new ToggleActivityPanelAction(true));
   const chips = [];
 
   if (running.length) {
@@ -188,7 +189,7 @@ export default function statusBar(state, ui) {
       ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
         .on({ click: (e) => ui.platform.workbench.showContextMenu(e.clientX, e.clientY, active.map((t) => ({
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
-          run: () => ui.app.transfers.cancel(t.id),
+          run: () => ui.go(new CancelTransferAction(t.id)),
         }))) })
       : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${f.totalKnown ? totalItems : 'more'}` : '' },
         `${totalItems.toLocaleString()}${f.totalKnown || !f.partial ? '' : '+'} item${totalItems === 1 ? '' : 's'}`),

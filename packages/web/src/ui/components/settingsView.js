@@ -5,7 +5,7 @@ import { listAssociations, rememberOpener } from '../../bl/openers.js';
 import { localState } from '../localState.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
-import { RebindKeyAction, CopyTextAction } from '../../bl/actions.js';
+import { CopyTextAction, PatchApiKeyDraftAction, RebindKeyAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -252,6 +252,8 @@ function mintedBanner(minted, ui) {
 
 function draftForm(keys, collections, ui) {
   const draft = keys.draft;
+  // Also a read. Derived from the draft, so it wants to be part of an apiKeys view
+  // rather than a call from the render; see docs/tickets/009.
   const scopes = ui.app.apiKeys.draftScopes();
   const ready = !!draft.name.trim() && !!scopes;
 
@@ -263,7 +265,7 @@ function draftForm(keys, collections, ui) {
       ),
       div({ className: 'control' },
         input({ className: 'input', value: draft.name, $attrs: { placeholder: 'CI uploader' } })
-          .on({ input: (e) => ui.app.apiKeys.patchDraft({ name: e.target.value }) }),
+          .on({ input: (e) => ui.go(new PatchApiKeyDraftAction({ name: e.target.value })) }),
       ),
     ),
 
@@ -276,7 +278,7 @@ function draftForm(keys, collections, ui) {
         input({
           className: 'input', type: 'number', value: draft.expiresInDays,
           $attrs: { min: '1', max: '3650', placeholder: 'never' },
-        }).on({ input: (e) => ui.app.apiKeys.patchDraft({ expiresInDays: e.target.value }) }),
+        }).on({ input: (e) => ui.go(new PatchApiKeyDraftAction({ expiresInDays: e.target.value })) }),
       ),
     ),
 
@@ -309,7 +311,7 @@ function scopeRow(collection, draft, ui) {
     div({ className: 'key-scope-caps' },
       ...CAPS.map((c) => label({ className: `cap ${held.has(c.id) ? 'on' : ''}`, title: c.hint },
         input({ type: 'checkbox', checked: held.has(c.id) })
-          .on({ change: () => ui.app.apiKeys.toggleCap(collection.id, c.id) }),
+          .on({ change: () => ui.go(new ToggleApiKeyCapAction(collection.id, c.id)) }),
         span(c.label),
       )),
     ),

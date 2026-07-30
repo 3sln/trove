@@ -6,7 +6,7 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseSearchModalAction, FilterAction, OpenFileAction, SearchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
+import { CloseSearchModalAction, FilterAction, OpenFileAction, SearchAction, SelectItemsAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { activeView, renderView, viewSwitcher, viewMove } from './views/index.js';
 import { openRowMenu } from './views/parts.js';
@@ -176,7 +176,7 @@ function resolvedBar(r) {
 // cannot resolve, and the commands that act on "the selection" then do nothing at all.
 function syncSelection(ui, item) {
   const node = item?.node;
-  ui.app.explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
+  ui.go(new SelectItemsAction(node?.id ? [node.id] : [], { nodes: node ? [node] : null }));
 }
 
 /**

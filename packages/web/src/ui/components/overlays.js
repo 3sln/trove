@@ -8,7 +8,7 @@ import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
 import { localState } from '../localState.js';
-import { CloseContextMenuAction, OpenInPanelAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, UpdateDialogAction } from '../../bl/actions.js';
+import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, UpdateDialogAction } from '../../bl/actions.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -251,7 +251,7 @@ export function transferTray(state, ui) {
       span({ $styling: { 'margin-left': '6px' } }, 'Transfers'),
       div({ className: 'actions' },
         button({ className: 'iconbtn', title: 'Clear finished' }, icon('check', { size: 14 }))
-          .on({ click: () => ui.app.transfers.clearDone() }),
+          .on({ click: () => ui.go(new ClearFinishedTransfersAction()) }),
       ),
     ),
     div({ className: 'items' },
@@ -261,7 +261,7 @@ export function transferTray(state, ui) {
             icon(t.status === 'error' ? 'warn' : t.status === 'done' ? 'check' : 'upload', { size: 14 }),
             span({ className: 'name' }, t.name),
             t.status === 'active'
-              ? button({ className: 'iconbtn', title: 'Cancel' }, icon('close', { size: 13 })).on({ click: () => ui.app.transfers.cancel(t.id) })
+              ? button({ className: 'iconbtn', title: 'Cancel' }, icon('close', { size: 13 })).on({ click: () => ui.go(new CancelTransferAction(t.id)) })
               : span({ className: 'pct' }, t.status === 'done' ? bytes(t.total) : t.status),
           ),
           t.status === 'active'
@@ -276,9 +276,9 @@ export function transferTray(state, ui) {
           (t.status === 'error' || t.status === 'cancelled') && t.retryable
             ? div({ className: 'xfer-actions' },
               button({ className: 'btn small' }, icon('refresh', { size: 12 }), span('Retry'))
-                .on({ click: () => ui.app.transfers.retry(t.id) }),
+                .on({ click: () => ui.go(new RetryTransferAction(t.id)) }),
               button({ className: 'btn small ghost' }, 'Dismiss')
-                .on({ click: () => ui.app.transfers.dismiss(t.id) }),
+                .on({ click: () => ui.go(new DismissTransferAction(t.id)) }),
             )
             : null,
         ).key(t.id),

@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
-import { CopyTextAction, NotifyAction, OpenFileAction, ToggleInfoPanelAction } from '../../bl/actions.js';
+import { AddTagAction, CopyTextAction, LoadSidecarAction, NotifyAction, OpenFileAction, RemoveTagAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
@@ -79,7 +79,7 @@ function inboxItem(note, ui) {
           ));
         });
       }
-      ui.app.social.toggleInbox(false);
+      ui.go(new ToggleInboxAction(false));
     },
   });
 }
@@ -108,6 +108,8 @@ export function infoPanel(state, ui) {
 }
 
 function fileHeader(node, state, ui) {
+  // A READ, not a mutation — so neither an action nor something to convert blindly. It
+  // belongs in the offline slice the component already receives; see docs/tickets/009.
   const pinned = ui.app.offline.isPinned(node.id);
   return div({ className: 'ip-file' },
     div({ className: 'ip-name' }, node.name),
@@ -164,7 +166,7 @@ function tagSection(sc, ui) {
       ...tags.map((t) =>
         span({ className: 'tag' },
           t.value ? `${t.name}: ${t.value}` : t.name,
-          button({ className: 'tag-x' }, icon('close', { size: 11 })).on({ click: () => ui.app.social.removeTag(t.name) }),
+          button({ className: 'tag-x' }, icon('close', { size: 11 })).on({ click: () => ui.go(new RemoveTagAction(t.name)) }),
         ),
       ),
       input({ className: 'tag-input', placeholder: '+ tag', value: '' }).on({
@@ -172,7 +174,7 @@ function tagSection(sc, ui) {
           if (e.key === 'Enter' && e.target.value.trim()) {
             const raw = e.target.value.trim();
             const [name, ...rest] = raw.split(':');
-            ui.app.social.addTag(name.trim(), rest.join(':').trim() || undefined);
+            ui.go(new AddTagAction(name.trim(), rest.join(':').trim() || undefined));
             e.target.value = '';
           }
         },
@@ -189,7 +191,7 @@ function conversationSection(state, sc, ui) {
   const body = sc?.error
     ? div({ className: 'conv-empty' },
         span(`Couldn't load the conversation: ${sc.error}`),
-        button({ className: 'btn', $styling: { 'margin-top': '8px' } }, 'Retry').on({ click: () => ui.app.social.loadSidecar(sc.nodeId) }))
+        button({ className: 'btn', $styling: { 'margin-top': '8px' } }, 'Retry').on({ click: () => ui.go(new LoadSidecarAction(sc.nodeId)) }))
     : comments.length
       ? div({ className: 'thread' }, ...comments.map((c) => commentNode(c, state, ui, 0)))
       : div({ className: 'conv-empty' }, 'No comments yet. Start the discussion — use @ to mention someone.');

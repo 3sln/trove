@@ -15,7 +15,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
 import { statusFacts, usageChip } from './statusBar.js';
-import { CloseSheetAction, OpenSheetAction } from '../../bl/actions.js';
+import { CloseSheetAction, OpenSheetAction, ToggleActivityPanelAction, ToggleInboxAction } from '../../bl/actions.js';
 
 const { div, button, span, img } = dd;
 
@@ -120,14 +120,14 @@ function statusSheet(state, ui) {
       ? sheetRow({
         icon: 'warn', danger: true,
         label: `${f.issues.length} need${f.issues.length === 1 ? 's' : ''} attention`,
-        onClick: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); },
+        onClick: () => { ui.go(new CloseSheetAction()); ui.go(new ToggleActivityPanelAction(true)); },
       })
       : null,
     f.running.length || f.uploading.length
       ? sheetRow({
         icon: 'refresh',
         label: `${f.running.length + f.uploading.length} running`,
-        onClick: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); },
+        onClick: () => { ui.go(new CloseSheetAction()); ui.go(new ToggleActivityPanelAction(true)); },
       })
       : null,
     !f.off.online ? sheetRow({ icon: 'info', label: 'Offline', value: `${f.off.pins.length} pinned` }) : null,
@@ -159,7 +159,7 @@ function statusSheet(state, ui) {
     div({ className: 'sheet-actions' },
       button({ className: 'btn small ghost' }, icon('refresh', { size: 13 }), span('Scan for changes')).on({ click: go('workbench.scanCollection') }),
       button({ className: 'btn small ghost' }, icon('refresh', { size: 13 }), span('Activity'))
-        .on({ click: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); } }),
+        .on({ click: () => { ui.go(new CloseSheetAction()); ui.go(new ToggleActivityPanelAction(true)); } }),
     ),
   );
 }
@@ -178,8 +178,8 @@ function moreSheet(state, ui) {
         div({}, div({ className: 'sm-name' }, me.name || me.id), me.email ? div({ className: 'sm-sub' }, me.email) : null))
       : null,
 
-    sheetRow({ icon: 'bell', label: unread ? `Notifications (${unread})` : 'Notifications', onClick: () => { ui.go(new CloseSheetAction()); ui.app.social.toggleInbox(true); } }),
-    sheetRow({ icon: 'refresh', label: 'Activity & problems', onClick: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); } }),
+    sheetRow({ icon: 'bell', label: unread ? `Notifications (${unread})` : 'Notifications', onClick: () => { ui.go(new CloseSheetAction()); ui.go(new ToggleInboxAction(true)); } }),
+    sheetRow({ icon: 'refresh', label: 'Activity & problems', onClick: () => { ui.go(new CloseSheetAction()); ui.go(new ToggleActivityPanelAction(true)); } }),
     sheetRow({ icon: 'info', label: 'Details & conversation', onClick: go('workbench.toggleInfoPanel') }),
     sheetRow({ icon: 'trash', label: 'Trash', onClick: go('explorer.showTrash') }),
     sheetRow({ icon: 'refresh', label: 'Refresh', onClick: go('explorer.refresh') }),

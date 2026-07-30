@@ -834,3 +834,91 @@ export class OpenInPanelAction extends ShellAction {
   }
   apply(wb) { wb.openFile(this.node, this.openerId, this.opts); }
 }
+
+// --- the drive's services --------------------------------------------------------
+//
+// Cancelling a transfer, retrying an issue, tagging a file. These were direct method calls
+// on the service, so the engine saw an upload being cancelled only as the state change that
+// followed, with nothing to say a person had asked for it.
+//
+// Named per operation for the same reason the shell actions are: the feed is the point.
+
+class ActivityAction extends AppAction {
+  async execute({ app }) { this.apply(app.activity); }
+}
+export class ToggleActivityPanelAction extends ActivityAction {
+  constructor(which) { super(); this.which = which; }
+  apply(s) { s.togglePanel(this.which); }
+}
+export class CancelTaskAction extends ActivityAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.cancel(this.id); }
+}
+export class DismissTaskAction extends ActivityAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.dismiss(this.id); }
+}
+export class RetryIssueAction extends ActivityAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.retryIssue(this.id); }
+}
+export class DismissIssueAction extends ActivityAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.dismissIssue(this.id); }
+}
+
+class TransfersAction extends AppAction {
+  async execute({ app }) { this.apply(app.transfers); }
+}
+export class CancelTransferAction extends TransfersAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.cancel(this.id); }
+}
+export class RetryTransferAction extends TransfersAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.retry(this.id); }
+}
+export class DismissTransferAction extends TransfersAction {
+  constructor(id) { super(); this.id = id; }
+  apply(s) { s.dismiss(this.id); }
+}
+export class ClearFinishedTransfersAction extends TransfersAction {
+  apply(s) { s.clearDone(); }
+}
+
+class SocialAction extends AppAction {
+  async execute({ app }) { this.apply(app.social); }
+}
+export class ToggleInboxAction extends SocialAction {
+  apply(s) { s.toggleInbox(); }
+}
+export class AddTagAction extends SocialAction {
+  constructor(name, value) { super(); this.name = name; this.value = value; }
+  apply(s) { s.addTag(this.name, this.value); }
+}
+export class RemoveTagAction extends SocialAction {
+  constructor(name) { super(); this.name = name; }
+  apply(s) { s.removeTag(this.name); }
+}
+export class LoadSidecarAction extends SocialAction {
+  constructor(nodeId) { super(); this.nodeId = nodeId; }
+  apply(s) { s.loadSidecar(this.nodeId); }
+}
+
+class ApiKeysAction extends AppAction {
+  async execute({ app }) { this.apply(app.apiKeys); }
+}
+export class PatchApiKeyDraftAction extends ApiKeysAction {
+  constructor(patch) { super(); this.patch = patch; }
+  apply(s) { s.patchDraft(this.patch); }
+}
+export class ToggleApiKeyCapAction extends ApiKeysAction {
+  constructor(cap) { super(); this.cap = cap; }
+  apply(s) { s.toggleCap(this.cap); }
+}
+
+/** Select items in the explorer. `additive` extends the selection rather than replacing it. */
+export class SelectItemsAction extends AppAction {
+  constructor(ids, additive = false) { super(); this.ids = ids; this.additive = additive; }
+  async execute({ app }) { app.explorer.select(this.ids, this.additive); }
+}
