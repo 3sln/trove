@@ -20,7 +20,9 @@ export const CAPABILITIES = ['read', 'write', 'delete', 'admin'];
 const NS = 'collections';
 
 // admin implies everything; a simple implication table keeps checks declarative.
-function expand(caps) {
+// Exported because API keys grant capabilities too, and "admin" has to mean the same
+// thing in a key as it does in an ACL — two implication tables would eventually diverge.
+export function expand(caps) {
   const set = new Set(caps);
   if (set.has('admin')) for (const c of CAPABILITIES) set.add(c);
   return set;

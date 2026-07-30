@@ -16,7 +16,7 @@ export { MetadataStore } from './metadata/interface.js';
 export { MemoryStore } from './metadata/memory.js';
 export { SqliteStore } from './metadata/sqlite.js';
 
-export { CollectionService, CAPABILITIES } from './collections/index.js';
+export { CollectionService, CAPABILITIES, expand as expandCapabilities } from './collections/index.js';
 
 export { SearchService } from './search/index.js';
 export { SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer, parseTagFilters, matchTagFilters } from './search/transformer.js';
@@ -45,6 +45,11 @@ export { VectorizeVectorStore } from './search/vectorize.js';
 // Server-side key/value store (subscriptions, inboxes, profiles).
 export { KeyValueStore, MemoryKV, SqliteKV } from './kv.js';
 export { SignedUrls, resolveUrlSecret, URL_PURPOSES } from './signedUrls.js';
+// API keys: capability without identity. CapabilityProvider is the injection point —
+// the counterpart to IdentityProvider, for credentials that say what rather than who.
+export {
+  ApiKeyService, ApiKeyGrant, ApiKeyCapabilityProvider, CapabilityProvider, ANY_COLLECTION,
+} from './apiKeys.js';
 export { SqliteDatabase, SqliteProvider, LocalSqliteProvider, assertSafePluginSql, stripSqlLiterals } from './sqlite.js';
 // SQLite on Cloudflare D1, so a Worker deployment has a metadata store that exists.
 export { D1SqliteProvider } from './sqlite-d1.js';
