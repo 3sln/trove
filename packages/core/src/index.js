@@ -37,6 +37,19 @@ export { SqliteVectorStore, SqliteKeywordStore, SEARCH_DB_KEY } from './search/s
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
 export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, PluginIndexers, matchFromSelector } from './plugins/index.js';
 export { UploadManager, KvSessionStore, DEFAULT_PART_SIZE } from './uploads.js';
+// Encryption at rest: the bucket holds ciphertext, the drive holds the key. Protects
+// against the STORAGE host (a leaked bucket credential, a storage vendor who is not the
+// compute vendor) and deliberately not against the server, which must read plaintext to
+// index it. See encryption/keys.js for why nothing here is a plain hash of a passphrase.
+export {
+  encrypt, decrypt, decryptRange, encodeHeader, decodeHeader, isEnvelope,
+  cipherSize, plaintextSizeOf, cipherRangeFor,
+  HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE,
+} from './encryption/envelope.js';
+export {
+  deriveDataKey, fingerprint, fingerprintHex, toHex, describeKey, matchesCollection,
+  newSalt, DEFAULT_KDF,
+} from './encryption/keys.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 export { IndexingCoordinator } from './indexing.js';
 // Work in flight (ephemeral) and standing problems (durable) — see the header of each.
