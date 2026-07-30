@@ -187,6 +187,7 @@ export class UploadManager {
       storedSize,
       encrypted: encrypting,
       chunkSize: encrypting ? chunkSize : null,
+      keyFingerprint: encrypting ? policy.encryption.fingerprint : null,
       contentType,
       createdAt: Date.now(),
       strategy: null,
@@ -398,12 +399,22 @@ export class UploadManager {
     await this.sessions.delete(uploadId);
     return {
       storageKey: s.storageKey,
-      size,
+      // For an encrypted object the store holds an envelope, which is larger than the
+      // file. The item records the file: that is the number a user recognises, the one
+      // search results and quotas are about, and the one a range request is against.
+      size: s.encrypted ? s.size : size,
+      storedSize: size,
       contentType: s.contentType,
       etag,
       collectionId: s.collectionId,
       name: s.name,
       overwrite: !!s.overwrite,
+      // Which key opens this object. Recorded on the item so reading it does not have to
+      // fetch the envelope header first, and so a rotation can find what it has not yet
+      // converted without opening every object in the bucket.
+      encryption: s.encrypted
+        ? { fingerprint: s.keyFingerprint, chunkSize: s.chunkSize }
+        : null,
     };
   }
 

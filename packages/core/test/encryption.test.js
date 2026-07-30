@@ -11,7 +11,7 @@
 
 import { test, expect } from 'bun:test';
 import {
-  encrypt, decrypt, decryptRange, encodeHeader, decodeHeader, isEnvelope,
+  encrypt, decrypt, decryptRange, decryptStream, encodeHeader, decodeHeader, isEnvelope,
   cipherSize, plaintextSizeOf, cipherRangeFor,
   HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE, FINGERPRINT_BYTES, VERSION,
 } from '../src/encryption/envelope.js';
@@ -231,4 +231,46 @@ test('an object sealed with a retired key is still identifiable, and still opens
   expect(fingerprintHex(decodeHeader(sealed).fingerprint)).toBe(oldKey.config.fingerprint);
   expect(await decrypt(oldKey.dataKey, sealed)).toEqual(plain);
   await expect(decrypt(newKey.dataKey, sealed)).rejects.toThrow(/wrong key/);
+});
+
+test('a stream decrypts without holding the object in memory', async () => {
+  // The buffering path is fine for a text preview and wrong for a two-hour video: a server
+  // that decrypted whole objects would hold one per concurrent viewer, which on a Worker is
+  // the memory limit rather than a slowdown.
+  const chunkSize = 64;
+  const plain = bytes(500);
+  const sealed = await encrypt(KEY, plain, { fingerprint: FP, chunkSize });
+  const header = decodeHeader(sealed);
+  const body = sealed.subarray(HEADER_BYTES);
+
+  // Delivered in awkward pieces that do not align to chunk boundaries, which is what a
+  // network actually does.
+  const source = new ReadableStream({
+    start(c) {
+      for (let at = 0; at < body.length; at += 37) c.enqueue(body.subarray(at, Math.min(at + 37, body.length)));
+      c.close();
+    },
+  });
+  const out = [];
+  const reader = (await decryptStream(KEY, header, source)).getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    out.push(value);
+  }
+  const joined = new Uint8Array(out.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of out) { joined.set(p, at); at += p.length; }
+  expect(joined).toEqual(plain);
+});
+
+test('a tampered stream fails rather than emitting bad bytes for that chunk', async () => {
+  const chunkSize = 64;
+  const sealed = await encrypt(KEY, bytes(200), { fingerprint: FP, chunkSize });
+  const header = decodeHeader(sealed);
+  const body = new Uint8Array(sealed.subarray(HEADER_BYTES));
+  body[5] ^= 0xff;
+  const source = new ReadableStream({ start(c) { c.enqueue(body); c.close(); } });
+  const reader = (await decryptStream(KEY, header, source)).getReader();
+  await expect(reader.read()).rejects.toThrow(/altered/);
 });

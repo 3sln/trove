@@ -46,7 +46,8 @@ export class SqliteStore extends MetadataStore {
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL,
         meta TEXT NOT NULL DEFAULT '{}',
-        facets TEXT NOT NULL DEFAULT '{}'
+        facets TEXT NOT NULL DEFAULT '{}',
+        encryption TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
       CREATE INDEX IF NOT EXISTS idx_nodes_updated ON nodes(updatedAt);
@@ -67,6 +68,11 @@ export class SqliteStore extends MetadataStore {
     const cols = await this.db.all('PRAGMA table_info(nodes)');
     if (!cols.some((c) => c.name === 'deletedAt')) {
       await this.db.exec('ALTER TABLE nodes ADD COLUMN deletedAt INTEGER');
+    }
+    // Which key opens this object, for drives that predate encryption. NULL means stored
+    // in the clear, which is what every existing row is.
+    if (!cols.some((c) => c.name === 'encryption')) {
+      await this.db.exec('ALTER TABLE nodes ADD COLUMN encryption TEXT');
     }
     // Recreating the index is cheap and idempotent; naming the new one differently is
     // what makes "has this run?" answerable without a migrations table.
@@ -130,14 +136,16 @@ export class SqliteStore extends MetadataStore {
       size: node.size ?? 0, contentType: node.contentType ?? null,
       storageKey: node.storageKey ?? null, etag: node.etag ?? null,
       createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: rawFacetsFromNode(node),
+      encryption: node.encryption ?? null,
     };
     try {
       await this.db.run(
-        `INSERT INTO nodes (id,collectionId,name,size,contentType,storageKey,etag,createdAt,updatedAt,meta,facets)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO nodes (id,collectionId,name,size,contentType,storageKey,etag,createdAt,updatedAt,meta,facets,encryption)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         full.id, full.collectionId, full.name, full.size,
         full.contentType, full.storageKey, full.etag, full.createdAt, full.updatedAt,
         JSON.stringify(full.meta), JSON.stringify(full.facets),
+        full.encryption ? JSON.stringify(full.encryption) : null,
       );
       return full;
     } catch (err) {
@@ -150,13 +158,17 @@ export class SqliteStore extends MetadataStore {
     const node = await this.getById(id);
     if (!node) throw TroveError.notFound('Node');
     const next = { ...node };
-    for (const k of ['size', 'contentType', 'storageKey', 'etag', 'meta']) {
+    // `encryption` is here because a key rotation rewrites the object and has to record
+    // which key the new one is sealed with. Without it a rotated item still claims the old
+    // key and becomes unreadable the moment that key is retired.
+    for (const k of ['size', 'contentType', 'storageKey', 'etag', 'meta', 'encryption']) {
       if (k in patch) next[k] = patch[k];
     }
     next.updatedAt = Date.now();
     await this.db.run(
-      `UPDATE nodes SET size=?, contentType=?, storageKey=?, etag=?, meta=?, updatedAt=? WHERE id=?`,
-      next.size, next.contentType, next.storageKey, next.etag, JSON.stringify(next.meta), next.updatedAt, id,
+      `UPDATE nodes SET size=?, contentType=?, storageKey=?, etag=?, meta=?, encryption=?, updatedAt=? WHERE id=?`,
+      next.size, next.contentType, next.storageKey, next.etag, JSON.stringify(next.meta),
+      next.encryption ? JSON.stringify(next.encryption) : null, next.updatedAt, id,
     );
     return next;
   }
@@ -353,7 +365,15 @@ export class SqliteStore extends MetadataStore {
 function row(r) {
   if (!r) return null;
   const { contributions, tags } = splitContributions(r.facets ? JSON.parse(r.facets) : {});
-  const out = { ...r, meta: r.meta ? JSON.parse(r.meta) : {}, contributions, tags };
+  const out = {
+    ...r,
+    meta: r.meta ? JSON.parse(r.meta) : {},
+    // Null for everything stored in the clear, which is every row on a drive that predates
+    // encryption and every item a rule did not match.
+    encryption: r.encryption ? JSON.parse(r.encryption) : null,
+    contributions,
+    tags,
+  };
   delete out.facets; // internal column name; exposed as contributions + tags
   return out;
 }

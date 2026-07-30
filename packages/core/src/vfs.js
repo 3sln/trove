@@ -13,6 +13,7 @@
 import { TroveError, isOutOfSpace } from './errors.js';
 import { UploadManager } from './uploads.js';
 import { toHex } from './encryption/keys.js';
+import { decryptStream, decodeHeader, cipherRangeFor, cipherSize, HEADER_BYTES } from './encryption/envelope.js';
 import { IndexerRegistry } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
 import { extname } from './util.js';
@@ -36,6 +37,44 @@ const CONTENT_TYPES = {
   '.m4b': 'audio/mp4', '.opus': 'audio/opus', '.flac': 'audio/flac', '.wav': 'audio/wav',
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.zip': 'application/zip',
 };
+
+
+/** Drain a stream into one buffer. Only ever used for the fixed-size envelope header. */
+async function bytesOf(stream) {
+  const reader = stream.getReader();
+  const parts = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    total += value.length;
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+
+/**
+ * Emit only the bytes between `start` and `end` of a stream.
+ *
+ * A plaintext range rarely lines up with a chunk boundary, so decryption yields whole
+ * chunks and this drops the overhang at each end — without collecting the middle, which is
+ * the entire point of streaming in the first place.
+ */
+function trimStream(stream, start, end) {
+  let seen = 0;
+  return stream.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      const from = Math.max(0, start - seen);
+      const to = Math.min(chunk.length, end - seen);
+      if (to > from) controller.enqueue(chunk.subarray(from, to));
+      seen += chunk.length;
+      if (seen >= end) controller.terminate();
+    },
+  }));
+}
 
 export class Vfs {
   constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, signedUrls = null, publicUrl = '', maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null, uploadPartSize = undefined, uploadSessions = undefined }) {
@@ -244,17 +283,20 @@ export class Vfs {
    * — and an unconditional replace at completion silently destroys whichever landed
    * first. So an upload re-resolves the collision at the moment it commits.
    */
-  async #upsertItem({ collectionId, name, storageKey, size, contentType, etag, overwrite = true }) {
+  async #upsertItem({ collectionId, name, storageKey, size, contentType, etag, overwrite = true, encryption = null }) {
     let finalName = name;
     const existing = await this.metadata.getByName(collectionId, name);
     if (existing && overwrite) {
       const oldKey = existing.storageKey;
-      const updated = await this.metadata.update(existing.id, { storageKey, size, contentType, etag });
+      const updated = await this.metadata.update(existing.id, { storageKey, size, contentType, etag, encryption });
       if (oldKey && oldKey !== storageKey) (await this.storageFor(collectionId)).delete(oldKey).catch(() => {});
       return updated;
     }
     if (existing) finalName = await this.#uniqueName(collectionId, name);
-    return this.metadata.create({ collectionId, name: finalName, storageKey, size, contentType, etag });
+    // `encryption` names which key opens this object. Carried on the item so a read does
+    // not have to fetch the envelope header to find out, and so a rotation can tell what it
+    // has not converted without opening every object in the bucket.
+    return this.metadata.create({ collectionId, name: finalName, storageKey, size, contentType, etag, encryption });
   }
 
   /**
@@ -420,15 +462,23 @@ export class Vfs {
 
   // --- download --------------------------------------------------------------
 
-  async getDownload(id, { expiresIn, download } = {}) {
+  async getDownload(id, { expiresIn, download, ciphertext = false } = {}) {
     const node = await this.resolve(id);
     const storage = await this.storageFor(node.collectionId);
+    // An encrypted object is not redirected to by default. A redirect hands the caller raw
+    // ciphertext, and most callers of a download URL cannot do anything with it — an <img
+    // src>, a <video src>, a signed URL given to an external service. Proxying is the
+    // answer that is always correct, so it is the default; a client that holds the key and
+    // knows it can decrypt asks for `ciphertext` and gets the direct path back.
+    if (node.encryption && !ciphertext) return { mode: 'proxy', node };
     if (storage.capabilities.presignDownload) {
       const url = await storage.presignGet(node.storageKey, {
         expiresIn, responseContentType: node.contentType,
         downloadName: download ? node.name : undefined,
       });
-      return { mode: 'redirect', url, node };
+      // Named on the way out so a client that asked for ciphertext knows which key opens
+      // what it is about to receive.
+      return { mode: 'redirect', url, node, encryption: node.encryption || null };
     }
     return { mode: 'proxy', node };
   }
@@ -478,7 +528,60 @@ export class Vfs {
   async readStream(id, { range, signal } = {}) {
     const node = await this.resolve(id);
     if (!node.storageKey) throw TroveError.notFound('File content');
-    return (await this.storageFor(node.collectionId)).get(node.storageKey, { range, signal });
+    const storage = await this.storageFor(node.collectionId);
+    if (!node.encryption) return storage.get(node.storageKey, { range, signal });
+
+    // An encrypted object is decrypted HERE, for everything that reads through the server.
+    //
+    // The browser can decrypt for itself when it fetches — and does, which is what keeps a
+    // presigned download direct. But an <img src>, a <video src>, a signed URL handed to an
+    // external service, and the service worker's own cache fills cannot: they are bare URLs
+    // that get bytes and have nowhere to run our code. Those all arrive here, so this is
+    // where correctness has to live.
+    //
+    // The plaintext range the caller asked for is mapped onto the chunks that hold it, so a
+    // seek into a video still fetches a chunk rather than the film.
+    const key = await this.#keyForNode(node);
+    const header = {
+      chunkSize: node.encryption.chunkSize,
+      plaintextSize: node.size,
+      noncePrefix: null, // filled from the object's own header below
+    };
+    const want = range
+      ? cipherRangeFor({ start: range.start, end: range.end }, header)
+      : { cipherStart: 0, cipherEnd: cipherSize(node.size, header.chunkSize) - 1, firstChunk: 0, trimStart: 0, trimEnd: node.size };
+
+    // The header carries the nonce prefix, and only the object has it.
+    const head = await storage.get(node.storageKey, { range: { start: 0, end: HEADER_BYTES - 1 }, signal });
+    const real = decodeHeader(await bytesOf(head.stream));
+    header.noncePrefix = real.noncePrefix;
+    header.chunkSize = real.chunkSize;
+
+    const body = await storage.get(node.storageKey, {
+      range: { start: Math.max(want.cipherStart, HEADER_BYTES), end: want.cipherEnd }, signal,
+    });
+    const plain = await decryptStream(key, header, body.stream, want.firstChunk);
+    return {
+      stream: trimStream(plain, want.trimStart, want.trimEnd),
+      size: want.trimEnd - want.trimStart,
+      contentType: node.contentType,
+      etag: head.etag,
+      range: range ? { start: range.start, end: range.start + (want.trimEnd - want.trimStart) - 1, total: node.size } : null,
+    };
+  }
+
+  /** The key that opens this object, by the fingerprint its envelope names. */
+  async #keyForNode(node) {
+    const key = this.collections?.dataKeyFor
+      ? await this.collections.dataKeyFor(node.collectionId, node.encryption.fingerprint)
+      : null;
+    if (!key) {
+      throw TroveError.invalid(
+        'This item is encrypted with a key this collection no longer holds. It was probably '
+        + 'retired before a key rotation finished.',
+      );
+    }
+    return key;
   }
 
   // --- uploads ---------------------------------------------------------------
@@ -532,7 +635,7 @@ export class Vfs {
       const node = await this.#upsertItem({
         collectionId: obj.collectionId, name: obj.name, storageKey: obj.storageKey,
         size: obj.size, contentType: obj.contentType, etag: obj.etag,
-        overwrite: obj.overwrite,
+        overwrite: obj.overwrite, encryption: obj.encryption || null,
       });
       this.indexing.indexNode(node).catch((e) => console.error('index error', e));
       return node;

@@ -289,3 +289,72 @@ async function decryptChunks(key, body, header, firstChunk) {
   for (const p of pieces) { out.set(p, at); at += p.length; }
   return out;
 }
+
+/**
+ * Decrypt a ciphertext stream chunk by chunk, without holding the object in memory.
+ *
+ * The buffering version is fine for a text preview and wrong for a two-hour video: a
+ * server that decrypted whole objects would hold one per concurrent viewer, and on a
+ * Worker that is the memory limit rather than a slowdown. This reassembles exactly one
+ * chunk at a time and emits its plaintext as soon as the tag verifies.
+ *
+ * Emitting per chunk does mean unverified bytes are never emitted, but earlier chunks are
+ * released before later ones are checked — which is inherent to streaming anything
+ * authenticated, and is why the chunk is the unit of trust rather than the file.
+ *
+ * @param {Uint8Array} rawKey
+ * @param {EnvelopeHeader} header
+ * @param {ReadableStream<Uint8Array>} cipherStream body only, no header
+ * @param {number} [firstChunk] index of the first chunk in the stream
+ */
+export async function decryptStream(rawKey, header, cipherStream, firstChunk = 0) {
+  const key = await importKey(rawKey);
+  const stride = header.chunkSize + TAG_BYTES;
+  const reader = cipherStream.getReader();
+  let held = new Uint8Array(0);
+  let index = firstChunk;
+
+  const take = (n) => {
+    const out = held.subarray(0, n);
+    held = held.subarray(n);
+    return out;
+  };
+  const open = async (sealed) => {
+    try {
+      return new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: nonceFor(header.noncePrefix, index++) }, key, sealed,
+      ));
+    } catch {
+      throw TroveError.invalid('Could not decrypt: wrong key, or the data has been altered');
+    }
+  };
+
+  return new ReadableStream({
+    async pull(controller) {
+      for (;;) {
+        if (held.length >= stride) {
+          controller.enqueue(await open(take(stride)));
+          return;
+        }
+        const { value, done } = await reader.read();
+        if (done) {
+          // Whatever is left is the final, partial chunk — still a whole tag, but fewer
+          // than a chunk of plaintext.
+          if (held.length) {
+            if (held.length < TAG_BYTES) throw TroveError.invalid('Truncated encrypted object');
+            controller.enqueue(await open(take(held.length)));
+          }
+          controller.close();
+          return;
+        }
+        const grown = new Uint8Array(held.length + value.length);
+        grown.set(held, 0);
+        grown.set(value, held.length);
+        held = grown;
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}

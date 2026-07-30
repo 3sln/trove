@@ -90,6 +90,8 @@ export class MemoryStore extends MetadataStore {
       size: node.size ?? 0, contentType: node.contentType ?? null,
       storageKey: node.storageKey ?? null, etag: node.etag ?? null,
       createdAt: now, updatedAt: now, meta: node.meta ?? {}, facets: rawFacetsFromNode(node),
+      // Which key opens this object; null for anything stored in the clear.
+      encryption: node.encryption ?? null,
     };
     this.#index(full);
     return clone(full);
@@ -98,7 +100,7 @@ export class MemoryStore extends MetadataStore {
   async update(id, patch) {
     const node = this.nodes.get(id);
     if (!node) throw TroveError.notFound('Item');
-    for (const k of ['size', 'contentType', 'storageKey', 'etag', 'meta']) {
+    for (const k of ['size', 'contentType', 'storageKey', 'etag', 'meta', 'encryption']) {
       if (k in patch) node[k] = patch[k];
     }
     node.updatedAt = Date.now();
