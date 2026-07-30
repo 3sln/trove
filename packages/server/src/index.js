@@ -197,9 +197,9 @@ export async function createServer(config = {}) {
   if (config.startFlusher !== false && config.scanIntervalMs) {
     scanTimer = setInterval(() => {
       if (tasks.list().some((t) => t.kind === 'scan' && t.status === 'running')) return; // still going
-      Promise.resolve(collections ? collections.list(null).catch(() => []) : [{ id: 'default' }])
+      Promise.resolve(collections ? collections.list(null).catch(() => []) : [])
         .then(async (list) => {
-          for (const c of list.length ? list : [{ id: 'default' }]) {
+          for (const c of list) {
             await startScan(c.id, { reason: 'Scheduled' }).catch(() => {});
           }
         })
@@ -381,7 +381,11 @@ export async function createServer(config = {}) {
     out.swept = true;
     if (!scan) return out;
     const list = collections ? await collections.list(null).catch(() => []) : [];
-    const targets = list.length ? list : [{ id: 'default' }];
+    // No collections means nothing to scan. It used to mean "scan the one called
+    // default", which on a drive that has none is a scan of a collection that does not
+    // exist — work that fails every cron firing and reports it as a scan error.
+    const targets = list;
+    if (!targets.length) return out;
     // Share the budget across collections so one huge bucket can't starve the rest.
     const each = Math.max(1000, Math.floor(budgetMs / targets.length));
     for (const c of targets) {
@@ -651,7 +655,17 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   config.kv = { driver: env.TROVE_KV || (config.metadata.driver === 'sqlite' ? 'sqlite' : 'memory'), path: config.metadata.path };
 
   // Collections: on by default. Admins (global) + roles that can create collections.
-  if (env.TROVE_COLLECTIONS === 'false') config.collections = false;
+  // TROVE_COLLECTIONS=false used to mean "one implicit unnamed store, no ACLs". That is
+  // precisely the fallback this drive no longer has: every collection-scoped endpoint
+  // names its collection in the path, so there is nothing for an unnamed store to answer.
+  // Refused loudly rather than ignored — a drive that quietly kept enforcing after being
+  // told not to would be a surprise in the wrong direction.
+  if (env.TROVE_COLLECTIONS === 'false') {
+    throw TroveError.invalid(
+      'TROVE_COLLECTIONS=false is no longer supported — endpoints are scoped to a named '
+      + 'collection. Remove the setting; create one collection and use it.',
+    );
+  }
   config.admins = (env.TROVE_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
   config.creatorRoles = (env.TROVE_COLLECTION_CREATOR_ROLES || '').split(',').map((s) => s.trim()).filter(Boolean);
   // 'default' collection grants everyone all caps unless locked down.

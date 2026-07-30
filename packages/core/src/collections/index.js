@@ -52,17 +52,21 @@ export class CollectionService {
     this._storage = new Map(Object.entries(storageOverrides || {}));
   }
 
-  async init() {
-    const existing = await this.kv.get(NS, 'default');
-    if (!existing) {
-      await this.kv.set(NS, 'default', {
-        id: 'default', name: 'My Drive', description: 'Default collection',
-        store: this.defaultStore,
-        acl: { grants: this.defaultOpen ? [{ type: 'anyone', capabilities: ['read', 'write', 'delete', 'admin'] }] : [] },
-        createdAt: Date.now(), createdBy: 'system', system: true,
-      });
-    }
-  }
+  /**
+   * Nothing is created here any more.
+   *
+   * There used to be a `default` collection, minted on first boot and named by every
+   * unscoped request. It made a fresh drive feel ready, and it cost more than it was
+   * worth: `'default'` became a hardcoded assumption in routing, in maintenance, in the
+   * metadata schema and in four core signatures, and on a multi-user drive it was a
+   * collection most people could not read — so the fallback pointed new users at a
+   * permission error and called it their drive.
+   *
+   * A drive with no collections now says so, and the client asks for one to be created.
+   * That is a real first-run step rather than a magic id, and every request names the
+   * collection it means.
+   */
+  async init() {}
 
   async list(principal) {
     const rows = await this.kv.list(NS);
@@ -234,7 +238,6 @@ export class CollectionService {
 
   /** Remove the collection record. Caller is responsible for its nodes/objects. */
   async remove(id, principal) {
-    if (id === 'default') throw TroveError.invalid('The default collection cannot be deleted');
     await this.assert(principal, id, 'admin');
     await this.kv.delete(NS, id);
     this._storage.delete(id);

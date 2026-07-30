@@ -134,8 +134,22 @@ function assertPublicHost(hostname) {
 
 // Which collection a request targets. There is no folder to infer one from any more,
 // so it's named explicitly or it's the default.
-function collectionOf(src) {
-  return src?.collection || src?.collectionId || 'default';
+/**
+ * The collection a request is scoped to, from the PATH.
+ *
+ * There is no fallback. A collection-scoped route names its collection in the URL —
+ * `/api/collections/:collection/items` — so a request that does not name one cannot
+ * reach the handler at all, and the router refuses it before this is called.
+ *
+ * The fallback that used to live here (`?collection=` or else `'default'`) was the same
+ * class of bug as everything else in this file's history: a missing value silently
+ * became a specific one, so an unscoped write went somewhere real and looked fine. On a
+ * multi-user drive that somewhere was a collection plenty of people cannot even read.
+ */
+function scopedCollection(ctx) {
+  const id = ctx.params?.collection;
+  if (!id) throw TroveError.invalid('This endpoint is scoped to a collection');
+  return id;
 }
 
 export function createRouter() {
@@ -213,13 +227,11 @@ export function createRouter() {
 
   r.get('/api/collections', ['collections'], async (ctx) => {
     const { collections, principal } = ctx;
-    if (!collectionsEnabled(ctx)) return { collections: [{ id: 'default', name: 'My Drive', capabilities: ['read', 'write', 'delete', 'admin'] }] };
     return { collections: await collections.list(principal), canCreate: collections.canCreate(principal) };
   });
 
   r.get('/api/collections/:id', ['collections'], async (ctx) => {
     const { collections, principal, params } = ctx;
-    if (!collectionsEnabled(ctx)) return { collection: { id: 'default', name: 'My Drive' } };
     const c = await collections.assert(principal, params.id, 'read');
     return { collection: collections.describe(c, principal) };
   });
@@ -300,9 +312,9 @@ export function createRouter() {
 
   // Every item in a collection. There is nothing to descend into — a drive is browsed
   // by search and by following links, and this is the "show me everything" fallback.
-  r.get('/api/items', ['vfs'], async (ctx) => {
+  r.get('/api/collections/:collection/items', ['vfs'], async (ctx) => {
     const { vfs, query } = ctx;
-    const collectionId = collectionOf(query);
+    const collectionId = scopedCollection(ctx);
     const collection = await ctx.access.collection(collectionId, 'read');
     const { items, nextCursor } = await collection.list({
       sort: query.sort, order: query.order,
@@ -321,12 +333,12 @@ export function createRouter() {
   });
 
   // Resolve an item: by id, by `?name=` within a collection, or by a `trove:` URI.
-  r.get('/api/items/resolve', [], async (ctx) => {
+  r.get('/api/collections/:collection/items/resolve', [], async (ctx) => {
     const ref = ctx.query.id || ctx.query.uri || ctx.query.name;
     if (!ref) throw TroveError.invalid('id, name or uri is required');
-    // A name is only unique within a collection, so the hint goes to `stat`; the
-    // capability is asserted on the collection the node turns out to be in.
-    const handle = await ctx.access.node(ref, 'read', { collectionId: collectionOf(ctx.query) });
+    // A name is only unique within a collection, which is the reason this one is scoped
+    // by path at all: resolving `notes.md` is a different question in each collection.
+    const handle = await ctx.access.node(ref, 'read', { collectionId: scopedCollection(ctx) });
     return { node: handle.node };
   });
 
@@ -427,10 +439,10 @@ export function createRouter() {
 
   // --- uploads ---------------------------------------------------------------
 
-  r.post('/api/uploads', [], async (ctx) => {
+  r.post('/api/collections/:collection/uploads', [], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
-    const collection = await ctx.access.collection(collectionOf(b), 'write');
+    const collection = await ctx.access.collection(scopedCollection(ctx), 'write');
     return uploadDescriptor(await collection.createUpload({
       name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
       overwrite: b.overwrite === true,
@@ -481,26 +493,36 @@ export function createRouter() {
   // different results. POST /api/query is the one that runs the transformer and is what
   // the workbench uses; this stays as the lower-level endpoint for callers that have
   // already resolved their own query.
-  r.get('/api/search', ['collections', 'vfs'], async (ctx) => {
+  // Searching comes in two shapes, and which one you get is in the URL rather than in
+  // the presence of a parameter. The flat route searches every collection the caller can
+  // read; the scoped one searches exactly the collection it names.
+  //
+  // Two routes rather than `?collection=` because omitting a query parameter used to mean
+  // "the whole drive" — a missing value silently choosing the broadest possible scope,
+  // which is the same failure shape as the old `'default'` fallback pointing the other
+  // way. Neither is something to arrive at by accident.
+  const searchHandler = async (ctx) => {
     const { vfs, query } = ctx;
     if (!query.q) throw TroveError.invalid('q is required');
-    const collectionIds = await readableCollectionIds(ctx, query.collection);
+    const collectionIds = await readableCollectionIds(ctx, ctx.params?.collection);
     const results = await vfs.searchQuery(query.q, {
       mode: query.mode, limit: clampLimit(query.limit, 40),
       indexers: query.indexers ? query.indexers.split(',') : undefined,
       collectionIds,
     });
     return { query: query.q, results };
-  });
+  };
+  r.get('/api/search', ['collections', 'vfs'], searchHandler);
+  r.get('/api/collections/:collection/search', ['collections', 'vfs'], searchHandler);
 
   // Unified query: a raw user string is run through the search transformer (default
   // parses `#tag` syntax; a plugged-in one may use an LLM), then dispatched. Returns
   // the results AND the `resolved` query (what was actually searched) so the client
   // can honestly show it.
-  r.post('/api/query', ['collections', 'vfs'], async (ctx) => {
+  const queryHandler = async (ctx) => {
     const b = await body(ctx.req);
     if (typeof b.q !== 'string' || !b.q.trim()) throw TroveError.invalid('q is required');
-    const collectionIds = await readableCollectionIds(ctx, b.collection);
+    const collectionIds = await readableCollectionIds(ctx, ctx.params?.collection);
     const { results, resolved } = await ctx.vfs.query(b.q, {
       mode: b.mode, limit: clampLimit(b.limit, 40), collectionIds,
       // Which views this client can draw with, so the transformer can suggest one of
@@ -509,18 +531,22 @@ export function createRouter() {
       views: Array.isArray(b.views) ? b.views : undefined,
     });
     return { query: b.q, results, resolved };
-  });
+  };
+  r.post('/api/query', ['collections', 'vfs'], queryHandler);
+  r.post('/api/collections/:collection/query', ['collections', 'vfs'], queryHandler);
 
   // Drive-wide tag/property filter (the launcher's `#tag` / `#key:op:value`).
-  r.post('/api/tags/search', ['collections', 'vfs'], async (ctx) => {
+  const tagSearchHandler = async (ctx) => {
     const b = await body(ctx.req);
     const filters = Array.isArray(b.filters) ? b.filters : [];
-    const collectionIds = await readableCollectionIds(ctx, b.collection);
+    const collectionIds = await readableCollectionIds(ctx, ctx.params?.collection);
     const items = await ctx.vfs.findByTags(filters, {
       q: b.q, collectionIds, limit: clampLimit(b.limit, 100),
     });
     return { items };
-  });
+  };
+  r.post('/api/tags/search', ['collections', 'vfs'], tagSearchHandler);
+  r.post('/api/collections/:collection/tags/search', ['collections', 'vfs'], tagSearchHandler);
 
   r.get('/api/indexers', ['vfs'], ({ vfs }) => ({ indexers: vfs.indexers.list() }));
 
@@ -652,8 +678,8 @@ export function createRouter() {
   // `delete` on the collection, the same capability the delete itself needed — seeing
   // what you deleted, and undoing it, are not lesser rights than deleting.
 
-  r.get('/api/trash', [], async (ctx) => {
-    const collectionId = collectionOf(ctx.query);
+  r.get('/api/collections/:collection/trash', [], async (ctx) => {
+    const collectionId = scopedCollection(ctx);
     const collection = await ctx.access.collection(collectionId, 'delete');
     return { items: await collection.listTrash({ limit: clampLimit(ctx.query.limit, 200) }), collectionId };
   });
@@ -668,14 +694,19 @@ export function createRouter() {
 
   // Destroy for real. Separate from DELETE /api/items so that emptying the trash can
   // never be something you reach by accident from the ordinary delete path.
+  // One item, by id. The node names its own collection, so this stays flat.
   r.post('/api/trash/purge', [], async (ctx) => {
     const b = await body(ctx.req);
-    if (b.id) {
-      const node = await ctx.access.node(b.id, 'delete', { trashed: true });
-      await node.remove({ permanent: true });
-      return { purged: 1 };
-    }
-    const collection = await ctx.access.collection(collectionOf(b), 'delete');
+    if (!b.id) throw TroveError.invalid('id is required — to empty a collection\u2019s trash, use /api/collections/:collection/trash/purge');
+    const node = await ctx.access.node(b.id, 'delete', { trashed: true });
+    await node.remove({ permanent: true });
+    return { purged: 1 };
+  });
+
+  // Empty a whole collection's trash. Scoped by path, because "everything in here" is
+  // exactly the request that must never be able to mean a collection you did not name.
+  r.post('/api/collections/:collection/trash/purge', [], async (ctx) => {
+    const collection = await ctx.access.collection(scopedCollection(ctx), 'delete');
     return collection.purgeTrash({ limit: MAX_PAGE });
   });
 
@@ -1020,8 +1051,15 @@ async function assertContributorOwned(ctx, contributorId) {
  */
 async function readableCollectionIds(ctx, narrowTo) {
   if (!collectionsEnabled(ctx)) return undefined;
-  const readable = (await ctx.collections.list(ctx.principal)).map((c) => c.id);
-  return narrowTo ? readable.filter((id) => id === narrowTo) : readable;
+  // A NAMED collection is asserted, not filtered. Filtering an unreadable id out of the
+  // list answers "no results" for a collection the caller may not see — indistinguishable
+  // from one that is simply empty, so a permissions problem reads as an indexing problem.
+  // `access.collection` throws the 403 that says what actually happened.
+  if (narrowTo) {
+    await ctx.access.collection(narrowTo, 'read');
+    return [narrowTo];
+  }
+  return (await ctx.collections.list(ctx.principal)).map((c) => c.id);
 }
 
 /**
