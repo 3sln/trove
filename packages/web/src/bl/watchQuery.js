@@ -44,6 +44,13 @@ import { fromObservable } from '../runtime.js';
  * Weak on the engine so a disposed engine takes its cells with it, and weak on the query so
  * an interned instance that falls out of use does too.
  */
+const cells = new WeakMap();
+
+/**
+ * @param {object} engine
+ * @param {object} queryInstance an INTERNED instance — see bl/intern.js
+ * @returns {object} a dodo Cell, PENDING until the query produces its first value
+ */
 export function watchQuery(engine, queryInstance) {
   let forEngine = cells.get(engine);
   if (!forEngine) {
