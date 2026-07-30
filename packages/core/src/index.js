@@ -16,6 +16,7 @@ export { MemoryStorage } from './storage/memory.js';
 export { StorageDriverRegistry } from './storage/registry.js';
 export { portableDrivers } from './storage/drivers.js';
 export { diagnoseStorage, corsPolicy, STORAGE_ISSUE_CODES } from './storage/diagnose.js';
+export { estimateRotationCost, recognizeProvider, RATES_AS_OF } from './storage/cost.js';
 export { S3Storage } from './storage/s3.js';
 export { PrefixedStorage } from './storage/prefixed.js';
 
