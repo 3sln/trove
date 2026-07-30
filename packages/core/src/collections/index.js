@@ -173,8 +173,11 @@ export class CollectionService {
    * Refuses to drop the current key: that would leave the collection encrypting with
    * something it cannot open.
    */
-  async retireKey(collectionId, fingerprint, principal) {
-    const c = await this.assert(principal, collectionId, 'admin');
+  async retireKey(collectionId, fingerprint, principal, { system = false } = {}) {
+    // `system` is for the rotation walker, which has no user behind it — it is finishing
+    // work an admin already authorized when they started the rotation. Named rather than
+    // done by passing a fake principal, so the bypass is visible at both ends.
+    const c = system ? await this.get(collectionId) : await this.assert(principal, collectionId, 'admin');
     if (fingerprint === c.encryption?.fingerprint) {
       throw TroveError.invalid('That is the collection\u2019s current key');
     }
