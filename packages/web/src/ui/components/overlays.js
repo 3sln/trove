@@ -8,6 +8,7 @@ import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
 import { localState } from '../localState.js';
+import { DismissNotificationAction } from '../../bl/actions.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -234,7 +235,7 @@ export function toasts(state, ui) {
       div({ className: `toast ${n.level}` },
         div({ className: 'bar' }),
         div({ className: 'msg' }, n.message),
-        button({ className: 'x' }, icon('close', { size: 14 })).on({ click: () => ui.platform.notifications.dismiss(n.id) }),
+        button({ className: 'x' }, icon('close', { size: 14 })).on({ click: () => ui.go(new DismissNotificationAction(n.id)) }),
       ).key(n.id),
     ),
   );

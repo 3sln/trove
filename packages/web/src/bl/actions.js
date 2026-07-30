@@ -669,3 +669,65 @@ export class RebindKeyAction extends AppAction {
     kb.rebind(binding, this.key);
   }
 }
+
+/**
+ * Copy text to the clipboard, and say so.
+ *
+ * Four components had their own version of this, each written slightly differently — two
+ * with `.then/.catch`, one with `await` in a `try`, one optional-chaining the clipboard and
+ * one not. All four ended the same way, and the ending is the part that matters: a copy that
+ * FAILS must still put the text where it can be selected by hand, or the user is left with a
+ * button that did nothing and no way to get at what it was for. That is what the sticky
+ * fallback is, and it is exactly the sort of detail that rots when it lives in four places.
+ *
+ * Clipboard access is denied outside a user gesture and in an insecure context, so the
+ * failure path is ordinary rather than exceptional.
+ */
+export class CopyTextAction extends AppAction {
+  /**
+   * @param {string} text
+   * @param {string} [label] what the toast says on success
+   */
+  constructor(text, label = 'Copied') {
+    super();
+    this.text = text;
+    this.label = label;
+  }
+
+  async execute({ app }) {
+    const notes = app.platform.notifications;
+    try {
+      await navigator.clipboard.writeText(this.text);
+      notes.success(this.label);
+    } catch {
+      notes.info(this.text, { sticky: true });
+    }
+  }
+}
+
+/** Say something to the user. `kind` is one of info, success, warn, error. */
+export class NotifyAction extends AppAction {
+  constructor(kind, message, opts) {
+    super();
+    this.kind = kind;
+    this.message = message;
+    this.opts = opts;
+  }
+
+  async execute({ app }) {
+    const notes = app.platform.notifications;
+    (notes[this.kind] ?? notes.info).call(notes, this.message, this.opts);
+  }
+}
+
+/** Dismiss one notification, by id. */
+export class DismissNotificationAction extends AppAction {
+  constructor(id) {
+    super();
+    this.id = id;
+  }
+
+  async execute({ app }) {
+    app.platform.notifications.dismiss(this.id);
+  }
+}

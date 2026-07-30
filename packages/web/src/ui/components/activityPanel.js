@@ -11,6 +11,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
+import { CopyTextAction } from '../../bl/actions.js';
 
 const { div, button, span, h3, p, pre } = dd;
 
@@ -24,9 +25,7 @@ const STATUS_ICON = { running: 'refresh', done: 'check', failed: 'close', cancel
  * of the app and into a terminal.
  */
 function copyText(text, ui) {
-  navigator.clipboard?.writeText(text)
-    .then(() => ui.platform.notifications.success('Copied'))
-    .catch(() => ui.platform.notifications.info(text, { sticky: true }));
+  ui.go(new CopyTextAction(text));
 }
 
 function amount(task) {

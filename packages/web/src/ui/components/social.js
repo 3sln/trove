@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
-import { OpenFileAction } from '../../bl/actions.js';
+import { OpenFileAction, CopyTextAction, NotifyAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
@@ -72,11 +72,11 @@ function inboxItem(note, ui) {
         }).catch((err) => {
           // The item a notification points at can be deleted, or live somewhere the
           // reader lost access to. Either way the click must not just do nothing.
-          ui.platform.notifications.warn(
+          ui.go(new NotifyAction('warn',
             err?.status === 403 || err?.code === 'forbidden'
               ? 'You no longer have access to that item.'
               : 'That item no longer exists.',
-          );
+          ));
         });
       }
       ui.app.social.toggleInbox(false);
@@ -152,13 +152,8 @@ function linkSection(node, state, ui) {
   );
 }
 
-async function copyLink(ui, uri) {
-  try {
-    await navigator.clipboard.writeText(uri);
-    ui.platform.notifications.success(`Copied ${uri}`);
-  } catch {
-    ui.platform.notifications.info(uri, { sticky: true });
-  }
+function copyLink(ui, uri) {
+  ui.go(new CopyTextAction(uri, `Copied ${uri}`));
 }
 
 function tagSection(sc, ui) {

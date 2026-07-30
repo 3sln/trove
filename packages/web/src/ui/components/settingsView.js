@@ -5,7 +5,7 @@ import { listAssociations, rememberOpener } from '../../bl/openers.js';
 import { localState } from '../localState.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
-import { RebindKeyAction } from '../../bl/actions.js';
+import { RebindKeyAction, CopyTextAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -100,13 +100,9 @@ function mcpSection(ui, caps) {
       p({ className: 'sub' }, 'MCP is switched off on this server. Set TROVE_MCP=on to enable it.'));
   }
 
-  const copy = (text) => () => {
-    navigator.clipboard?.writeText(text)
-      .then(() => ui.platform.notifications.success('Copied'))
-      // Clipboard access is denied often enough that failing silently would look like a
-      // broken button; showing the value still gets it into the user's hands.
-      .catch(() => ui.platform.notifications.info(text, { sticky: true }));
-  };
+  // The "denied clipboard still has to hand the value over" reasoning moved into
+  // CopyTextAction, which is where the other three copies of it went too.
+  const copy = (text) => () => ui.go(new CopyTextAction(text));
 
   const servers = auth.authorizationServers || [];
   // Where the value came from matters when it is wrong: "we took this from your JWT
@@ -235,11 +231,7 @@ function apiKeysSection(state, ui) {
  * table would be dismissed without being copied.
  */
 function mintedBanner(minted, ui) {
-  const copy = () => {
-    navigator.clipboard?.writeText(minted.secret)
-      .then(() => ui.platform.notifications.success('Key copied'))
-      .catch(() => ui.platform.notifications.info(minted.secret, { sticky: true }));
-  };
+  const copy = () => ui.go(new CopyTextAction(minted.secret, 'Key copied'));
   return div({ className: 'key-minted' },
     div({ className: 'key-minted-head' },
       icon('warn', { size: 15 }),
