@@ -126,3 +126,121 @@ export function contributionsOfType(type) {
   }
   return q;
 }
+
+// --- view queries ---------------------------------------------------------------
+//
+// The ones above hand a service's state through unchanged. These COMPOSE: they answer a
+// question the UI actually asks, in plain renderable data, with every decision already made.
+//
+// The rule, and it is the important one: a query emits a VIEW, never a handle. A list of
+// commands is a list of descriptions — id, title, whether it is enabled right now — not the
+// command objects, and never a `run` function. Interaction goes the other way, as an action
+// carrying the thing's id. So a component renders what it is given and dispatches an id; it
+// does not reach into a service to find out whether to draw something, and it cannot reach
+// into one to make something happen.
+//
+// That is what takes `platform` out of the components. The status bar used to ask
+// `context.evaluate(item.when)` and `plugins.isAvailable(item)` per item, mid-render, which
+// is why it needed the bag at all. Those are view decisions; they belong on this side.
+
+/**
+ * A query composed from several services rather than passed through from one.
+ *
+ * `sources` names the cells whose changes should recompute it; `project` builds the value.
+ * Split apart because what a view DEPENDS on is usually wider than what it reads from —
+ * the palette's command list changes when a contribution is registered, but also when a
+ * context key flips, because that is what decides `enabled`.
+ */
+class ViewQuery extends Query {
+  static deps = ['app'];
+
+  /**
+   * @param {(app: object) => Array<{onDirty: Function}>} sources
+   * @param {(app: object) => any} project must return plain data — see the note above
+   */
+  constructor(sources, project) {
+    super();
+    this.sources = sources;
+    this.project = project;
+  }
+
+  boot({ app }, { notify }) {
+    const emit = () => notify(this.project(app));
+    emit();
+    this.offs = this.sources(app).filter(Boolean).map((c) => c.onDirty(emit));
+  }
+
+  kill() {
+    this.offs?.forEach((off) => off());
+    this.offs = null;
+  }
+}
+
+/** Contributions, context keys and plugin health — what most of these views depend on. */
+const registries = (app) => [
+  app.platform.contributions.observe(),
+  app.platform.context.observe(),
+  app.platform.plugins?.observe(),
+  app.platform.settings.observe(),
+];
+
+/**
+ * The command palette's list: every palette command, with its keybinding label resolved
+ * and `enabled` already decided.
+ *
+ * No `when` expression and no handler. A component shows the title, greys out what is
+ * disabled, and dispatches `ExecCommandAction(id)`.
+ */
+export const paletteCommands = new ViewQuery(registries, (app) => {
+  const p = app.platform;
+  return p.commands.paletteCommands().map((c) => ({
+    id: c.id,
+    title: c.title ?? c.id,
+    category: c.category ?? null,
+    icon: c.icon ?? null,
+    keybinding: p.keybindings.labelFor(c.id),
+    enabled: p.commands.isEnabled(c.id),
+  }));
+});
+
+/**
+ * Plugin-contributed status bar slots, already filtered to the ones that should show.
+ *
+ * `when` and availability are resolved here rather than in the render, which is the whole
+ * reason the status bar had to carry `platform` at all. `html` is still untrusted plugin
+ * markup and is still sanitised at the point it becomes nodes — a query emitting plain data
+ * says nothing about that data being safe.
+ */
+export const statusItems = new ViewQuery(registries, (app) => {
+  const p = app.platform;
+  return p.contributions.ofType('statusItem')
+    .filter((i) => i.visible !== false && i.html)
+    .filter((i) => !i.when || p.context.evaluate(i.when))
+    .filter((i) => p.plugins?.isAvailable(i) ?? true)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.name).localeCompare(String(b.name)))
+    .map((i) => ({
+      id: i.id,
+      slot: i.slot === 'left' ? 'left' : 'right',
+      html: i.html,
+      tooltip: i.tooltip ?? null,
+      command: i.command ?? null,
+    }));
+});
+
+/** The effective keybindings, for the settings view: what is bound to what, right now. */
+export const keybindings = new ViewQuery(registries, (app) => {
+  const p = app.platform;
+  return p.keybindings.resolved().map((b) => ({
+    command: b.command,
+    key: b.key,
+    label: p.keybindings.labelFor(b.command),
+    title: p.contributions.get(b.command)?.title ?? b.command,
+    when: b.when ?? null,
+  }));
+});
+
+/** What this drive lets the current user do. Rebinding it is not a thing a view can do. */
+export const capabilities = new ViewQuery(
+  (app) => [app.platform.context.observe()],
+  (app) => ({ ...(app.platform.capabilities || {}) }),
+);

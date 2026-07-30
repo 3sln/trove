@@ -28,6 +28,41 @@ And the bridge to the render layer exists: `runtime.js` exports `fromObservable`
 adapts `subscribe({next, error, complete})` — exactly what `engine.query()` returns — into
 dodo's Cell protocol, which is what `watch` takes.
 
+## The rule: a query emits a view, an action carries an id
+
+Stated after phase 1, because the first cut got it half right and the distinction is the
+whole design.
+
+A query emits a **view**: plain data, every decision already made, nothing callable. The
+palette's command list is a list of *descriptions* — id, title, keybinding label, whether it
+is enabled right now — not the command objects, and never a `handler`. The plugin list is
+records, not plugin handles.
+
+Interaction goes back the other way: an **action carrying the thing's id**.
+`ExecCommandAction('explorer.upload')`, `UninstallPluginAction(id)`. A component renders
+what it was given and dispatches an id.
+
+The test is mechanical, and there is one in the suite that applies it: walk the emitted
+value, and if anything in it is a function, the query has handed out a handle. A component
+holding a handle is reaching around the engine again — which is the thing this ticket
+exists to stop.
+
+What this buys, concretely: the status bar used to call `context.evaluate(item.when)` and
+`plugins.isAvailable(item)` per item, mid-render. Those are view decisions, so they moved
+into the `statusItems` query, and the component stopped needing `platform` at all. That is
+the general shape of how `platform` leaves the components — not by being passed differently,
+but by the decisions it was consulted for moving to the query side.
+
+Two things a view query has to get right:
+
+- **Depend on more than it reads.** `enabled` is decided from the context keys, so a
+  command view that only watched the contribution registry would go stale the moment a
+  selection changed — still showing a command as available after the thing it acts on was
+  deselected. `ViewQuery` takes its sources and its projection separately for that reason.
+- **Plain is not the same as safe.** A status item's `html` is untrusted plugin markup. It
+  is still sanitised where it becomes nodes.
+
+
 ## Where everything goes
 
 | today | becomes |

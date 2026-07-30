@@ -161,3 +161,116 @@ test('a parameterised query memoises, so it is not a new realization per render'
   expect(q.contributionsOfType('statusItem')).toBe(q.contributionsOfType('statusItem'));
   expect(q.contributionsOfType('statusItem')).not.toBe(q.contributionsOfType('opener'));
 });
+
+// --- view queries: plain data, never handles ------------------------------------
+//
+// The rule these enforce: a query emits a VIEW — descriptions with every decision already
+// made — and interaction goes back the other way as an action carrying an id. A query that
+// hands out a callable has handed out the service, and the component is reaching around the
+// engine again, which is the thing this ticket exists to stop.
+
+/** Anything callable anywhere in the emitted value, with the path that reached it. */
+function callablesIn(value, path = '$', seen = new Set()) {
+  if (typeof value === 'function') return [path];
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  return Object.entries(value).flatMap(([k, v]) => callablesIn(v, `${path}.${k}`, seen));
+}
+
+function platformStub() {
+  const contributions = cell([]);
+  const context = cell({});
+  const settings = cell({});
+  const items = [
+    { id: 'a', type: 'statusItem', html: '<b>A</b>', slot: 'left', order: 2, name: 'A', command: 'x.run' },
+    { id: 'b', type: 'statusItem', html: '<b>B</b>', name: 'B', when: 'nope' },      // when is false
+    { id: 'c', type: 'statusItem', html: '<b>C</b>', name: 'C', visible: false },     // hidden
+    { id: 'd', type: 'statusItem', name: 'D' },                                       // no html
+  ];
+  return {
+    platform: {
+      contributions: {
+        observe: () => contributions,
+        ofType: (t) => items.filter((i) => i.type === t),
+        get: (id) => ({ title: `Title of ${id}` }),
+      },
+      context: { observe: () => context, evaluate: (expr) => expr !== 'nope' },
+      settings: { observe: () => settings },
+      plugins: null,
+      capabilities: { read: true, write: false },
+      commands: {
+        // A real command carries a handler; the view must not.
+        paletteCommands: () => [{ id: 'x.run', title: 'Run it', category: 'Test', when: 'ok', handler() {} }],
+        isEnabled: () => true,
+      },
+      keybindings: {
+        resolved: () => [{ command: 'x.run', key: 'mod+r' }],
+        labelFor: (c) => (c === 'x.run' ? '⌘R' : null),
+      },
+    },
+    _dirty: { contributions, context },
+  };
+}
+
+async function readOnce(query, app) {
+  const engine = engineWith(app);
+  const seen = [];
+  const sub = engine.query(query).subscribe((v) => seen.push(v));
+  await settle();
+  sub.unsubscribe();
+  return seen.at(-1);
+}
+
+test('the palette command view is a description, not a command', async () => {
+  const app = platformStub();
+  const list = await readOnce(q.paletteCommands, app);
+  expect(list).toEqual([
+    { id: 'x.run', title: 'Run it', category: 'Test', icon: null, keybinding: '⌘R', enabled: true },
+  ]);
+  // The source command had a `handler`. Emitting it would hand a component a way to run
+  // something without going through the engine at all.
+  expect(callablesIn(list)).toEqual([]);
+  expect('when' in list[0]).toBe(false);
+});
+
+test('the status item view resolves when/visibility, so a component does not have to', async () => {
+  // This is what let the status bar stop carrying `platform`: it used to call
+  // `context.evaluate(item.when)` per item, mid-render.
+  const app = platformStub();
+  const items = await readOnce(q.statusItems, app);
+  expect(items.map((i) => i.id)).toEqual(['a']);   // b: when false, c: hidden, d: no html
+  expect(items[0]).toEqual({ id: 'a', slot: 'left', html: '<b>A</b>', tooltip: null, command: 'x.run' });
+  expect(callablesIn(items)).toEqual([]);
+});
+
+test('the keybinding view names the command rather than carrying it', async () => {
+  const app = platformStub();
+  const bindings = await readOnce(q.keybindings, app);
+  expect(bindings).toEqual([
+    { command: 'x.run', key: 'mod+r', label: '⌘R', title: 'Title of x.run', when: null },
+  ]);
+  expect(callablesIn(bindings)).toEqual([]);
+});
+
+test('capabilities are a copy, so a view cannot grant itself one', async () => {
+  const app = platformStub();
+  const caps = await readOnce(q.capabilities, app);
+  expect(caps).toEqual({ read: true, write: false });
+  expect(caps).not.toBe(app.platform.capabilities);
+});
+
+test('a view recomputes when a context key flips, not only when its own list changes', async () => {
+  // `enabled` and `when` are decided from the context, so a view that only watched the
+  // contribution registry would go stale the moment a selection changed — showing a
+  // command as available after the thing it acts on was deselected.
+  const app = platformStub();
+  const engine = engineWith(app);
+  const seen = [];
+  const sub = engine.query(q.statusItems).subscribe((v) => seen.push(v));
+  await settle();
+  const before = seen.length;
+  app._dirty.context.setValue({ changed: true });
+  await settle();
+  expect(seen.length).toBeGreaterThan(before);
+  sub.unsubscribe();
+});

@@ -87,7 +87,7 @@ export default function workbench({ engine, app, platform }) {
   // list beneath it. Now it reaches the chrome and the tray, and nothing else.
   const chrome = {
     ex: q.explorer, tr: q.transfers, act: q.activity, off: q.offline,
-    so: q.social, wb: q.workbench, statusItems: q.contributionsOfType('statusItem'),
+    so: q.social, wb: q.workbench, statusItems: q.statusItems,
   };
   // A query boots asynchronously — it awaits a container lease first — so a region is
   // PENDING for the first frame or two and `watch` renders its placeholder. For a bar with

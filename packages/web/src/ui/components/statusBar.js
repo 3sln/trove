@@ -12,10 +12,12 @@ const { div, button, span } = dd;
  * A slot with nothing in it, or one whose `when` doesn't hold, renders nothing at all
  * rather than an empty chip.
  */
+// The item arrives already decided — see the statusItems view query. Whether it should
+// show at all (`visible`, its `when` clause, whether the plugin behind it is responding) is
+// resolved on the query side now, which is what let this stop reaching into `platform`
+// mid-render. `html` is still untrusted plugin markup: a query emitting plain data says
+// nothing about that data being safe, so it is still sanitised here.
 function statusSlot(item, ui) {
-  if (item.visible === false || !item.html) return null;
-  if (item.when && !ui.platform.context.evaluate(item.when)) return null;
-  if (!ui.platform.plugins.isAvailable(item)) return null;
   const content = sanitizedVNodes(item.html, dd);
   if (!content.length) return null;
   const title = item.tooltip ? htmlToText(item.tooltip) : '';
@@ -139,9 +141,8 @@ export default function statusBar(state, ui) {
   const { totalItems, totalBytes, caps } = f;
   const active = f.uploading;
 
-  // Plugin-contributed status slots, ordered by their declared `order` then name.
-  const slots = [...(state.statusItems || [])]
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
+  // Plugin-contributed status slots. Already filtered and ordered by the query.
+  const slots = state.statusItems || [];
   const left = slots.filter((s) => s.slot === 'left').map((s) => statusSlot(s, ui));
   const right = slots.filter((s) => s.slot !== 'left').map((s) => statusSlot(s, ui));
 
