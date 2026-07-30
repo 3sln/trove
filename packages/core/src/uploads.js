@@ -14,7 +14,8 @@
 
 import { TroveError, ErrorCode } from './errors.js';
 import { newId, isValidItemName } from './util.js';
-import { cipherSize, DEFAULT_CHUNK_SIZE } from './encryption/envelope.js';
+import { cipherSize, DEFAULT_CHUNK_SIZE, isEnvelope, decodeHeader, HEADER_BYTES as ENVELOPE_HEAD } from './encryption/envelope.js';
+import { toHex } from './encryption/keys.js';
 import { shouldEncrypt } from './encryption/policy.js';
 
 export const DEFAULT_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
@@ -282,6 +283,42 @@ export class UploadManager {
     };
   }
 
+
+  /**
+   * Refuse an upload that was supposed to be encrypted and is not.
+   *
+   * Deleted rather than kept, like the over-size branch: an object that cannot be read is
+   * not worth the storage, and leaving it would also leave plaintext in a bucket the
+   * collection promises is ciphertext.
+   */
+  async #assertSealed(storage, s) {
+    let head;
+    try {
+      const got = await storage.get(s.storageKey, { range: { start: 0, end: ENVELOPE_HEAD - 1 } });
+      head = new Uint8Array(await new Response(got.stream).arrayBuffer());
+    } catch {
+      return; // a backend that cannot serve a range gets the benefit of the doubt
+    }
+    const sealed = isEnvelope(head);
+    const matches = sealed && (() => {
+      try {
+        return toHex(decodeHeader(head).fingerprint) === s.keyFingerprint;
+      } catch {
+        return false;
+      }
+    })();
+    if (sealed && matches) return;
+
+    await storage.delete(s.storageKey).catch(() => {});
+    await this.sessions.delete(s.id);
+    throw TroveError.invalid(
+      sealed
+        ? 'This upload was encrypted with the wrong key for this collection.'
+        : 'This collection encrypts its files, and this upload arrived unencrypted. The client '
+          + 'must seal the bytes using the key in the upload plan before sending them.',
+    );
+  }
+
   /** Re-issue a signed URL for one part (resume after expiry). */
   async signPart(uploadId, partNumber) {
     const s = await this.#session(uploadId);
@@ -412,6 +449,21 @@ export class UploadManager {
         { details: { maxBytes: this.maxBytes, size } },
       );
     }
+    // An upload planned as encrypted must have ARRIVED encrypted.
+    //
+    // `complete` otherwise records what the session INTENDED, so a client that ignores
+    // `plan.encryption` — which is every client that has not implemented it yet — uploads
+    // plaintext and the item is stamped with a key fingerprint anyway. The result is the
+    // worst of both: permanently unreadable, because the read path looks for an envelope
+    // that is not there, and not actually protected, because the bytes are sitting in the
+    // bucket in the clear on a collection labelled encrypted.
+    //
+    // The envelope header is readable without the key, which is exactly what makes this
+    // checkable here. One small ranged read, once, at the end of an upload.
+    if (s.encrypted) {
+      await this.#assertSealed(storage, s);
+    }
+
     await this.sessions.delete(uploadId);
     return {
       storageKey: s.storageKey,

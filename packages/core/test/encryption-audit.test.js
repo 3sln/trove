@@ -127,3 +127,43 @@ test('exposure with no way to read manifests reports unknown, not safe', async (
   expect(e.indexers[0].endpoints).toBe(null);
   expect(e.anyEgress).toBe(true);
 });
+
+test('an upload that arrives unencrypted on an encrypted collection is refused', async () => {
+  // Every client that has not implemented encryption yet — which today is all of them —
+  // ignores `plan.encryption` and sends the raw bytes. Recording what the session INTENDED
+  // stamped those with a key fingerprint anyway, producing the worst of both outcomes: an
+  // item permanently unreadable, because the read path looks for an envelope that is not
+  // there, AND plaintext sitting in a bucket the collection claims is ciphertext.
+  const d = await drive();
+  const plan = await d.vfs.createUpload({
+    collectionId: d.c.id, name: 'naive.txt', size: 5, contentType: 'text/plain',
+  });
+  expect(plan.encryption).toBeTruthy();
+  await d.vfs.uploads.uploadPart(plan.uploadId, 1, text('hello'));
+  await expect(d.vfs.completeUpload(plan.uploadId)).rejects.toThrow(/arrived unencrypted/);
+
+  // And nothing is left behind: no item, and no plaintext in the bucket.
+  expect(await d.vfs.metadata.getByName(d.c.id, 'naive.txt')).toBe(null);
+  const left = await d.storage.list({});
+  expect((left.items || []).length).toBe(0);
+});
+
+test('an upload sealed with the wrong key is refused too', async () => {
+  const d = await drive();
+  const plan = await d.vfs.createUpload({
+    collectionId: d.c.id, name: 'wrong.txt', size: 5, contentType: 'text/plain',
+  });
+  const stranger = new Uint8Array(32).fill(3);
+  const sealed = await encrypt(stranger, text('hello'), {
+    fingerprint: new Uint8Array(16).fill(9), chunkSize: plan.encryption.chunkSize,
+  });
+  await d.vfs.uploads.uploadPart(plan.uploadId, 1, sealed);
+  await expect(d.vfs.completeUpload(plan.uploadId)).rejects.toThrow(/wrong key for this collection/);
+});
+
+test('a correctly sealed upload still completes', async () => {
+  const d = await drive();
+  const done = await put(d, 'good.txt', text('hello'));
+  expect(done.encryption).toBeTruthy();
+  expect(await new Response((await d.vfs.readStream(done.id)).stream).text()).toBe('hello');
+});
