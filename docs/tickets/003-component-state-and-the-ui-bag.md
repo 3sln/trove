@@ -1,8 +1,10 @@
 # 003 — Component state, render granularity, and the `ui` bag
 
 > **Phases 1 and 2 are done.** `ui.rerender`, the `bump` cell, the shallow-equality
-> exception, `ui.engine` and `ui.uninstallPlugin` are all gone; component-local state lives
-> in `ui/localState.js`. What is left is the open decision below and phase 3.
+> exception and `ui.uninstallPlugin` are gone; component-local state lives in
+> `ui/localState.js`; and running a command is an action, so UI-initiated commands go
+> through the engine instead of around it. What is left is the open decision below and
+> phase 3.
 
 Three findings that look like three problems and are mostly one: state the workbench needs
 lives outside the reactive graph, and the machinery built to compensate is what the `ui` bag
@@ -57,9 +59,22 @@ for the same reason every other render happens. That deleted `rerender` from the
 `bump` cell, and the exception in the snapshot that existed purely so `watch`'s
 shallow-equality check would not discard a forced render as "nothing changed".
 
-`ui.engine` is gone — it reached fourteen modules and was read by none. `uninstallPlugin`
-is an action; it had one call site and was carried the whole way down to reach it. The
-`plugins` shim that existed only to build it went with it.
+`uninstallPlugin` is an action; it had one call site and was carried the whole way down to
+reach it. The `plugins` shim that existed only to build it went with it.
+
+`ui.engine` was removed for being unreferenced and then put back, which is worth recording
+because the first call was wrong in an instructive way. Nothing referenced it precisely
+BECAUSE `go` and `exec` stood in for it — and `exec` was not a wrapper over the engine at
+all, it called the command service directly. So every command a user ran from the UI, every
+menu item and keybinding and palette entry, went AROUND the engine: nothing could intercept
+one, nothing could observe one, and the engine's picture of what the app was doing had a
+hole in it shaped exactly like everything a person did.
+
+`ExecCommandAction` closes that. `exec` stays as sugar at 46 call sites, but it dispatches
+now, and `engine` is on the bag because it is the thing components actually talk to —
+`dispatch` for an action, `query` for a question, the latter having been unreachable from a
+component entirely. Deleting unused surface was the wrong instinct here: the surface was
+unused because something was reaching around it.
 
 One thing worth keeping in mind for anything similar: the plugin review's ticked
 capabilities were a `Set` mutated in place, and writing a mutated object back to a cell is

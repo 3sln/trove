@@ -213,6 +213,32 @@ export class OpenInitialCollectionAction extends AppAction {
  * reached by carrying a function through fourteen modules of components that had no use
  * for it except to hand it to their children.
  */
+/**
+ * Run a command.
+ *
+ * Commands used to be invoked straight on the command service, which meant every command a
+ * user ran from the UI — every menu item, every keybinding, every palette entry — went
+ * around the engine rather than through it. Nothing could intercept one, nothing could
+ * observe one, and the engine's own view of what the app was doing had a hole in it exactly
+ * the shape of everything a person actually did.
+ *
+ * Running one is an action like any other, so it is one.
+ *
+ * The command's return value is not available here — `dispatch` answers with an event feed
+ * rather than the handler's result. That costs nothing today: every one of the call sites
+ * is fire-and-forget, and a command that needs to answer its caller wants a query.
+ */
+export class ExecCommandAction extends AppAction {
+  constructor(id, ...args) {
+    super();
+    this.id = id;
+    this.args = args;
+  }
+  async execute({ app }) {
+    return app.platform.commands.execute(this.id, ...this.args);
+  }
+}
+
 export class UninstallPluginAction extends AppAction {
   constructor(pluginId) {
     super();

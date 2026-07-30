@@ -6,7 +6,7 @@
 
 import { dd, derive, constant } from '../../runtime.js';
 import { localState } from '../localState.js';
-import { NavigateAction } from '../../bl/actions.js';
+import { NavigateAction, ExecCommandAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
 import launcher from '../components/launcher.js';
@@ -25,18 +25,22 @@ const { alias, div } = dd;
 export default function workbench({ engine, app, platform }) {
   // What a component is handed.
   //
-  // `engine` used to be in here and was read by nothing at all — carried to fourteen
-  // modules and referenced in none of them. `uninstallPlugin` is gone too: it was one call
-  // site reached by threading a closure the whole way down, and it is an action now.
+  // `engine` is here because it is the thing components actually talk to: `dispatch` for
+  // an action, `query` for a question. It was removed once for being unreferenced, which
+  // was true and backwards — nothing referenced it precisely BECAUSE `go` and `exec` stood
+  // in for it, and one of those was reaching around the engine rather than through it.
   //
-  // What remains is `go` and `exec` — how a component asks for something to happen — and
-  // `app`/`platform`, which are how it reaches the services it renders from. Whether those
-  // stay a parameter, become a factory closure per component the way dodo builds a
-  // `special()`, or become a context, is the open question in docs/tickets.
+  // `go` and `exec` stay as sugar, not as the only door. `exec` in particular now
+  // dispatches: running a command used to call the command service directly, so every
+  // menu item, keybinding and palette entry a user triggered was invisible to the engine.
+  //
+  // `app` and `platform` are how a component reaches the services it renders from. Whether
+  // those stay a parameter, become a factory closure per component, or become a context is
+  // the open question in docs/tickets.
   const ui = {
-    app, platform,
+    engine, app, platform,
     go: (action) => engine.dispatch(action),
-    exec: (id, ...args) => platform.commands.execute(id, ...args),
+    exec: (id, ...args) => engine.dispatch(new ExecCommandAction(id, ...args)),
   };
 
   const { watch } = platform.reactive;
