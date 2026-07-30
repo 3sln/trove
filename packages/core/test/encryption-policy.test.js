@@ -2,12 +2,10 @@
 
 import { test, expect } from 'bun:test';
 import { normalizeEncryption, shouldEncrypt, describeEncryption } from '../src/encryption/policy.js';
-import { CollectionService, MemoryKV, MemoryStorage, describeKey } from '../src/index.js';
+import { CollectionService, MemoryKV, MemoryStorage, fingerprintHex } from '../src/index.js';
 
-const KDF = { name: 'PBKDF2-SHA256', iterations: 1000 };
-const enc = (rules) => normalizeEncryption({
-  enabled: true, salt: 'aa'.repeat(16), fingerprint: 'bb'.repeat(16), kdf: KDF, rules,
-});
+const FP = 'bb'.repeat(16);
+const enc = (rules) => normalizeEncryption({ enabled: true, rules }, FP);
 
 test('rules match by extension, case and dot insensitively', () => {
   const e = enc({ extensions: ['.PDF', 'docx'] });
@@ -50,20 +48,20 @@ test('encryption that would match nothing is refused', () => {
 });
 
 test('key material has to be coherent', () => {
+  // A collection recorded as encrypted with no fingerprint is one whose objects could
+  // never be matched to a key.
   expect(() => normalizeEncryption({ enabled: true, rules: { all: true } }))
-    .toThrow(/needs a salt and a key fingerprint/);
-  expect(() => normalizeEncryption({ enabled: true, salt: 'aa', fingerprint: 'nope', rules: { all: true } }))
+    .toThrow(/needs a key fingerprint/);
+  expect(() => normalizeEncryption({ enabled: true, rules: { all: true } }, 'nope'))
     .toThrow(/Not a key fingerprint/);
 });
 
-test('what a client is told is enough to derive and useless without the passphrase', async () => {
-  const { config } = await describeKey('a good passphrase', { kdf: KDF });
-  const e = normalizeEncryption({ ...config, enabled: true, rules: { all: true } });
-  const shown = describeEncryption(e);
-  expect(shown.salt).toBe(config.salt);
-  expect(shown.fingerprint).toBe(config.fingerprint);
-  expect(shown.kdf.iterations).toBe(1000);
-  expect(JSON.stringify(shown)).not.toContain('a good passphrase');
+test('what a client is told names the key without being it', async () => {
+  const shown = describeEncryption(enc({ all: true }));
+  expect(shown.fingerprint).toBe(FP);
+  expect(shown.enabled).toBe(true);
+  // No salt, no KDF, no key — there is nothing to derive and nothing to prompt for.
+  expect(Object.keys(shown).sort()).toEqual(['enabled', 'fingerprint', 'rules']);
 });
 
 // --- through the collection service --------------------------------------------
@@ -74,127 +72,108 @@ async function svc() {
   });
 }
 const BOSS = { id: 'boss', email: 'boss@example.com', roles: [] };
+const encrypted = (s, rules = { all: true }) => s.create({
+  name: 'Private', store: { driver: 'memory' }, encryption: { enabled: true, rules },
+}, BOSS);
 
-test('a collection can be created encrypted, and says so', async () => {
+test('enabling encryption mints a key, and the collection names it', async () => {
   const s = await svc();
-  const { config } = await describeKey('hunter2', { kdf: KDF });
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { ...config, enabled: true, rules: { mimeTypes: ['image'] } },
-  }, BOSS);
-  expect(c.encryption.fingerprint).toBe(config.fingerprint);
+  const c = await encrypted(s, { mimeTypes: ['image'] });
+  expect(c.encryption.fingerprint).toMatch(/^[0-9a-f]{32}$/);
   expect(c.encryption.rules.mimeTypes).toEqual(['image']);
+  const key = await s.dataKeyFor(c.id);
+  expect(key.length).toBe(32);
+  expect(fingerprintHex(await (await import('../src/encryption/keys.js')).fingerprint(key)))
+    .toBe(c.encryption.fingerprint);
 });
 
-test('an unencrypted collection reports null rather than an absent field', async () => {
-  // So a client has one question to ask, not two.
+test('the key is never in what a client is handed', async () => {
+  // The deliberate limit of the design is that the SERVER holds the key. It reaches a
+  // client through a transfer plan, authorized per operation — never through a listing.
+  const s = await svc();
+  const c = await encrypted(s);
+  const key = Buffer.from(await s.dataKeyFor(c.id)).toString('hex');
+  expect(JSON.stringify(c)).not.toContain(key);
+  expect(JSON.stringify(await s.list(BOSS))).not.toContain(key);
+});
+
+test('an unencrypted collection has no key and says so', async () => {
   const s = await svc();
   const c = await s.create({ name: 'Open', store: { driver: 'memory' } }, BOSS);
   expect(c.encryption).toBe(null);
+  expect(await s.dataKeyFor(c.id)).toBe(null);
+  expect(await s.keyRingFor(c.id)).toEqual([]);
 });
 
-test('changing the key on a collection is refused, because it would orphan everything', async () => {
-  // Every stored object names the key it was encrypted with. Swapping the collection's
-  // fingerprint without re-encrypting leaves all of them pointing at a key nobody holds.
+test('changing the rules keeps the key', async () => {
+  // Minting a new one would orphan every object already sealed with the old.
   const s = await svc();
-  const first = await describeKey('hunter2', { kdf: KDF });
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { ...first.config, enabled: true, rules: { all: true } },
-  }, BOSS);
-
-  const second = await describeKey('a different key', { kdf: KDF });
-  await expect(s.update(c.id, {
-    encryption: { ...second.config, enabled: true, rules: { all: true } },
-  }, BOSS)).rejects.toThrow(/Rotate the key instead/);
+  const c = await encrypted(s, { mimeTypes: ['image'] });
+  const before = Buffer.from(await s.dataKeyFor(c.id)).toString('hex');
+  const after = await s.update(c.id, { encryption: { enabled: true, rules: { all: true } } }, BOSS);
+  expect(after.encryption.fingerprint).toBe(c.encryption.fingerprint);
+  expect(Buffer.from(await s.dataKeyFor(c.id)).toString('hex')).toBe(before);
+  expect(after.encryption.rules.all).toBe(true);
 });
 
-test('the rules can be changed without touching the key', async () => {
+test('switching encryption off decrypts nothing, and keeps the ring', async () => {
+  // Objects already stored name their own key; dropping it would make them unreadable.
   const s = await svc();
-  const { config } = await describeKey('hunter2', { kdf: KDF });
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { ...config, enabled: true, rules: { mimeTypes: ['image'] } },
-  }, BOSS);
-  const updated = await s.update(c.id, {
-    encryption: { ...config, enabled: true, rules: { all: true } },
-  }, BOSS);
-  expect(updated.encryption.rules.all).toBe(true);
-  expect(updated.encryption.fingerprint).toBe(config.fingerprint);
-});
-
-test('encryption can be switched off, and nothing already stored changes', async () => {
-  // Turning it off must not imply decrypting what exists: each object records its own
-  // envelope, so old items keep opening and new ones are stored in the clear.
-  const s = await svc();
-  const { config } = await describeKey('hunter2', { kdf: KDF });
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { ...config, enabled: true, rules: { all: true } },
-  }, BOSS);
+  const c = await encrypted(s);
   const off = await s.update(c.id, { encryption: { enabled: false } }, BOSS);
   expect(off.encryption).toBe(null);
+  expect((await s.keyRingFor(c.id)).length).toBe(1);
 });
 
-// --- the key the server keeps --------------------------------------------------
+// --- rotation ------------------------------------------------------------------
 
-test('setting a passphrase stores a key the server can use, and never shows it', async () => {
-  // This is the deliberate limit of the design: the server holds the key, because it has
-  // to hand it to a client in a transfer plan and decrypt for an indexer. It defends the
-  // bucket, not the server. What it must never do is let that key out through the API.
+test('rotation mints a new current key and keeps the old one live', async () => {
+  // The point of a ring: until every object has moved, both keys must open things.
   const s = await svc();
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { userKey: 'a good long passphrase', rules: { all: true } },
-  }, BOSS);
+  const c = await encrypted(s);
+  const old = c.encryption.fingerprint;
 
-  const key = await s.dataKeyFor(c.id);
-  expect(key.length).toBe(32);
+  const r = await s.beginRotation(c.id, BOSS);
+  expect(r.previous).toBe(old);
+  expect(r.fingerprint).not.toBe(old);
 
-  // Not in what a client is handed, in any shape.
-  const shown = JSON.stringify(c);
-  expect(shown).not.toContain('a good long passphrase');
-  expect(shown).not.toContain(Buffer.from(key).toString('hex'));
-  expect(c.encryption.fingerprint).toMatch(/^[0-9a-f]{32}$/);
-
-  // Nor in the list.
-  const listed = JSON.stringify(await s.list(BOSS));
-  expect(listed).not.toContain(Buffer.from(key).toString('hex'));
+  const ring = await s.keyRingFor(c.id);
+  expect(ring.length).toBe(2);
+  expect(ring[0].current).toBe(true);
+  expect(ring[0].fingerprint).toBe(r.fingerprint);
+  // The old key is still there, and still resolvable by name.
+  expect(await s.dataKeyFor(c.id, old)).toBeTruthy();
+  // And the collection now seals new objects with the new one.
+  const now = (await s.list(BOSS)).find((x) => x.id === c.id);
+  expect(now.encryption.fingerprint).toBe(r.fingerprint);
 });
 
-test('setting the same passphrase again is idempotent, not a silent key change', async () => {
-  // Re-derived against the collection's existing salt. Without that, "confirm the key"
-  // would generate a new salt, a new key, and orphan everything already stored.
+test('a key is retired only once nothing needs it', async () => {
   const s = await svc();
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { userKey: 'hunter2', rules: { all: true } },
-  }, BOSS);
-  const first = Buffer.from(await s.dataKeyFor(c.id)).toString('hex');
+  const c = await encrypted(s);
+  const old = c.encryption.fingerprint;
+  const r = await s.beginRotation(c.id, BOSS);
 
-  const again = await s.update(c.id, {
-    encryption: { userKey: 'hunter2', rules: { mimeTypes: ['image'] } },
-  }, BOSS);
-  expect(again.encryption.fingerprint).toBe(c.encryption.fingerprint);
-  expect(Buffer.from(await s.dataKeyFor(c.id)).toString('hex')).toBe(first);
-  // ...while the rules did change.
-  expect(again.encryption.rules.mimeTypes).toEqual(['image']);
+  // The current key cannot be dropped — that would leave the collection sealing with
+  // something it cannot open.
+  await expect(s.retireKey(c.id, r.fingerprint, BOSS)).rejects.toThrow(/current key/);
+
+  expect(await s.retireKey(c.id, old, BOSS)).toEqual({ retired: true });
+  expect(await s.dataKeyFor(c.id, old)).toBe(null);
+  expect((await s.keyRingFor(c.id)).length).toBe(1);
 });
 
-test('a different passphrase is refused rather than quietly orphaning everything', async () => {
+test('retiring a key that is already gone is not an error', async () => {
+  // Rotation can be resumed after a failure, so finishing twice has to be harmless.
   const s = await svc();
-  const c = await s.create({
-    name: 'Private', store: { driver: 'memory' },
-    encryption: { userKey: 'hunter2', rules: { all: true } },
-  }, BOSS);
-  await expect(s.update(c.id, {
-    encryption: { userKey: 'something else', rules: { all: true } },
-  }, BOSS)).rejects.toThrow(/rotate the key instead/i);
+  const c = await encrypted(s);
+  await s.beginRotation(c.id, BOSS);
+  await s.retireKey(c.id, c.encryption.fingerprint, BOSS);
+  expect(await s.retireKey(c.id, c.encryption.fingerprint, BOSS)).toEqual({ retired: false });
 });
 
-test('an unencrypted collection has no key to give out', async () => {
+test('rotation needs a collection that is actually encrypted', async () => {
   const s = await svc();
   const c = await s.create({ name: 'Open', store: { driver: 'memory' } }, BOSS);
-  expect(await s.dataKeyFor(c.id)).toBe(null);
-  expect(await s.encryptionFor(c.id)).toBe(null);
+  await expect(s.beginRotation(c.id, BOSS)).rejects.toThrow(/not encrypted/);
 });

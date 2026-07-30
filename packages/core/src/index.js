@@ -47,8 +47,7 @@ export {
   HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE,
 } from './encryption/envelope.js';
 export {
-  deriveDataKey, fingerprint, fingerprintHex, toHex, describeKey, matchesCollection,
-  newSalt, DEFAULT_KDF,
+  generateDataKey, newCollectionKey, fingerprint, fingerprintHex, toHex, fromHex,
 } from './encryption/keys.js';
 export { normalizeEncryption, shouldEncrypt, describeEncryption } from './encryption/policy.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';

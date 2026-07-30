@@ -5,9 +5,9 @@
 //   A plaintext range costs one chunk range, not the whole file — otherwise seeking in an
 //   encrypted video means downloading the video.
 //
-//   Neither the key nor the fingerprint is a cheap function of the passphrase. The
-//   adversary is the storage host and they are holding the ciphertext, so anything they
-//   can check quickly, they can guess.
+//   An object names the key that sealed it, readably and without that key — which is what
+//   lets a sideloaded object be identified, and what lets two keys be live at once while a
+//   rotation works through a collection.
 
 import { test, expect } from 'bun:test';
 import {
@@ -16,8 +16,7 @@ import {
   HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE, FINGERPRINT_BYTES, VERSION,
 } from '../src/encryption/envelope.js';
 import {
-  deriveDataKey, fingerprint, fingerprintHex, describeKey, matchesCollection,
-  newSalt, DEFAULT_KDF, KEY_BYTES,
+  generateDataKey, newCollectionKey, fingerprint, fingerprintHex, KEY_BYTES,
 } from '../src/encryption/keys.js';
 
 const KEY = new Uint8Array(32).fill(7);
@@ -169,80 +168,67 @@ test('a range running to the end of the file is clamped, not overrun', async () 
 
 // --- keys ----------------------------------------------------------------------
 
-test('the data key is not a hash of the passphrase', async () => {
-  // If it were, the storage host — who holds the ciphertext — could guess offline at
-  // billions of attempts a second, and a passphrase a human chose would not survive it.
-  const salt = newSalt();
-  const key = await deriveDataKey('correct horse battery staple', salt, { name: 'PBKDF2-SHA256', iterations: 1000 });
-  expect(key.length).toBe(KEY_BYTES);
-  const plainHash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('correct horse battery staple')));
-  expect(Buffer.from(key).equals(Buffer.from(plainHash))).toBe(false);
-});
-
-test('the same passphrase under a different salt is a different key', async () => {
-  // So a guess made against one collection is worth nothing against another.
-  const kdf = { name: 'PBKDF2-SHA256', iterations: 1000 };
-  const a = await deriveDataKey('hunter2', newSalt(), kdf);
-  const b = await deriveDataKey('hunter2', newSalt(), kdf);
+test('a collection key is generated, not derived from anything a user types', async () => {
+  // A passphrase would buy nothing: the server knows the key either way, so there is no
+  // protection to gain from the user holding one — and every cost would still apply.
+  const a = generateDataKey();
+  const b = generateDataKey();
+  expect(a.length).toBe(KEY_BYTES);
   expect(Buffer.from(a).equals(Buffer.from(b))).toBe(false);
 });
 
-test('the fingerprint is not a cheap oracle for the passphrase', async () => {
-  // Published on the collection and on every object, so if it were H(H(passphrase)) an
-  // attacker could test a guess with one hash instead of a real decryption attempt.
-  const salt = newSalt();
-  const kdf = { name: 'PBKDF2-SHA256', iterations: 1000 };
-  const key = await deriveDataKey('hunter2', salt, kdf);
+test('the fingerprint names a key without being it', async () => {
+  const key = generateDataKey();
   const fp = await fingerprint(key);
-  const doubleHash = new Uint8Array(await crypto.subtle.digest('SHA-256',
-    await crypto.subtle.digest('SHA-256', new TextEncoder().encode('hunter2'))));
-  expect(Buffer.from(fp).equals(Buffer.from(doubleHash.subarray(0, fp.length)))).toBe(false);
-  // Deterministic, though — it has to identify the key across devices and objects.
+  expect(fp.length).toBe(16);
+  // Deterministic, because it has to identify the same key across every object.
   expect(fingerprintHex(await fingerprint(key))).toBe(fingerprintHex(fp));
+  // And not simply the key with a haircut.
+  expect(fingerprintHex(fp)).not.toBe(fingerprintHex(key.subarray(0, 16)));
 });
 
-test('a collection records enough to re-derive and nothing that reveals', async () => {
-  const { dataKey, config } = await describeKey('hunter2', { kdf: { name: 'PBKDF2-SHA256', iterations: 1000 } });
+test('different keys get different names', async () => {
+  const one = fingerprintHex(await fingerprint(generateDataKey()));
+  const two = fingerprintHex(await fingerprint(generateDataKey()));
+  expect(one).not.toBe(two);
+});
+
+test('a new collection key comes with the config that records it', async () => {
+  const { dataKey, config } = await newCollectionKey();
   expect(dataKey.length).toBe(KEY_BYTES);
-  expect(config.salt).toMatch(/^[0-9a-f]+$/);
   expect(config.fingerprint).toMatch(/^[0-9a-f]{32}$/);
-  // The passphrase is nowhere in what gets stored.
-  expect(JSON.stringify(config)).not.toContain('hunter2');
-  expect(config.kdf.iterations).toBe(1000);
+  expect(config.fingerprint).toBe(fingerprintHex(await fingerprint(dataKey)));
+  // The key is not in the config — they go to different places.
+  expect(JSON.stringify(config)).not.toContain(fingerprintHex(dataKey));
 });
 
-test('a key can be checked against a collection before anything is downloaded', async () => {
-  const { config } = await describeKey('hunter2', { kdf: { name: 'PBKDF2-SHA256', iterations: 1000 } });
-  const right = await matchesCollection('hunter2', config);
-  expect(right.ok).toBe(true);
-  expect(right.dataKey.length).toBe(KEY_BYTES);
-  const wrong = await matchesCollection('hunter3', config);
-  expect(wrong.ok).toBe(false);
-  // And a rejected key is not handed back, so nothing downstream can use it by accident.
-  expect(wrong.dataKey).toBe(null);
+test('a key that is not a key is refused', async () => {
+  await expect(fingerprint(new Uint8Array(16))).rejects.toThrow(/must be 32 bytes/);
 });
 
-test('an unimplemented KDF is named rather than silently substituted', async () => {
-  // A collection written by a newer client must not be derived the old way and then fail
-  // to decrypt with a message about the data being altered.
-  await expect(deriveDataKey('x', newSalt(), { name: 'Argon2id', iterations: 3 }))
-    .rejects.toThrow(/key derivation "Argon2id"/);
-});
-
-test('the default cost is the published guidance, not a placeholder', async () => {
-  expect(DEFAULT_KDF.iterations).toBeGreaterThanOrEqual(600_000);
-});
-
-test('an end-to-end pass: passphrase in, object out, passphrase back in', async () => {
-  const kdf = { name: 'PBKDF2-SHA256', iterations: 1000 };
-  const { dataKey, config } = await describeKey('a good long passphrase', { kdf });
+test('an end-to-end pass: key in, object out, key back in', async () => {
+  const { dataKey, config } = await newCollectionKey();
   const fp = await fingerprint(dataKey);
-  const plain = new TextEncoder().encode('the quarterly numbers, which are nobody else’s business');
+  const plain = new TextEncoder().encode('the quarterly numbers, which are nobody else\u2019s business');
 
   const sealed = await encrypt(dataKey, plain, { fingerprint: fp, chunkSize: 32 });
   // What the collection says it wants and what the object says it wants agree.
   expect(fingerprintHex(decodeHeader(sealed).fingerprint)).toBe(config.fingerprint);
+  expect(await decrypt(dataKey, sealed)).toEqual(plain);
+});
 
-  const { dataKey: reopened } = await matchesCollection('a good long passphrase', config);
-  expect(await decrypt(reopened, sealed)).toEqual(plain);
+test('an object sealed with a retired key is still identifiable, and still opens', async () => {
+  // The rotation story: two keys are live at once, and an object is opened with whichever
+  // one its envelope names.
+  const oldKey = await newCollectionKey();
+  const newKey = await newCollectionKey();
+  const plain = new TextEncoder().encode('written before the rotation');
+  const sealed = await encrypt(oldKey.dataKey, plain, { fingerprint: await fingerprint(oldKey.dataKey), chunkSize: 32 });
+
+  // The collection now says its current key is the new one...
+  expect(newKey.config.fingerprint).not.toBe(oldKey.config.fingerprint);
+  // ...but the object still names the old one, so the right key is findable.
+  expect(fingerprintHex(decodeHeader(sealed).fingerprint)).toBe(oldKey.config.fingerprint);
+  expect(await decrypt(oldKey.dataKey, sealed)).toEqual(plain);
+  await expect(decrypt(newKey.dataKey, sealed)).rejects.toThrow(/wrong key/);
 });

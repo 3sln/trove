@@ -9,7 +9,6 @@ import { test, expect } from 'bun:test';
 import { UploadManager, CollectionService, MemoryKV, MemoryStorage, cipherSize, HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE } from '../src/index.js';
 
 const BOSS = { id: 'boss', roles: [] };
-const KDF = { name: 'PBKDF2-SHA256', iterations: 1000 };
 
 /** A drive with one encrypted collection, and an UploadManager wired to it as Vfs does. */
 async function drive({ rules = { all: true }, storage = new MemoryStorage() } = {}) {
@@ -18,7 +17,7 @@ async function drive({ rules = { all: true }, storage = new MemoryStorage() } = 
   });
   const c = await collections.create({
     name: 'Private', store: { driver: 'memory' },
-    encryption: { userKey: 'a good long passphrase', rules },
+    encryption: { enabled: true, rules },
   }, BOSS);
   const open = await collections.create({ name: 'Open', store: { driver: 'memory' } }, BOSS);
   const uploads = new UploadManager({
@@ -110,7 +109,7 @@ test('whether an item is encrypted is decided once and recorded', async () => {
   const d = await drive({ rules: { mimeTypes: ['image'] } });
   const plan = await d.uploads.create({ collectionId: d.encrypted.id, name: 'a.png', size: 10, contentType: 'image/png' });
   await d.collections.update(d.encrypted.id, {
-    encryption: { userKey: 'a good long passphrase', rules: { mimeTypes: ['video'] } },
+    encryption: { enabled: true, rules: { mimeTypes: ['video'] } },
   }, BOSS);
   const session = await d.uploads.sessions.get(plan.uploadId);
   expect(session.encrypted).toBe(true);

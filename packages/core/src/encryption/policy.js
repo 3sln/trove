@@ -13,21 +13,17 @@
 // says today, and one that was not must not suddenly be interpreted as one.
 
 import { TroveError } from '../errors.js';
-import { DEFAULT_KDF } from './keys.js';
 
 /**
  * What a collection stores about its encryption.
  *
- * `salt`, `kdf` and `fingerprint` are safe to show anyone: they are what a client needs in
- * order to turn a passphrase into the key, and they are useless without the passphrase.
- * That is the point of deriving the fingerprint through HKDF rather than hashing the
- * passphrase — see keys.js.
+ * The fingerprint is safe to show anyone who may see the collection: it names the key
+ * without being it. The key itself is never part of this — it reaches a client through a
+ * transfer plan, which is authorized per operation.
  *
  * @typedef {object} EncryptionConfig
  * @property {boolean} enabled
- * @property {string} salt hex
- * @property {string} fingerprint hex — which key this collection wants
- * @property {{name: string, iterations: number}} kdf
+ * @property {string} fingerprint hex — which key this collection's objects are sealed with
  * @property {{extensions: string[], mimeTypes: string[], all: boolean}} rules
  */
 
@@ -39,26 +35,27 @@ const normList = (v) => (Array.isArray(v) ? v : [])
 const normExt = (e) => e.replace(/^\./, '');
 
 /**
- * Validate and normalise what a caller asked for.
+ * Validate and normalise what a caller asked for, against the key the server holds.
  *
- * Refuses rather than repairs when the key material is incoherent: a collection recorded
- * as encrypted with no fingerprint is one whose objects can never be matched to a key.
+ * The fingerprint is a separate argument rather than a field of `input` because the two
+ * come from different places and only one of them is the caller's to decide: rules are
+ * asked for, the key is minted. A collection recorded as encrypted with no fingerprint is
+ * one whose objects could never be matched to a key, so it is refused rather than repaired.
+ *
+ * @param {object|null} input   what the caller asked for: `{ enabled, rules }`
+ * @param {string} [fingerprint] hex, from the collection's key
  */
-export function normalizeEncryption(input) {
+export function normalizeEncryption(input, fingerprint) {
   if (!input || input.enabled === false) return null;
-  const { salt, fingerprint, kdf, rules } = input;
-  if (!salt || !fingerprint) {
-    throw TroveError.invalid('An encrypted collection needs a salt and a key fingerprint');
-  }
-  if (!/^[0-9a-f]{32}$/.test(String(fingerprint))) {
+  const fp = fingerprint ?? input.fingerprint;
+  if (!fp) throw TroveError.invalid('An encrypted collection needs a key fingerprint');
+  if (!/^[0-9a-f]{32}$/.test(String(fp))) {
     throw TroveError.invalid('Not a key fingerprint');
   }
-  const r = rules || {};
+  const r = input.rules || {};
   const out = {
     enabled: true,
-    salt: String(salt),
-    fingerprint: String(fingerprint),
-    kdf: { name: kdf?.name || DEFAULT_KDF.name, iterations: kdf?.iterations || DEFAULT_KDF.iterations },
+    fingerprint: String(fp),
     rules: {
       all: !!r.all,
       extensions: [...new Set(normList(r.extensions).map(normExt))],
@@ -100,17 +97,16 @@ export function shouldEncrypt(encryption, { name = '', contentType = '' } = {}) 
 /**
  * What a client is told about a collection's encryption.
  *
- * Includes everything needed to derive the key from a passphrase and nothing that helps
- * without one. `locked` is the client's cue to prompt: the collection wants a key, and
- * whether this browser currently holds it is not something the server knows.
+ * Enough to know that objects here are sealed and which key seals them; never the key.
+ * There is no "locked" state and nothing to prompt for — a client that may read the
+ * collection is handed the key with the transfer plan, because being allowed to read the
+ * contents and being allowed to decrypt them are the same permission.
  */
 export function describeEncryption(encryption) {
   if (!encryption?.enabled) return null;
   return {
     enabled: true,
-    salt: encryption.salt,
     fingerprint: encryption.fingerprint,
-    kdf: { ...encryption.kdf },
     rules: { ...encryption.rules },
   };
 }

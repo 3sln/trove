@@ -14,13 +14,8 @@
 
 import { TroveError } from '../errors.js';
 import { normalizeEncryption, describeEncryption } from '../encryption/policy.js';
-import { describeKey, deriveDataKey, fingerprint, toHex } from '../encryption/keys.js';
+import { newCollectionKey, fromHex, toHex } from '../encryption/keys.js';
 
-/** Hex back to bytes — salts and stored keys are written as hex in the record. */
-function hexToBytes(hex) {
-  if (typeof hex !== 'string' || !hex.length || hex.length % 2) throw TroveError.invalid('Not hex');
-  return new Uint8Array(hex.match(/../g).map((h) => parseInt(h, 16)));
-}
 import { PrefixedStorage } from '../storage/prefixed.js';
 import { newId } from '../util.js';
 
@@ -86,44 +81,108 @@ export class CollectionService {
   }
 
   /**
-   * Set a collection's key from the passphrase an admin typed.
+   * The encryption settings for a collection, generating a key the first time.
    *
-   * The derived key is kept on the record, unlike the passphrase, because the server has
-   * to hand it to a client in a transfer plan and has to decrypt for an indexer. That is
-   * the deliberate limit of this design: it defends the bucket, not the server. It is held
-   * under a `#` prefix and stripped from `describe`, so it never leaves through the API by
-   * accident — the salt and fingerprint that DO go out are useless without the passphrase.
+   * The key is generated, not derived from anything a user types. A passphrase would buy
+   * nothing: the server knows the key regardless — it hands it to clients and decrypts for
+   * indexers — so there is no protection to gain from the user holding it, and every cost
+   * would still apply. A random 256-bit key cannot be forgotten, guessed, or shoulder-read,
+   * and needs no prompt in front of the collection.
    *
-   * @returns {Promise<{encryption: object, dataKey: Uint8Array}>}
+   * Generated ONCE. Re-enabling, or changing the rules, keeps the existing key: every
+   * stored object names the key it was sealed with, so quietly minting a new one would
+   * orphan all of them. Replacing a key is rotation, and rotation re-encrypts.
+   *
+   * @returns {Promise<{encryption: object, dataKey: Uint8Array|null}>}
    */
-  async #keyFrom(userKey, rules, existing) {
-    let dataKey;
-    let config;
-    if (existing?.salt) {
-      // Re-derive against the collection's existing salt, so setting the SAME passphrase
-      // again is idempotent rather than a silent key change. The fingerprint has to be
-      // computed from the key that was just derived, though — reusing the stored one would
-      // make every passphrase look like the right one, which is exactly the check the
-      // caller is relying on.
-      dataKey = await deriveDataKey(userKey, hexToBytes(existing.salt), existing.kdf);
-      config = { kdf: existing.kdf, salt: existing.salt, fingerprint: toHex(await fingerprint(dataKey)) };
-    } else {
-      ({ dataKey, config } = await describeKey(userKey));
+  async #encryptionFor(patch, existing, ring) {
+    if (!patch || patch.enabled === false) return { encryption: null, keys: ring || null };
+    if (existing?.fingerprint && ring?.[existing.fingerprint]) {
+      // Keep the whole ring; only the rules can change here.
+      return { encryption: normalizeEncryption(patch, existing.fingerprint), keys: ring };
     }
-    const encryption = normalizeEncryption({ ...config, enabled: true, rules });
-    return { encryption, dataKey };
+    const { dataKey, config } = await newCollectionKey();
+    return {
+      encryption: normalizeEncryption(patch, config.fingerprint),
+      keys: { ...(ring || {}), [config.fingerprint]: toHex(dataKey) },
+    };
   }
 
   /**
-   * The key this collection's objects are encrypted with, or null.
+   * The key an object was sealed with, or the collection's current key.
    *
-   * Server-side only. Callers: the upload plan, which hands it to the client so the bytes
-   * are encrypted before they ever reach the bucket, and indexing, which decrypts to read
-   * content. Never reachable through `describe`.
+   * A collection holds a RING, not a key: rotation adds a new key and makes it current,
+   * then re-encrypts objects onto it in the background. Until that finishes both keys are
+   * live, and an object is opened with whichever one its envelope names — which is the
+   * whole reason every object carries a fingerprint. Retiring a key is only safe once
+   * nothing names it any more.
+   *
+   * Server-side only. Callers are the transfer plans, which hand the right key to a client
+   * that may read the collection, and indexing, which decrypts to read content. Never
+   * reachable through `describe`.
+   *
+   * @param {string} collectionId
+   * @param {string} [fingerprint] which key; omitted means the current one
    */
-  async dataKeyFor(collectionId) {
+  async dataKeyFor(collectionId, fingerprint) {
     const c = await this.get(collectionId);
-    return c?.$dataKey ? hexToBytes(c.$dataKey) : null;
+    const ring = c?.$keys;
+    if (!ring) return null;
+    const want = fingerprint || c.encryption?.fingerprint;
+    const hex = want && ring[want];
+    return hex ? fromHex(hex) : null;
+  }
+
+  /**
+   * Every key this collection can still open something with, current first.
+   *
+   * For rotation, and for anything that has to read objects it did not plan.
+   */
+  async keyRingFor(collectionId) {
+    const c = await this.get(collectionId);
+    if (!c?.$keys) return [];
+    const current = c.encryption?.fingerprint;
+    return Object.entries(c.$keys)
+      .map(([fp, hex]) => ({ fingerprint: fp, dataKey: fromHex(hex), current: fp === current }))
+      .sort((a, b) => Number(b.current) - Number(a.current));
+  }
+
+  /**
+   * Begin a rotation: mint a key, make it current, keep the old ones.
+   *
+   * Only makes the new key current. Nothing is re-encrypted here — objects move onto it
+   * incrementally, and until every one has, the old keys must stay or their objects become
+   * unreadable. `retireKey` is what finishes the job.
+   */
+  async beginRotation(collectionId, principal) {
+    const c = await this.assert(principal, collectionId, 'admin');
+    if (!c.encryption?.enabled) throw TroveError.invalid('This collection is not encrypted');
+    const { dataKey, config } = await newCollectionKey();
+    const next = {
+      ...c,
+      encryption: { ...c.encryption, fingerprint: config.fingerprint },
+      $keys: { ...(c.$keys || {}), [config.fingerprint]: toHex(dataKey) },
+    };
+    await this.kv.set(NS, collectionId, next);
+    return { fingerprint: config.fingerprint, previous: c.encryption.fingerprint };
+  }
+
+  /**
+   * Drop a key from the ring, once nothing is sealed with it any more.
+   *
+   * Refuses to drop the current key: that would leave the collection encrypting with
+   * something it cannot open.
+   */
+  async retireKey(collectionId, fingerprint, principal) {
+    const c = await this.assert(principal, collectionId, 'admin');
+    if (fingerprint === c.encryption?.fingerprint) {
+      throw TroveError.invalid('That is the collection\u2019s current key');
+    }
+    if (!c.$keys?.[fingerprint]) return { retired: false };
+    const keys = { ...c.$keys };
+    delete keys[fingerprint];
+    await this.kv.set(NS, collectionId, { ...c, $keys: keys });
+    return { retired: true };
   }
 
   /** What a collection encrypts, for the code that has to decide per item. */
@@ -347,13 +406,9 @@ export class CollectionService {
     // only affects what arrives after — nothing retroactively encrypts what is already
     // there, and pretending otherwise would be the more dangerous lie.
     if (encryption !== undefined) {
-      if (encryption?.userKey) {
-        const set = await this.#keyFrom(encryption.userKey, encryption.rules, null);
-        record.encryption = set.encryption;
-        record.$dataKey = toHex(set.dataKey);
-      } else {
-        record.encryption = normalizeEncryption(encryption);
-      }
+      const set = await this.#encryptionFor(encryption, null, null);
+      record.encryption = set.encryption;
+      if (set.keys) record.$keys = set.keys;
     }
     await this.kv.set(NS, id, record);
     return this.describe(record, principal);
@@ -375,26 +430,14 @@ export class CollectionService {
     // is a key rotation, and rotating without re-encrypting would orphan every existing
     // object. Refused here; the rotation job is what does it safely.
     if (patch.encryption !== undefined) {
-      if (patch.encryption?.userKey) {
-        const set = await this.#keyFrom(patch.encryption.userKey, patch.encryption.rules, c.encryption);
-        if (c.encryption?.fingerprint && set.encryption.fingerprint !== c.encryption.fingerprint) {
-          throw TroveError.invalid(
-            'That is a different key. Changing it would orphan every object already encrypted with the old one \u2014 rotate the key instead.',
-          );
-        }
-        next.encryption = set.encryption;
-        next.$dataKey = toHex(set.dataKey);
-        await this.kv.set(NS, id, next);
-        return this.describe(next, principal);
-      }
-      const nextEnc = normalizeEncryption(patch.encryption);
-      const prevFp = c.encryption?.fingerprint;
-      if (prevFp && nextEnc && nextEnc.fingerprint !== prevFp) {
-        throw TroveError.invalid(
-          'Changing this collection\u2019s key would orphan every object already encrypted with the old one. Rotate the key instead.',
-        );
-      }
-      next.encryption = nextEnc;
+      // Turning encryption ON affects only what is uploaded from now on, and turning it OFF
+      // decrypts nothing: every object records its own envelope, so what is already stored
+      // keeps working either way. The KEY is never replaced here — it is generated once and
+      // kept, because every stored object names the key it was sealed with. Replacing one
+      // is rotation, and rotation re-encrypts.
+      const set = await this.#encryptionFor(patch.encryption, c.encryption, c.$keys);
+      next.encryption = set.encryption;
+      if (set.keys) next.$keys = set.keys;
     }
     await this.kv.set(NS, id, next);
     return this.describe(next, principal);
