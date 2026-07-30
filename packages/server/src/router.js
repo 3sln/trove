@@ -139,7 +139,7 @@ export class Router {
     // handler asks for an AUTHORIZED view of a node, collection or upload: the
     // grant is carried by the object it hands back, so there is no unrestricted
     // service and no raw id left over to use with one.
-    const scope = leaseScope(ctx.container, ctx.principal);
+    const scope = leaseScope(ctx.container, ctx.principal, ctx.grant);
     const access = scope.access;
     try {
       lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;

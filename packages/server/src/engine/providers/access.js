@@ -76,6 +76,27 @@ const intersect = (held, asked) => new Set([...asked].filter((c) => held.has(c))
  * @param {object} node   already resolved by `stat`
  * @param {string|symbol} granted the capability that was asserted
  */
+/**
+ * Authorize from an API key grant rather than from a principal.
+ *
+ * The same shape as the signature path below it, and for the same reason: a grant is
+ * authority that arrived with the request, so there is nobody to look up in an ACL.
+ *
+ * REFUSED, not narrowed. If the route asked for `write` and the key holds `read`, this
+ * throws — because handing back a read handle to a route that asked for write means the
+ * route believes it has write and acts accordingly. The signature path learned this the
+ * hard way (see its comment); the rule is the same here.
+ */
+function grantedCapabilities(grant, collectionId, capability) {
+  const held = grant.capabilitiesFor(collectionId);
+  if (!held.has(capability)) {
+    throw TroveError.forbidden(
+      `This API key does not hold "${capability}" on this collection`,
+    );
+  }
+  return intersect(held, requested(capability));
+}
+
 function nodeHandle(vfs, sidecar, node, held) {
   const permits = (capability) => held.has(capability);
   const granted = held === ALL ? 'system' : [...held].sort().join(',');
@@ -204,7 +225,7 @@ export class NodeAccessProvider extends Provider {
   // cannot see — restoring and permanently deleting are the only operations on items
   // that are no longer part of the drive. It widens WHAT IS VISIBLE, never what is
   // permitted: the capability is asserted exactly the same way afterwards.
-  async obtain({ principal, id, collectionId, trashed = false, capability = 'read', signature = null } = {}) {
+  async obtain({ principal, grant = null, id, collectionId, trashed = false, capability = 'read', signature = null } = {}) {
     if (!id) throw TroveError.invalid('A node id is required');
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
@@ -238,6 +259,15 @@ export class NodeAccessProvider extends Provider {
     const config = await this.config.obtain();
     if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, requested(capability));
 
+    // A key IS the grant, scoped to the node's own collection. Checked before the ACL
+    // and never alongside it: a request bearing a key is the key's request, and falling
+    // back to whatever principal happens to be attached would let a weak key borrow a
+    // strong session — the confused deputy, arrived at by being helpful.
+    if (grant) {
+      return nodeHandle(vfs, sidecar, node,
+        grantedCapabilities(grant, node.collectionId, capability));
+    }
+
     // `assert` throws when the capability is not held. Nothing here decides from
     // presence: if the service is missing this raises, it does not allow.
     const collections = await this.collections.obtain();
@@ -269,11 +299,17 @@ export class CollectionAccessProvider extends Provider {
     this.config = config;
   }
 
-  async obtain({ principal, id = 'default', capability = 'read' } = {}) {
+  async obtain({ principal, grant = null, id = 'default', capability = 'read' } = {}) {
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
     const config = await this.config.obtain();
     if (!enforcing(config)) return collectionHandle(vfs, id, requested(capability));
+
+    // Same rule as the node path: a key's grant decides, alone, and refuses rather than
+    // narrowing. This is the check that keeps a key scoped to `photos` out of `invoices`.
+    if (grant) {
+      return collectionHandle(vfs, id, grantedCapabilities(grant, id, capability));
+    }
 
     const collections = await this.collections.obtain();
     const collection = await collections.assert(principal, id, capability);
@@ -306,7 +342,7 @@ export class UploadAccessProvider extends Provider {
     this.config = config;
   }
 
-  async obtain({ principal, id } = {}) {
+  async obtain({ principal, grant = null, id } = {}) {
     if (!id) throw TroveError.invalid('An upload id is required');
     const vfs = await this.vfs.obtain();
     // Resolving first is what makes the check possible at all: only the session knows
@@ -314,8 +350,14 @@ export class UploadAccessProvider extends Provider {
     const session = await vfs.uploadStatus(id);
     const config = await this.config.obtain();
     if (enforcing(config)) {
-      const collections = await this.collections.obtain();
-      await collections.assert(principal, session.collectionId, 'write');
+      // Re-checked on EVERY request of the upload, keys included — the point of this
+      // provider. A key revoked between `POST /api/uploads` and `complete` stops the
+      // upload, which it would not if the grant were only checked when it began.
+      if (grant) grantedCapabilities(grant, session.collectionId, 'write');
+      else {
+        const collections = await this.collections.obtain();
+        await collections.assert(principal, session.collectionId, 'write');
+      }
     }
     return {
       id,

@@ -308,6 +308,13 @@ export class ApiKeyCapabilityProvider extends CapabilityProvider {
     // Only OUR prefix. A bearer token that is someone's OIDC access token must fall
     // through to the identity provider untouched, not be spent as a failed key lookup.
     if (!match || !match[1].startsWith(`${PREFIX}_`)) return null;
-    return this.apiKeys.verify(match[1]);
+
+    const grant = await this.apiKeys.verify(match[1]);
+    // Presented one of ours and it did not verify. That is a 401, not a fall-through to
+    // anonymous: a caller who sent a credential is telling us they expect to be
+    // authorized by it, and quietly serving them as the public would turn a revoked key
+    // into "works, but with less access" — which is how a revocation goes unnoticed.
+    if (!grant) throw TroveError.unauthorized('This API key is not valid');
+    return grant;
   }
 }

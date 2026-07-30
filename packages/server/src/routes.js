@@ -259,6 +259,37 @@ export function createRouter() {
     return { collection: await ctx.collections.setGrant(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
 
+  // --- API keys ---------------------------------------------------------------
+  //
+  // Managing keys requires a real admin PRINCIPAL, and a key can never be used to reach
+  // these routes — `requireHumanAdmin` refuses when the request arrived on a grant. That
+  // asymmetry is deliberate: a key that could mint keys is a key that can escalate
+  // itself, and revoking it would not revoke what it had already issued. The blast
+  // radius of a leaked key stops at the capabilities it was given.
+
+  r.get('/api/keys', ['apiKeys', 'collections'], async (ctx) => {
+    requireHumanAdmin(ctx, 'manage API keys');
+    return { keys: await ctx.apiKeys.list() };
+  });
+
+  r.post('/api/keys', ['apiKeys', 'collections'], async (ctx) => {
+    requireHumanAdmin(ctx, 'mint API keys');
+    const b = await body(ctx.req);
+    // The secret comes back exactly once, here, and is never retrievable again.
+    const { record, secret } = await ctx.apiKeys.mint({
+      name: b.name,
+      scopes: b.scopes,
+      expiresAt: b.expiresAt ?? null,
+      createdBy: ctx.principal?.id ?? null,
+    });
+    return { key: record, secret };
+  });
+
+  r.delete('/api/keys/:id', ['apiKeys', 'collections'], async (ctx) => {
+    requireHumanAdmin(ctx, 'revoke API keys');
+    return { key: await ctx.apiKeys.revoke(ctx.params.id) };
+  });
+
   // --- browse ----------------------------------------------------------------
 
   // --- items -----------------------------------------------------------------
@@ -1056,6 +1087,22 @@ async function assertTaskAccess(ctx, task, what) {
   if (task.collectionId == null) return requireWholeDrive(ctx, `${what} a drive-wide task`);
   await assertCap(ctx, task.collectionId, 'write');
 }
+/**
+ * An admin, in person.
+ *
+ * Two refusals, not one. A grant is refused outright — an API key must never be able to
+ * manage API keys, however broadly it was scoped, because a key that can mint keys can
+ * outlive its own revocation. Then the ordinary admin check on the principal.
+ */
+function requireHumanAdmin(ctx, action) {
+  if (ctx.grant) {
+    throw TroveError.forbidden(`An API key cannot ${action} — sign in as an administrator`);
+  }
+  requirePrincipal(ctx.principal);
+  const isAdmin = collectionsEnabled(ctx) ? ctx.collections.isAdmin(ctx.principal) : !!ctx.principal;
+  if (!isAdmin) throw TroveError.forbidden(`You need to be an administrator to ${action}`);
+}
+
 function requirePrincipal(principal) {
   if (!principal) throw TroveError.unauthorized('Authentication required');
 }

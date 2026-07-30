@@ -15,12 +15,12 @@
  * @param {object|null} principal who is asking
  * @returns {{access: object|null, release: () => Promise<void>}}
  */
-export function leaseScope(container, principal) {
+export function leaseScope(container, principal, grant = null) {
   const held = [];
   if (!container) return { access: null, release: async () => {} };
 
   const obtain = async (name, request) => {
-    const lease = await container.lease({ [name]: { principal, ...request } });
+    const lease = await container.lease({ [name]: { principal, grant, ...request } });
     held.push(lease);
     return lease.resources[name];
   };

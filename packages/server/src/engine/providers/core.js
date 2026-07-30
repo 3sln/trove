@@ -33,6 +33,7 @@ import {
   KeyValueStore, MemoryKV, SqliteKV,
   SqliteProvider, LocalSqliteProvider,
   SidecarService, NotificationCenter, WebPushService, WebPushChannel, NotificationChannel,
+  ApiKeyService, CapabilityProvider, ApiKeyCapabilityProvider,
   CollectionService,
   PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
   IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
@@ -308,6 +309,30 @@ export function coreProviders(config, lifecycleState) {
       },
       null,
       { deps: ['kv', 'push'] },
+    ),
+
+    // The API key store. Keys grant capabilities and no identity — see core/apiKeys.js.
+    apiKeys: Provider.fromLazySingleton(
+      async (deps) => {
+        const { kv } = await need(deps, ['kv']);
+        return resolve(config.apiKeys, ApiKeyService, () => new ApiKeyService({ kv }));
+      },
+      null,
+      { deps: ['kv'] },
+    ),
+
+    // How a credential becomes a capability grant. The counterpart to `identity`, and
+    // separate from it on purpose: some credentials answer "what may this do" without
+    // answering "who is this". Swap it to authorize from something else — a client
+    // certificate, a signed webhook, a service mesh header.
+    capabilities: Provider.fromLazySingleton(
+      async (deps) => {
+        const { apiKeys } = await need(deps, ['apiKeys']);
+        return resolve(config.capabilities, CapabilityProvider,
+          () => new ApiKeyCapabilityProvider({ apiKeys }));
+      },
+      null,
+      { deps: ['apiKeys'] },
     ),
 
     notifications: Provider.fromLazySingleton(

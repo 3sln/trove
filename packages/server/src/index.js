@@ -60,7 +60,7 @@ export async function createServer(config = {}) {
   const backbone = await engine.container.lease(BACKBONE);
   const {
     storage, sqlite: sqliteProvider, metadata, kv, tasks, issues, notifications,
-    sidecar, collections, identity, auth, search, vfs, plugins,
+    sidecar, collections, identity, auth, search, vfs, plugins, apiKeys, capabilities,
   } = backbone.resources;
 
   // Aliased so the rest of this function reads as it did; the container's
@@ -281,9 +281,20 @@ export async function createServer(config = {}) {
     if (url.pathname.startsWith('/api/')) {
       // Authenticate every API request; a bad token is a clean 401, missing is
       // anonymous-or-401 per the provider's policy.
+      //
+      // A capability grant is resolved FIRST, and when one is found the identity step is
+      // skipped entirely. That ordering is the design: an API key answers "what may this
+      // request do" and deliberately does not answer "who is this", so there is no
+      // principal to attach and nothing downstream can mistake a key for a person.
+      //
+      // Resolving both would be worse than useless. A request bearing a weak key and a
+      // strong session would get the union of the two, which is the confused deputy
+      // reached by being accommodating — so it is one or the other, never both.
       let principal = null;
+      let grant = null;
       try {
-        principal = await identity.authenticate(req);
+        grant = await capabilities.resolve(req);
+        if (!grant) principal = await identity.authenticate(req);
       } catch (err) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return withChallenge(new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } }), req);
@@ -295,7 +306,7 @@ export async function createServer(config = {}) {
         // locator — nothing recorded what a route used, so nothing stopped it
         // reaching for more.
         container: engine.container,
-        config, principal, auth, mcp,
+        config, principal, grant, auth, mcp,
       });
       // A route can refuse on its own (a token that verified but names nobody we know,
       // a session that expired between calls). Whatever refused, the answer to "so
@@ -380,7 +391,7 @@ export async function createServer(config = {}) {
     return out;
   }
 
-  return { vfs, handle, router, sidecar, notifications, identity, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild,
+  return { vfs, handle, router, sidecar, notifications, identity, apiKeys, capabilities, kv, collections, plugins, sqlite: sqliteProvider, tasks, issues, indexRebuild,
     // The graph itself, so an action or query can be dispatched directly — by a
     // test, by MCP, by anything that is not an HTTP route.
     engine, engineContainer: engine.container,
