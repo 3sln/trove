@@ -32,6 +32,7 @@ import {
   IdentityProvider, JwtIdentityProvider, HeaderIdentityProvider, AnonymousIdentityProvider,
   cloudflareAccess,
   KeyValueStore, MemoryKV, SqliteKV,
+  KvSessionStore,
   SqliteProvider, LocalSqliteProvider,
   SidecarService, NotificationCenter, WebPushService, WebPushChannel, NotificationChannel,
   ApiKeyService, CapabilityProvider, ApiKeyCapabilityProvider,
@@ -461,11 +462,17 @@ export function coreProviders(config, lifecycleState) {
       async (deps) => {
         const r = await need(deps, [
           'storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections',
-          'searchTransformer', 'issues', 'signedUrls',
+          'searchTransformer', 'issues', 'signedUrls', 'kv',
         ]);
         const vfs = new Vfs({
           ...r,
           maxUploadBytes: config.maxUploadBytes ?? null,
+          // Upload sessions in the KeyValueStore rather than this process's memory. An
+          // upload spans several requests and the session is the only thing joining them,
+          // so on a runtime that can serve those requests from different isolates an
+          // in-memory Map means "upload session not found" on a drive where nothing is
+          // wrong. See KvSessionStore.
+          uploadSessions: new KvSessionStore({ kv: r.kv }),
           // Where this server can be reached from outside, for the URLs that leave the
           // browser (an indexer hands one to an external API). Absent, those are refused
           // rather than handed out as links to nowhere.
@@ -475,7 +482,7 @@ export function coreProviders(config, lifecycleState) {
         return vfs;
       },
       null,
-      { deps: ['storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections', 'searchTransformer', 'issues', 'signedUrls'] },
+      { deps: ['storage', 'metadata', 'search', 'indexers', 'sidecar', 'collections', 'searchTransformer', 'issues', 'signedUrls', 'kv'] },
     ),
 
     // Bulk plugin package blobs. Defaults to the primary storage under a prefix;

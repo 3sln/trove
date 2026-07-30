@@ -36,7 +36,7 @@ export { SqliteVectorStore, SqliteKeywordStore, SEARCH_DB_KEY } from './search/s
 
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
 export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, PluginIndexers, matchFromSelector } from './plugins/index.js';
-export { UploadManager, DEFAULT_PART_SIZE } from './uploads.js';
+export { UploadManager, KvSessionStore, DEFAULT_PART_SIZE } from './uploads.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 export { IndexingCoordinator } from './indexing.js';
 // Work in flight (ephemeral) and standing problems (durable) — see the header of each.

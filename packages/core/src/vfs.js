@@ -37,7 +37,7 @@ const CONTENT_TYPES = {
 };
 
 export class Vfs {
-  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, signedUrls = null, publicUrl = '', maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null, uploadPartSize = undefined }) {
+  constructor({ storage, metadata, search, indexers, sidecar, collections, searchTransformer, issues, signedUrls = null, publicUrl = '', maxIndexBytes = 2 * 1024 * 1024, maxUploadBytes = null, uploadPartSize = undefined, uploadSessions = undefined }) {
     if (!storage && !collections) throw TroveError.invalid('Vfs requires a storage backend or a CollectionService');
     if (!metadata) throw TroveError.invalid('Vfs requires a metadata store');
     this.storage = storage; // primary backend (default collection + capability reporting)
@@ -49,7 +49,17 @@ export class Vfs {
     this.collections = collections ?? null;
     this.indexers = indexers ?? new IndexerRegistry();
     // One UploadManager; it resolves the right backend per session's collection.
-    this.uploads = new UploadManager({ storageFor: (cid) => this.storageFor(cid), maxBytes: maxUploadBytes, partSize: uploadPartSize });
+    //
+    // `uploadSessions` is where the sessions live. It defaults to memory, which is right
+    // for a test and wrong for anything where two requests of one upload can be served by
+    // different processes — see KvSessionStore. Injected rather than built here because
+    // core does not otherwise need a KeyValueStore.
+    this.uploads = new UploadManager({
+      storageFor: (cid) => this.storageFor(cid),
+      sessions: uploadSessions,
+      maxBytes: maxUploadBytes,
+      partSize: uploadPartSize,
+    });
     this.maxIndexBytes = maxIndexBytes;
     // The indexing subsystem (run/backfill/purge/contributions) lives here.
     // Where a failure to index becomes a standing, retryable problem rather than a

@@ -48,6 +48,58 @@ class MemorySessionStore {
   }
 }
 
+/** The namespace upload sessions live under. */
+const SESSION_NS = 'uploads';
+
+/**
+ * Upload sessions in the KeyValueStore, so they outlive the process that made one.
+ *
+ * An upload is three or more separate requests — create, the bytes, complete — and the
+ * session is the only thing joining them. Held in a `Map`, that works exactly as long as
+ * every request happens to reach the same process: an assumption a long-lived server gets
+ * away with and a serverless one does not. On Cloudflare Workers an isolate can be
+ * discarded the moment a response resolves, and a cold drive fans a burst of requests
+ * across several isolates at once, so `create` writes to one Map and `complete` reads an
+ * empty one. The user is told their upload session does not exist while its own 24h TTL
+ * is nowhere near up — because it never expired, it was simply somewhere else.
+ *
+ * Retrying does not rescue that and must not: a missing session is `notFound`, correctly
+ * classified non-retryable, and one that genuinely expired is never coming back. The fix
+ * is for the session to live somewhere every request can see.
+ *
+ * Values are plain JSON, which is all a session ever was.
+ */
+export class KvSessionStore {
+  /** @param {{kv: import('./kv.js').KeyValueStore, ns?: string}} deps */
+  constructor({ kv, ns = SESSION_NS } = {}) {
+    if (!kv) throw TroveError.invalid('KvSessionStore needs a KeyValueStore');
+    this.kv = kv;
+    this.ns = ns;
+  }
+  async get(id) {
+    return (await this.kv.get(this.ns, id)) || null;
+  }
+  async put(session) {
+    await this.kv.set(this.ns, session.id, session);
+  }
+  async delete(id) {
+    await this.kv.delete(this.ns, id);
+  }
+  /**
+   * Which sessions have expired — WITHOUT deleting them, for the reason given on
+   * MemorySessionStore.expired: the session holds the multipart `uploadId`, and dropping
+   * the record strands the uploaded parts in the bucket with nothing left to abort them.
+   */
+  async expired(now) {
+    const rows = await this.kv.list(this.ns, '');
+    return rows
+      .map((r) => r.value)
+      .filter(Boolean)
+      .filter((s) => now - s.createdAt > SESSION_TTL_MS)
+      .map((s) => s.id);
+  }
+}
+
 export class UploadManager {
   /**
    * @param {object} deps
