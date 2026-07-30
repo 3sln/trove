@@ -398,3 +398,38 @@ test('contributionsOfType shares through the mixin rather than its own memo tabl
   expect(q.contributionsOfType('statusItem')).toBe(q.contributionsOfType('statusItem'));
   expect(q.contributionsOfType('statusItem')).not.toBe(q.contributionsOfType('opener'));
 });
+
+test('a `get key()` on the prototype is refused, not quietly ignored', () => {
+  // The natural thing to reach for, and silently wrong: the inherited STATIC wins, the
+  // getter is never consulted, and two instances share one realization with nothing to
+  // show for it. Confirmed against the language before guarding — `Sub.key` resolves to
+  // the static even when the prototype defines a getter.
+  class Getter extends SharedQuery {
+    constructor(type) { super(); this.type = type; }
+    get key() { return this.type; }
+    boot(_, { notify }) { notify(this.type); }
+    kill() {}
+  }
+  expect(() => Getter.of('a')).toThrow(/must be `static key\(\.\.\.args\)`/);
+});
+
+test('normalize keeps the key describing the query, not the arguments typed', () => {
+  // Without it, a constructor that fills in a default splits one query into two: `of('x')`
+  // and `of('x', { limit: 20 })` build identical objects under different keys. That is the
+  // false split interning exists to prevent, so it must not be reachable through the
+  // defaulting the constructor was going to do anyway.
+  class Paged extends SharedQuery {
+    static normalize(id, opts = {}) { return [id, { limit: 20, ...opts }]; }
+    constructor(id, opts) { super(); this.id = id; this.opts = opts; }
+    boot(_, { notify }) { notify(this.id); }
+    kill() {}
+  }
+  expect(Paged.of('x')).toBe(Paged.of('x', { limit: 20 }));
+  expect(Paged.of('x')).not.toBe(Paged.of('x', { limit: 50 }));
+  // And the instance is built from the normalized arguments, so state matches the key.
+  expect(Paged.of('x').opts).toEqual({ limit: 20 });
+});
+
+test('normalize defaults to the identity, so a query with plain arguments needs nothing', () => {
+  expect(Param.of('n1')).toBe(Param.of('n1'));
+});

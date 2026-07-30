@@ -107,19 +107,46 @@ export function keyOfArgs(...args) {
  * module-private in bl/queries.js and only their `of` wrapper is exported, so a component
  * has nothing to call `new` on.
  *
+ * ### Why `key` is static, and not `get key()`
+ *
+ * Because the key is needed BEFORE there is an instance. An instance getter would mean
+ * constructing to find out whether construction was necessary — the interning constructor
+ * again, discarding the object on every cache hit, and running any work the constructor
+ * does each time.
+ *
+ * The cost of static is that a key built from RAW arguments can disagree with what the
+ * object actually is: a constructor that defaults `{ limit: 20 }` makes `of('x')` and
+ * `of('x', { limit: 20 })` two keys for one query — a false split, which is the very bug
+ * this exists to prevent. `normalize` is the answer rather than normalising inside `key`,
+ * because that would be two functions that must agree, which is the objection to a
+ * hash-plus-comparator restated. Normalise once, and both the key and the constructor see
+ * the same arguments.
+ *
  * A subclass whose arguments are not canonically stringifiable — or which should share more
  * coarsely than its arguments do, say ignoring a display option that changes nothing about
  * what is fetched — overrides `key`:
  *
- *     static key(nodeId, { preview }) { return nodeId; }   // preview does not affect sharing
+ *     static key(nodeId, opts) { return nodeId; }   // opts does not affect sharing
  *
  * A KEY rather than a hash-plus-comparator on purpose. A comparator only earns its
- * complexity when keys can collide, and a canonical key does not collide; where equality is
- * genuinely semantic, normalising inside `key` says the same thing in one function instead
- * of two that have to agree.
+ * complexity when keys can collide, and a canonical key does not collide.
  */
 export function shared(Base) {
   return class Shared extends Base {
+    /**
+     * Canonical form of the arguments, used for BOTH the key and the construction.
+     *
+     * Override where the constructor would otherwise fill in defaults, so that the key
+     * describes the query that gets built rather than the arguments that were typed:
+     *
+     *     static normalize(id, opts = {}) { return [id, { limit: 20, ...opts }]; }
+     *
+     * @returns {any[]} the argument list to key on and to construct with
+     */
+    static normalize(...args) {
+      return args;
+    }
+
     /** Canonical sharing key for these arguments. Override to share more coarsely. */
     static key(...args) {
       return keyOfArgs(...args);
@@ -127,7 +154,18 @@ export function shared(Base) {
 
     /** The shared instance for these arguments. */
     static of(...args) {
-      const key = this.key(...args);
+      // `get key()` on the prototype is the natural thing to reach for and is silently
+      // wrong: the inherited STATIC wins, the getter is never consulted, and two instances
+      // quietly share one realization. Nothing about that failure is visible, so refuse it.
+      const proto = Object.getOwnPropertyDescriptor(this.prototype, 'key');
+      if (proto) {
+        throw new TypeError(
+          `${this.name} defines \`key\` on the prototype. It must be \`static key(...args)\` — ` +
+          'the key is needed before an instance exists, so an instance getter is never read.',
+        );
+      }
+      const normalized = this.normalize(...args);
+      const key = this.key(...normalized);
       let table = tables.get(this);
       if (!table) {
         table = new Map();
@@ -136,7 +174,7 @@ export function shared(Base) {
       const existing = table.get(key)?.deref();
       if (existing) return existing;
 
-      const instance = new this(...args);
+      const instance = new this(...normalized);
       table.set(key, new WeakRef(instance));
       sweeper.register(instance, { table, key });
       return instance;

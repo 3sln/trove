@@ -73,6 +73,23 @@ keyed on the class OBJECT rather than its name, since minification can collapse 
 names to one identifier; it also cannot be a `static #table` on the base, because a private
 static belongs to the class that declares it and `Subclass.of()` reaching for it throws.
 
+**`key` is static, and that is forced.** The key is needed BEFORE there is an instance —
+that is what makes the lookup worth doing. `get key()` would mean constructing to find out
+whether construction was necessary: the interning constructor again, discarding the object on
+every cache hit and re-running whatever the constructor does.
+
+Writing it as `get key()` anyway is silently wrong rather than broken — the inherited static
+wins, the getter is never consulted, and two instances share one realization with nothing to
+show for it. `of` refuses a `key` found on the prototype for that reason.
+
+**`normalize`, because a key from raw arguments can lie.** A constructor that fills in a
+default makes `of('x')` and `of('x', {limit: 20})` two keys for one query — a false split,
+which is the bug interning exists to prevent, reachable through the defaulting the
+constructor was going to do anyway. Normalising inside `key` would fix it and reintroduce
+"two functions that have to agree", which is the objection to a comparator restated. So
+`static normalize(...args)` runs once and feeds both the key and the constructor, and the
+instance's state matches its key by construction.
+
 **A key, not a hash plus a comparator.** A comparator only earns its complexity when keys can
 collide, and a canonical key does not collide. Where equality is genuinely semantic — an
 argument that changes how something is displayed but not what is fetched — `static key()` is
