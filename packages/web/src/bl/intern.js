@@ -95,16 +95,29 @@ export function keyOfArgs(...args) {
  * A key rather than a hash plus a comparator: a comparator only earns its complexity when
  * keys can collide, and a canonical key does not collide.
  *
- * Note that the class is captured, so a subclass inheriting this field builds the PARENT.
- * A subclass that wants its own sharing declares its own `static of`. Nothing in the app
- * subclasses a concrete query, so this is a remark, not a guard.
+ * The class is captured, so a subclass inheriting this field would build the PARENT —
+ * `Sub.of('x')` returning a `Base` is the sort of wrong that reads as right. The factory is
+ * a plain function rather than an arrow so that `this` is the class it was reached through,
+ * and it refuses to run when that is not the class it was built for. A subclass that wants
+ * sharing declares its own `static of`.
+ *
+ * A detached call — `const of = Thing.of; of('x')` — has no receiver at all, and in a module
+ * `this` is `undefined` rather than the global. That is the ordinary way to pass the factory
+ * around, so it is allowed; only a DIFFERENT class is an error.
  *
  * @param {Function} Class the query class, referenced from inside its own body
  * @param {(...args: any[]) => string} [key]
  */
 export function queryOf(Class, key = keyOfArgs) {
   const table = new Map();
-  return (...args) => {
+  return function of(...args) {
+    if (this !== undefined && this !== Class) {
+      throw new TypeError(
+        `${this?.name ?? 'A subclass'}.of() would build a ${Class.name}, because \`of\` ` +
+        `captures the class it was declared on. Give ${this?.name ?? 'the subclass'} its own ` +
+        '`static of = queryOf(...)`, or call it on ' + Class.name + ' directly.',
+      );
+    }
     const k = key(...args);
     const existing = table.get(k)?.deref();
     if (existing) return existing;

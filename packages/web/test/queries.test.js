@@ -395,3 +395,37 @@ test('contributionsOfType shares through queryOf rather than its own memo table'
   expect(q.contributionsOfType('statusItem')).toBe(q.contributionsOfType('statusItem'));
   expect(q.contributionsOfType('statusItem')).not.toBe(q.contributionsOfType('opener'));
 });
+
+test('a subclass inheriting `of` is refused rather than quietly building the parent', () => {
+  // `of` captures the class it was declared on, so `Sub.of('x')` would return a Base — the
+  // sort of wrong that reads as right at the call site. The factory is a plain function so
+  // `this` is the class it was reached through, which is what makes this detectable.
+  class Base extends Query {
+    static of = queryOf(Base);
+    constructor(id) { super(); this.id = id; }
+    boot(_, { notify }) { notify(this.id); }
+    kill() {}
+  }
+  class Sub extends Base {}
+  expect(Base.of('x')).toBeInstanceOf(Base);
+  expect(() => Sub.of('x')).toThrow(/Sub\.of\(\) would build a Base/);
+
+  // A subclass with its own factory is fine, and shares separately.
+  class Own extends Base { static of = queryOf(Own); }
+  expect(Own.of('x')).toBeInstanceOf(Own);
+  expect(Own.of('x')).not.toBe(Base.of('x'));
+});
+
+test('a detached factory still works, since passing it around is ordinary', () => {
+  // No receiver means `this` is undefined in a module, not a different class — that is not
+  // the mistake being guarded, so it must not trip the guard.
+  class Loose extends Query {
+    static of = queryOf(Loose);
+    constructor(id) { super(); this.id = id; }
+    boot(_, { notify }) { notify(this.id); }
+    kill() {}
+  }
+  const of = Loose.of;
+  expect(of('x')).toBe(Loose.of('x'));
+  expect(['a', 'b'].map(Loose.of).length).toBe(2);
+});

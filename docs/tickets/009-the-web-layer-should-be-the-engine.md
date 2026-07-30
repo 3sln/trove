@@ -86,8 +86,15 @@ should not split one realization — or to key arguments the default refuses.
 A key rather than a hash plus a comparator: a comparator only earns its complexity when keys
 can collide, and a canonical key does not collide.
 
-Because the class is captured, a subclass inheriting the field builds the PARENT. Nothing in
-the app subclasses a concrete query, so that is a remark rather than something guarded.
+Because the class is captured, a subclass inheriting the field would build the PARENT —
+`Sub.of('x')` returning a `Base` is the sort of wrong that reads as right. The factory is a
+plain function rather than an arrow so that `this` is the class it was reached through, and
+it refuses to run when that is not the class it was built for. A subclass that wants sharing
+declares its own `static of`.
+
+A detached call — `const of = Thing.of; of('x')`, or `ids.map(Thing.of)` — has no receiver,
+and in a module `this` is `undefined` rather than the global. Passing the factory around is
+ordinary, so that is allowed; only a *different* class is an error.
 
 **Eviction: weak, swept by a finalizer.** Entries are `WeakRef`s and a `FinalizationRegistry`
 removes the key once the instance is collected. That is sound because LIVENESS PINS THE
