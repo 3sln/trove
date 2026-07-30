@@ -7,7 +7,7 @@
 import { test, expect } from 'bun:test';
 import {
   createVfs, CollectionService, MemoryKV, MemoryStorage, RotationService,
-  encrypt, fromHex, isEnvelope, decodeHeader, fingerprintHex,
+  encrypt, fromHex, isEnvelope, decodeHeader, fingerprintHex, DEFAULT_CHUNK_SIZE,
 } from '../src/index.js';
 
 const BOSS = { id: 'boss', roles: [] };
@@ -157,4 +157,128 @@ test('a cancelled rotation leaves what moved moved, and stays readable', async (
   expect((await d.rotation.state(d.c.id)).cancelled).toBe(true);
   // Both keys are still live, so nothing broke.
   expect(await readBack(d, a.id)).toBe('still fine');
+});
+
+// --- large files, which is where this had to work and did not ------------------
+
+/**
+ * A multipart-capable store that records the largest single buffer it was ever handed.
+ *
+ * That number is the whole question: if rotation buffers, it scales with the file, and on a
+ * Worker isolate — 128 MB for everything — the ceiling landed somewhere around a 50 MB
+ * file, making rotation unavailable for exactly the collections most likely to want it.
+ */
+class MultipartStore extends MemoryStorage {
+  constructor() {
+    super();
+    this.biggestWrite = 0;
+    this.multiparts = new Map();
+    this.aborted = [];
+  }
+  get capabilities() {
+    return { ...super.capabilities, multipart: true };
+  }
+  async createMultipart(key) {
+    const id = `mp_${key}`;
+    this.multiparts.set(id, []);
+    return id;
+  }
+  async putPart(key, uploadId, partNumber, body) {
+    this.biggestWrite = Math.max(this.biggestWrite, body.length);
+    this.multiparts.get(uploadId)[partNumber - 1] = body;
+    return { etag: `etag${partNumber}` };
+  }
+  async completeMultipart(key, uploadId) {
+    const parts = this.multiparts.get(uploadId).filter(Boolean);
+    const total = parts.reduce((n, p) => n + p.length, 0);
+    const joined = new Uint8Array(total);
+    let at = 0;
+    for (const p of parts) { joined.set(p, at); at += p.length; }
+    this.multiparts.delete(uploadId);
+    return super.put(key, joined);
+  }
+  async abortMultipart(key, uploadId) {
+    this.aborted.push(uploadId);
+    this.multiparts.delete(uploadId);
+  }
+  async put(key, body, opts) {
+    this.biggestWrite = Math.max(this.biggestWrite, body.length ?? 0);
+    return super.put(key, body, opts);
+  }
+}
+
+test('a large object rotates without ever being held whole', async () => {
+  const kv = new MemoryKV();
+  const storage = new MultipartStore();
+  const collections = new CollectionService({ kv, storageFactory: () => storage, admins: ['boss'] });
+  const c = await collections.create({
+    name: 'Big', store: { driver: 'memory' }, encryption: { enabled: true, rules: { all: true } },
+  }, BOSS);
+  const vfs = await createVfs({ storage, collections });
+  const rotation = new RotationService({ kv, vfs, collections });
+
+  // 40 MiB — comfortably past what an isolate could hold twice over.
+  const size = 40 * 1024 * 1024;
+  const body = new Uint8Array(size);
+  for (let i = 0; i < size; i += 4096) body[i] = i % 251;
+  // Seeded straight into the store: this test is about the rotation, and routing 40 MiB
+  // through the upload machinery would be testing that instead.
+  const key = await collections.dataKeyFor(c.id);
+  const fp = fromHex(c.encryption.fingerprint);
+  const sealed = await encrypt(key, body, { fingerprint: fp, chunkSize: DEFAULT_CHUNK_SIZE });
+  await storage.put('obj_big', sealed, { contentType: 'application/octet-stream' });
+  const node = await vfs.metadata.create({
+    collectionId: c.id, name: 'big.bin', storageKey: 'obj_big', size,
+    contentType: 'application/octet-stream',
+    encryption: { fingerprint: c.encryption.fingerprint, chunkSize: DEFAULT_CHUNK_SIZE },
+  });
+
+  storage.biggestWrite = 0; // measure the rotation, not the upload
+  await rotation.begin(c.id, BOSS);
+  let state = await rotation.step(c.id);
+  while (state.status === 'running') state = await rotation.step(c.id);
+  expect(state.moved).toBe(1);
+  expect(state.failed).toBe(0);
+
+  // The property: no single write was anywhere near the file. One part, not one file.
+  expect(storage.biggestWrite).toBeLessThan(12 * 1024 * 1024);
+  expect(storage.biggestWrite).toBeGreaterThan(0);
+
+  // And it still reads back byte for byte.
+  const out = new Uint8Array(await new Response((await vfs.readStream(node.id)).stream).arrayBuffer());
+  expect(out.length).toBe(size);
+  expect(out[0]).toBe(body[0]);
+  expect(out[4096]).toBe(body[4096]);
+  expect(out[size - 4096]).toBe(body[size - 4096]);
+});
+
+test('a multipart that fails partway is aborted, not left in the bucket', async () => {
+  // Otherwise the parts already sent stay there, billed, with nothing able to reclaim them.
+  const kv = new MemoryKV();
+  const storage = new MultipartStore();
+  const collections = new CollectionService({ kv, storageFactory: () => storage, admins: ['boss'] });
+  const c = await collections.create({
+    name: 'Big', store: { driver: 'memory' }, encryption: { enabled: true, rules: { all: true } },
+  }, BOSS);
+  const vfs = await createVfs({ storage, collections });
+  const rotation = new RotationService({ kv, vfs, collections });
+
+  const key = await collections.dataKeyFor(c.id);
+  const sealed = await encrypt(key, text('hello'), {
+    fingerprint: fromHex(c.encryption.fingerprint), chunkSize: DEFAULT_CHUNK_SIZE,
+  });
+  await storage.put('obj_x', sealed, { contentType: 'text/plain' });
+  const node = await vfs.metadata.create({
+    collectionId: c.id, name: 'x.bin', storageKey: 'obj_x', size: 5, contentType: 'text/plain',
+    encryption: { fingerprint: c.encryption.fingerprint, chunkSize: DEFAULT_CHUNK_SIZE },
+  });
+  // Only the rotation's writes fail.
+  storage.putPart = async () => { throw new Error('network went away'); };
+
+  await rotation.begin(c.id, BOSS);
+  const state = await rotation.step(c.id);
+  expect(state.failed).toBe(1);
+  expect(storage.aborted.length).toBe(1);
+  // The original is untouched, so the file is still there and still readable.
+  expect(await new Response((await vfs.readStream(node.id)).stream).text()).toBe('hello');
 });

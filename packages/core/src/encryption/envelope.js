@@ -358,3 +358,87 @@ export async function decryptStream(rawKey, header, cipherStream, firstChunk = 0
     },
   });
 }
+
+/**
+ * Seal a plaintext stream into an envelope stream, a chunk at a time.
+ *
+ * The counterpart to `decryptStream`, and needed for the same reason: `encrypt` allocates
+ * the whole ciphertext, so re-encrypting a large object meant holding the file twice over —
+ * once decrypted and once sealed. On a Cloudflare isolate that is the memory limit rather
+ * than a slowdown, which capped key rotation at small files.
+ *
+ * The size has to be known up front because it goes in the header, which is written before
+ * any chunk. That is not a limitation in practice: every caller is re-sealing something
+ * whose size is already recorded.
+ *
+ * @param {Uint8Array} rawKey
+ * @param {ReadableStream<Uint8Array>} plaintext
+ * @param {{fingerprint: Uint8Array, plaintextSize: number, chunkSize?: number}} opts
+ */
+export async function encryptStream(rawKey, plaintext, { fingerprint, plaintextSize, chunkSize = DEFAULT_CHUNK_SIZE } = {}) {
+  assertChunkSize(chunkSize);
+  if (!fingerprint || fingerprint.length !== FINGERPRINT_BYTES) {
+    throw TroveError.invalid(`A fingerprint must be ${FINGERPRINT_BYTES} bytes`);
+  }
+  const key = await importKey(rawKey);
+  const noncePrefix = crypto.getRandomValues(new Uint8Array(NONCE_PREFIX_BYTES));
+  const header = encodeHeader({
+    version: VERSION, algorithm: ALG_AES_256_GCM, chunkSize, plaintextSize, noncePrefix, fingerprint,
+  });
+
+  const reader = plaintext.getReader();
+  let held = new Uint8Array(0);
+  let index = 0;
+  let wroteHeader = false;
+  let seen = 0;
+
+  const seal = async (piece) => new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonceFor(noncePrefix, index++) }, key, piece,
+  ));
+
+  return new ReadableStream({
+    async pull(controller) {
+      if (!wroteHeader) {
+        wroteHeader = true;
+        controller.enqueue(header);
+        return;
+      }
+      for (;;) {
+        if (held.length >= chunkSize) {
+          const piece = held.subarray(0, chunkSize);
+          held = held.subarray(chunkSize);
+          seen += piece.length;
+          controller.enqueue(await seal(piece));
+          return;
+        }
+        const { value, done } = await reader.read();
+        if (done) {
+          // The trailing partial chunk — and, for an empty file, the one empty chunk that
+          // makes "is this encrypted" answerable the same way at any size.
+          if (held.length || seen === 0) {
+            seen += held.length;
+            controller.enqueue(await seal(held));
+            held = new Uint8Array(0);
+          }
+          if (seen !== plaintextSize) {
+            // Refused rather than written: an envelope whose header disagrees with its body
+            // decrypts to the wrong length forever, and the header cannot be fixed later
+            // without re-encrypting.
+            throw TroveError.invalid(
+              `Expected ${plaintextSize} bytes to encrypt and received ${seen}`,
+            );
+          }
+          controller.close();
+          return;
+        }
+        const grown = new Uint8Array(held.length + value.length);
+        grown.set(held, 0);
+        grown.set(value, held.length);
+        held = grown;
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}

@@ -25,13 +25,21 @@
 // key by a request that was in flight when the rotation started.
 
 import { TroveError } from '../errors.js';
-import { encrypt, decodeHeader } from './envelope.js';
+import { encryptStream, decodeHeader } from './envelope.js';
 import { fromHex, fingerprint, toHex } from './keys.js';
 
 const NS = 'rotations';
 
 /** How long one slice may run before yielding, so a cron firing stays inside its budget. */
 const DEFAULT_BUDGET_MS = 15_000;
+
+/**
+ * How much sealed output to gather before sending a part.
+ *
+ * Above S3's 5 MiB floor for non-final parts, and small enough that peak memory during a
+ * rotation is a few megabytes rather than a function of the file.
+ */
+const PART_TARGET_BYTES = 8 * 1024 * 1024;
 
 /**
  * @typedef {object} RotationState
@@ -199,16 +207,38 @@ export class RotationService {
    * rather than a half-written file that is neither.
    */
   async #move(node, newKey, newFingerprint) {
+    const storage = await this.vfs.storageFor(node.collectionId);
+    const chunkSize = node.encryption.chunkSize;
+    // Written to a NEW storage key rather than over the old one. AES-GCM cannot survive a
+    // nonce being reused with a key, and rewriting in place invites exactly that on a
+    // retry; a new object also means a failure halfway leaves the original intact and
+    // readable rather than a half-written file that is neither.
+    const nextKey = `${node.storageKey}.rot${Date.now().toString(36)}`;
+
     const read = await this.vfs.readStream(node.id);
-    const plain = new Uint8Array(await new Response(read.stream).arrayBuffer());
-    const sealed = await encrypt(newKey, plain, {
+    const sealed = await encryptStream(newKey, read.stream, {
       fingerprint: newFingerprint,
-      chunkSize: node.encryption.chunkSize,
+      plaintextSize: read.size ?? node.size,
+      chunkSize,
     });
 
-    const storage = await this.vfs.storageFor(node.collectionId);
-    const nextKey = `${node.storageKey}.rot${Date.now().toString(36)}`;
-    await storage.put(nextKey, sealed, { contentType: node.contentType });
+    // Streamed into multipart parts rather than collected.
+    //
+    // Buffering meant holding the file twice — once decrypted and once sealed — so a
+    // rotation was capped at whatever fits in an isolate. On Workers that is 128 MB for
+    // everything, which put the ceiling somewhere around a 50 MB file and made rotation
+    // simply unavailable for the collections most likely to want it. Peak memory is now one
+    // part, whatever the object weighs.
+    //
+    // A backend that cannot do multipart is a local one — filesystem, memory — where the
+    // whole object is already in reach and a single put is both simpler and fine.
+    if (storage.capabilities?.multipart) {
+      await this.#putStreamed(storage, nextKey, sealed, node.contentType);
+    } else {
+      await storage.put(nextKey, new Uint8Array(await new Response(sealed).arrayBuffer()), {
+        contentType: node.contentType,
+      });
+    }
 
     // The item points at the new object before the old one is removed. In the window
     // between, both exist and the item is readable; in the reverse order there is a window
@@ -216,9 +246,53 @@ export class RotationService {
     const oldKey = node.storageKey;
     await this.vfs.metadata.update(node.id, {
       storageKey: nextKey,
-      encryption: { fingerprint: toHex(newFingerprint), chunkSize: node.encryption.chunkSize },
+      encryption: { fingerprint: toHex(newFingerprint), chunkSize },
     });
     await storage.delete(oldKey).catch(() => {});
+  }
+
+  /**
+   * Upload a stream as a multipart object, holding one part at a time.
+   *
+   * Parts are accumulated to a target size because S3 requires every part except the last
+   * to clear a 5 MiB floor — an envelope chunk is far smaller than that, so one chunk per
+   * part would be rejected.
+   *
+   * A failure aborts the multipart. Without that the parts already sent stay in the bucket,
+   * billed, with nothing left able to reclaim them.
+   */
+  async #putStreamed(storage, key, stream, contentType) {
+    const uploadId = await storage.createMultipart(key, { contentType });
+    try {
+      const reader = stream.getReader();
+      const parts = [];
+      let held = [];
+      let size = 0;
+      let n = 1;
+      const flush = async () => {
+        const part = new Uint8Array(size);
+        let at = 0;
+        for (const p of held) { part.set(p, at); at += p.length; }
+        held = [];
+        size = 0;
+        const etag = await storage.putPart(key, uploadId, n, part);
+        parts.push({ partNumber: n, etag: etag?.etag ?? etag });
+        n++;
+      };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        held.push(value);
+        size += value.length;
+        if (size >= PART_TARGET_BYTES) await flush();
+      }
+      // The final part may be under the floor, and only the final part may be.
+      if (size || parts.length === 0) await flush();
+      await storage.completeMultipart(key, uploadId, parts);
+    } catch (err) {
+      await storage.abortMultipart(key, uploadId).catch(() => {});
+      throw err;
+    }
   }
 
   /** Abandon a rotation. The new key stays current; what has moved stays moved. */

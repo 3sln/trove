@@ -43,7 +43,7 @@ export { UploadManager, KvSessionStore, DEFAULT_PART_SIZE } from './uploads.js';
 // compute vendor) and deliberately not against the server, which must read plaintext to
 // index it. See encryption/keys.js for why nothing here is a plain hash of a passphrase.
 export {
-  encrypt, decrypt, decryptRange, decryptStream, encodeHeader, decodeHeader, isEnvelope,
+  encrypt, encryptStream, decrypt, decryptRange, decryptStream, encodeHeader, decodeHeader, isEnvelope,
   cipherSize, plaintextSizeOf, cipherRangeFor,
   HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE,
 } from './encryption/envelope.js';

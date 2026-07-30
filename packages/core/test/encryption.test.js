@@ -11,7 +11,7 @@
 
 import { test, expect } from 'bun:test';
 import {
-  encrypt, decrypt, decryptRange, decryptStream, encodeHeader, decodeHeader, isEnvelope,
+  encrypt, encryptStream, decrypt, decryptRange, decryptStream, encodeHeader, decodeHeader, isEnvelope,
   cipherSize, plaintextSizeOf, cipherRangeFor,
   HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE, FINGERPRINT_BYTES, VERSION,
 } from '../src/encryption/envelope.js';
@@ -273,4 +273,33 @@ test('a tampered stream fails rather than emitting bad bytes for that chunk', as
   const source = new ReadableStream({ start(c) { c.enqueue(body); c.close(); } });
   const reader = (await decryptStream(KEY, header, source)).getReader();
   await expect(reader.read()).rejects.toThrow(/altered/);
+});
+
+test('sealing a stream produces exactly what sealing a buffer would', async () => {
+  // Same format, so an object written by the streaming path and one written by the
+  // buffering path are indistinguishable to every reader.
+  const chunkSize = 64;
+  for (const size of [0, 1, 63, 64, 65, 300]) {
+    const plain = bytes(size, size);
+    const source = new ReadableStream({
+      start(c) {
+        for (let at = 0; at < plain.length; at += 23) c.enqueue(plain.subarray(at, Math.min(at + 23, plain.length)));
+        c.close();
+      },
+    });
+    const sealed = new Uint8Array(await new Response(
+      await encryptStream(KEY, source, { fingerprint: FP, plaintextSize: size, chunkSize }),
+    ).arrayBuffer());
+    expect(sealed.length).toBe(cipherSize(size, chunkSize));
+    expect(await decrypt(KEY, sealed)).toEqual(plain);
+  }
+});
+
+test('a stream that delivers the wrong number of bytes is refused, not written', async () => {
+  // The header states the size and is written first. An envelope whose header disagrees
+  // with its body decrypts to the wrong length forever and cannot be corrected without
+  // re-encrypting, so a short read has to fail loudly here.
+  const source = new ReadableStream({ start(c) { c.enqueue(bytes(10)); c.close(); } });
+  const out = await encryptStream(KEY, source, { fingerprint: FP, plaintextSize: 999, chunkSize: 64 });
+  await expect(new Response(out).arrayBuffer()).rejects.toThrow(/Expected 999 bytes/);
 });
