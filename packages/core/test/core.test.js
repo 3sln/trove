@@ -3,10 +3,11 @@
 // fast and offline. `bun test` (or `node --test` with light shims).
 
 import { test, expect } from 'bun:test';
-import {
-  createVfs, MemoryStorage, MemoryStore, FilesystemStorage,
-  SearchService, LocalHashEmbedding, TroveError, isValidItemName, extname,
-} from '../src/index.js';
+import { createVfs, MemoryStorage, MemoryStore, SearchService, LocalHashEmbedding, TroveError, isValidItemName, extname,  } from '../src/index.js';
+// FilesystemStorage is imported from its own module, not the barrel: the barrel export
+// dragged node:fs into every bundle that touched core, which is the only reason a Workers
+// build needed nodejs_compat.
+import { FilesystemStorage } from '../src/storage/filesystem.js';
 
 async function collect(stream) {
   const reader = stream.getReader();

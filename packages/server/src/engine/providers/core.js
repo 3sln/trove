@@ -21,7 +21,8 @@
 // means the same thing it always did.
 
 import {
-  StorageBackend, MemoryStorage, FilesystemStorage, S3Storage,
+  StorageBackend, MemoryStorage, S3Storage,
+  StorageDriverRegistry, portableDrivers,
   MetadataStore, MemoryStore, SqliteStore,
   SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,
   SearchTransformer, ParsingSearchTransformer, WorkersAiSearchTransformer,
@@ -50,12 +51,37 @@ import { need } from '../lazy.js';
 const resolve = (value, BaseClass, build) =>
   (value instanceof BaseClass ? value : build(value || {}));
 
-export function buildStorage(cfg) {
-  switch (cfg.driver) {
-    case 's3': return new S3Storage(cfg.s3);
-    case 'filesystem': return new FilesystemStorage({ root: cfg.root });
-    case 'memory': default: return new MemoryStorage();
-  }
+/**
+ * The drivers this deployment can build, as a registry.
+ *
+ * `config.storageDrivers` either IS a registry or is a list of drivers to add to the
+ * portable ones — so a deployment adds Filesystem (Node/Bun), or a driver written
+ * entirely outside this package, by naming it at the entry point. What is not registered
+ * is not offered and cannot be built.
+ */
+export function storageRegistry(config = {}) {
+  if (config.storageRegistry instanceof StorageDriverRegistry) return config.storageRegistry;
+  if (config.storageDrivers instanceof StorageDriverRegistry) return config.storageDrivers;
+  const registry = new StorageDriverRegistry(portableDrivers());
+  for (const d of config.storageDrivers || []) registry.register(d);
+  return registry;
+}
+
+/**
+ * Build a backend from a store config.
+ *
+ * The `default:` arm this replaces returned MemoryStorage, so a typo'd driver produced a
+ * store that took writes and lost them at the next restart. Unknown drivers now throw and
+ * say what is available.
+ */
+export function buildStorage(cfg, config = {}) {
+  // ABSENT is not the same as WRONG, and conflating them is what the old `default:` arm
+  // did. No storage configured at all is the zero-config path — `createServer()` with
+  // nothing, which is ephemeral by definition — so it gets memory. A driver that was
+  // NAMED and is not registered is a mistake, and throws: that is the case where a typo
+  // used to buy you a store that took writes and lost them.
+  if (!cfg?.driver) return new MemoryStorage();
+  return storageRegistry(config).build(cfg);
 }
 
 function buildIdentity(cfg) {
@@ -143,7 +169,7 @@ export function coreProviders(config, lifecycleState) {
     }),
 
     storage: Provider.fromLazySingleton(
-      () => resolve(config.storage ?? config.vfs?.storage, StorageBackend, buildStorage),
+      () => resolve(config.storage ?? config.vfs?.storage, StorageBackend, (cfg) => buildStorage(cfg, config)),
     ),
 
     // One shared SQLite provider (a keyed pool) for metadata, kv, and per-plugin
@@ -381,7 +407,7 @@ export function coreProviders(config, lifecycleState) {
         const { kv, storage } = await need(deps, ['kv', 'storage']);
         return resolve(config.collections, CollectionService, () => new CollectionService({
           kv,
-          storageFactory: (storeConfig) => buildStorage(storeConfig),
+          storageFactory: (storeConfig) => buildStorage(storeConfig, config),
           admins: config.admins || [],
           creatorRoles: config.creatorRoles || [],
           defaultOpen: config.defaultOpen !== false,

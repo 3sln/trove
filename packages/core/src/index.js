@@ -8,7 +8,13 @@ export * from './links.js';
 
 export { StorageBackend } from './storage/interface.js';
 export { MemoryStorage } from './storage/memory.js';
-export { FilesystemStorage } from './storage/filesystem.js';
+// FilesystemStorage is NOT exported here on purpose. It imports node:fs at the top level,
+// so re-exporting it from the barrel put node:fs into every bundle that touched core —
+// including Cloudflare Workers, which is the only reason a Workers build needed
+// nodejs_compat. Import it (and `filesystemDriver`) from
+// '@3sln/trove/core/storage/filesystem.js' in an entry point that has a filesystem.
+export { StorageDriverRegistry } from './storage/registry.js';
+export { portableDrivers } from './storage/drivers.js';
 export { S3Storage } from './storage/s3.js';
 export { PrefixedStorage } from './storage/prefixed.js';
 

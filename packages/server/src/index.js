@@ -18,6 +18,7 @@ import {
 } from '@3sln/trove/core';
 import { createRouter, routeHelpers } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
+import { storageRegistry } from './engine/providers/core.js';
 import { createMcpHandler } from './mcp/index.js';
 import { cacheControlFor } from './cachePolicy.js';
 import { MANIFEST_PATH, webManifest, manifestFromEnv } from './manifest.js';
@@ -51,6 +52,10 @@ export async function createServer(config = {}) {
   // 200 lines of statements whose ORDER was the graph is a declaration the
   // container walks, which is also what makes `close()` stop being a hand-kept
   // list that had to agree with it.
+  // The driver registry is decided once, here, and shared: the providers build backends
+  // from it and /api/capabilities describes it, so the form a user sees and the set of
+  // things the server can actually construct cannot drift apart.
+  config = { ...config, storageRegistry: storageRegistry(config) };
   const lifecycleState = { closing: false, background: null };
   const engine = createDriveEngine(config, lifecycleState);
 

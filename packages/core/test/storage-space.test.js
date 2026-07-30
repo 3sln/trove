@@ -13,10 +13,11 @@ import { test, expect } from 'bun:test';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  createVfs, FilesystemStorage, MemoryStorage, IssueRegistry, MemoryKV,
-  TroveError, ErrorCode, isOutOfSpace, wrapError,
-} from '../src/index.js';
+import { createVfs, MemoryStorage, IssueRegistry, MemoryKV, TroveError, ErrorCode, isOutOfSpace, wrapError,  } from '../src/index.js';
+// FilesystemStorage is imported from its own module, not the barrel: the barrel export
+// dragged node:fs into every bundle that touched core, which is the only reason a Workers
+// build needed nodejs_compat.
+import { FilesystemStorage } from '../src/storage/filesystem.js';
 
 // A filesystem small enough to fill, if this environment allows mounting one.
 const TINY = process.env.TROVE_TEST_TINYFS || '/tmp/tinyfs';

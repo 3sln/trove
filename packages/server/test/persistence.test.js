@@ -14,6 +14,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../src/index.js';
+// A filesystem-backed drive has to say it can do filesystems. The driver is registered by
+// the entry point, not by core — which is what keeps node:fs out of a Workers bundle.
+import { filesystemDriver } from '@3sln/trove/core/storage/filesystem.js';
 
 const TEXT = 'Dune is a science fiction novel about the desert planet Arrakis and the spice melange.';
 
@@ -22,6 +25,7 @@ async function withDrive(fn) {
   const config = () => ({
     storage: { driver: 'filesystem', root: join(dir, 'objects') },
     metadata: { driver: 'sqlite', path: join(dir, 'trove.db') },
+    storageDrivers: [filesystemDriver()],
     startFlusher: false,
   });
   const open = async (extra = {}) => createServer({ ...config(), ...extra });

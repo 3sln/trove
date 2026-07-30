@@ -177,8 +177,13 @@ export function createRouter() {
       storage = await (await ctx.access.collection(query.collection, 'read')).storage();
     }
     return {
-      collection: query.collection || 'default',
+      collection: query.collection || null,
       storage: storage.capabilities,
+      // What kinds of backing store THIS deployment can build, with the fields each one
+      // needs. The collection form used to hardcode this list, which is how a Cloudflare
+      // Workers drive came to offer "Filesystem / NAS" — a choice its runtime cannot
+      // honour. Answered by the server now, so the form can only offer what exists.
+      storageDrivers: ctx.config.storageRegistry?.describe?.() || [],
       indexers: vfs.indexers.list(),
       partSize: vfs.uploads.partSize,
       features: {

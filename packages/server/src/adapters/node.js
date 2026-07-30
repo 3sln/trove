@@ -12,6 +12,11 @@ import fs, { readFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
+// This runtime HAS a filesystem, so it registers the filesystem driver. Imported from
+// storage/filesystem.js rather than the package barrel: that import is what pulls in
+// node:fs, and the Workers adapter deliberately never makes it — so there, Filesystem is
+// absent from the collection form and absent from the bundle.
+import { filesystemDriver } from '@3sln/trove/core/storage/filesystem.js';
 import { findWebDist } from './webDist.js';
 import { createStaticAssets } from './staticAssets.js';
 
@@ -82,6 +87,7 @@ const envConfig = configFromEnv();
 warnOnOpenAccess(envConfig);
 const { handle, close } = await createServer({
   ...envConfig,
+  storageDrivers: [filesystemDriver()],
   assets: hasWeb ? staticAssets : undefined,
 });
 

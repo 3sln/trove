@@ -10,7 +10,11 @@ import { test, expect } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createVfs, MemoryStorage, FilesystemStorage, IssueRegistry, MemoryKV, StorageBackend } from '../src/index.js';
+import { createVfs, MemoryStorage, IssueRegistry, MemoryKV, StorageBackend } from '../src/index.js';
+// FilesystemStorage is imported from its own module, not the barrel: the barrel export
+// dragged node:fs into every bundle that touched core, which is the only reason a Workers
+// build needed nodejs_compat.
+import { FilesystemStorage } from '../src/storage/filesystem.js';
 
 const drive = async () => {
   const issues = new IssueRegistry({ kv: new MemoryKV() });

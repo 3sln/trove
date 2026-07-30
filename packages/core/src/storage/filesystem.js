@@ -281,3 +281,25 @@ export class FilesystemStorage extends StorageBackend {
 function etagOfStat(stat) {
   return `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
 }
+
+/**
+ * This driver as a registrable descriptor.
+ *
+ * Deliberately exported from HERE and not from the package barrel or drivers.js. Importing
+ * it is what pulls node:fs into a bundle, so a Workers entry point that never mentions it
+ * gets neither the form option nor the module — which is also why `core/index.js` no
+ * longer re-exports FilesystemStorage. A Workers build previously needed nodejs_compat
+ * purely because the barrel dragged this file in whether or not it could ever be used.
+ */
+export function filesystemDriver() {
+  return {
+    key: 'filesystem',
+    label: 'Filesystem / NAS',
+    description: 'A directory on this machine, or a mounted network share.',
+    fields: [
+      { name: 'root', label: 'Root directory', required: true, placeholder: './data/team' },
+      { name: 'prefix', label: 'Prefix', help: 'Share one directory between collections.' },
+    ],
+    create: (cfg) => new FilesystemStorage({ root: cfg.root }),
+  };
+}

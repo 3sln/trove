@@ -86,66 +86,96 @@ function openerChooserDialog(d, ui) {
   );
 }
 
-// A collection is a backing-store config. This form collects the driver + its
-// fields (filesystem path, or S3 bucket/prefix/keys) so a user with the create
-// capability can provision a new collection dynamically. The form persists
-// across re-renders (keyed to the dialog instance) so switching driver keeps it.
+// A collection is a backing-store config, and which stores exist is the SERVER's answer.
+//
+// This form used to hardcode its own list — Filesystem / NAS, S3, Memory — and the fields
+// for each. On Cloudflare Workers that offered a filesystem the runtime cannot provide, so
+// the form could produce a collection the server would refuse to build. Now the drivers and
+// their fields come from /api/capabilities, which reports what was actually registered.
+//
+// The form persists across re-renders (keyed to the dialog instance) so switching driver
+// keeps what has been typed.
 let colState = { ref: null, form: null };
 function collectionDialog(d, ui) {
   const wb = ui.platform.workbench;
+  const drivers = ui.platform.capabilities?.storageDrivers || [];
+
   if (colState.ref !== d) {
-    colState = { ref: d, form: { name: '', description: '', driver: 'filesystem', root: '', bucket: '', prefix: '', region: 'auto', endpoint: '', accessKeyId: '', secretAccessKey: '' } };
+    colState = { ref: d, form: { name: '', description: '', driver: drivers[0]?.key || '' } };
   }
   const form = colState.form;
-  const set = (k) => (e) => { form[k] = e.target.value; if (k === 'driver') ui.rerender?.(); };
+  const driver = drivers.find((x) => x.key === form.driver) || drivers[0];
+  const set = (k) => (e) => {
+    form[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    if (k === 'driver') ui.rerender?.();
+  };
+
   const submit = () => {
+    // Only the fields this driver declared, so a leftover value from a driver the user
+    // switched away from is not smuggled into the store config.
     const store = { driver: form.driver };
-    if (form.driver === 'filesystem') store.root = form.root;
-    if (form.driver === 's3') {
-      store.s3 = { bucket: form.bucket, region: form.region, endpoint: form.endpoint || undefined, accessKeyId: form.accessKeyId, secretAccessKey: form.secretAccessKey, forcePathStyle: !!form.endpoint };
-      if (form.prefix) store.prefix = form.prefix;
+    for (const f of driver?.fields || []) {
+      const v = form[f.name];
+      if (v !== undefined && v !== '') store[f.name] = f.type === 'number' ? Number(v) : v;
     }
-    if (form.driver === 'filesystem' && form.prefix) store.prefix = form.prefix;
     d.onSubmit?.({ name: form.name, description: form.description, store });
   };
+
   const field = (lbl, k, ph = '') => div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
     label(lbl), input({ className: 'input', placeholder: ph }).on({ input: set(k) }));
+
+  const ready = !!form.name.trim() && !!form.driver
+    && (driver?.fields || []).every((f) => !f.required || String(form[f.name] ?? '').trim());
+
   return div({},
     div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
     div({ className: 'dialog', $styling: { width: 'min(480px, 94vw)' } },
       h3('New collection'),
       div({ className: 'body' }, 'A collection is a backing store you own. Configure where its files live.'),
       field('Name', 'name', 'Team Vault'),
-      div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
-        label('Backing store'),
-        select({ className: 'input' },
-          option({ value: 'filesystem', selected: form.driver === 'filesystem' }, 'Filesystem / NAS'),
-          option({ value: 's3', selected: form.driver === 's3' }, 'S3-compatible (S3 · R2 · MinIO)'),
-          option({ value: 'memory', selected: form.driver === 'memory' }, 'Memory (ephemeral)'),
-        ).on({ change: set('driver') })),
-      storeFields(form, set),
+      drivers.length
+        ? div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
+          label('Backing store'),
+          select({ className: 'input' },
+            ...drivers.map((x) => option({ value: x.key, selected: form.driver === x.key }, x.label)),
+          ).on({ change: set('driver') }))
+        // No drivers at all means the deployment registered none, which is a server
+        // misconfiguration — saying so beats an empty dropdown.
+        : div({ className: 'body' }, 'This server has no storage drivers registered, so a collection cannot be created.'),
+      driver ? storeFields(driver, form, set) : null,
       div({ className: 'row-actions' },
         button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
-        button({ className: 'btn primary' }, 'Create collection').on({ click: submit }),
+        button({ className: 'btn primary', $attrs: ready ? {} : { disabled: 'true' } }, 'Create collection')
+          .on({ click: () => ready && submit() }),
       ),
     ),
   );
 }
-function storeFields(form, set) {
-  const f = (lbl, k, ph = '', type = 'text') => div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
-    label(lbl), input({ className: 'input', placeholder: ph, type, autocomplete: 'off' }).on({ input: set(k) }));
-  if (form.driver === 'filesystem') return div({}, f('Root directory', 'root', './data/team'), f('Prefix (optional)', 'prefix'));
-  if (form.driver === 's3') {
-    return div({},
-      f('Bucket', 'bucket', 'my-bucket'),
-      f('Prefix (optional)', 'prefix', 'team-a/'),
-      f('Region', 'region', 'auto'),
-      f('Endpoint (R2/MinIO; blank for AWS)', 'endpoint', 'https://<acct>.r2.cloudflarestorage.com'),
-      f('Access key id', 'accessKeyId'),
-      f('Secret access key', 'secretAccessKey', '', 'password'),
-    );
+
+/** The chosen driver's declared fields, rendered from its descriptor. */
+function storeFields(driver, form, set) {
+  if (!driver.fields.length) {
+    return div({ className: 'body', $styling: { 'font-size': '12px' } },
+      driver.description || 'This store needs no configuration.');
   }
-  return div({ className: 'body', $styling: { 'font-size': '12px' } }, 'Ephemeral — data is lost on restart. Good for testing.');
+  return div({},
+    driver.description
+      ? div({ className: 'body', $styling: { 'font-size': '12px', 'margin-bottom': '10px' } }, driver.description)
+      : null,
+    ...driver.fields.map((f) => (f.type === 'boolean'
+      ? div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
+        label({}, input({ type: 'checkbox' }).on({ change: set(f.name) }), ` ${f.label}`),
+        f.help ? div({ className: 'body', $styling: { 'font-size': '11.5px' } }, f.help) : null)
+      : div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
+        label(f.label + (f.required ? '' : ' (optional)')),
+        input({
+          className: 'input', placeholder: f.placeholder, autocomplete: 'off',
+          // A field the driver marked secret is a password field, so a shoulder or a
+          // screen share does not read an access key out of the form.
+          type: f.type === 'password' || f.secret ? 'password' : (f.type === 'number' ? 'number' : 'text'),
+        }).on({ input: set(f.name) }),
+        f.help ? div({ className: 'body', $styling: { 'font-size': '11.5px' } }, f.help) : null))),
+  );
 }
 
 // ---- Context menu ----------------------------------------------------------
