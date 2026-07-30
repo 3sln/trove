@@ -408,3 +408,71 @@ export class SearchAction extends AppAction {
     }
   }
 }
+
+// --- API keys (admin) ----------------------------------------------------------
+
+/**
+ * Load the key list.
+ *
+ * Silent on failure rather than noisy: this fires when Settings opens, and a non-admin
+ * opening Settings gets a 403 that is the correct answer, not an error worth a toast.
+ * The section simply does not render.
+ */
+export class LoadApiKeysAction extends AppAction {
+  async execute({ app }) {
+    app.apiKeys.set({ loading: true, error: null });
+    try {
+      const res = await app.platform.api.apiKeys();
+      app.apiKeys.set({ keys: res.keys || [], loading: false, loaded: true, error: null });
+    } catch (err) {
+      app.apiKeys.set({ loading: false, loaded: true, error: err?.message || 'Could not load API keys' });
+    }
+  }
+}
+
+/**
+ * Mint a key and hold the secret for display.
+ *
+ * The secret is the whole point of the round trip and cannot be fetched again, so it is
+ * put into state before anything else can fail. A refresh of the list afterwards is a
+ * convenience; losing the secret because the refresh threw would not be.
+ */
+export class MintApiKeyAction extends AppAction {
+  constructor(spec) {
+    super();
+    this.spec = spec;
+  }
+  async execute({ app }) {
+    app.apiKeys.set({ busy: 'mint', error: null });
+    try {
+      const { key, secret } = await app.platform.api.mintApiKey(this.spec);
+      app.apiKeys.set({ minted: { key, secret }, busy: null });
+      const res = await app.platform.api.apiKeys().catch(() => null);
+      if (res) app.apiKeys.set({ keys: res.keys || [] });
+      return key;
+    } catch (err) {
+      app.apiKeys.set({ busy: null, error: err?.message || 'Could not create the key' });
+      app.platform.notifications.error(err?.message || 'Could not create the key');
+      return null;
+    }
+  }
+}
+
+export class RevokeApiKeyAction extends AppAction {
+  constructor(id) {
+    super();
+    this.id = id;
+  }
+  async execute({ app }) {
+    app.apiKeys.set({ busy: this.id, error: null });
+    try {
+      await app.platform.api.revokeApiKey(this.id);
+      const res = await app.platform.api.apiKeys().catch(() => null);
+      app.apiKeys.set({ busy: null, ...(res ? { keys: res.keys || [] } : {}) });
+      app.platform.notifications.success('Key revoked');
+    } catch (err) {
+      app.apiKeys.set({ busy: null });
+      app.platform.notifications.error(err?.message || 'Could not revoke the key');
+    }
+  }
+}

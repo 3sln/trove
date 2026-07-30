@@ -315,6 +315,12 @@ export class ApiKeyCapabilityProvider extends CapabilityProvider {
     // authorized by it, and quietly serving them as the public would turn a revoked key
     // into "works, but with less access" — which is how a revocation goes unnoticed.
     if (!grant) throw TroveError.unauthorized('This API key is not valid');
+
+    // Not awaited. "Last used" is what tells an admin which key nobody needs any more,
+    // so it is worth recording — but it is a convenience, and a slow or failing KV write
+    // must not add latency to, or fail, the request it is describing. `touch` swallows
+    // its own errors for the same reason.
+    this.apiKeys.touch(grant.keyId);
     return grant;
   }
 }

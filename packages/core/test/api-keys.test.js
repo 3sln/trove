@@ -222,3 +222,27 @@ test('list is newest first and hides hashes', async () => {
   expect(listed.map((k) => k.name)).toEqual(['second', 'first']);
   for (const k of listed) expect(k.hash).toBeUndefined();
 });
+
+test('using a key records that it was used', async () => {
+  // The UI shows "never used", which is how an admin finds the key nobody needs. It has
+  // to actually be true — resolving a credential is the only place that knows.
+  let clock = 1_000;
+  const keys = svc(() => clock);
+  const { record, secret } = await keys.mint({
+    name: 'k', scopes: [{ collectionId: 'c1', capabilities: ['read'] }],
+  });
+  const provider = new ApiKeyCapabilityProvider({ apiKeys: keys });
+
+  clock = 7_000;
+  await provider.resolve(bearer(secret));
+  // `touch` is deliberately not awaited by resolve, so let the microtask queue drain.
+  await new Promise((r) => setTimeout(r, 0));
+  expect((await keys.get(record.id)).lastUsedAt).toBe(7_000);
+});
+
+test('a credential of ours that does not verify is a 401, not anonymous', async () => {
+  const keys = svc();
+  const provider = new ApiKeyCapabilityProvider({ apiKeys: keys });
+  // Serving a revoked key as the public is how a revocation goes unnoticed.
+  await expect(provider.resolve(bearer('trv_key_deadbeefdeadbeef_nope'))).rejects.toThrow(/not valid/i);
+});

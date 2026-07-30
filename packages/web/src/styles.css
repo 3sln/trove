@@ -1380,3 +1380,98 @@ kbd {
 .launch-h .lh-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .launch-h .lh-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 .launch-h .lh-verbatim { text-transform: none; font-weight: 500; color: var(--text-dim); letter-spacing: 0; }
+
+/* ---- API keys (settings) --------------------------------------------------
+   Built from the same tokens as the rest of Settings, so a key list reads as part
+   of the screen rather than a bolted-on admin console. */
+.keys-actions { display: flex; gap: 8px; align-items: center; padding: 12px 0 2px; }
+.keys-empty { color: var(--text-faint); font-size: 12.5px; padding: 10px 0; }
+
+.keys-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.key-row {
+  display: flex; align-items: flex-start; gap: 12px; padding: 12px 13px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
+}
+.key-row-main { flex: 1; min-width: 0; }
+.key-row-name { display: flex; align-items: center; gap: 8px; }
+.key-row-name .t { font-weight: 550; }
+/* Revoked and expired keys stay in the list — "why did this stop working" is the
+   question they answer — so they are dimmed rather than removed. */
+.key-row.dead { opacity: .55; }
+.key-row.dead .key-row-name .t { text-decoration: line-through; }
+.key-tag {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+  padding: 2px 7px; border-radius: 6px; background: var(--bg-hover); color: var(--text-dim);
+}
+.key-row-scopes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.key-chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+}
+.key-chip .where { padding: 2px 7px; background: var(--bg-hover); color: var(--text-dim); }
+.key-chip .what { padding: 2px 7px; color: var(--accent); font-family: var(--font-mono); font-size: 10.5px; }
+.key-row-meta { color: var(--text-faint); font-size: 11.5px; margin-top: 7px; }
+
+/* ---- the mint form ---- */
+.key-form {
+  border: 1px solid var(--border); border-radius: 11px; background: var(--bg-elevated);
+  padding: 4px 14px 14px; margin-top: 12px;
+}
+.key-form .setting:last-of-type { border-bottom: 0; }
+.key-scopes { padding: 12px 0 4px; }
+.key-scopes-head .t { font-weight: 550; }
+.key-scopes-head .d { color: var(--text-faint); font-size: 12px; margin-top: 2px; line-height: 1.4; }
+.key-scope {
+  display: flex; align-items: center; gap: 12px; padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.key-scope:last-child { border-bottom: 0; }
+/* "All collections" is the one row where a tick is a much bigger decision than it
+   looks, so it is set apart rather than sitting flush with the named collections. */
+.key-scope.wildcard {
+  margin-bottom: 4px; padding: 10px 11px; border-bottom: 0; border-radius: 9px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent);
+}
+.key-scope-name { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.key-scope-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-scope-name svg { flex: none; color: var(--text-dim); }
+.key-scope.wildcard .key-scope-name svg { color: var(--warn); }
+.key-scope-caps { display: flex; gap: 6px; flex: none; }
+.key-scope-caps .cap {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
+  font-size: 11.5px; padding: 4px 9px; border-radius: 7px;
+  border: 1px solid var(--border); color: var(--text-dim); background: transparent;
+}
+.key-scope-caps .cap:hover { background: var(--bg-hover); }
+.key-scope-caps .cap.on {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.key-scope-caps .cap input { margin: 0; accent-color: var(--accent); }
+
+/* ---- the one-time secret ----
+   Loud on purpose. The server kept only a hash, so this is the only moment the value
+   exists anywhere, and a quiet row would be dismissed without being copied. */
+.key-minted {
+  margin: 12px 0 4px; padding: 13px 14px; border-radius: 11px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+}
+.key-minted-head { display: flex; align-items: center; gap: 9px; font-weight: 550; color: var(--warn); }
+.key-minted-head svg { flex: none; }
+.key-minted-note { color: var(--text-dim); font-size: 12.5px; line-height: 1.55; margin: 8px 0 11px; }
+.key-secret { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.key-secret code {
+  flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; color: var(--text);
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 10px; overflow-x: auto; white-space: nowrap;
+}
+
+/* A capability row is four chips wide; on a phone that beats the collection name into a
+   gutter, so the row stacks and the chips wrap under it. */
+@media (max-width: 560px) {
+  .key-scope { flex-direction: column; align-items: stretch; gap: 8px; }
+  .key-scope-caps { flex-wrap: wrap; }
+  .key-row { flex-direction: column; }
+}

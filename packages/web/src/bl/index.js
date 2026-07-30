@@ -6,7 +6,7 @@
 
 import { Engine, Provider } from '@3sln/ngin';
 import { effect } from '../runtime.js';
-import { ExplorerService, SearchClientService, TransfersService } from './services.js';
+import { ExplorerService, SearchClientService, TransfersService, ApiKeysService } from './services.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { ActivityService } from './activity.js';
@@ -16,6 +16,7 @@ import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction } fr
 export function createApp(platform) {
   const explorer = new ExplorerService(platform.settings);
   const search = new SearchClientService();
+  const apiKeys = new ApiKeysService();
   // One place for "what's running" and "what's stuck", covering both sides of the wire.
   const activity = new ActivityService(platform);
   const transfers = new TransfersService(activity);
@@ -23,7 +24,7 @@ export function createApp(platform) {
   const offline = new OfflineService(platform);
   social.offline = offline; // social queues sidecar ops through offline when disconnected
 
-  const app = { platform, explorer, search, transfers, social, offline, activity, engine: null };
+  const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, engine: null };
 
   const engine = new Engine({
     providers: { app: Provider.fromSingleton(app) },

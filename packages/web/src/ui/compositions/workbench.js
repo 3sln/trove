@@ -43,6 +43,7 @@ export default function workbench({ engine, app, platform, plugins }) {
       platform.workbench.observeNav(),
       app.explorer.observe(),
       app.search.observe(),
+      app.apiKeys.observe(),
       app.transfers.observe(),
       platform.notifications.observe(),
       platform.context.observe(),
@@ -60,8 +61,8 @@ export default function workbench({ engine, app, platform, plugins }) {
     // shallow-equal to the last one, so a forced re-render that left no trace in the
     // object would be discarded as "nothing changed" — which is the opposite of what
     // asking for one means.
-    (wb, overlay, nav, ex, se, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, voice, _bump) =>
-      ({ wb, overlay, nav, ex, se, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, voice, _bump }),
+    (wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, voice, _bump) =>
+      ({ wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, voice, _bump }),
   );
 
   return alias(() => watch(combined, (state) => view(state, ui)));

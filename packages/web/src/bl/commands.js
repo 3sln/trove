@@ -7,6 +7,7 @@ import {
   NavigateAction, RefreshAction, DeleteAction, RenameAction,
   UploadFilesAction, OpenFileAction, CreateCollectionAction, LoadMoreAction, TrashAction,
   SearchAction,
+  LoadApiKeysAction, MintApiKeyAction, RevokeApiKeyAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri } from '@3sln/trove/core/links.js';
@@ -131,6 +132,29 @@ export function registerCommands(app) {
     go(new TrashAction('list'));
     workbench.showHome();
   }, { category: 'Explorer', icon: 'trash' });
+  // --- API keys (admin) ---------------------------------------------------------
+  // All `palette: false`: these are the settings screen's own buttons, not verbs anyone
+  // would go looking for in the palette. Revoking a credential by fuzzy-searching for it
+  // is not a thing to make easy.
+  cmd('keys.load', 'Load API Keys', () => go(new LoadApiKeysAction()), { palette: false });
+  cmd('keys.new', 'New API Key', () => app.apiKeys.startDraft(), { palette: false });
+  cmd('keys.cancel', 'Cancel API Key', () => app.apiKeys.cancelDraft(), { palette: false });
+  cmd('keys.dismissMinted', 'Dismiss API Key', () => app.apiKeys.clearMinted(), { palette: false });
+  cmd('keys.revoke', 'Revoke API Key', (id) => id && go(new RevokeApiKeyAction(id)), { palette: false });
+  cmd('keys.mint', 'Create API Key', () => {
+    const draft = app.apiKeys.state.draft;
+    const scopes = app.apiKeys.draftScopes();
+    if (!draft?.name?.trim() || !scopes) return;
+    // Days in the form, an absolute instant on the wire: the server compares against its
+    // own clock, and "30 days from whenever this arrives" is not what was chosen.
+    const days = Number(draft.expiresInDays);
+    const expiresAt = draft.expiresInDays !== '' && Number.isFinite(days) && days > 0
+      ? Date.now() + days * 86400_000
+      : null;
+    app.apiKeys.cancelDraft();
+    return go(new MintApiKeyAction({ name: draft.name.trim(), scopes, expiresAt }));
+  }, { palette: false });
+
   cmd('explorer.hideTrash', 'Hide Trash', () => go(new TrashAction('hide')), { palette: false });
   cmd('explorer.restore', 'Restore from Trash', (id) => id && go(new TrashAction('restore', id)), { palette: false });
   cmd('explorer.purgeOne', 'Delete Forever', (id) => id && go(new TrashAction('purge', id)), { palette: false });

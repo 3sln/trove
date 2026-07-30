@@ -241,6 +241,19 @@ export class TroveApiClient {
   vapidKey() {
     return this.request('GET', '/api/push/vapid');
   }
+
+  // --- API keys (admin) -------------------------------------------------------
+  // Capability-only credentials; see core/apiKeys.js. `mintApiKey` is the one call in
+  // this client whose response contains a secret, and it is the only chance to see it.
+  apiKeys() {
+    return this.request('GET', '/api/keys');
+  }
+  mintApiKey({ name, scopes, expiresAt = null }) {
+    return this.request('POST', '/api/keys', { body: { name, scopes, expiresAt } });
+  }
+  revokeApiKey(id) {
+    return this.request('DELETE', `/api/keys/${encodeURIComponent(id)}`);
+  }
   subscribePush(subscription) {
     return this.request('POST', '/api/push/subscribe', { body: { subscription } });
   }

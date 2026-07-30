@@ -59,6 +59,80 @@ export class ExplorerService {
   }
 }
 
+/**
+ * API keys, for the admin screen that manages them.
+ *
+ * Its own service rather than a corner of ExplorerService because it is a different
+ * lifetime: keys are read when someone opens Settings and never again, so they should not
+ * be part of the state every render of the file list walks over.
+ *
+ * `minted` holds the one secret a mint returns. It lives here, in memory, and is dropped
+ * the moment the admin dismisses it — the server cannot show it again, so the UI is the
+ * only place it ever exists, and it should not persist anywhere that outlives the tab.
+ */
+export class ApiKeysService {
+  constructor() {
+    this.state = {
+      keys: [], loading: false, loaded: false, error: null, minted: null, busy: null,
+      // The mint form. Held here rather than in the DOM so the section stays a pure
+      // function of state — and so a half-filled form survives a re-render caused by
+      // something else on the settings screen.
+      draft: null,
+    };
+    this.cell = cell(this.state);
+  }
+
+  /** Open the mint form, empty. */
+  startDraft() {
+    this.set({ draft: { name: '', expiresInDays: '', caps: {} }, error: null });
+  }
+  cancelDraft() {
+    this.set({ draft: null });
+  }
+  patchDraft(patch) {
+    if (!this.state.draft) return;
+    this.set({ draft: { ...this.state.draft, ...patch } });
+  }
+
+  /**
+   * Toggle one capability on one collection in the draft.
+   *
+   * `admin` is not treated specially here — it is offered as itself and the server
+   * expands it. Pre-ticking read/write/delete when admin is chosen would suggest they
+   * are separable afterwards, and they are not.
+   */
+  toggleCap(collectionId, capability) {
+    if (!this.state.draft) return;
+    const caps = { ...this.state.draft.caps };
+    const held = new Set(caps[collectionId] || []);
+    if (held.has(capability)) held.delete(capability);
+    else held.add(capability);
+    if (held.size) caps[collectionId] = [...held];
+    else delete caps[collectionId];
+    this.patchDraft({ caps });
+  }
+
+  /** The draft as the API wants it, or null when it would grant nothing. */
+  draftScopes() {
+    const caps = this.state.draft?.caps || {};
+    const scopes = Object.entries(caps)
+      .filter(([, list]) => list.length)
+      .map(([collectionId, capabilities]) => ({ collectionId, capabilities }));
+    return scopes.length ? scopes : null;
+  }
+  observe() {
+    return this.cell;
+  }
+  set(patch) {
+    this.state = { ...this.state, ...patch };
+    this.cell.setValue(this.state);
+  }
+  /** Forget the freshly minted secret. Called on dismiss, and after a copy. */
+  clearMinted() {
+    if (this.state.minted) this.set({ minted: null });
+  }
+}
+
 export class SearchClientService {
   constructor() {
     this.state = { query: '', mode: 'hybrid', results: [], loading: false, error: null, ran: false, paletteFiles: [], paletteQuery: '', paletteLoading: false, paletteError: null };

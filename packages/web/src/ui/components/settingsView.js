@@ -3,7 +3,7 @@ import { prettyKey, eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
 
-const { div, h2, h3, p, span, select, option, input, label, button } = dd;
+const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
 export default function settingsView(state, ui) {
   const groups = ui.platform.settings.grouped();
@@ -14,6 +14,7 @@ export default function settingsView(state, ui) {
         p({ className: 'sub' }, 'Preferences are stored in this browser. Plugins contribute their own settings here too.'),
         ...groups.map((g) => group(g, ui)),
         mcpSection(ui),
+        apiKeysSection(state, ui),
         openersSection(ui),
         keybindingsSection(ui),
       ),
@@ -170,6 +171,201 @@ function mcpSection(ui) {
 // Default openers per file type — the "always use this" choices from the opener
 // chooser. Each row shows the type → viewer; the × forgets it (so the next open of
 // that type asks again). Empty when the user hasn't set any defaults.
+// --- API keys -------------------------------------------------------------------
+
+const CAPS = [
+  { id: 'read', label: 'Read', hint: 'list and download' },
+  { id: 'write', label: 'Write', hint: 'upload and rename' },
+  { id: 'delete', label: 'Delete', hint: 'trash and purge' },
+  { id: 'admin', label: 'Admin', hint: 'includes all of the above' },
+];
+
+const ANY = '*';
+
+/** One-shot guard so a render does not queue a second load while the first is in flight. */
+let keysRequested = false;
+
+function apiKeysSection(state, ui) {
+  const keys = state.keys || {};
+
+  // Loaded lazily, when Settings is first opened — the list is admin-only and most
+  // sessions never need it, so it is not worth a request at boot.
+  if (!keysRequested && !keys.loaded && !keys.loading) {
+    keysRequested = true;
+    ui.exec('keys.load');
+  }
+
+  // A non-admin gets a 403 here, which is the correct answer rather than an error worth
+  // showing. The section simply is not part of their settings screen.
+  if (keys.error && !keys.keys?.length) return null;
+  if (!keys.loaded) return null;
+
+  const collections = state.ex?.collections || [];
+
+  return div({ className: 'group' },
+    h3('API keys'),
+    p({ className: 'sub' },
+      'Give a script or a service access without giving it an account. A key carries '
+      + 'capabilities and no identity, so anything it does is attributed to the key rather '
+      + 'than to a person \u2014 and it can only reach the collections you scope it to.'),
+
+    keys.minted ? mintedBanner(keys.minted, ui) : null,
+    keys.draft ? draftForm(keys, collections, ui) : null,
+
+    !keys.draft && !keys.minted
+      ? div({ className: 'keys-actions' },
+        button({ className: 'btn' }, icon('plus', { size: 14 }), 'New key')
+          .on({ click: () => ui.exec('keys.new') }))
+      : null,
+
+    keys.keys?.length
+      ? div({ className: 'keys-list' }, ...keys.keys.map((k) => keyRow(k, keys, collections, ui)))
+      : div({ className: 'keys-empty' }, 'No keys yet.'),
+  );
+}
+
+/**
+ * The secret, shown once.
+ *
+ * Deliberately loud and deliberately blocking the rest of the section: the server stored
+ * only a hash, so this is the only moment the value exists anywhere. A quiet row in a
+ * table would be dismissed without being copied.
+ */
+function mintedBanner(minted, ui) {
+  const copy = () => {
+    navigator.clipboard?.writeText(minted.secret)
+      .then(() => ui.platform.notifications.success('Key copied'))
+      .catch(() => ui.platform.notifications.info(minted.secret, { sticky: true }));
+  };
+  return div({ className: 'key-minted' },
+    div({ className: 'key-minted-head' },
+      icon('warn', { size: 15 }),
+      span(`\u201c${minted.key.name}\u201d is ready \u2014 copy it now.`),
+    ),
+    p({ className: 'key-minted-note' },
+      'This is the only time it can be shown. It is stored as a hash, so it cannot be '
+      + 'recovered \u2014 if it is lost, revoke the key and make another.'),
+    div({ className: 'key-secret' },
+      code({ className: 'mono' }, minted.secret),
+      button({ className: 'btn small', title: 'Copy' }, icon('link', { size: 13 })).on({ click: copy }),
+    ),
+    div({ className: 'keys-actions' },
+      button({ className: 'btn' }, 'Done').on({ click: () => ui.exec('keys.dismissMinted') }),
+    ),
+  );
+}
+
+function draftForm(keys, collections, ui) {
+  const draft = keys.draft;
+  const scopes = ui.app.apiKeys.draftScopes();
+  const ready = !!draft.name.trim() && !!scopes;
+
+  return div({ className: 'key-form' },
+    div({ className: 'setting' },
+      div({ className: 'info' },
+        div({ className: 't' }, 'Name'),
+        div({ className: 'd' }, 'What it is for. This is what the list shows, so make it recognisable.'),
+      ),
+      div({ className: 'control' },
+        input({ className: 'input', value: draft.name, $attrs: { placeholder: 'CI uploader' } })
+          .on({ input: (e) => ui.app.apiKeys.patchDraft({ name: e.target.value }) }),
+      ),
+    ),
+
+    div({ className: 'setting' },
+      div({ className: 'info' },
+        div({ className: 't' }, 'Expires after'),
+        div({ className: 'd' }, 'Days from now. Leave blank and it never expires.'),
+      ),
+      div({ className: 'control' },
+        input({
+          className: 'input', type: 'number', value: draft.expiresInDays,
+          $attrs: { min: '1', max: '3650', placeholder: 'never' },
+        }).on({ input: (e) => ui.app.apiKeys.patchDraft({ expiresInDays: e.target.value }) }),
+      ),
+    ),
+
+    div({ className: 'key-scopes' },
+      div({ className: 'key-scopes-head' },
+        div({ className: 't' }, 'What it may do'),
+        div({ className: 'd' },
+          'Per collection. A key with nothing ticked grants nothing and cannot be created.'),
+      ),
+      scopeRow({ id: ANY, name: 'All collections', wildcard: true }, draft, ui),
+      ...collections.map((c) => scopeRow(c, draft, ui)),
+    ),
+
+    div({ className: 'keys-actions' },
+      button({ className: 'btn primary', $attrs: ready ? {} : { disabled: 'true' } },
+        keys.busy === 'mint' ? 'Creating\u2026' : 'Create key')
+        .on({ click: () => ready && ui.exec('keys.mint') }),
+      button({ className: 'btn' }, 'Cancel').on({ click: () => ui.exec('keys.cancel') }),
+    ),
+  );
+}
+
+function scopeRow(collection, draft, ui) {
+  const held = new Set(draft.caps[collection.id] || []);
+  return div({ className: `key-scope ${collection.wildcard ? 'wildcard' : ''}` },
+    div({ className: 'key-scope-name' },
+      icon(collection.wildcard ? 'grid' : 'files', { size: 14 }),
+      span(collection.name || collection.id),
+    ),
+    div({ className: 'key-scope-caps' },
+      ...CAPS.map((c) => label({ className: `cap ${held.has(c.id) ? 'on' : ''}`, title: c.hint },
+        input({ type: 'checkbox', checked: held.has(c.id) })
+          .on({ change: () => ui.app.apiKeys.toggleCap(collection.id, c.id) }),
+        span(c.label),
+      )),
+    ),
+  );
+}
+
+function keyRow(k, keys, collections, ui) {
+  const revoked = !!k.revokedAt;
+  const expired = k.expiresAt != null && k.expiresAt <= Date.now();
+  const dead = revoked || expired;
+  return div({ className: `key-row ${dead ? 'dead' : ''}` },
+    div({ className: 'key-row-main' },
+      div({ className: 'key-row-name' },
+        span({ className: 't' }, k.name),
+        revoked ? span({ className: 'key-tag' }, 'revoked')
+          : expired ? span({ className: 'key-tag' }, 'expired') : null,
+      ),
+      div({ className: 'key-row-scopes' }, ...scopeSummary(k, collections)),
+      div({ className: 'key-row-meta' }, metaLine(k)),
+    ),
+    !dead
+      ? button({
+        className: 'btn small danger',
+        $attrs: keys.busy === k.id ? { disabled: 'true' } : {},
+      }, keys.busy === k.id ? '\u2026' : 'Revoke').on({ click: () => ui.exec('keys.revoke', k.id) })
+      : null,
+  );
+}
+
+function scopeSummary(k, collections) {
+  // The name if we know it, the id if we do not. A key can outlive the collection it was
+  // scoped to, and showing a bare id then is more honest than showing nothing — it is
+  // also the thing you would search for to find out what happened to it.
+  const nameOf = (id) => collections.find((c) => c.id === id)?.name || id;
+  return (k.scopes || []).map((s) => span({ className: 'key-chip' },
+    span({ className: 'where' }, s.collectionId === ANY ? 'all collections' : nameOf(s.collectionId)),
+    span({ className: 'what' }, s.capabilities.join(' \u00b7 ')),
+  ));
+}
+
+function metaLine(k) {
+  const when = (ms) => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const bits = [`created ${when(k.createdAt)}`];
+  if (k.createdBy) bits.push(`by ${k.createdBy}`);
+  // "Never used" is the more useful of the two facts: it is how you find the key nobody
+  // needs and can safely revoke.
+  bits.push(k.lastUsedAt ? `last used ${when(k.lastUsedAt)}` : 'never used');
+  if (k.expiresAt) bits.push(`expires ${when(k.expiresAt)}`);
+  return bits.join(' \u00b7 ');
+}
+
 function openersSection(ui) {
   const rows = listAssociations(ui.platform);
   return div({ className: 'group' },
