@@ -59,13 +59,44 @@ minted URLs and two leases for one file, and nothing fails to say so. "Remember 
 at each call site" is not a defence, because forgetting is silent and it is exactly the
 parameterised queries that are worth sharing.
 
-So `queryFor(Class, ...args)` interns: same class and same arguments gives back the same
-instance, which makes identity mean logical equality and lets both caches behave. Keyed on
-the class OBJECT rather than its name, since minification can collapse two class names to
-the same identifier. Arguments must be primitives or plain objects/arrays of them —
-a function stringifies to `undefined` in JSON, so accepting one would silently key two
-different queries identically, which is the original bug reintroduced by the fix. It throws
-instead.
+So a parameterised query is not constructed, it is asked for: `SomeQuery.of(...args)` gives
+back the same instance for the same arguments, which makes identity mean logical equality and
+lets both caches behave.
+
+`of` rather than an interning constructor: a constructor that hands back somebody else's
+object still allocates the one it discarded, and `new X()` returning a thing that is not a
+fresh X is a trap for whoever reads the call site next.
+
+A mixin, `shared(Base)`, rather than a base class — the queries that need it already extend
+`ServiceQuery` or `ViewQuery`, and single inheritance does not allow two bases. The table is
+keyed on the class OBJECT rather than its name, since minification can collapse two class
+names to one identifier; it also cannot be a `static #table` on the base, because a private
+static belongs to the class that declares it and `Subclass.of()` reaching for it throws.
+
+**A key, not a hash plus a comparator.** A comparator only earns its complexity when keys can
+collide, and a canonical key does not collide. Where equality is genuinely semantic — an
+argument that changes how something is displayed but not what is fetched — `static key()` is
+overridden to normalise, which says it in one function rather than two that have to agree.
+Default arguments must be primitives or plain objects/arrays of them: a function stringifies
+to `undefined` in JSON, so accepting one would key two different queries identically, which
+is the original bug reintroduced by the fix. It throws instead. A custom `key` sidesteps the
+check, because it never stringifies the argument.
+
+**Eviction: weak, swept by a finalizer.** Entries are `WeakRef`s and a `FinalizationRegistry`
+removes the key once the instance is collected. That is sound because LIVENESS PINS THE
+INSTANCE — ngin's controller map is a plain `Map` holding the query as a key, deleted only on
+teardown, so a query with observers is strongly reachable and cannot be collected. An idle
+one can be, and re-asking simply builds a fresh instance.
+
+An LRU with a cap would be actively wrong: evicting a *live* entry means the next `of()`
+mints a second instance while the first is still running — the exact bug interning exists to
+prevent, arriving on a timer. (This does lean on ngin's default controller map being strong.
+`hooks.createQueryControllersMap` could replace it with a weak one; we do not, and a weak one
+would break this.)
+
+There is no guard against calling `new` directly. Threading one through every subclass
+constructor composes badly with a mixin whose base takes its own arguments, and scope already
+does the job: the classes stay private to `bl/queries.js` and only instances leave it.
 
 ngin also exposes `hooks.createQueryControllersMap` for custom keying, which is where this
 could live instead. Interning was chosen because it is the layer where the problem actually

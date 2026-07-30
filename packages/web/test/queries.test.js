@@ -9,7 +9,7 @@ import { test, expect } from './testkit.js';
 import { Engine, Provider, Query } from '@3sln/ngin';
 import { cell } from '../src/runtime.js';
 import * as q from '../src/bl/queries.js';
-import { queryFor } from '../src/bl/intern.js';
+import { shared, SharedQuery, keyOfArgs } from '../src/bl/intern.js';
 import { watchQuery } from '../src/bl/watchQuery.js';
 
 /**
@@ -282,7 +282,7 @@ test('a view recomputes when a context key flips, not only when its own list cha
 // fields, so two structurally identical queries are two realizations unless something makes
 // them one object. These are the cases where getting that wrong is silent.
 
-class Param extends Query {
+class Param extends SharedQuery {
   constructor(...args) { super(); this.args = args; }
   boot(_, { notify }) { notify(this.args); }
   kill() {}
@@ -290,63 +290,111 @@ class Param extends Query {
 class OtherParam extends Param {}
 
 test('same class and same arguments is the same instance', () => {
-  expect(queryFor(Param, 'n1')).toBe(queryFor(Param, 'n1'));
-  expect(queryFor(Param, 'n1')).not.toBe(queryFor(Param, 'n2'));
+  expect(Param.of('n1')).toBe(Param.of('n1'));
+  expect(Param.of('n1')).not.toBe(Param.of('n2'));
 });
 
-test('different classes never share a key, whatever a bundler renames them to', () => {
-  // Keyed on the class OBJECT, not its name: minification can turn two class names into the
-  // same short identifier, and a name-keyed cache would then hand one query's realization
-  // to a different query entirely.
-  expect(queryFor(Param, 'x')).not.toBe(queryFor(OtherParam, 'x'));
-  expect(queryFor(OtherParam, 'x')).toBe(queryFor(OtherParam, 'x'));
+test('a subclass gets its own row, and never its parent\'s', () => {
+  // `this` inside the static is the class it was called on, so subclasses separate for free.
+  // A `static #table` on the base could not do this: a private static belongs to the class
+  // that declares it, so `Subclass.of()` reaching for it throws.
+  expect(Param.of('x')).not.toBe(OtherParam.of('x'));
+  expect(OtherParam.of('x')).toBe(OtherParam.of('x'));
+  expect(OtherParam.of('x')).toBeInstanceOf(OtherParam);
 });
 
 test('argument types are part of the key', () => {
-  // '1' and 1 are different questions; a naive key would flatten them together.
-  expect(queryFor(Param, '1')).not.toBe(queryFor(Param, 1));
-  expect(queryFor(Param, 0)).not.toBe(queryFor(Param, false));
-  expect(queryFor(Param, null)).not.toBe(queryFor(Param));
+  expect(Param.of('1')).not.toBe(Param.of(1));
+  expect(Param.of(0)).not.toBe(Param.of(false));
+  expect(Param.of(null)).not.toBe(Param.of());
 });
 
 test('object arguments key by content, in a stable order', () => {
-  expect(queryFor(Param, { a: 1, b: 2 })).toBe(queryFor(Param, { b: 2, a: 1 }));
-  expect(queryFor(Param, { a: 1 })).not.toBe(queryFor(Param, { a: 2 }));
-  expect(queryFor(Param, ['a', 'b'])).toBe(queryFor(Param, ['a', 'b']));
-  expect(queryFor(Param, ['a', 'b'])).not.toBe(queryFor(Param, ['b', 'a']));
+  expect(Param.of({ a: 1, b: 2 })).toBe(Param.of({ b: 2, a: 1 }));
+  expect(Param.of({ a: 1 })).not.toBe(Param.of({ a: 2 }));
+  expect(Param.of(['a', 'b'])).toBe(Param.of(['a', 'b']));
+  expect(Param.of(['a', 'b'])).not.toBe(Param.of(['b', 'a']));
 });
 
 test('an argument a key cannot capture is refused at the call site', () => {
   // A function stringifies to `undefined` in JSON, so two queries taking different callbacks
   // would key identically and silently share one realization — the very bug interning
   // exists to prevent, reintroduced by the fix. Fail loudly instead.
-  expect(() => queryFor(Param, () => {})).toThrow(/cannot be part of a sharing key/);
-  expect(() => queryFor(Param, { cb: () => {} })).toThrow(/#0\.cb/);
-  expect(() => queryFor(Param, Symbol('s'))).toThrow(/cannot be part of a sharing key/);
-  expect(() => queryFor(Param, new Date(0))).toThrow(/Date/);
+  expect(() => Param.of(() => {})).toThrow(/cannot be part of a sharing key/);
+  expect(() => Param.of({ cb: () => {} })).toThrow(/#0\.cb/);
+  expect(() => Param.of(Symbol('s'))).toThrow(/cannot be part of a sharing key/);
+  expect(() => Param.of(new Date(0))).toThrow(/Date/);
 });
 
-test('an interned query is one live realization, not two', async () => {
-  // The point of all of it: two call sites asking the same question boot once and share.
+test('a custom key can share more coarsely than the arguments do', () => {
+  // The case this is for: an argument that changes how something is displayed but not what
+  // is fetched should not split the realization in two.
+  class Coarse extends SharedQuery {
+    static key(id) { return id; }
+    constructor(id, opts) { super(); this.id = id; this.opts = opts; }
+    boot(_, { notify }) { notify(this.id); }
+    kill() {}
+  }
+  expect(Coarse.of('n1', { preview: true })).toBe(Coarse.of('n1', { preview: false }));
+  expect(Coarse.of('n1', {})).not.toBe(Coarse.of('n2', {}));
+  // And a custom key sidesteps the keyable check, since it never stringifies the argument.
+  expect(() => Coarse.of('n1', () => {})).not.toThrow();
+});
+
+test('the mixin composes with a query that already has a base', () => {
+  // Why it is a mixin: the queries that need sharing already extend ServiceQuery/ViewQuery,
+  // and single inheritance does not let a class have two bases.
+  class Base extends Query { constructor(tag) { super(); this.tag = tag; } boot(_, {notify}) { notify(this.tag); } kill() {} }
+  class Both extends shared(Base) {}
+  expect(Both.of('t')).toBeInstanceOf(Base);
+  expect(Both.of('t')).toBe(Both.of('t'));
+});
+
+test('interning is what makes one realization, not two', async () => {
   let boots = 0;
-  class Counted extends Query {
+  class Counted extends SharedQuery {
     constructor(id) { super(); this.id = id; }
     boot(_, { notify }) { boots++; notify(this.id); }
     kill() {}
   }
   const engine = engineWith({ explorer: service({}) });
-  const a = engine.query(queryFor(Counted, 'node-1')).subscribe(() => {});
-  const b = engine.query(queryFor(Counted, 'node-1')).subscribe(() => {});
+  const a = engine.query(Counted.of('node-1')).subscribe(() => {});
+  const b = engine.query(Counted.of('node-1')).subscribe(() => {});
   await settle();
   expect(boots).toBe(1);
 
-  engine.query(queryFor(Counted, 'node-2')).subscribe(() => {});
+  engine.query(Counted.of('node-2')).subscribe(() => {});
   await settle();
   expect(boots).toBe(2);   // a genuinely different question does get its own
   a.unsubscribe(); b.unsubscribe();
 });
 
-test('contributionsOfType goes through interning rather than its own memo table', () => {
+test('a live query stays interned, which is what makes weak eviction safe', async () => {
+  // Entries are WeakRefs swept by a finalizer, and that is only sound because liveness pins
+  // the instance: ngin's controller map is a plain Map holding the query as a key, deleted
+  // only on teardown. If a live entry could be evicted, the next `of()` would mint a second
+  // instance alongside a running one — the exact bug, arriving on a timer. An LRU with a cap
+  // would do precisely that.
+  class Live extends SharedQuery {
+    constructor(id) { super(); this.id = id; }
+    boot(_, { notify }) { notify(this.id); }
+    kill() {}
+  }
+  const engine = engineWith({ explorer: service({}) });
+  const first = Live.of('pinned');
+  const sub = engine.query(first).subscribe(() => {});
+  await settle();
+  if (global.gc) { global.gc(); await settle(); }
+  expect(Live.of('pinned')).toBe(first);
+  sub.unsubscribe();
+});
+
+test('keyOfArgs is available on its own, for a custom key built from part of the arguments', () => {
+  expect(keyOfArgs('a', 1)).toBe(keyOfArgs('a', 1));
+  expect(keyOfArgs('a', 1)).not.toBe(keyOfArgs('a', '1'));
+});
+
+test('contributionsOfType shares through the mixin rather than its own memo table', () => {
   expect(q.contributionsOfType('statusItem')).toBe(q.contributionsOfType('statusItem'));
   expect(q.contributionsOfType('statusItem')).not.toBe(q.contributionsOfType('opener'));
 });
