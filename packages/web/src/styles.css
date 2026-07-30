@@ -458,12 +458,23 @@ kbd {
 .scrim { position: fixed; inset: 0; background: #0006; backdrop-filter: blur(1.5px); z-index: 40; }
 
 .palette {
-  position: fixed; top: 12vh; left: 50%; transform: translateX(-50%);
+  position: fixed; top: 12vh; left: 50%; translate: -50% 0;
   width: min(640px, 92vw); background: var(--bg-elevated); border: 1px solid var(--border-strong);
   border-radius: 12px; box-shadow: var(--shadow); z-index: 50; overflow: hidden;
   animation: pop .13s var(--ease);
 }
-@keyframes pop { from { opacity: 0; transform: translate(-50%, -6px) scale(.98); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+/* Transform-neutral on purpose.
+
+   This used to end at `translate(-50%, 0)` — the command palette's horizontal centring,
+   baked into a shared animation. `animation-fill-mode` is `none`, so when the animation
+   finished the transform reverted to the element's own and anything that did not happen to
+   want exactly that offset jumped by the difference: the context menu, plugin panel and
+   inbox each snapped right by half their width, and the dialog dropped half its height
+   because the keyframe kept the X centring and lost the Y.
+
+   Elements that need centring now do it with the standalone `translate` property, which
+   composes with `transform` instead of competing for the same slot. */
+@keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
 .palette .search { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .palette .search input { flex: 1; background: transparent; border: 0; outline: none; font-size: 15px; color: var(--text); }
 .palette .results { max-height: 52vh; overflow-y: auto; padding: 6px; }
@@ -501,7 +512,7 @@ kbd {
 .palette .none .spinner { width: 13px; height: 13px; }
 
 .dialog {
-  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  position: fixed; top: 50%; left: 50%; translate: -50% -50%;
   width: min(440px, 92vw); background: var(--bg-elevated); border: 1px solid var(--border-strong);
   border-radius: 12px; box-shadow: var(--shadow); z-index: 50; padding: 20px; animation: pop .13s var(--ease);
 }
@@ -535,7 +546,11 @@ kbd {
   border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow); padding: 5px;
   animation: pop .1s var(--ease);
 }
-.menu .mi { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 6px; cursor: default; }
+/* `width: 100%` because these are <button>s, and a form control computes `width: auto` as
+   fit-content rather than stretching the way a block does — so the row, and with it the
+   hover target, was only as wide as its label. `.kbd`'s `margin-left: auto` below is the
+   evidence of the intent: pushing a shortcut to the far right needs a full-width row. */
+.menu .mi { display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 6px; cursor: default; }
 .menu .mi:hover { background: var(--bg-active); }
 .menu .mi.danger:hover { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
 .menu .mi .kbd { margin-left: auto; color: var(--text-faint); }

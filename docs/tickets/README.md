@@ -16,4 +16,3 @@ directory of closed tickets is a directory nobody reads.
 | [005](005-rotation-resume-mid-object.md) | Rotation: resume mid-object | A single object larger than a slice budget retries from the start forever |
 | [006](006-share-link-routing.md) | Share link routing | Links parse and nothing opens them |
 | [007](007-encrypted-multipart-is-sequential.md) | Encrypted multipart is sequential | Large uploads to encrypted collections lose upload concurrency |
-| [008](008-context-menu-position-and-hit-area.md) | Context menu jumps on open, rows do not fill it | One keyframe hardcodes the palette's centring, so 4 of its 5 users jump on open; button rows size to content |
