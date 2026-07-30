@@ -52,6 +52,7 @@ export {
 } from './encryption/keys.js';
 export { normalizeEncryption, shouldEncrypt, describeEncryption } from './encryption/policy.js';
 export { RotationService } from './encryption/rotation.js';
+export { describeExposure } from './encryption/exposure.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 export { IndexingCoordinator } from './indexing.js';
 // Work in flight (ephemeral) and standing problems (durable) — see the header of each.
