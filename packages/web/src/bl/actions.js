@@ -304,11 +304,25 @@ export class UploadFilesAction extends AppAction {
     await Promise.allSettled(uploads);
     app.engine.dispatch(new NavigateAction(collection));
   }
-  async #one(app, file, collection, concurrency) {
+  /**
+   * One file, once — and again, on the same tray row, if the user asks.
+   *
+   * `existingTid` is what makes a manual retry a second attempt at the row already on
+   * screen rather than a new entry beside it. The retry closes over the File, which is why
+   * it can run at all without asking the user to find the file again; it is also why the
+   * offer does not survive a reload, since nothing here is persisted.
+   */
+  async #one(app, file, collection, concurrency, existingTid = null) {
     const { transfers, platform } = app;
-    const tid = newId('xfer');
+    const tid = existingTid || newId('xfer');
     const controller = new AbortController();
-    transfers.start(tid, file.name, file.size, controller);
+    if (existingTid) {
+      transfers.restart(tid, controller);
+    } else {
+      transfers.start(tid, file.name, file.size, controller, {
+        retry: () => this.#one(app, file, collection, concurrency, tid),
+      });
+    }
     let uploadId = null;
     try {
       const node = await platform.api.upload(file, {
@@ -329,7 +343,9 @@ export class UploadFilesAction extends AppAction {
       if (err.code === 'aborted') transfers.finish(tid, 'cancelled');
       else {
         transfers.finish(tid, 'error', err.message);
-        platform.notifications.error(`Upload failed: ${file.name} — ${err.message}`);
+        // The toast says what happened; the tray row is where it can be acted on, and
+        // pointing at it is the difference between a dead end and an offer.
+        platform.notifications.error(`Upload failed: ${file.name} — ${err.message}. Retry it from the transfers tray.`);
       }
     }
   }

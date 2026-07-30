@@ -562,6 +562,9 @@ kbd {
 .tray .items { max-height: 300px; overflow-y: auto; }
 .xfer { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 .xfer:last-child { border-bottom: 0; }
+/* Only appears on a transfer that stopped short, so it never competes with the
+   progress bar for the eye. */
+.xfer-actions { display: flex; gap: 6px; margin-top: 8px; }
 .xfer .top { display: flex; align-items: center; gap: 8px; }
 .xfer .top .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .xfer .pct { color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }

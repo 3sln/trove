@@ -257,6 +257,19 @@ export function transferTray(state, ui) {
             ? div({ className: 'progress' }, div({ $styling: { width: `${Math.round(t.ratio * 100)}%` } }))
             : t.error ? div({ $styling: { 'font-size': '11px', color: 'var(--danger)', 'margin-top': '4px' } }, t.error) : null,
           t.status === 'active' ? div({ className: 'pct', $styling: { 'margin-top': '4px' } }, `${bytes(t.loaded)} / ${bytes(t.total)}`) : null,
+          // Offered on anything that stopped short, cancelled included — the transport
+          // already retries what is worth retrying on its own, so a row that reached this
+          // state failed for a reason another automatic attempt would not fix. A lost
+          // upload session is the case in point: correctly non-retryable, and correctly
+          // something the user can choose to start over.
+          (t.status === 'error' || t.status === 'cancelled') && t.retryable
+            ? div({ className: 'xfer-actions' },
+              button({ className: 'btn small' }, icon('refresh', { size: 12 }), span('Retry'))
+                .on({ click: () => ui.app.transfers.retry(t.id) }),
+              button({ className: 'btn small ghost' }, 'Dismiss')
+                .on({ click: () => ui.app.transfers.dismiss(t.id) }),
+            )
+            : null,
         ).key(t.id),
       ),
     ),

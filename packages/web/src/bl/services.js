@@ -165,11 +165,19 @@ export class SearchClientService {
 export class TransfersService {
   /** @param {import('./activity.js').ActivityService} [activity] */
   constructor(activity = null) {
-    this.state = { items: [] }; // { id, name, direction, ratio, loaded, total, status, error }
+    this.state = { items: [] }; // { id, name, direction, ratio, loaded, total, status, error, retryable }
     this.cell = cell(this.state);
     this._controllers = new Map();
     this.activity = activity;
     this._tasks = new Map(); // transfer id -> activity task handle
+    // How to run this transfer again. Held here rather than in state because it closes
+    // over the File itself, which is not something a state snapshot should carry.
+    //
+    // It exists because automatic retry cannot cover everything: a lost upload session is
+    // `notFound`, which is correctly classified non-retryable and will never succeed on
+    // its own no matter how many times it is tried. Someone has to decide to start over,
+    // and the alternative is asking the user to find the file and drag it in again.
+    this._retries = new Map();
   }
   observe() {
     return this.cell;
@@ -177,15 +185,61 @@ export class TransfersService {
   #emit() {
     this.cell.setValue(this.state);
   }
-  start(id, name, total, controller) {
+  /**
+   * @param {{retry?: () => Promise<any>}} [opts] how to run this transfer again, if it can be
+   */
+  start(id, name, total, controller, { retry = null } = {}) {
     this._controllers.set(id, controller);
-    this.state = { items: [...this.state.items, { id, name, direction: 'up', ratio: 0, loaded: 0, total, status: 'active', error: null }] };
+    if (retry) this._retries.set(id, retry);
+    this.state = {
+      items: [...this.state.items, {
+        id, name, direction: 'up', ratio: 0, loaded: 0, total, status: 'active', error: null,
+        // Surfaced in state so the tray renders from a snapshot rather than interrogating
+        // the service — it is a fact about the row, like `status`.
+        retryable: !!retry,
+      }],
+    };
     this.#emit();
+    this.#task(id, name, total);
+  }
+
+  #task(id, name, total) {
     const task = this.activity?.start({
       kind: 'transfer', title: `Uploading ${name}`, total: total || null, unit: 'bytes',
       onCancel: () => this.cancel(id),
     });
     if (task) this._tasks.set(id, task);
+  }
+
+  /**
+   * Run a failed transfer again, in place.
+   *
+   * The same row rather than a new one: a retry is another attempt at the thing the user
+   * already asked for, and a tray that grew an entry per attempt would report one upload
+   * as four.
+   */
+  retry(id) {
+    const again = this._retries.get(id);
+    if (!again) return null;
+    const item = this.state.items.find((t) => t.id === id);
+    if (!item || item.status === 'active') return null;
+    return again();
+  }
+
+  /** Put an existing row back into flight — see `retry`. */
+  restart(id, controller) {
+    this._controllers.set(id, controller);
+    const item = this.state.items.find((t) => t.id === id);
+    this.state = {
+      items: this.state.items.map((t) => (t.id === id
+        ? { ...t, status: 'active', error: null, ratio: 0, loaded: 0 }
+        : t)),
+    };
+    this.#emit();
+    // A fresh activity task: the previous one already ended as failed, and reporting
+    // progress into a finished task would leave the panel showing a failure that is
+    // actively being retried.
+    this.#task(id, item?.name || 'file', item?.total || null);
   }
   progress(id, { loaded, total, ratio }) {
     this.state = { items: this.state.items.map((t) => (t.id === id ? { ...t, loaded, total, ratio } : t)) };
@@ -211,10 +265,16 @@ export class TransfersService {
   }
   dismiss(id) {
     this.state = { items: this.state.items.filter((t) => t.id !== id) };
+    this._retries.delete(id);
     this.#emit();
   }
   clearDone() {
-    this.state = { items: this.state.items.filter((t) => t.status === 'active') };
+    const kept = this.state.items.filter((t) => t.status === 'active');
+    const keptIds = new Set(kept.map((t) => t.id));
+    // Drop the retry thunks of the rows that just left, so a dismissed upload does not
+    // hold its File alive for the rest of the session.
+    for (const id of [...this._retries.keys()]) if (!keptIds.has(id)) this._retries.delete(id);
+    this.state = { items: kept };
     this.#emit();
   }
 }
