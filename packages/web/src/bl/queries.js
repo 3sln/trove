@@ -22,16 +22,16 @@
 // memoise" is not a defence: forgetting is silent, and it is the parameterised queries —
 // exactly the ones worth sharing — that need it.
 //
-// So a parameterised query is not constructed, it is asked for: `SomeQuery.of(...args)`
-// returns the same instance for the same arguments, which makes identity mean logical
-// equality and lets both ngin's cache and watchQuery's work as intended. See bl/intern.js.
+// So a parameterised query declares `static of = queryOf(TheClass)` and is asked for rather
+// than constructed: the same arguments give back the same instance, which makes identity
+// mean logical equality and lets both ngin's cache and watchQuery's work. See bl/intern.js.
 // Parameterless queries are exported as singletons below. Either way the CLASSES stay
 // private to this module and only instances leave it — which is also what stops anyone
 // calling `new` on a shared query and quietly getting a second realization.
 
 import { Query } from '@3sln/ngin';
 import { localState } from '../ui/localState.js';
-import { shared } from './intern.js';
+import { queryOf } from './intern.js';
 
 /**
  * A live query over one of the existing cell-backed services.
@@ -131,7 +131,9 @@ export const localUi = new ServiceQuery(() => localState.observe());
  */
 export const contributionsOfType = (type) => ContributionsOfType.of(type);
 
-class ContributionsOfType extends shared(ServiceQuery) {
+class ContributionsOfType extends ServiceQuery {
+  static of = queryOf(ContributionsOfType);
+
   constructor(type) {
     super((app) => app.platform.contributions.observeType(type));
     this.type = type;

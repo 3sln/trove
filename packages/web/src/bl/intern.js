@@ -6,31 +6,18 @@
 // `new MediaUrl('n1')` in two places is two realizations of the same question, so two minted
 // URLs and two leases for one file, and nothing fails to say so.
 //
-// So a parameterised query is not constructed. It is asked for:
+// So a parameterised query declares a shared factory and is asked for, not constructed:
 //
-//     class MediaUrl extends SharedQuery { ... }
-//     MediaUrl.of(nodeId)     // same nodeId, same instance, one realization
+//     class MediaUrl extends ViewQuery {
+//       static of = queryOf(MediaUrl);
+//       constructor(nodeId) { ... }
+//     }
 //
-// `of` rather than an interning constructor because a constructor that hands back somebody
-// else's object still allocates the one it discarded, and `new X()` returning a thing that
-// is not a fresh X is a trap for whoever reads the call site next. A named factory says what
-// it does.
-
-import { Query } from '@3sln/ngin';
-
-/**
- * Class -> (key -> WeakRef<instance>).
- *
- * Keyed on the class OBJECT, not its name: the web app is bundled, and minification can
- * collapse two class names to one identifier — a name-keyed table would then hand one
- * query's realization to a different query.
- *
- * It also cannot live in a `static #table` on the base, because a private static belongs to
- * the class that declares it: `Subclass.of()` reaching for `this.#table` throws. A module
- * table sidesteps that, and `this` inside a static method is the class it was called on, so
- * subclasses get their own row for free.
- */
-const tables = new WeakMap();
+//     MediaUrl.of('n1')     // same id, same instance, one realization
+//
+// A field holding a factory rather than a base class or a mixin, which is what makes this
+// small: the query keeps whatever base it already had, each factory closes over its own
+// table, and there is no name resolved through a prototype chain for anything to shadow.
 
 /**
  * Eviction, without a policy to get wrong.
@@ -42,7 +29,7 @@ const tables = new WeakMap();
  *
  * The alternative — an LRU with a cap — is actively wrong here: evicting a LIVE entry means
  * the next `of()` mints a second instance while the first is still running, which is the
- * exact bug interning exists to prevent, arriving on a timer.
+ * exact bug this exists to prevent, arriving on a timer.
  *
  * (This leans on ngin's default controller map being strong. `hooks.createQueryControllersMap`
  * could replace it with a weak one; we do not, and a weak one would break this.)
@@ -57,7 +44,8 @@ const sweeper = new FinalizationRegistry(({ table, key }) => {
  *
  * A function stringifies to `undefined` in JSON, so two queries taking different callbacks
  * would key identically and silently share one realization — the very bug this exists to
- * prevent, reintroduced by the fix. Fail at the call site instead.
+ * prevent, reintroduced by the fix. Fail at the call site instead. A query with arguments
+ * like that passes its own key function and never comes through here.
  */
 function assertKeyable(value, path) {
   const t = typeof value;
@@ -65,7 +53,7 @@ function assertKeyable(value, path) {
   if (t !== 'object') {
     throw new TypeError(
       `Query argument ${path} is a ${t}, which cannot be part of a sharing key. ` +
-      'Pass an id and let the query look the thing up.',
+      'Pass an id and let the query look the thing up, or give queryOf a key function.',
     );
   }
   if (Array.isArray(value)) return value.forEach((v, i) => assertKeyable(v, `${path}[${i}]`));
@@ -75,7 +63,8 @@ function assertKeyable(value, path) {
   }
   throw new TypeError(
     `Query argument ${path} is a ${value.constructor?.name ?? 'non-plain object'}, which ` +
-    'cannot be part of a sharing key. Pass an id and let the query look the thing up.',
+    'cannot be part of a sharing key. Pass an id and let the query look the thing up, ' +
+    'or give queryOf a key function.',
   );
 }
 
@@ -86,101 +75,42 @@ export function stableKey(value) {
   return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableKey(value[k])}`).join(',')}}`;
 }
 
-/** The default: every argument, in order, canonically. Types are part of it, so 1 ≠ '1'. */
+/** The default key: every argument, in order, canonically. Types count, so 1 and '1' differ. */
 export function keyOfArgs(...args) {
   args.forEach((a, i) => assertKeyable(a, `#${i}`));
   return args.map(stableKey).join('|');
 }
 
 /**
- * Adds argument-sharing to a query class.
+ * A factory returning the shared instance of `Class` for a given argument list.
  *
- * A mixin rather than a base class because the queries that need it already have one —
- * `ServiceQuery` and `ViewQuery` — and single inheritance does not let a class have both.
+ *     class Thing extends ViewQuery { static of = queryOf(Thing); }
  *
- *     class ContributionsOfType extends shared(ServiceQuery) { ... }
- *     ContributionsOfType.of('statusItem')
+ * `key` defaults to the arguments, canonically. Pass one to share more coarsely than the
+ * arguments do — an option that changes how something is displayed but not what is fetched
+ * should not split one realization into two — or to key arguments the default refuses:
  *
- * There is no guard against calling `new` directly. A constructor guard has to be threaded
- * through every subclass constructor, and it composes badly with a mixin whose base takes
- * its own arguments. What actually prevents direct construction is scope: these classes stay
- * module-private in bl/queries.js and only their `of` wrapper is exported, so a component
- * has nothing to call `new` on.
+ *     static of = queryOf(Thing, (nodeId, opts) => nodeId);
  *
- * ### Why `key` is static, and not `get key()`
+ * A key rather than a hash plus a comparator: a comparator only earns its complexity when
+ * keys can collide, and a canonical key does not collide.
  *
- * Because the key is needed BEFORE there is an instance. An instance getter would mean
- * constructing to find out whether construction was necessary — the interning constructor
- * again, discarding the object on every cache hit, and running any work the constructor
- * does each time.
+ * Note that the class is captured, so a subclass inheriting this field builds the PARENT.
+ * A subclass that wants its own sharing declares its own `static of`. Nothing in the app
+ * subclasses a concrete query, so this is a remark, not a guard.
  *
- * The cost of static is that a key built from RAW arguments can disagree with what the
- * object actually is: a constructor that defaults `{ limit: 20 }` makes `of('x')` and
- * `of('x', { limit: 20 })` two keys for one query — a false split, which is the very bug
- * this exists to prevent. `normalize` is the answer rather than normalising inside `key`,
- * because that would be two functions that must agree, which is the objection to a
- * hash-plus-comparator restated. Normalise once, and both the key and the constructor see
- * the same arguments.
- *
- * A subclass whose arguments are not canonically stringifiable — or which should share more
- * coarsely than its arguments do, say ignoring a display option that changes nothing about
- * what is fetched — overrides `key`:
- *
- *     static key(nodeId, opts) { return nodeId; }   // opts does not affect sharing
- *
- * A KEY rather than a hash-plus-comparator on purpose. A comparator only earns its
- * complexity when keys can collide, and a canonical key does not collide.
+ * @param {Function} Class the query class, referenced from inside its own body
+ * @param {(...args: any[]) => string} [key]
  */
-export function shared(Base) {
-  return class Shared extends Base {
-    /**
-     * Canonical form of the arguments, used for BOTH the key and the construction.
-     *
-     * Override where the constructor would otherwise fill in defaults, so that the key
-     * describes the query that gets built rather than the arguments that were typed:
-     *
-     *     static normalize(id, opts = {}) { return [id, { limit: 20, ...opts }]; }
-     *
-     * @returns {any[]} the argument list to key on and to construct with
-     */
-    static normalize(...args) {
-      return args;
-    }
-
-    /** Canonical sharing key for these arguments. Override to share more coarsely. */
-    static key(...args) {
-      return keyOfArgs(...args);
-    }
-
-    /** The shared instance for these arguments. */
-    static of(...args) {
-      // `get key()` on the prototype is the natural thing to reach for and is silently
-      // wrong: the inherited STATIC wins, the getter is never consulted, and two instances
-      // quietly share one realization. Nothing about that failure is visible, so refuse it.
-      const proto = Object.getOwnPropertyDescriptor(this.prototype, 'key');
-      if (proto) {
-        throw new TypeError(
-          `${this.name} defines \`key\` on the prototype. It must be \`static key(...args)\` — ` +
-          'the key is needed before an instance exists, so an instance getter is never read.',
-        );
-      }
-      const normalized = this.normalize(...args);
-      const key = this.key(...normalized);
-      let table = tables.get(this);
-      if (!table) {
-        table = new Map();
-        tables.set(this, table);
-      }
-      const existing = table.get(key)?.deref();
-      if (existing) return existing;
-
-      const instance = new this(...normalized);
-      table.set(key, new WeakRef(instance));
-      sweeper.register(instance, { table, key });
-      return instance;
-    }
+export function queryOf(Class, key = keyOfArgs) {
+  const table = new Map();
+  return (...args) => {
+    const k = key(...args);
+    const existing = table.get(k)?.deref();
+    if (existing) return existing;
+    const instance = new Class(...args);
+    table.set(k, new WeakRef(instance));
+    sweeper.register(instance, { table, key: k });
+    return instance;
   };
 }
-
-/** The common case: a shared query with no other base. */
-export const SharedQuery = shared(Query);

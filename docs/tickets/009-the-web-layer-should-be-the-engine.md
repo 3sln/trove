@@ -59,45 +59,35 @@ minted URLs and two leases for one file, and nothing fails to say so. "Remember 
 at each call site" is not a defence, because forgetting is silent and it is exactly the
 parameterised queries that are worth sharing.
 
-So a parameterised query is not constructed, it is asked for: `SomeQuery.of(...args)` gives
-back the same instance for the same arguments, which makes identity mean logical equality and
-lets both caches behave.
+So a parameterised query declares a shared factory and is asked for, not constructed:
 
-`of` rather than an interning constructor: a constructor that hands back somebody else's
-object still allocates the one it discarded, and `new X()` returning a thing that is not a
-fresh X is a trap for whoever reads the call site next.
+    class MediaUrl extends ViewQuery {
+      static of = queryOf(MediaUrl);
+      constructor(nodeId) { ... }
+    }
 
-A mixin, `shared(Base)`, rather than a base class — the queries that need it already extend
-`ServiceQuery` or `ViewQuery`, and single inheritance does not allow two bases. The table is
-keyed on the class OBJECT rather than its name, since minification can collapse two class
-names to one identifier; it also cannot be a `static #table` on the base, because a private
-static belongs to the class that declares it and `Subclass.of()` reaching for it throws.
+    MediaUrl.of('n1')      // same id, same instance, one realization
 
-**`key` is static, and that is forced.** The key is needed BEFORE there is an instance —
-that is what makes the lookup worth doing. `get key()` would mean constructing to find out
-whether construction was necessary: the interning constructor again, discarding the object on
-every cache hit and re-running whatever the constructor does.
+A static field holding a factory, rather than a base class or a mixin. That is what keeps it
+small: the query keeps whatever base it already had, each factory closes over its own table,
+and there is no name resolved through a prototype chain for anything to shadow. An earlier
+cut of this was a `shared(Base)` mixin with overridable `static key` and `static normalize`
+plus a guard against writing `get key()`. Most of that machinery existed to serve the mixin —
+the class-keyed registry, the subclass row separation, the shadowing guard — and went away
+with it. `normalize` went too: it solved a false split that no query in the app actually has.
 
-Writing it as `get key()` anyway is silently wrong rather than broken — the inherited static
-wins, the getter is never consulted, and two instances share one realization with nothing to
-show for it. `of` refuses a `key` found on the prototype for that reason.
+`key` defaults to the arguments, canonically, and types count so `1` and `'1'` differ.
+Arguments must be primitives or plain objects/arrays of them: a function stringifies to
+`undefined` in JSON, so accepting one would key two different queries identically, which is
+the original bug reintroduced by the fix. Pass a key function to share more coarsely than the
+arguments do — an option that changes how something is displayed but not what is fetched
+should not split one realization — or to key arguments the default refuses.
 
-**`normalize`, because a key from raw arguments can lie.** A constructor that fills in a
-default makes `of('x')` and `of('x', {limit: 20})` two keys for one query — a false split,
-which is the bug interning exists to prevent, reachable through the defaulting the
-constructor was going to do anyway. Normalising inside `key` would fix it and reintroduce
-"two functions that have to agree", which is the objection to a comparator restated. So
-`static normalize(...args)` runs once and feeds both the key and the constructor, and the
-instance's state matches its key by construction.
+A key rather than a hash plus a comparator: a comparator only earns its complexity when keys
+can collide, and a canonical key does not collide.
 
-**A key, not a hash plus a comparator.** A comparator only earns its complexity when keys can
-collide, and a canonical key does not collide. Where equality is genuinely semantic — an
-argument that changes how something is displayed but not what is fetched — `static key()` is
-overridden to normalise, which says it in one function rather than two that have to agree.
-Default arguments must be primitives or plain objects/arrays of them: a function stringifies
-to `undefined` in JSON, so accepting one would key two different queries identically, which
-is the original bug reintroduced by the fix. It throws instead. A custom `key` sidesteps the
-check, because it never stringifies the argument.
+Because the class is captured, a subclass inheriting the field builds the PARENT. Nothing in
+the app subclasses a concrete query, so that is a remark rather than something guarded.
 
 **Eviction: weak, swept by a finalizer.** Entries are `WeakRef`s and a `FinalizationRegistry`
 removes the key once the instance is collected. That is sound because LIVENESS PINS THE
@@ -110,10 +100,6 @@ mints a second instance while the first is still running — the exact bug inter
 prevent, arriving on a timer. (This does lean on ngin's default controller map being strong.
 `hooks.createQueryControllersMap` could replace it with a weak one; we do not, and a weak one
 would break this.)
-
-There is no guard against calling `new` directly. Threading one through every subclass
-constructor composes badly with a mixin whose base takes its own arguments, and scope already
-does the job: the classes stay private to `bl/queries.js` and only instances leave it.
 
 ngin also exposes `hooks.createQueryControllersMap` for custom keying, which is where this
 could live instead. Interning was chosen because it is the layer where the problem actually
