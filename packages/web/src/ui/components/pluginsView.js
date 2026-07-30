@@ -1,6 +1,6 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { UninstallPluginAction } from '../../bl/actions.js';
+import { CloseDialogAction, OpenPluginPanelAction, UninstallPluginAction } from '../../bl/actions.js';
 
 const { div, span, p, button, h2, input, label } = dd;
 
@@ -55,13 +55,13 @@ function installedCard(pl, state, ui) {
       : null,
     (pl.settingsSchema || []).length ? settingsSection(pl, ui) : null,
     div({ className: 'actions' },
-      pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.platform.workbench.openPluginPanel(pl.id) }) : null,
+      pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.go(new OpenPluginPanelAction(pl.id)) }) : null,
       button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.platform.plugins.refresh(pl.id) }),
       button({ className: 'btn danger' }, 'Uninstall').on({
         click: () => ui.platform.workbench.showDialog({
           kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
           body: 'The plugin and all data it stored will be removed.',
-          onConfirm: () => { ui.platform.workbench.closeDialog(); ui.go(new UninstallPluginAction(pl.id)); },
+          onConfirm: () => { ui.go(new CloseDialogAction()); ui.go(new UninstallPluginAction(pl.id)); },
         }),
       }),
     ),

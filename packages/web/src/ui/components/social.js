@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
-import { OpenFileAction, CopyTextAction, NotifyAction } from '../../bl/actions.js';
+import { CopyTextAction, NotifyAction, OpenFileAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
@@ -68,7 +68,7 @@ function inboxItem(note, ui) {
       if (first?.nodeId) {
         ui.platform.api.stat(first.nodeId).then((r) => {
           ui.go(new OpenFileAction(r.node));
-          ui.platform.workbench.toggleInfoPanel(true);
+          ui.go(new ToggleInfoPanelAction(true));
         }).catch((err) => {
           // The item a notification points at can be deleted, or live somewhere the
           // reader lost access to. Either way the click must not just do nothing.
@@ -94,7 +94,7 @@ export function infoPanel(state, ui) {
     div({ className: 'ip-head' },
       icon('info', { size: 15 }),
       span('Details'),
-      button({ className: 'iconbtn', title: 'Close' }, icon('close', { size: 14 })).on({ click: () => ui.platform.workbench.toggleInfoPanel(false) }),
+      button({ className: 'iconbtn', title: 'Close' }, icon('close', { size: 14 })).on({ click: () => ui.go(new ToggleInfoPanelAction(false)) }),
     ),
     !active
       ? div({ className: 'ip-empty' }, span('Open a file to see its tags and conversation.'))

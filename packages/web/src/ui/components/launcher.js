@@ -6,7 +6,7 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { OpenFileAction, SearchAction, FilterAction } from '../../bl/actions.js';
+import { CloseSearchModalAction, FilterAction, OpenFileAction, SearchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { activeView, renderView, viewSwitcher, viewMove } from './views/index.js';
 import { openRowMenu } from './views/parts.js';
@@ -39,7 +39,7 @@ function runSearch(ui, query) {
   searchTimer = setTimeout(() => ui.go(new SearchAction(query)), 240);
 }
 function clearSearch(ui) {
-  ui.platform.workbench.setLaunchQuery('');
+  ui.go(new SetLaunchQueryAction(''));
   ui.go(new SearchAction('')); // empty query resets results/ran/error in the service
 }
 function runFilter(ui, filters, text) {
@@ -59,7 +59,7 @@ export default function launcher(state, ui, opts = {}) {
 
   const onInput = (e) => {
     const v = e.target.value;
-    wb.setLaunchQuery(v);
+    ui.go(new SetLaunchQueryAction(v));
     if (v.startsWith('!')) return; // command mode: no query dispatch
     const { text, filters } = parseTagQuery(v);
     if (filters.length) runFilter(ui, filters, text); // drive-wide tag/property query
@@ -75,8 +75,13 @@ export default function launcher(state, ui, opts = {}) {
   // move re-renders the list under the pointer, and a row replaced between mousedown and
   // mouseup never receives its click. A pointer user acts through the row's own menu,
   // which selects explicitly before it opens.
-  const hoverAt = (at) => wb.setLaunchIndex(at);
-  const selectAt = (at) => { wb.setLaunchIndex(at); syncSelection(ui, flat[at]); };
+  const hoverAt = (at) => ui.go(new SetLaunchIndexAction(at));
+  const selectAt = (at) => { ui.go(new SetLaunchIndexAction(at)); syncSelection(ui, flat[at]); };
+  // Still a direct call, and deliberately. The line below reads the index BACK out
+  // immediately, and dispatching is not synchronous — an action here would move the
+  // selection and then sync against the position it was in beforehand. Converting this
+  // means making the move and the sync one action, which needs `flat` on the engine side.
+  // See docs/tickets/009.
   const move = (delta) => {
     wb.moveLaunch(delta, flat.length);
     syncSelection(ui, flat[wb.state.launch.index]);
@@ -193,7 +198,7 @@ function searchHelp(state, ui, mode) {
   if (!p?.hint && !p?.examples?.length) return null;
   const wb = ui.platform.workbench;
   const tryIt = (query) => () => {
-    wb.setLaunchQuery(query);
+    ui.go(new SetLaunchQueryAction(query));
     const { text, filters } = parseTagQuery(query);
     if (filters.length) ui.go(new FilterAction(filters, text));
     else ui.go(new SearchAction(text));
@@ -211,7 +216,7 @@ function searchHelp(state, ui, mode) {
 }
 
 function buildContent(state, ui, q, mode, modal) {
-  const done = () => { if (modal) ui.platform.workbench.closeSearchModal(); };
+  const done = () => { if (modal) ui.go(new CloseSearchModalAction()); };
   if (mode === 'command') {
     const term = q.slice(1).trim().toLowerCase();
     const items = ui.platform.commands.paletteCommands()
@@ -336,7 +341,7 @@ function fileItem(node, ui, modal) {
     // From the modal search, `reset` starts a fresh viewer stack; then close it.
     run: () => {
       ui.go(new OpenFileAction(node, { reset: !!modal }));
-      if (modal) ui.platform.workbench.closeSearchModal();
+      if (modal) ui.go(new CloseSearchModalAction());
     },
     menu: () => fileMenu(node, ui),
   };

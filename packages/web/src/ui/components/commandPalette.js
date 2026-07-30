@@ -4,7 +4,7 @@
 
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
-import { OpenFileAction, QuickOpenAction } from '../../bl/actions.js';
+import { ClosePaletteAction, MovePaletteAction, OpenFileAction, QuickOpenAction, SetPaletteIndexAction, SetPaletteQueryAction } from '../../bl/actions.js';
 
 const { div, input, span } = dd;
 
@@ -21,13 +21,13 @@ export default function commandPalette(state, ui) {
 
   const run = (item) => {
     if (!item) return;
-    wb.closePalette();
+    ui.go(new ClosePaletteAction());
     if (pal.mode === 'files') ui.go(new OpenFileAction(item.node));
     else ui.exec(item.id);
   };
 
   return div({},
-    div({ className: 'scrim' }).on({ click: () => wb.closePalette() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new ClosePaletteAction()) }),
     div({ className: 'palette' },
       div({ className: 'search' },
         icon(pal.mode === 'files' ? 'search' : 'command', { size: 18 }),
@@ -53,7 +53,7 @@ export default function commandPalette(state, ui) {
       div({ className: 'results' },
         items.length
           ? items.map((item, i) => {
-            const hover = () => wb.setPaletteIndex(i);
+            const hover = () => ui.go(new SetPaletteIndexAction(i));
             return pal.mode === 'files' ? fileOpt(item, i === index, run, hover) : cmdOpt(item, i === index, ui, run, hover);
           })
           : emptyResults(pal, state),
@@ -121,23 +121,23 @@ function onKey(e, ui, items, index, run) {
   const wb = ui.platform.workbench;
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    wb.movePalette(1, items.length);
+    ui.go(new MovePaletteAction(1, items.length));
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    wb.movePalette(-1, items.length);
+    ui.go(new MovePaletteAction(-1, items.length));
   } else if (e.key === 'Enter') {
     e.preventDefault();
     run(items[index]);
   } else if (e.key === 'Escape') {
     e.preventDefault();
-    wb.closePalette();
+    ui.go(new ClosePaletteAction());
   }
 }
 
 let fileTimer = null;
 function onQuery(ui, value) {
   const wb = ui.platform.workbench;
-  wb.setPaletteQuery(value);
+  ui.go(new SetPaletteQueryAction(value));
   // The palette's CURRENT mode, not whichever one was on screen when this listener
   // was created — see the note at the input.
   clearTimeout(fileTimer);

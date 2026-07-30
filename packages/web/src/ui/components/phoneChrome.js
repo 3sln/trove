@@ -15,6 +15,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
 import { statusFacts, usageChip } from './statusBar.js';
+import { CloseSheetAction, OpenSheetAction } from '../../bl/actions.js';
 
 const { div, button, span, img } = dd;
 
@@ -53,7 +54,7 @@ export function phoneTopBar(state, ui) {
         ? div({ className: 'spinner', $styling: { width: '15px', height: '15px' } })
         : icon(g.icon, { size: 18 }),
       g.badge ? span({ className: 'pb-badge' }, String(g.badge > 9 ? '9+' : g.badge)) : null,
-    ).on({ click: () => ui.platform.workbench.openSheet('status') }),
+    ).on({ click: () => ui.go(new OpenSheetAction('status')) }),
   );
 }
 
@@ -66,7 +67,7 @@ export function phoneBottomBar(state, ui) {
       className: `pb-tab ${!sheet && active === t.id ? 'active' : ''}`,
       $attrs: { 'aria-label': t.label },
     }, icon(t.icon, { size: 21 }), span({ className: 'pb-label' }, t.label))
-      .on({ click: () => { ui.platform.workbench.closeSheet(); ui.exec(t.command); } })),
+      .on({ click: () => { ui.go(new CloseSheetAction()); ui.exec(t.command); } })),
     // Settings is reached FROM the More sheet, so while you are in it "More" is where
     // you are — otherwise all four tabs read as inactive and the bar claims you are
     // nowhere.
@@ -77,7 +78,7 @@ export function phoneBottomBar(state, ui) {
       icon('dots', { size: 21 }),
       unread ? span({ className: 'pb-badge' }, String(unread > 9 ? '9+' : unread)) : null,
       span({ className: 'pb-label' }, 'More'),
-    ).on({ click: () => ui.platform.workbench.openSheet('more') }),
+    ).on({ click: () => ui.go(new OpenSheetAction('more')) }),
   );
 }
 
@@ -99,9 +100,9 @@ export function phoneSheet(state, ui) {
   if (!which) return null;
   const wb = ui.platform.workbench;
   return div({ className: 'sheet-wrap' },
-    div({ className: 'scrim' }).on({ click: () => wb.closeSheet() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseSheetAction()) }),
     div({ className: 'sheet' },
-      div({ className: 'sheet-grip' }).on({ click: () => wb.closeSheet() }),
+      div({ className: 'sheet-grip' }).on({ click: () => ui.go(new CloseSheetAction()) }),
       which === 'status' ? statusSheet(state, ui) : moreSheet(state, ui),
     ),
   );
@@ -110,7 +111,7 @@ export function phoneSheet(state, ui) {
 function statusSheet(state, ui) {
   const f = statusFacts(state, ui);
   const wb = ui.platform.workbench;
-  const go = (cmd) => () => { wb.closeSheet(); ui.exec(cmd); };
+  const go = (cmd) => () => { ui.go(new CloseSheetAction()); ui.exec(cmd); };
   return div({ className: 'sheet-body' },
     div({ className: 'sheet-title' }, f.collectionLabel),
 
@@ -119,14 +120,14 @@ function statusSheet(state, ui) {
       ? sheetRow({
         icon: 'warn', danger: true,
         label: `${f.issues.length} need${f.issues.length === 1 ? 's' : ''} attention`,
-        onClick: () => { wb.closeSheet(); ui.app.activity.togglePanel(true); },
+        onClick: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); },
       })
       : null,
     f.running.length || f.uploading.length
       ? sheetRow({
         icon: 'refresh',
         label: `${f.running.length + f.uploading.length} running`,
-        onClick: () => { wb.closeSheet(); ui.app.activity.togglePanel(true); },
+        onClick: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); },
       })
       : null,
     !f.off.online ? sheetRow({ icon: 'info', label: 'Offline', value: `${f.off.pins.length} pinned` }) : null,
@@ -158,14 +159,14 @@ function statusSheet(state, ui) {
     div({ className: 'sheet-actions' },
       button({ className: 'btn small ghost' }, icon('refresh', { size: 13 }), span('Scan for changes')).on({ click: go('workbench.scanCollection') }),
       button({ className: 'btn small ghost' }, icon('refresh', { size: 13 }), span('Activity'))
-        .on({ click: () => { ui.platform.workbench.closeSheet(); ui.app.activity.togglePanel(true); } }),
+        .on({ click: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); } }),
     ),
   );
 }
 
 function moreSheet(state, ui) {
   const wb = ui.platform.workbench;
-  const go = (cmd) => () => { wb.closeSheet(); ui.exec(cmd); };
+  const go = (cmd) => () => { ui.go(new CloseSheetAction()); ui.exec(cmd); };
   const me = state.so.me;
   const unread = state.so.notifications.unread;
   return div({ className: 'sheet-body' },
@@ -177,8 +178,8 @@ function moreSheet(state, ui) {
         div({}, div({ className: 'sm-name' }, me.name || me.id), me.email ? div({ className: 'sm-sub' }, me.email) : null))
       : null,
 
-    sheetRow({ icon: 'bell', label: unread ? `Notifications (${unread})` : 'Notifications', onClick: () => { wb.closeSheet(); ui.app.social.toggleInbox(true); } }),
-    sheetRow({ icon: 'refresh', label: 'Activity & problems', onClick: () => { wb.closeSheet(); ui.app.activity.togglePanel(true); } }),
+    sheetRow({ icon: 'bell', label: unread ? `Notifications (${unread})` : 'Notifications', onClick: () => { ui.go(new CloseSheetAction()); ui.app.social.toggleInbox(true); } }),
+    sheetRow({ icon: 'refresh', label: 'Activity & problems', onClick: () => { ui.go(new CloseSheetAction()); ui.app.activity.togglePanel(true); } }),
     sheetRow({ icon: 'info', label: 'Details & conversation', onClick: go('workbench.toggleInfoPanel') }),
     sheetRow({ icon: 'trash', label: 'Trash', onClick: go('explorer.showTrash') }),
     sheetRow({ icon: 'refresh', label: 'Refresh', onClick: go('explorer.refresh') }),

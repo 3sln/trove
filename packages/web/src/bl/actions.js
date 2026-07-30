@@ -731,3 +731,106 @@ export class DismissNotificationAction extends AppAction {
     app.platform.notifications.dismiss(this.id);
   }
 }
+
+// --- the shell's own surface ----------------------------------------------------
+//
+// Opening and closing the workbench's overlays. These were direct calls on
+// `platform.workbench`, which meant the engine could not see a person close a dialog or
+// move through the palette — the same hole `ExecCommandAction` closed for commands.
+//
+// One class per operation rather than a single ShellAction carrying a method name. The
+// point of routing these through the engine is that the feed says what happened; a
+// discriminated blob would make every one of them read as "ShellAction" and give back
+// exactly the observability this is for.
+//
+// NOT here yet, deliberately: `showDialog` and `showContextMenu`. Both take callbacks —
+// a dialog carries `onConfirm`, a menu carries an item's `run` — so converting them
+// mechanically would post a closure through the engine and call it an action. They want
+// the outcome to be an ACTION TO DISPATCH rather than a function to call, which is a real
+// change at each call site rather than a swap. See docs/tickets/009.
+
+class ShellAction extends AppAction {
+  async execute({ app }) {
+    this.apply(app.platform.workbench);
+  }
+}
+
+export class CloseDialogAction extends ShellAction {
+  apply(wb) { wb.closeDialog(); }
+}
+
+export class UpdateDialogAction extends ShellAction {
+  constructor(patch) { super(); this.patch = patch; }
+  apply(wb) { wb.updateDialog(this.patch); }
+}
+
+export class CloseContextMenuAction extends ShellAction {
+  apply(wb) { wb.closeContextMenu(); }
+}
+
+export class ClosePaletteAction extends ShellAction {
+  apply(wb) { wb.closePalette(); }
+}
+
+export class SetPaletteQueryAction extends ShellAction {
+  constructor(query) { super(); this.query = query; }
+  apply(wb) { wb.setPaletteQuery(this.query); }
+}
+
+export class SetPaletteIndexAction extends ShellAction {
+  constructor(index) { super(); this.index = index; }
+  apply(wb) { wb.setPaletteIndex(this.index); }
+}
+
+export class MovePaletteAction extends ShellAction {
+  constructor(delta) { super(); this.delta = delta; }
+  apply(wb) { wb.movePalette(this.delta); }
+}
+
+export class CloseSearchModalAction extends ShellAction {
+  apply(wb) { wb.closeSearchModal(); }
+}
+
+export class SetLaunchQueryAction extends ShellAction {
+  constructor(query) { super(); this.query = query; }
+  apply(wb) { wb.setLaunchQuery(this.query); }
+}
+
+export class SetLaunchIndexAction extends ShellAction {
+  constructor(index) { super(); this.index = index; }
+  apply(wb) { wb.setLaunchIndex(this.index); }
+}
+
+export class OpenSheetAction extends ShellAction {
+  constructor(which) { super(); this.which = which; }
+  apply(wb) { wb.openSheet(this.which); }
+}
+
+export class CloseSheetAction extends ShellAction {
+  apply(wb) { wb.closeSheet(); }
+}
+
+export class ToggleInfoPanelAction extends ShellAction {
+  constructor(open) { super(); this.open = open; }
+  apply(wb) { wb.toggleInfoPanel(this.open); }
+}
+
+export class OpenPluginPanelAction extends ShellAction {
+  constructor(pluginId) { super(); this.pluginId = pluginId; }
+  apply(wb) { wb.openPluginPanel(this.pluginId); }
+}
+
+export class ClosePluginPanelAction extends ShellAction {
+  apply(wb) { wb.closePluginPanel(); }
+}
+
+/** Open a node in a panel, with a chosen opener. */
+export class OpenInPanelAction extends ShellAction {
+  constructor(node, openerId, opts = {}) {
+    super();
+    this.node = node;
+    this.openerId = openerId;
+    this.opts = opts;
+  }
+  apply(wb) { wb.openFile(this.node, this.openerId, this.opts); }
+}

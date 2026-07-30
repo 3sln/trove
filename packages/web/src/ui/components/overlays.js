@@ -8,7 +8,7 @@ import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
 import { localState } from '../localState.js';
-import { DismissNotificationAction } from '../../bl/actions.js';
+import { CloseContextMenuAction, OpenInPanelAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, UpdateDialogAction } from '../../bl/actions.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -23,7 +23,7 @@ export function dialog(state, ui) {
   let value = d.value ?? '';
   const submit = () => (d.kind === 'confirm' ? d.onConfirm?.() : d.onSubmit?.(value));
   return div({},
-    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
     div({ className: 'dialog' },
       h3(d.title),
       d.body ? div({ className: 'body' }, d.body) : null,
@@ -33,13 +33,13 @@ export function dialog(state, ui) {
             input({ className: 'input', value: d.value ?? '', placeholder: d.placeholder || '', autofocus: true })
               .on({
                 input: (e) => { value = e.target.value; },
-                keydown: (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') wb.closeDialog(); },
+                keydown: (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') ui.go(new CloseDialogAction()); },
                 $attach: (el) => queueMicrotask(() => { el.focus(); el.select(); }),
               }),
           )
         : null,
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
         button({ className: `btn ${d.danger ? 'danger' : 'primary'}` }, d.confirmLabel || 'OK').on({ click: submit }),
       ),
     ),
@@ -56,32 +56,32 @@ function openerChooserDialog(d, ui) {
   const remember = !!d.remember;
   const confirm = () => {
     if (remember && selected) rememberOpener(platform, typeKeyFor(d.node), selected);
-    wb.closeDialog();
-    wb.openFile(d.node, selected, { reset: !!d.reset });
+    ui.go(new CloseDialogAction());
+    ui.go(new OpenInPanelAction(d.node, selected, { reset: !!d.reset }));
   };
   return div({},
-    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
     div({ className: 'dialog opener-chooser' },
       h3(`Open “${d.node.name}” with…`),
       div({ className: 'opener-list' },
         ...d.openers.map((o) =>
           label({ className: `opener-opt ${o.id === selected ? 'sel' : ''}` },
             input({ type: 'radio', name: 'opener-choice', checked: o.id === selected })
-              .on({ change: () => wb.updateDialog({ openerId: o.id }) }),
+              .on({ change: () => ui.go(new UpdateDialogAction({ openerId: o.id })) }),
             icon(o.icon || iconForNode(d.node), { size: 18 }),
             div({ className: 'oo-main' },
               span({ className: 'oo-title' }, o.title || o.id),
               span({ className: 'oo-src' }, openerSource(platform, o)),
             ),
-          ).on({ click: () => wb.updateDialog({ openerId: o.id }) }),
+          ).on({ click: () => ui.go(new UpdateDialogAction({ openerId: o.id })) }),
         ),
       ),
       label({ className: 'opener-remember' },
-        input({ type: 'checkbox', checked: remember }).on({ change: (e) => wb.updateDialog({ remember: e.target.checked }) }),
+        input({ type: 'checkbox', checked: remember }).on({ change: (e) => ui.go(new UpdateDialogAction({ remember: e.target.checked })) }),
         span(`Always use this for ${typeLabelFor(d.node)}`),
       ),
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
         button({ className: 'btn primary' }, 'Open').on({ click: confirm }),
       ),
     ),
@@ -139,7 +139,7 @@ function collectionDialog(d, ui, caps) {
     && (driver?.fields || []).every((f) => !f.required || String(form[f.name] ?? '').trim());
 
   return div({},
-    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
     div({ className: 'dialog', $styling: { width: 'min(480px, 94vw)' } },
       h3('New collection'),
       div({ className: 'body' }, 'A collection is a backing store you own. Configure where its files live.'),
@@ -155,7 +155,7 @@ function collectionDialog(d, ui, caps) {
         : div({ className: 'body' }, 'This server has no storage drivers registered, so a collection cannot be created.'),
       driver ? storeFields(driver, form, set) : null,
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
         button({ className: 'btn primary', $attrs: ready ? {} : { disabled: 'true' } }, 'Create collection')
           .on({ click: () => ready && submit() }),
       ),
@@ -203,7 +203,7 @@ export function contextMenu(state, ui) {
   const x = Math.max(8, Math.min(m.x, window.innerWidth - 220));
   const y = Math.max(8, Math.min(m.y, window.innerHeight - wanted));
   return div({},
-    div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => wb.closeContextMenu(), contextmenu: (e) => { e.preventDefault(); wb.closeContextMenu(); } }),
+    div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => ui.go(new CloseContextMenuAction()), contextmenu: (e) => { e.preventDefault(); ui.go(new CloseContextMenuAction()); } }),
     div({ className: 'menu', $styling: { left: x + 'px', top: y + 'px' } },
       ...m.items.map((it, i) =>
         it.sep
@@ -216,9 +216,9 @@ export function contextMenu(state, ui) {
               span(it.label),
               it.kbd ? span({ className: 'kbd' }, it.kbd) : null,
             ).on({
-              click: () => { wb.closeContextMenu(); it.run?.(); },
+              click: () => { ui.go(new CloseContextMenuAction()); it.run?.(); },
               // The first item is focused on open, so Escape has to get you back out.
-              keydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); wb.closeContextMenu(); } },
+              keydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); ui.go(new CloseContextMenuAction()); } },
               $attach: (el) => { if (i === 0) queueMicrotask(() => el.focus()); },
             }),
       ),
@@ -296,7 +296,7 @@ export function pluginPanel(state, ui) {
     div({ className: 'head' },
       icon('plug', { size: 14 }),
       span(plugin?.name || pid),
-      button({ className: 'iconbtn x' }, icon('close', { size: 14 })).on({ click: () => ui.platform.workbench.closePluginPanel() }),
+      button({ className: 'iconbtn x' }, icon('close', { size: 14 })).on({ click: () => ui.go(new ClosePluginPanelAction()) }),
     ),
     // The host mounts the plugin's iframe into this element on attach.
     div({ className: 'host' }).on({

@@ -9,7 +9,7 @@ import { localState } from '../localState.js';
 import { region } from '../region.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import * as q from '../../bl/queries.js';
-import { NavigateAction, ExecCommandAction } from '../../bl/actions.js';
+import { CloseSearchModalAction, ExecCommandAction, NavigateAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
 import launcher from '../components/launcher.js';
@@ -171,7 +171,7 @@ function mainArea(state, ui) {
 function searchModal(state, ui) {
   if (!state.wb.searchModal) return div();
   return div({ className: 'search-modal' },
-    div({ className: 'scrim' }).on({ click: () => ui.platform.workbench.closeSearchModal() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseSearchModalAction()) }),
     div({ className: 'search-modal-panel' }, launcher(state, ui, { modal: true })),
   );
 }

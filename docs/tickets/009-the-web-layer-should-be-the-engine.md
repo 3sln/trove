@@ -185,3 +185,24 @@ Strangler-fig, because a single change here is not reviewable and not revertible
 - `platform.capabilities` is assigned after boot and is not reactive today — as a query that
   problem disappears, along with `workbench.touch()`.
 - Each phase commits on its own. If phase 2 stalls halfway, a half-converted tree still runs.
+
+## Still direct calls, and why
+
+Three things still reach `platform.workbench` rather than dispatching, each for a reason
+worth keeping written down.
+
+**`showDialog` and `showContextMenu` carry callbacks.** A dialog is posted with an
+`onConfirm` closure; a context menu with items each holding a `run`. Converting them
+mechanically would post a function through the engine and call it an action — the same
+mistake as a query handing out a handle, in the other direction. What they want is an ACTION
+TO DISPATCH as the outcome (`confirmAction`, `item.action`) rather than a function to call,
+which makes the result of a confirmation visible on the feed too. That is a real change at
+each call site, not a swap, so it is its own piece of work.
+
+**`moveLaunch` is read-after-write.** The line following it reads the new index straight back
+out of the store, and dispatching is not synchronous — an action there would move the
+selection and then sync against where it used to be. Converting means making the move and
+the sync a single action, which needs the flattened result list on the engine side.
+
+The three `observe*` calls in the composition are not in this category: they are the shell
+snapshot, and they go when the snapshot does.

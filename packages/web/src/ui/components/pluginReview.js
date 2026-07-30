@@ -8,6 +8,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes as fmtBytes } from '../format.js';
 import { localState } from '../localState.js';
+import { CloseDialogAction } from '../../bl/actions.js';
 
 const { div, span, button, h3, p, label, input } = dd;
 
@@ -17,7 +18,6 @@ const { div, span, button, h3, p, label, input } = dd;
 const KEY = 'pluginReview';
 
 export function pluginReview(d, ui) {
-  const wb = ui.platform.workbench;
   const s = d.summary;
   let sel = localState.get(KEY);
   if (sel?.ref !== d) {
@@ -33,7 +33,7 @@ export function pluginReview(d, ui) {
   });
 
   return div({},
-    div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
+    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
     div({ className: 'dialog review', $styling: { width: 'min(560px, 96vw)' } },
       header(s),
       div({ className: 'review-body' },
@@ -51,7 +51,7 @@ export function pluginReview(d, ui) {
         div({ className: 'review-meta' }, `${s.fileCount} files · ${fmtBytes(s.sizeBytes)} · id ${s.id}`),
       ),
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => wb.closeDialog() }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
         button({ className: 'btn primary' }, icon('plug', { size: 15 }), 'Install').on({ click: () => d.onInstall([...sel.grants]) }),
       ),
     ),
