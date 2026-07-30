@@ -6,7 +6,13 @@
     <meta name="theme-color" content="#181a1f" />
     <title>Trove</title>
     <link rel="icon" href="/icon.svg" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- `use-credentials` because a manifest is fetched with credentials OMITTED by
+         default, even same-origin. Behind cookie-based auth — Cloudflare Access, an
+         oauth2-proxy, anything holding a session cookie — that request is bounced to a
+         login page, the fetch fails, and the browser silently has no manifest: no app
+         name, no icons, no theme colour, and "Install app" offers a nameless page.
+         Silently, because a failed manifest fetch is not an error anyone is shown. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
