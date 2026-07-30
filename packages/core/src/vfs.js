@@ -12,6 +12,7 @@
 
 import { TroveError, isOutOfSpace } from './errors.js';
 import { UploadManager } from './uploads.js';
+import { toHex } from './encryption/keys.js';
 import { IndexerRegistry } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
 import { extname } from './util.js';
@@ -57,6 +58,16 @@ export class Vfs {
     this.uploads = new UploadManager({
       storageFor: (cid) => this.storageFor(cid),
       sessions: uploadSessions,
+      // What a collection encrypts and the key for it. Only the CollectionService knows,
+      // and only it is allowed to hand the key out — see collections/index.js.
+      encryptionFor: async (cid) => {
+        if (!this.collections?.encryptionFor) return null;
+        const encryption = await this.collections.encryptionFor(cid);
+        if (!encryption?.enabled) return null;
+        const key = await this.collections.dataKeyFor(cid);
+        if (!key) return null;
+        return { encryption, dataKeyHex: toHex(key) };
+      },
       maxBytes: maxUploadBytes,
       partSize: uploadPartSize,
     });

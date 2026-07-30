@@ -14,6 +14,8 @@
 
 import { TroveError, ErrorCode } from './errors.js';
 import { newId, isValidItemName } from './util.js';
+import { cipherSize, DEFAULT_CHUNK_SIZE } from './encryption/envelope.js';
+import { shouldEncrypt } from './encryption/policy.js';
 
 export const DEFAULT_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
 const MIN_MULTIPART_PART = 5 * 1024 * 1024; // S3 floor (except final part)
@@ -107,10 +109,14 @@ export class UploadManager {
    * @param {object} [deps.sessions] session store (defaults in-memory)
    * @param {number} [deps.partSize]
    */
-  constructor({ storage, storageFor, sessions, partSize = DEFAULT_PART_SIZE, maxBytes = null }) {
+  constructor({ storage, storageFor, sessions, encryptionFor, partSize = DEFAULT_PART_SIZE, maxBytes = null }) {
     // Either a single backend, or a resolver keyed by collectionId (collections).
     this.storageFor = storageFor ?? (async () => storage);
     this.sessions = sessions ?? new MemorySessionStore();
+    // What a collection encrypts, and the key to do it with:
+    // `(collectionId) => { encryption, dataKey } | null`. Absent means nothing is
+    // encrypted, which is what every existing deployment is.
+    this.encryptionFor = encryptionFor ?? (async () => null);
     this.partSize = partSize;
     this.maxBytes = maxBytes || null; // per-file quota (null = unbounded)
   }
@@ -151,6 +157,21 @@ export class UploadManager {
     const storageKey = newId('obj');
     const contentType = req.contentType || 'application/octet-stream';
 
+    // Does this item get encrypted, and with what?
+    //
+    // Decided here, once, and recorded on the session — not re-derived at `complete`,
+    // because the collection's rules can change between the two and an object half-planned
+    // as one thing and finished as another is unreadable either way.
+    //
+    // Everything downstream negotiates against the STORED size, which is larger: a header
+    // plus an authentication tag per chunk. Planning multipart boundaries against the
+    // plaintext size is short by exactly that, which is the difference between a final part
+    // that exists and one that does not.
+    const policy = await this.encryptionFor(collectionId);
+    const encrypting = !!policy && shouldEncrypt(policy.encryption, { name: req.name, contentType });
+    const chunkSize = policy?.encryption?.chunkSize || DEFAULT_CHUNK_SIZE;
+    const storedSize = encrypting ? cipherSize(req.size, chunkSize) : req.size;
+
     const session = {
       id: newId('up'),
       storageKey,
@@ -160,7 +181,12 @@ export class UploadManager {
       // the session because the decision is made when the upload STARTS but has to be
       // honoured when it COMPLETES, possibly much later.
       overwrite: !!req.overwrite,
+      // The size the USER sees, which is what the item is recorded as. `storedSize` is
+      // what actually occupies the bucket.
       size: req.size,
+      storedSize,
+      encrypted: encrypting,
+      chunkSize: encrypting ? chunkSize : null,
       contentType,
       createdAt: Date.now(),
       strategy: null,
@@ -172,17 +198,17 @@ export class UploadManager {
     const limits = this.#limits();
 
     // Small file + presign → single PUT straight to storage (never through us).
-    if (req.size <= SINGLE_PUT_LIMIT && caps.presignUpload) {
+    if (storedSize <= SINGLE_PUT_LIMIT && caps.presignUpload) {
       session.strategy = 'single';
       await this.sessions.put(session);
       const url = await storage.presignPut(storageKey, { contentType });
-      return { ...planSummary(session), strategy: 'single', multipart: false, presigned: true, url, limits };
+      return { ...planSummary(session), strategy: 'single', multipart: false, presigned: true, url, limits, encryption: this.#planEncryption(session, policy) };
     }
 
     // Multipart (presigned parts straight to storage, or streamed through us).
     if (caps.multipart) {
       session.strategy = caps.presignUpload ? 'presign' : 'direct';
-      const partCount = Math.max(1, Math.ceil(req.size / this.partSize));
+      const partCount = Math.max(1, Math.ceil(storedSize / this.partSize));
       // `#limits()` advertises maxParts in the very same response, and nothing enforced
       // it: a 150 GiB file planned 19,200 parts against a ceiling of 10,000, which S3
       // rejects at part 10,001 — after the client has transferred 80 GiB. On a presign
@@ -191,7 +217,7 @@ export class UploadManager {
       if (partCount > MAX_PARTS) {
         throw TroveError.tooLarge(
           `This file needs ${partCount.toLocaleString()} parts of ${this.partSize} bytes, over the ${MAX_PARTS.toLocaleString()}-part limit`,
-          { details: { maxParts: MAX_PARTS, partCount, partSize: this.partSize, size: req.size } },
+          { details: { maxParts: MAX_PARTS, partCount, partSize: this.partSize, size: storedSize } },
         );
       }
       // Only now open the multipart. Refusing AFTER creating it left an upload open in
@@ -205,13 +231,38 @@ export class UploadManager {
           parts.push({ partNumber: n, url: await storage.presignPart(storageKey, session.uploadId, n) });
         }
       }
-      return { ...planSummary(session), strategy: session.strategy, multipart: true, presigned: session.strategy === 'presign', partCount, parts, limits };
+      return { ...planSummary(session), strategy: session.strategy, multipart: true, presigned: session.strategy === 'presign', partCount, parts, limits, encryption: this.#planEncryption(session, policy) };
     }
 
     // Fallback: whole-object PUT streamed through us (tiny/simple backends).
     session.strategy = 'direct-single';
     await this.sessions.put(session);
-    return { ...planSummary(session), strategy: 'direct-single', multipart: false, presigned: false, limits };
+    return { ...planSummary(session), strategy: 'direct-single', multipart: false, presigned: false, limits, encryption: this.#planEncryption(session, policy) };
+  }
+
+  /**
+   * What the client needs in order to encrypt before the bytes leave the browser.
+   *
+   * The key travels, the bytes do not. That is what keeps a presigned direct-to-bucket
+   * upload possible while the bucket only ever sees ciphertext: the client seals the file
+   * locally and PUTs the envelope. Sending the key here is the explicit trade of this
+   * design — it defends the storage host, not the server, and the server had the key
+   * already in order to be able to index.
+   *
+   * Null for anything not being encrypted, so a client has one thing to check.
+   */
+  #planEncryption(session, policy) {
+    if (!session.encrypted) return null;
+    return {
+      algorithm: 'AES-256-GCM',
+      chunkSize: session.chunkSize,
+      fingerprint: policy.encryption.fingerprint,
+      // Hex rather than raw bytes: this rides in a JSON plan.
+      key: policy.dataKeyHex,
+      // What the client should end up PUTting, so it can check its own work before
+      // spending the bytes.
+      storedSize: session.storedSize,
+    };
   }
 
   /** Re-issue a signed URL for one part (resume after expiry). */
