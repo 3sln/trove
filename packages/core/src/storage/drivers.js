@@ -49,9 +49,19 @@ export function portableDrivers() {
           help: 'MinIO and most self-hosted endpoints need this.',
         },
       ],
-      // S3Storage takes the config flat; the old switch passed `cfg.s3`, which meant a
-      // collection record had to nest its own settings one level deeper than every
-      // other driver for no reason a user could see.
+      // Two config shapes reach here and both have to work.
+      //
+      // Flat — `{ driver: 's3', bucket: … }` — is what `fields` above describes and what
+      // the collection form posts. Nested under `s3` is what `configFromEnv` produces and
+      // what every collection record written before this driver existed holds, because the
+      // switch this replaced read `cfg.s3` and nothing else.
+      //
+      // Normalising rather than only handling it in `create` is the point: validation runs
+      // against the normalised shape, so a nested config is no longer refused for a missing
+      // top-level `bucket` that was about to be spread in anyway. That refusal broke every
+      // environment-configured S3 deployment at startup, which is as loud as a bug gets and
+      // still took a local run to see, because no test used the env shape.
+      normalize: (cfg) => ({ ...cfg, ...(cfg.s3 || {}) }),
       create: (cfg) => new S3Storage({
         bucket: cfg.bucket,
         region: cfg.region || 'auto',
@@ -60,7 +70,6 @@ export function portableDrivers() {
         secretAccessKey: cfg.secretAccessKey,
         sessionToken: cfg.sessionToken,
         forcePathStyle: cfg.forcePathStyle === true || cfg.forcePathStyle === 'true',
-        ...(cfg.s3 || {}),
       }),
     },
     {

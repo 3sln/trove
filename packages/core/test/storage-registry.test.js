@@ -106,3 +106,37 @@ test('a driver can be copied into another registry, create included', async () =
   expect(full.describe().find((d) => d.key === 's3').create).toBeUndefined();
   expect(typeof full.driver('s3').create).toBe('function');
 });
+
+test('the nested s3 config shape still builds — the one configFromEnv produces', async () => {
+  // The regression this pins broke every environment-configured S3 deployment at startup,
+  // production included: `TROVE_STORAGE=s3` puts the settings under `s3`, `create` spread
+  // them back out, and the required-field check in between looked for a top-level `bucket`
+  // that was never going to be there. "Storage driver "s3" requires "bucket"" on a drive
+  // whose bucket was configured correctly.
+  //
+  // No test caught it because every one of them used the flat shape the form posts.
+  const registry = new StorageDriverRegistry(portableDrivers());
+  const fromEnv = {
+    driver: 's3',
+    s3: { bucket: 'trove', region: 'auto', endpoint: 'https://acct.r2.cloudflarestorage.com', accessKeyId: 'a', secretAccessKey: 'x' },
+  };
+  const store = registry.build(fromEnv);
+  expect(store).toBeInstanceOf(StorageBackend);
+  expect(store.cfg.bucket).toBe('trove');
+
+  // Flat still works, and still validates.
+  expect(registry.build({ driver: 's3', bucket: 'flat', accessKeyId: 'a', secretAccessKey: 'x' }).cfg.bucket).toBe('flat');
+  // A nested config genuinely missing a bucket is still refused — normalising must not
+  // turn validation off.
+  expect(() => registry.build({ driver: 's3', s3: { accessKeyId: 'a', secretAccessKey: 'x' } }))
+    .toThrow(/requires "bucket"/);
+});
+
+test('descriptors carry no behaviour at all', async () => {
+  // `normalize` joined `create` as something a driver has and a client must not receive.
+  const described = new StorageDriverRegistry(portableDrivers()).describe();
+  for (const d of described) {
+    for (const [k, v] of Object.entries(d)) expect(typeof v).not.toBe('function');
+  }
+  expect(JSON.parse(JSON.stringify(described)).find((d) => d.key === 's3').fields.length).toBe(7);
+});

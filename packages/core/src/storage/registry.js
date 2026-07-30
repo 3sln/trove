@@ -56,6 +56,9 @@ export class StorageDriverRegistry {
    * @param {string} driver.label         for a form
    * @param {string} [driver.description] one line about what it is
    * @param {DriverField[]} [driver.fields]
+   * @param {(config: object) => object} [driver.normalize] accept an older or alternative
+   *   config shape, returning the one `fields` describes. Runs before validation, so the
+   *   shape checked is the shape built from.
    * @param {(config: object) => StorageBackend} driver.create
    */
   register(driver) {
@@ -82,6 +85,7 @@ export class StorageDriverRegistry {
         placeholder: f.placeholder || '',
         help: f.help || '',
       })),
+      normalize: driver.normalize || null,
       create: driver.create,
     });
     return this;
@@ -109,9 +113,16 @@ export class StorageDriverRegistry {
     return this._drivers.get(key);
   }
 
-  /** What a client needs to render a form. No `create`, because that is not data. */
+  /**
+   * What a client needs to render a form.
+   *
+   * Neither `create` nor `normalize`: both are behaviour, not data. JSON.stringify would
+   * drop them anyway, which is exactly why they are removed here instead — a describe()
+   * whose result is only serialisable by accident is one that leaks the next function
+   * somebody adds into every in-process consumer.
+   */
   describe() {
-    return [...this._drivers.values()].map(({ create, ...rest }) => rest);
+    return [...this._drivers.values()].map(({ create, normalize, ...rest }) => rest);
   }
 
   /**
@@ -119,6 +130,13 @@ export class StorageDriverRegistry {
    *
    * An unknown driver throws, and says what IS available. This is the arm that used to
    * return an in-memory store.
+   *
+   * `normalize` runs FIRST, so a driver that accepts more than one config shape validates
+   * the shape it will actually build from. Without it, required-field checks are performed
+   * against a config the driver was about to rewrite — which is precisely how S3 broke:
+   * `configFromEnv` nests its settings under `s3`, `create` spread that back out, and the
+   * check in between looked for a top-level `bucket` that was never going to be there and
+   * refused every environment-configured S3 deployment at startup.
    */
   build(config) {
     const key = config?.driver;
@@ -129,12 +147,13 @@ export class StorageDriverRegistry {
         `Unknown storage driver "${key}" — this deployment has: ${this.keys().join(', ') || 'none'}`,
       );
     }
+    const cfg = driver.normalize ? driver.normalize(config) : config;
     for (const f of driver.fields) {
-      if (f.required && (config[f.name] == null || config[f.name] === '')) {
+      if (f.required && (cfg[f.name] == null || cfg[f.name] === '')) {
         throw TroveError.invalid(`Storage driver "${key}" requires "${f.name}"`);
       }
     }
-    const backend = driver.create(config);
+    const backend = driver.create(cfg);
     if (!(backend instanceof StorageBackend)) {
       throw TroveError.invalid(`Storage driver "${key}" did not return a StorageBackend`);
     }
