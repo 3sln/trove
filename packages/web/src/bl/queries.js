@@ -12,14 +12,26 @@
 // state rather than competing to. The services are deleted in a later phase, at which point
 // these stop wrapping and simply hold.
 //
-// INSTANCE IDENTITY IS THE SHARING KEY. ngin keys live realizations by the query INSTANCE,
-// so `new Explorer()` twice is two realizations, two boots, and two subscriptions to the
-// same underlying cell — quietly, because nothing fails. Parameterless queries are therefore
-// exported as singletons, and anything parameterised has to memoise. Import the instance,
-// never the class.
+// INSTANCE IDENTITY IS THE SHARING KEY. ngin keys live realizations by the query INSTANCE —
+// `#controllers` is a Map keyed on the object — and nothing anywhere looks at the class or
+// the fields. So `new Explorer()` twice is two realizations, two boots and two subscriptions
+// to the same underlying cell, quietly, because nothing fails.
+//
+// Two instances carrying the SAME arguments are still two instances. `new MediaUrl('n1')`
+// twice mints two URLs and holds two leases for one file. That is the trap, and "remember to
+// memoise" is not a defence: forgetting is silent, and it is the parameterised queries —
+// exactly the ones worth sharing — that need it.
+//
+// So instances are INTERNED: `queryFor(Class, ...args)` returns the same instance for the
+// same arguments, which makes identity mean logical equality and lets both ngin's cache and
+// watchQuery's work as intended. Parameterless queries are exported as singletons below;
+// anything parameterised goes through `queryFor`. Import the instance, never the class.
 
 import { Query } from '@3sln/ngin';
 import { localState } from '../ui/localState.js';
+import { queryFor } from './intern.js';
+
+export { queryFor };
 
 /**
  * A live query over one of the existing cell-backed services.
@@ -117,14 +129,13 @@ export const localUi = new ServiceQuery(() => localState.observe());
  * realization every frame and never share one. Keyed by the type, which is the only thing
  * that distinguishes them.
  */
-const contributionQueries = new Map();
-export function contributionsOfType(type) {
-  let q = contributionQueries.get(type);
-  if (!q) {
-    q = new ServiceQuery((app) => app.platform.contributions.observeType(type));
-    contributionQueries.set(type, q);
+export const contributionsOfType = (type) => queryFor(ContributionsOfType, type);
+
+class ContributionsOfType extends ServiceQuery {
+  constructor(type) {
+    super((app) => app.platform.contributions.observeType(type));
+    this.type = type;
   }
-  return q;
 }
 
 // --- view queries ---------------------------------------------------------------

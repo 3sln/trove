@@ -47,6 +47,30 @@ value, and if anything in it is a function, the query has handed out a handle. A
 holding a handle is reaching around the engine again — which is the thing this ticket
 exists to stop.
 
+### Identity, and why instances are interned
+
+ngin shares a live realization by INSTANCE identity: `#controllers` is a Map keyed on the
+object, and neither the class nor the fields are consulted. `watchQuery` keys its bridged
+cells the same way.
+
+For a parameterless query that is fine — export a singleton. For a parameterised one it is a
+trap: `new MediaUrl('n1')` in two places is two realizations of the same question, so two
+minted URLs and two leases for one file, and nothing fails to say so. "Remember to memoise
+at each call site" is not a defence, because forgetting is silent and it is exactly the
+parameterised queries that are worth sharing.
+
+So `queryFor(Class, ...args)` interns: same class and same arguments gives back the same
+instance, which makes identity mean logical equality and lets both caches behave. Keyed on
+the class OBJECT rather than its name, since minification can collapse two class names to
+the same identifier. Arguments must be primitives or plain objects/arrays of them —
+a function stringifies to `undefined` in JSON, so accepting one would silently key two
+different queries identically, which is the original bug reintroduced by the fix. It throws
+instead.
+
+ngin also exposes `hooks.createQueryControllersMap` for custom keying, which is where this
+could live instead. Interning was chosen because it fixes `watchQuery` at the same time —
+overriding ngin's map alone would still mint two cells for one shared realization.
+
 What this buys, concretely: the status bar used to call `context.evaluate(item.when)` and
 `plugins.isAvailable(item)` per item, mid-render. Those are view decisions, so they moved
 into the `statusItems` query, and the component stopped needing `platform` at all. That is
