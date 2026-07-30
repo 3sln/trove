@@ -33,6 +33,7 @@ import {
   cloudflareAccess,
   KeyValueStore, MemoryKV, SqliteKV,
   KvSessionStore,
+  RotationService,
   SqliteProvider, LocalSqliteProvider,
   SidecarService, NotificationCenter, WebPushService, WebPushChannel, NotificationChannel,
   ApiKeyService, CapabilityProvider, ApiKeyCapabilityProvider,
@@ -329,6 +330,17 @@ export function coreProviders(config, lifecycleState) {
     // They meet at the retry: a failure raises an issue, retrying it starts a task,
     // and the task succeeding clears the issue.
     tasks: Provider.fromLazySingleton(() => resolve(config.tasks, TaskRegistry, () => new TaskRegistry())),
+
+    // Moving a collection onto a new key, incrementally. Depends on vfs rather than the
+    // other way round, so it sits after it in the graph and the container orders itself.
+    rotation: Provider.fromLazySingleton(
+      async (deps) => {
+        const { kv, vfs, collections } = await need(deps, ['kv', 'vfs', 'collections']);
+        return new RotationService({ kv, vfs, collections });
+      },
+      null,
+      { deps: ['kv', 'vfs', 'collections'] },
+    ),
 
     issues: Provider.fromLazySingleton(
       async (deps) => {

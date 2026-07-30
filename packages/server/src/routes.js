@@ -5,7 +5,7 @@
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
-  shouldEncrypt,
+  shouldEncrypt, estimateRotationCost,
 } from '@3sln/trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@3sln/trove/core/plugins/identity.js';
 
@@ -682,6 +682,55 @@ export function createRouter() {
   r.post('/api/diagnostics/storage', ['collections', 'issues', 'storageCheck'], async (ctx) => {
     await requireWholeDrive(ctx, 'check the backing stores');
     return ctx.storageCheck.run({ origin: publicOrigin(ctx.req, ctx.config) });
+  });
+
+  // --- key rotation ----------------------------------------------------------
+  //
+  // Moving a collection onto a new key is admin work in the strict sense: it rewrites every
+  // object in the collection and costs real money on a metered store. `requireHumanAdmin`
+  // refuses a request arriving on an API key — a credential that could re-key a collection
+  // could also make its contents unreadable to everyone else holding the old one.
+
+  /** What a rotation would cost, before anyone starts one. */
+  r.get('/api/collections/:collection/rotate/estimate', ['collections', 'vfs'], async (ctx) => {
+    const collectionId = scopedCollection(ctx);
+    await ctx.access.collection(collectionId, 'admin');
+    requireHumanAdmin(ctx, 'estimate a key rotation');
+    const record = await ctx.collections.get(collectionId);
+    const stats = await ctx.vfs.metadata.collectionStats?.(collectionId).catch(() => null);
+    return estimateRotationCost(
+      { driver: record.store?.driver, endpoint: record.store?.endpoint || record.store?.s3?.endpoint },
+      { objects: stats?.items ?? 0, bytes: stats?.bytes ?? 0 },
+    );
+  });
+
+  r.get('/api/collections/:collection/rotate', ['collections', 'rotation'], async (ctx) => {
+    const collectionId = scopedCollection(ctx);
+    await ctx.access.collection(collectionId, 'admin');
+    requireHumanAdmin(ctx, 'read key rotation state');
+    // Null rather than 404: "this collection has never been rotated" is an answer, and a
+    // client polling for progress should not have to treat it as an error.
+    return { rotation: (await ctx.rotation.state(collectionId)) || null };
+  });
+
+  r.post('/api/collections/:collection/rotate', ['collections', 'rotation'], async (ctx) => {
+    const collectionId = scopedCollection(ctx);
+    await ctx.access.collection(collectionId, 'admin');
+    requireHumanAdmin(ctx, 'rotate a key');
+    // Begin only mints the key and makes it current; the objects move in slices, from the
+    // cron or from further calls. Returning immediately is the point — the walk can take
+    // hours and holding the request open for it would just time out.
+    const state = await ctx.rotation.begin(collectionId, ctx.principal);
+    return { rotation: state };
+  });
+
+  r.delete('/api/collections/:collection/rotate', ['collections', 'rotation'], async (ctx) => {
+    const collectionId = scopedCollection(ctx);
+    await ctx.access.collection(collectionId, 'admin');
+    requireHumanAdmin(ctx, 'cancel a key rotation');
+    // Stops the walk. What has already moved stays moved, and both keys stay in the ring,
+    // so nothing becomes unreadable — an abandoned rotation is untidy, not destructive.
+    return { rotation: await ctx.rotation.cancel(collectionId) };
   });
 
   // Rebuild the search index on demand. Admin-only: it re-reads every object in the

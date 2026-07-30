@@ -66,7 +66,7 @@ export async function createServer(config = {}) {
   const backbone = await engine.container.lease(BACKBONE);
   const {
     storage, sqlite: sqliteProvider, metadata, kv, tasks, issues, notifications,
-    sidecar, collections, identity, auth, search, vfs, plugins, apiKeys, capabilities,
+    sidecar, collections, identity, auth, search, vfs, plugins, apiKeys, capabilities, rotation,
   } = backbone.resources;
 
   // Aliased so the rest of this function reads as it did; the container's
@@ -471,6 +471,26 @@ export async function createServer(config = {}) {
       const r = await startScan(c.id, { reason: 'Scheduled', deadlineMs: each }).catch((e) => ({ error: e.message }));
       out.scans.push({ collectionId: c.id, ...r });
     }
+
+    // A rotation that has been started finishes on its own.
+    //
+    // Without this the walk only advances while somebody is watching, which is precisely
+    // wrong for a job that can take hours: the old key stays in the ring, the collection
+    // stays half-moved, and nothing says so. The slice claims the collection, so a firing
+    // that overlaps a manual run does nothing rather than racing it.
+    //
+    // Last, and out of what the scans left, because a rotation is elective and a scan is
+    // how the drive notices files that changed underneath it.
+    out.rotated = [];
+    for (const c of targets) {
+      const state = await rotation.state(c.id).catch(() => null);
+      if (!state || state.status !== 'running') continue;
+      const next = await rotation.step(c.id, { budgetMs: each }).catch((e) => {
+        console.error(`[trove] rotation slice for ${c.id} failed`, e);
+        return null;
+      });
+      if (next) out.rotated.push({ collectionId: c.id, moved: next.moved, failed: next.failed, status: next.status });
+    }
     return out;
   }
 
@@ -482,7 +502,7 @@ export async function createServer(config = {}) {
     // inside a Durable Object want. `begin*` goes wherever `config.background` says,
     // which for a front-line Worker isolate is the object rather than itself.
     startScan, startReindex, beginScan: routeBeginScan, beginReindex: routeBeginReindex,
-    runMaintenance, checkStorage, mcp, auth, close };
+    runMaintenance, checkStorage, rotation, mcp, auth, close };
 }
 
 /**
