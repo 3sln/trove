@@ -15,6 +15,25 @@
 
 import { withRetry } from '@3sln/trove/core/retry.js';
 import { TroveError } from '@3sln/trove/core/errors.js';
+// Imported from the module rather than the barrel so a page that never uploads to an
+// encrypted collection still does not pull the rest of core in with it.
+import { encrypt, encryptStream, cipherSize } from '@3sln/trove/core/encryption/envelope.js';
+import { fromHex } from '@3sln/trove/core/encryption/keys.js';
+
+/**
+ * Seal a whole file into an envelope.
+ *
+ * Only used where the plan already decided the STORED size fits a single PUT, so the
+ * buffering is bounded by that limit rather than by the file.
+ */
+async function sealWhole(file, enc) {
+  const plain = new Uint8Array(await file.arrayBuffer());
+  const sealed = await encrypt(fromHex(enc.key), plain, {
+    fingerprint: fromHex(enc.fingerprint),
+    chunkSize: enc.chunkSize,
+  });
+  return new Blob([sealed], { type: file.type || 'application/octet-stream' });
+}
 
 export class TroveApiClient {
   /**
@@ -413,18 +432,27 @@ export class TroveApiClient {
     // (otherwise a multipart upload leaks server + storage state).
     if (plan.uploadId) opts.onStart?.(plan.uploadId);
 
-    const progress = new ProgressAggregator(size, opts.onProgress);
+    // Progress is measured against what TRAVELS, which for an encrypted upload is the
+    // envelope — larger than the file by a header and a tag per chunk. Measured against the
+    // file, the bar would pass 100% and sit there.
+    const progress = new ProgressAggregator(plan.encryption?.storedSize || size, opts.onProgress);
     const t = plan.transfer || {};
     const completeUrl = plan.endpoints?.complete || `/api/uploads/${plan.uploadId}/complete`;
 
     if (plan.strategy === 'single') {
       // One presigned PUT straight to storage (bytes never touch our server).
-      await step(() => xhrPut(t.url || plan.url, file, { headers: t.requiredHeaders, signal: opts.signal, onProgress: (l) => progress.set('single', l) }));
+      // Sealed here, before a byte leaves the browser, so the bucket only ever receives
+      // ciphertext while the PUT still goes straight to it. The whole envelope is built in
+      // memory, which is fine on this path: the plan only chooses `single` when what is
+      // stored fits under the single-PUT limit.
+      const body = plan.encryption ? await sealWhole(file, plan.encryption) : file;
+      await step(() => xhrPut(t.url || plan.url, body, { headers: t.requiredHeaders, signal: opts.signal, onProgress: (l) => progress.set('single', l) }));
       const done = await step(() => this.request('POST', completeUrl, { body: {}, signal: opts.signal }));
       return done.node;
     }
     if (plan.strategy === 'direct-single') {
-      await step(() => xhrPut(this.baseUrl + this.#partUrl(plan, 1), file, {
+      const body = plan.encryption ? await sealWhole(file, plan.encryption) : file;
+      await step(() => xhrPut(this.baseUrl + this.#partUrl(plan, 1), body, {
         // Our own server, so it needs our bearer token; `t.authHeaders` lets the plan
         // add its own and wins on a clash.
         headers: { ...this.authHeaders(), ...t.authHeaders },
@@ -432,6 +460,21 @@ export class TroveApiClient {
       }));
       const done = await step(() => this.request('POST', completeUrl, { body: {}, signal: opts.signal }));
       return done.node;
+    }
+
+    // Multipart, encrypted: sequential, and streamed.
+    //
+    // Two things stop the ordinary path working here. The parts have to be slices of the
+    // ENVELOPE rather than of the file, and the envelope is produced in order — chunk n
+    // cannot be sealed before chunk n-1, because the nonce is derived from its position. So
+    // parts are produced and sent one at a time, and the concurrency the plaintext path
+    // enjoys is not available.
+    //
+    // Streamed rather than assembled: building the whole envelope before slicing it would
+    // hold a second copy of the file in a browser tab, which for the large files that
+    // reach this path is exactly what it cannot afford.
+    if (plan.encryption) {
+      return this.#uploadSealed(file, plan, { ...opts, progress, step, completeUrl });
     }
 
     // Multipart (presign or direct).
@@ -506,6 +549,64 @@ export class TroveApiClient {
   #partUrl(plan, n) {
     const tmpl = plan.transfer?.partUrl || `/api/uploads/${plan.uploadId}/parts/{partNumber}`;
     return tmpl.replace('{partNumber}', String(n));
+  }
+
+
+  /**
+   * A multipart upload of an encrypted object, one part at a time.
+   *
+   * Parts are gathered to the plan's part size because every part but the last has to clear
+   * the backend's floor, and an envelope chunk is far smaller than that.
+   */
+  async #uploadSealed(file, plan, { signal, progress, step, completeUrl, onRetry }) {
+    const enc = plan.encryption;
+    const sealed = await encryptStream(fromHex(enc.key), file.stream(), {
+      fingerprint: fromHex(enc.fingerprint),
+      plaintextSize: file.size,
+      chunkSize: enc.chunkSize,
+    });
+    const reader = sealed.getReader();
+    const parts = [];
+    let held = [];
+    let size = 0;
+    let n = 1;
+    let sent = 0;
+
+    const flush = async () => {
+      const body = new Uint8Array(size);
+      let at = 0;
+      for (const p of held) { body.set(p, at); at += p.length; }
+      held = [];
+      size = 0;
+      const partNumber = n++;
+      const base = sent;
+      const etag = await withRetry(
+        () => this.#uploadPart(plan, partNumber, new Blob([body]), {
+          signal, onProgress: (l) => progress.set(partNumber, l),
+        }),
+        {
+          signal,
+          retries: 4,
+          onRetry: ({ attempt, delayMs, error }) => onRetry?.({ attempt, delayMs, part: partNumber, message: error.message }),
+        },
+      );
+      sent = base + body.length;
+      progress.set(partNumber, body.length);
+      parts.push({ partNumber, etag });
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      held.push(value);
+      size += value.length;
+      if (size >= plan.partSize) await flush();
+    }
+    // The final part may be under the floor, and only the final part may be.
+    if (size || parts.length === 0) await flush();
+
+    const finished = await step(() => this.request('POST', completeUrl, { body: { parts }, signal }));
+    return finished.node;
   }
 
   async #uploadPart(plan, n, blob, { signal, onProgress }) {
