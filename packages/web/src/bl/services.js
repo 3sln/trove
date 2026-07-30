@@ -12,7 +12,10 @@ export class ExplorerService {
     this.state = {
       items: [], loading: false, error: null,
       selection: [], sort: settings.get('explorer.sort'), order: settings.get('explorer.sortOrder'),
-      collectionId: 'default', collections: [], canCreateCollection: false,
+      // No collection until one is chosen or created. `gate` is 'create' | 'choose' | null
+      // — when set, it is the ONLY thing the workbench shows, because every request needs
+      // a collection and there is nothing sensible to render without one.
+      collectionId: null, collections: [], canCreateCollection: false, gate: null,
       // `stats` is the whole collection; `items` is the page on screen. Keeping both
       // is what lets the UI say "500 of 3,006" instead of quietly claiming 500.
       stats: null, usage: null, nextCursor: null, loadingMore: false, trash: null,

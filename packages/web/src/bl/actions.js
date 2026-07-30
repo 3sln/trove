@@ -25,7 +25,14 @@ export class NavigateAction extends AppAction {
   }
   async execute({ app }) {
     const { explorer, platform } = app;
-    const collectionId = this.collectionId || explorer.state.collectionId || 'default';
+    // No `|| 'default'`. Navigating nowhere in particular used to land on a collection
+    // that may not exist and may not be readable; now it is a bug in the caller, said out
+    // loud rather than papered over with a guess.
+    const collectionId = this.collectionId || explorer.state.collectionId;
+    if (!collectionId) {
+      explorer.set({ loading: false, gate: 'choose' });
+      return;
+    }
     const switching = collectionId !== explorer.state.collectionId;
     // A collection's trash belongs to that collection. Carrying it across a switch
     // listed the OLD collection's deleted files under the new one — above an "Empty
@@ -47,6 +54,7 @@ export class NavigateAction extends AppAction {
       });
       // Remember where they were, so the next visit opens there rather than guessing.
       platform.settings.set?.('explorer.lastCollection', collectionId);
+      explorer.set({ gate: null });
       // Explorer→context projection (collectionId/hasSelection) lives in bl/index.js
       // so it stays in sync with selection too — nothing to mirror here.
     } catch (err) {
@@ -82,28 +90,46 @@ export class OpenInitialCollectionAction extends AppAction {
     // dispatch() returns an event feed, not the action's value, so awaiting it would
     // hand back an EventTarget and this would fail in a way nothing reports.
     let collections = [];
+    let canCreate = false;
     try {
       const res = await app.platform.api.collections();
       collections = res.collections || [];
-      app.explorer.set({ collections, canCreateCollection: !!res.canCreate });
+      canCreate = !!res.canCreate;
+      app.explorer.set({ collections, canCreateCollection: canCreate });
     } catch (err) {
       app.explorer.set({ loading: false, error: `Couldn't load your collections: ${err.message}` });
       return;
     }
+
     const ids = collections.map((c) => c.id);
     const remembered = app.platform.settings.get('explorer.lastCollection');
+
+    // Nothing exists yet. Two different situations that used to read as one:
     if (!ids.length) {
-      // A signed-in user with no grants at all. Say so; an empty file list with no
-      // explanation reads as "your drive is empty", which is a different and much worse
-      // thing to believe.
       app.explorer.set({
         loading: false, items: [], collections: [],
-        error: 'You do not have access to any collections yet. Ask an administrator to grant you one.',
+        // Someone who may create one is on a fresh drive and should be asked to. Someone
+        // who may not has no grants, and telling them to create a collection they cannot
+        // create is worse than telling them nothing.
+        gate: canCreate ? 'create' : null,
+        error: canCreate
+          ? null
+          : 'You do not have access to any collections yet. Ask an administrator to grant you one.',
       });
       return;
     }
-    const target = ids.includes(remembered) ? remembered : (ids.includes('default') ? 'default' : ids[0]);
-    return app.engine.dispatch(new NavigateAction(target));
+
+    // There is no fallback to a first or a favourite. Landing somewhere the user did not
+    // pick is how the old 'default' behaved, and on a shared drive it opened a collection
+    // plenty of people could not read — a permission error presented as their drive.
+    // A remembered choice is theirs; anything else is a question.
+    if (!remembered || !ids.includes(remembered)) {
+      app.explorer.set({ loading: false, items: [], gate: 'choose', error: null });
+      return;
+    }
+
+    app.explorer.set({ gate: null });
+    return app.engine.dispatch(new NavigateAction(remembered));
   }
 }
 
@@ -266,7 +292,13 @@ export class UploadFilesAction extends AppAction {
     this.collectionId = collectionId;
   }
   async execute({ app }) {
-    const collection = this.collectionId || app.explorer.state.collectionId || 'default';
+    const collection = this.collectionId || app.explorer.state.collectionId;
+    // Uploading with no collection open has nowhere to put the bytes. Refused visibly:
+    // the old fallback sent them to whatever 'default' happened to be.
+    if (!collection) {
+      app.platform.notifications.error('Open a collection before uploading');
+      return;
+    }
     const concurrency = app.platform.settings.get('uploads.concurrency');
     const uploads = [...this.files].map((file) => this.#one(app, file, collection, concurrency));
     await Promise.allSettled(uploads);

@@ -117,6 +117,13 @@ export function statusFacts(state, ui) {
   };
 }
 
+/** What to call the current collection: its name, its id, or an honest nothing. */
+function collectionLabel(ex) {
+  if (!ex?.collectionId) return 'no collection';
+  const match = (ex.collections || []).find((c) => c.id === ex.collectionId);
+  return match?.name || ex.collectionId;
+}
+
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
@@ -156,7 +163,9 @@ export default function statusBar(state, ui) {
         } })
       : null,
     button({ className: 'seg', title: 'Switch collection' },
-      icon('files', { size: 13 }), span(ex.collectionId || 'default'),
+      // The NAME, and nothing invented. `|| 'default'` used to sit here, which meant the
+      // status bar cheerfully named a collection on a drive that had none.
+      icon('files', { size: 13 }), span(collectionLabel(ex)),
       (ex.collections || []).length > 1 || ex.canCreateCollection ? icon('chevron-down', { size: 11 }) : null)
       .on({ click: (e) => {
         const items = ui.app.collectionMenu?.() || [];

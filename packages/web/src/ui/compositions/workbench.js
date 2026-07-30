@@ -10,6 +10,7 @@ import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
 import launcher from '../components/launcher.js';
 import settingsView from '../components/settingsView.js';
+import collectionGate from '../components/collectionGate.js';
 import pluginsView from '../components/pluginsView.js';
 import editorArea from '../components/editorArea.js';
 import commandPalette from '../components/commandPalette.js';
@@ -95,6 +96,11 @@ function view(state, ui) {
 }
 
 function mainArea(state, ui) {
+  // Before a collection is known there is nothing to draw: every scoped request names one
+  // in its path, so a file list, a search box and an Upload button would all be lying.
+  // Settings stays reachable — an admin with no collections still needs to get at it.
+  if (state.ex?.gate && state.wb.activity !== 'settings') return collectionGate(state, ui);
+
   switch (state.wb.activity) {
     case 'settings': return settingsView(state, ui);
     case 'plugins': return pluginsView(state, ui);

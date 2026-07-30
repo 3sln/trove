@@ -1475,3 +1475,37 @@ kbd {
   .key-scope-caps { flex-wrap: wrap; }
   .key-row { flex-direction: column; }
 }
+
+/* ---- Collection gate -------------------------------------------------------
+   The whole screen until a collection is chosen. Centred and narrow on purpose:
+   there is exactly one decision to make here, and a full-width layout would imply
+   there is something else to look at. */
+.gate { display: grid; place-items: center; min-height: 100%; padding: 40px 20px; }
+.gate-card { width: min(520px, 100%); text-align: center; }
+.gate-icon {
+  width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 15px;
+  display: grid; place-items: center; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.gate-card h2 { margin: 0 0 8px; font-size: 19px; }
+.gate-sub { color: var(--text-dim); font-size: 13px; line-height: 1.6; margin: 0 0 20px; }
+.gate-actions { display: flex; gap: 8px; justify-content: center; margin-top: 18px; }
+
+.gate-list { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.gate-choice {
+  display: flex; align-items: center; gap: 12px; width: 100%; cursor: pointer;
+  padding: 12px 14px; border-radius: 10px; font: inherit; color: inherit;
+  border: 1px solid var(--border); background: var(--bg-elevated);
+}
+.gate-choice:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--bg-hover); }
+.gate-choice:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-halo); }
+.gate-choice-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gate-choice-main .n { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gate-choice-main .d { color: var(--text-faint); font-size: 11.5px; }
+/* The capability list is the quiet half of the row: useful before you commit, not
+   something to read first. */
+.gate-caps {
+  flex: none; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim);
+  padding: 2px 8px; border-radius: 6px; background: var(--bg-hover);
+}
