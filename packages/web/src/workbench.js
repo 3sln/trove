@@ -75,10 +75,8 @@ export function createWorkbench({
   // restore any that were installed on this device, then run.
   platform.plugins.restore();
 
-  const plugins = { uninstall: (id) => platform.plugins.uninstall(id) };
-
   // --- mount ----------------------------------------------------------------
-  const App = workbenchComposition({ engine, app, platform, plugins });
+  const App = workbenchComposition({ engine, app, platform });
   dd.reconcile(root, [App()]);
 
   // --- theme ----------------------------------------------------------------

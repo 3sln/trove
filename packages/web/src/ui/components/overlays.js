@@ -7,6 +7,7 @@ import { icon, iconForNode } from '../icon.js';
 import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
+import { localState } from '../localState.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -95,19 +96,28 @@ function openerChooserDialog(d, ui) {
 //
 // The form persists across re-renders (keyed to the dialog instance) so switching driver
 // keeps what has been typed.
-let colState = { ref: null, form: null };
+// The collection dialog's unsubmitted form. In a cell, so changing the storage driver —
+// which changes which fields render — invalidates the tree instead of needing a manual
+// nudge back up to the root. See ui/localState.js.
+const COL_FORM = 'collectionDialog';
 function collectionDialog(d, ui) {
   const wb = ui.platform.workbench;
   const drivers = ui.platform.capabilities?.storageDrivers || [];
 
-  if (colState.ref !== d) {
+  let colState = localState.get(COL_FORM);
+  if (colState?.ref !== d) {
     colState = { ref: d, form: { name: '', description: '', driver: drivers[0]?.key || '' } };
+    localState.set(COL_FORM, colState);
   }
   const form = colState.form;
   const driver = drivers.find((x) => x.key === form.driver) || drivers[0];
+  // Every field writes through the cell. Only the driver changes which fields are on
+  // screen, but writing them all the same way means there is no second rule to remember —
+  // and a text field that only mattered on submit was the reason `form` could be mutated
+  // in place at all.
   const set = (k) => (e) => {
-    form[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    if (k === 'driver') ui.rerender?.();
+    const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    localState.set(COL_FORM, { ref: colState.ref, form: { ...form, [k]: value } });
   };
 
   const submit = () => {

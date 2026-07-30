@@ -4,7 +4,8 @@
 // either call ui.exec(commandId) or ui.go(action). This is the only module that
 // knows about every service at once.
 
-import { dd, cell, derive, constant } from '../../runtime.js';
+import { dd, derive, constant } from '../../runtime.js';
+import { localState } from '../localState.js';
 import { NavigateAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
@@ -21,16 +22,21 @@ import { phoneTopBar, phoneBottomBar, phoneSheet } from '../components/phoneChro
 
 const { alias, div } = dd;
 
-export default function workbench({ engine, app, platform, plugins }) {
-  // A counter rather than a timestamp: a cell drops a write of the value it already
-  // holds, and two `rerender()` calls in the same millisecond would have compared equal.
-  const bump = cell(0);
+export default function workbench({ engine, app, platform }) {
+  // What a component is handed.
+  //
+  // `engine` used to be in here and was read by nothing at all — carried to fourteen
+  // modules and referenced in none of them. `uninstallPlugin` is gone too: it was one call
+  // site reached by threading a closure the whole way down, and it is an action now.
+  //
+  // What remains is `go` and `exec` — how a component asks for something to happen — and
+  // `app`/`platform`, which are how it reaches the services it renders from. Whether those
+  // stay a parameter, become a factory closure per component the way dodo builds a
+  // `special()`, or become a context, is the open question in docs/tickets.
   const ui = {
-    engine, app, platform,
+    app, platform,
     go: (action) => engine.dispatch(action),
     exec: (id, ...args) => platform.commands.execute(id, ...args),
-    rerender: () => bump.update((n) => n + 1),
-    uninstallPlugin: (id) => plugins?.uninstall(id),
   };
 
   const { watch } = platform.reactive;
@@ -56,14 +62,16 @@ export default function workbench({ engine, app, platform, plugins }) {
       app.activity.observe(),
       platform.viewport.observe(),
       platform.voice.observe(),
-      bump,
+      // Component-local UI state — see ui/localState.js. One input rather than one per
+      // dialog, and the reason there is no longer a `rerender` hook to thread anywhere.
+      localState.observe(),
     ],
-    // `_bump` is IN the snapshot, unlike before. `watch` skips a render whose value is
-    // shallow-equal to the last one, so a forced re-render that left no trace in the
-    // object would be discarded as "nothing changed" — which is the opposite of what
-    // asking for one means.
-    (wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, voice, _bump) =>
-      ({ wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, voice, _bump }),
+    // No `_bump` any more. It existed to defeat `watch`'s shallow-equality check for a
+    // forced re-render that left no trace in the snapshot — a counter smuggled into the
+    // state to get past an optimisation designed to skip pointless renders. With the state
+    // that needed it in a cell, every render has a reason again.
+    (wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, voice, local) =>
+      ({ wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, voice, local }),
   );
 
   return alias(() => watch(combined, (state) => view(state, ui)));

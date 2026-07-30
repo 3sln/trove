@@ -1,5 +1,9 @@
 # 003 — Component state, render granularity, and the `ui` bag
 
+> **Phases 1 and 2 are done.** `ui.rerender`, the `bump` cell, the shallow-equality
+> exception, `ui.engine` and `ui.uninstallPlugin` are all gone; component-local state lives
+> in `ui/localState.js`. What is left is the open decision below and phase 3.
+
 Three findings that look like three problems and are mostly one: state the workbench needs
 lives outside the reactive graph, and the machinery built to compensate is what the `ui` bag
 mostly carries.
@@ -40,85 +44,47 @@ What is actually used, across `packages/web/src/ui/`:
 
 ---
 
-## Phase 1 — Delete `rerender` by putting the state in cells
+## Done: phases 1 and 2
 
-All five `rerender` call sites are the same bug, not five different needs. Each is
-component-local state deliberately held outside the reactive system, mutated in place, then
-needing a manual nudge:
+`ui/localState.js` holds state a component owns that still has to reach the render — the
+keybinding mid-capture, the unsubmitted collection form, the ticked plugin capabilities.
+Each was a module-level `let` mutated in place, which is why a `rerender()` hook had to be
+threaded through fourteen modules: the leaf that changed something had nothing to
+invalidate, so it poked the root through a function passed as an argument.
 
-- `ui/components/overlays.js:110` — `colState.form`, a plain object mutated by the collection
-  dialog's field handlers; nudged when the storage driver changes because that changes which
-  fields render
-- `ui/components/settingsView.js:401,431,448` — `capturing`, a bare variable tracking which
-  keybinding is mid-capture
-- `ui/components/pluginReview.js:23` — `sel.grants`, a `Set` mutated in place as capabilities
-  are ticked
+With those in a cell, the write invalidates, the snapshot recomputes, and the render happens
+for the same reason every other render happens. That deleted `rerender` from the bag, the
+`bump` cell, and the exception in the snapshot that existed purely so `watch`'s
+shallow-equality check would not discard a forced render as "nothing changed".
 
-`platform.workbench.touch()` is the same shape one level up: `platform.capabilities` is
-assigned onto a plain object when it arrives after boot, so nothing invalidates, and the
-status bar reads it.
+`ui.engine` is gone — it reached fourteen modules and was read by none. `uninstallPlugin`
+is an action; it had one call site and was carried the whole way down to reach it. The
+`plugins` shim that existed only to build it went with it.
 
-### Why this is the root and not a detail
+One thing worth keeping in mind for anything similar: the plugin review's ticked
+capabilities were a `Set` mutated in place, and writing a mutated object back to a cell is
+a no-op — a cell compares with `Object.is` and correctly drops a write of what it already
+holds. It is an array now, replaced rather than mutated. The old design needed `rerender`
+partly *because* it mutated; fixing one without the other would have looked like the
+reactivity was broken.
 
-Rendering happens in exactly one place (see phase 3). A leaf that mutates state outside the
-graph has no way to reach that place, because there is nothing to invalidate — so it reaches
-up through a manually threaded callback instead. Data flows down and invalidation flows *out
-of band*, which is the inversion the reactive layer exists to prevent.
+## Still open: what `ui` should be
 
-The tell is in the composition. `bump` is a cell whose only purpose is to make manual
-re-renders work, and it is deliberately smuggled into the derived snapshot:
+`ui` now carries `app`, `platform`, `go` and `exec`. `go` and `exec` are how a component
+asks for something to happen; `app` and `platform` are how it reaches the services it
+renders from — 81 and 32 uses respectively.
 
-> `_bump` is IN the snapshot, unlike before. `watch` skips a render whose value is
-> shallow-equal to the last one, so a forced re-render that left no trace in the object
-> would be discarded as "nothing changed" — which is the opposite of what asking for one
-> means.
+Three shapes, and this is a judgement call rather than a defect:
 
-That is a counter added to the state snapshot to defeat an optimisation designed to skip
-unnecessary renders. The design is working around itself.
-
-### The change
-
-Put those three pieces of state in cells. Then:
-
-- `rerender` leaves the bag
-- the `bump` cell goes
-- the exception in the shallow-equality check goes
-- the single render point does not move; the trigger simply travels as data
-
-Deletes machinery rather than relocating it, and is provable by the suite staying green.
-
----
-
-## Phase 2 — Move dispatch onto the engine
-
-`exec`, `go` and `uninstallPlugin` are not render concerns. Running a command and
-uninstalling a plugin are the engine's business and reachable from anywhere holding it;
-threading them through the render tree means every component that wants to run a command
-takes a parameter it passes to children that pass it to theirs. `uninstallPlugin` is the
-clearest case — one call site, carried through fourteen modules.
-
-`eng.dispatch(new ExecCommand(id, ...args))` is the right shape. One caveat: `execute` is
-`async` and returns the handler's value, so dispatch has to preserve that or callers that
-await a result break.
-
-**`RenderApp` as an action is the wrong shape**, for two reasons. Rendering is not domain
-logic, so dispatching it makes the business layer know about presentation. More importantly
-it would give the workaround a nicer address instead of removing the need for it — after
-phase 1 there is nothing left to dispatch. A `RenderApp` action would be a permanent home
-for a temporary problem.
-
-Drop `ui.engine` at the same time; nothing reads it.
-
-That leaves `platform` (81) and `app` (32), which are how a component reaches the services it
-renders from. Three options, and this is the real decision:
-
-1. **Keep the parameter, shrunk** to `{ platform, app, rerender? }`. Smallest diff.
+1. **Keep the parameter.** It is now honest: four members, all used, none of them a
+   workaround. Smallest thing that could be right.
 2. **Factory per component**, the way dodo builds a `special()`: `const bar = activityBar(ui)`
    once at composition, `bar(state)` per render. Components close over what they need and
    stop taking a second parameter. The shape the rest of the stack already uses.
 3. **Context** — dodo has one. Least ceremony at call sites, most indirection.
 
----
+`exec` has 46 call sites, so 2 and 3 are real diffs. Worth deciding deliberately rather than
+drifting into one.
 
 ## Phase 3 — Render granularity
 
@@ -147,8 +113,6 @@ become its own ticket if it grows.
 
 ## Notes
 
-- No behaviour change in phases 1 and 2, so both should be provable by the suite staying
-  green rather than by inspection.
 - Verify in a **visible** browser tab. A hidden tab throttles `requestAnimationFrame`, so
   dodo's scheduler queue never drains — which presents exactly like a frozen render tree
   with correct state and no console error. This cost real time once already.

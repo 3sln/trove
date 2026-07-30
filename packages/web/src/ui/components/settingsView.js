@@ -2,6 +2,7 @@ import { dd } from '../../runtime.js';
 import { prettyKey, eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
+import { localState } from '../localState.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -391,14 +392,17 @@ function openersSection(ui) {
 
 // Which shortcut is currently listening for its new chord. Module-level because the
 // settings view re-renders from scratch and this is transient UI state, not a setting.
-let capturing = null;
+// Which keybinding is mid-capture. In a cell rather than a module-level `let`, so writing
+// it invalidates the render the way every other state change does — see ui/localState.js.
+const capturingOf = () => localState.get('keybindingCapture') ?? null;
+const setCapturing = (id) => localState.set('keybindingCapture', id);
 
 function keybindingsSection(ui) {
   const kb = ui.platform.keybindings;
   const bindings = kb.resolved();
   const cmds = ui.platform.contributions;
   const overrides = kb.overrides();
-  const stop = () => { capturing = null; ui.rerender?.(); };
+  const stop = () => setCapturing(null);
   // Which chords more than one command answers to. Nothing rejects a collision, and
   // `#matchFor` scans in reverse so the LAST registration wins — bind Delete onto
   // ⌘P and Quick Open stops opening, with no hint anywhere that that is why.
@@ -412,7 +416,7 @@ function keybindingsSection(ui) {
     // tell, and one plugin keymap was enough to push real ones off the end.
     ...bindings.map((b) => {
       const cmd = cmds.get(b.command);
-      const listening = capturing === b.bindingId;
+      const listening = capturingOf() === b.bindingId;
       const custom = !!overrides[b.bindingId];
       const clash = byKey.get(b.key) > 1;
       return div({ className: 'setting' },
@@ -428,7 +432,7 @@ function keybindingsSection(ui) {
           button({ className: `kbd-edit ${listening ? 'listening' : ''} ${clash ? 'clash' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
             listening ? span('Press keys…') : dd.h('kbd', prettyKey(b.key)))
             .on({
-              click: () => { capturing = listening ? null : b.bindingId; ui.rerender?.(); },
+              click: () => setCapturing(listening ? null : b.bindingId),
               blur: () => { if (listening) stop(); },
               keydown: (e) => {
                 if (!listening) return;
@@ -445,7 +449,7 @@ function keybindingsSection(ui) {
             }),
           custom
             ? button({ className: 'c-link', title: 'Back to the default' }, 'reset')
-              .on({ click: () => { kb.rebind(b, null); ui.rerender?.(); } })
+              .on({ click: () => { kb.rebind(b, null); setCapturing(null); } })
             : null,
         ),
       );

@@ -1,5 +1,6 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
+import { UninstallPluginAction } from '../../bl/actions.js';
 
 const { div, span, p, button, h2, input, label } = dd;
 
@@ -60,7 +61,7 @@ function installedCard(pl, state, ui) {
         click: () => ui.platform.workbench.showDialog({
           kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
           body: 'The plugin and all data it stored will be removed.',
-          onConfirm: () => { ui.platform.workbench.closeDialog(); ui.uninstallPlugin(pl.id); },
+          onConfirm: () => { ui.platform.workbench.closeDialog(); ui.go(new UninstallPluginAction(pl.id)); },
         }),
       }),
     ),

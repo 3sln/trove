@@ -205,6 +205,28 @@ export class OpenInitialCollectionAction extends AppAction {
   }
 }
 
+/**
+ * Uninstall a plugin.
+ *
+ * An action rather than a closure threaded through the render tree. Uninstalling is engine
+ * work — it is not a render concern in any sense — and it had exactly one call site,
+ * reached by carrying a function through fourteen modules of components that had no use
+ * for it except to hand it to their children.
+ */
+export class UninstallPluginAction extends AppAction {
+  constructor(pluginId) {
+    super();
+    this.pluginId = pluginId;
+  }
+  async execute({ app }) {
+    try {
+      await app.platform.plugins.uninstall(this.pluginId);
+    } catch (err) {
+      app.platform.notifications.error(`Couldn’t uninstall: ${err.message}`);
+    }
+  }
+}
+
 export class CreateCollectionAction extends AppAction {
   constructor(record) {
     super();

@@ -7,20 +7,30 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes as fmtBytes } from '../format.js';
+import { localState } from '../localState.js';
 
 const { div, span, button, h3, p, label, input } = dd;
 
 // Grant selection persists across re-renders, keyed to the dialog instance.
-let sel = { ref: null, grants: null };
+// The ticked capabilities, in a cell — a Set mutated in place wrote the same reference
+// back, which a cell correctly drops as "nothing changed". See ui/localState.js.
+const KEY = 'pluginReview';
 
 export function pluginReview(d, ui) {
   const wb = ui.platform.workbench;
   const s = d.summary;
-  if (sel.ref !== d) {
+  let sel = localState.get(KEY);
+  if (sel?.ref !== d) {
     // Default: request everything the user is allowed to grant.
-    sel = { ref: d, grants: new Set(s.capabilities.filter((c) => !c.adminOnly || d.isAdmin).map((c) => c.id)) };
+    sel = { ref: d, grants: s.capabilities.filter((c) => !c.adminOnly || d.isAdmin).map((c) => c.id) };
+    localState.set(KEY, sel);
   }
-  const toggle = (cap) => { sel.grants.has(cap) ? sel.grants.delete(cap) : sel.grants.add(cap); ui.rerender?.(); };
+  // A new array rather than a mutated Set: the write has to be a different value for the
+  // cell to see it as a change at all.
+  const toggle = (cap) => localState.set(KEY, {
+    ref: sel.ref,
+    grants: sel.grants.includes(cap) ? sel.grants.filter((c) => c !== cap) : [...sel.grants, cap],
+  });
 
   return div({},
     div({ className: 'scrim' }).on({ click: () => wb.closeDialog() }),
@@ -29,7 +39,7 @@ export function pluginReview(d, ui) {
       div({ className: 'review-body' },
         s.description ? p({ className: 'review-desc' }, s.description) : null,
         section('Capabilities it requests', s.capabilities.length
-          ? div({ className: 'cap-list' }, ...s.capabilities.map((c) => capRow(c, d.isAdmin, sel.grants.has(c.id), () => toggle(c.id))))
+          ? div({ className: 'cap-list' }, ...s.capabilities.map((c) => capRow(c, d.isAdmin, sel.grants.includes(c.id), () => toggle(c.id))))
           : muted('None — this plugin only runs in its sandbox.')),
         (s.network || []).length ? section('Network access', div({ className: 'contrib-list' }, ...s.network.map(endpointRow))) : null,
         (s.commands || []).length
