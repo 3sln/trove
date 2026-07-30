@@ -14,6 +14,13 @@
 
 import { TroveError } from '../errors.js';
 import { normalizeEncryption, describeEncryption } from '../encryption/policy.js';
+import { describeKey, deriveDataKey, fingerprint, toHex } from '../encryption/keys.js';
+
+/** Hex back to bytes — salts and stored keys are written as hex in the record. */
+function hexToBytes(hex) {
+  if (typeof hex !== 'string' || !hex.length || hex.length % 2) throw TroveError.invalid('Not hex');
+  return new Uint8Array(hex.match(/../g).map((h) => parseInt(h, 16)));
+}
 import { PrefixedStorage } from '../storage/prefixed.js';
 import { newId } from '../util.js';
 
@@ -76,6 +83,53 @@ export class CollectionService {
       .filter((c) => this.can(principal, c, 'read'))
       .map((c) => this.describe(c, principal))
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  /**
+   * Set a collection's key from the passphrase an admin typed.
+   *
+   * The derived key is kept on the record, unlike the passphrase, because the server has
+   * to hand it to a client in a transfer plan and has to decrypt for an indexer. That is
+   * the deliberate limit of this design: it defends the bucket, not the server. It is held
+   * under a `#` prefix and stripped from `describe`, so it never leaves through the API by
+   * accident — the salt and fingerprint that DO go out are useless without the passphrase.
+   *
+   * @returns {Promise<{encryption: object, dataKey: Uint8Array}>}
+   */
+  async #keyFrom(userKey, rules, existing) {
+    let dataKey;
+    let config;
+    if (existing?.salt) {
+      // Re-derive against the collection's existing salt, so setting the SAME passphrase
+      // again is idempotent rather than a silent key change. The fingerprint has to be
+      // computed from the key that was just derived, though — reusing the stored one would
+      // make every passphrase look like the right one, which is exactly the check the
+      // caller is relying on.
+      dataKey = await deriveDataKey(userKey, hexToBytes(existing.salt), existing.kdf);
+      config = { kdf: existing.kdf, salt: existing.salt, fingerprint: toHex(await fingerprint(dataKey)) };
+    } else {
+      ({ dataKey, config } = await describeKey(userKey));
+    }
+    const encryption = normalizeEncryption({ ...config, enabled: true, rules });
+    return { encryption, dataKey };
+  }
+
+  /**
+   * The key this collection's objects are encrypted with, or null.
+   *
+   * Server-side only. Callers: the upload plan, which hands it to the client so the bytes
+   * are encrypted before they ever reach the bucket, and indexing, which decrypts to read
+   * content. Never reachable through `describe`.
+   */
+  async dataKeyFor(collectionId) {
+    const c = await this.get(collectionId);
+    return c?.$dataKey ? hexToBytes(c.$dataKey) : null;
+  }
+
+  /** What a collection encrypts, for the code that has to decide per item. */
+  async encryptionFor(collectionId) {
+    const c = await this.get(collectionId);
+    return c?.encryption || null;
   }
 
   /**
@@ -292,7 +346,15 @@ export class CollectionService {
     // Set at creation so the very first upload is covered. Enabling it later is allowed and
     // only affects what arrives after — nothing retroactively encrypts what is already
     // there, and pretending otherwise would be the more dangerous lie.
-    if (encryption !== undefined) record.encryption = normalizeEncryption(encryption);
+    if (encryption !== undefined) {
+      if (encryption?.userKey) {
+        const set = await this.#keyFrom(encryption.userKey, encryption.rules, null);
+        record.encryption = set.encryption;
+        record.$dataKey = toHex(set.dataKey);
+      } else {
+        record.encryption = normalizeEncryption(encryption);
+      }
+    }
     await this.kv.set(NS, id, record);
     return this.describe(record, principal);
   }
@@ -313,6 +375,18 @@ export class CollectionService {
     // is a key rotation, and rotating without re-encrypting would orphan every existing
     // object. Refused here; the rotation job is what does it safely.
     if (patch.encryption !== undefined) {
+      if (patch.encryption?.userKey) {
+        const set = await this.#keyFrom(patch.encryption.userKey, patch.encryption.rules, c.encryption);
+        if (c.encryption?.fingerprint && set.encryption.fingerprint !== c.encryption.fingerprint) {
+          throw TroveError.invalid(
+            'That is a different key. Changing it would orphan every object already encrypted with the old one \u2014 rotate the key instead.',
+          );
+        }
+        next.encryption = set.encryption;
+        next.$dataKey = toHex(set.dataKey);
+        await this.kv.set(NS, id, next);
+        return this.describe(next, principal);
+      }
       const nextEnc = normalizeEncryption(patch.encryption);
       const prevFp = c.encryption?.fingerprint;
       if (prevFp && nextEnc && nextEnc.fingerprint !== prevFp) {
