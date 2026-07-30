@@ -269,6 +269,38 @@ export class ActivityService {
     }
   }
 
+  /**
+   * Ask the server whether the backing stores are actually usable from a browser.
+   *
+   * Unlike a scan or a reindex this finishes in one round trip, so it reports its own
+   * result rather than handing back a task: the answer to "did I fix the bucket?" should
+   * be available immediately, and the issue list is refreshed so a problem that is now
+   * fixed visibly disappears rather than sitting there until the next poll.
+   */
+  async checkStorage() {
+    try {
+      const res = await this.api.checkStorage();
+      await this.refresh();
+      this.togglePanel(true);
+      const problems = (res.results || []).reduce((n, r) => n + (r.findings?.length || 0), 0);
+      if (problems) {
+        this.platform.notifications?.warn?.(`Found ${problems} storage problem${problems === 1 ? '' : 's'} — see Activity`);
+      } else if (!res.checked) {
+        this.platform.notifications?.info?.('There are no collections to check yet');
+      } else if (!res.corsChecked) {
+        // Honest about what was not checked. Reporting "all good" having skipped the check
+        // that matters is how a diagnostic stops being believed.
+        this.platform.notifications?.info?.('Stores are reachable. Browser access was not checked — this drive has no public URL configured.');
+      } else {
+        this.platform.notifications?.success?.('Stores are reachable and allow browser access');
+      }
+      return res;
+    } catch (err) {
+      this.platform.notifications?.error?.(`Couldn't check the stores: ${err.message}`);
+      throw err;
+    }
+  }
+
   togglePanel(open) {
     this.#set({ open: open ?? !this.state.open });
     if (this.state.open) this.refresh();

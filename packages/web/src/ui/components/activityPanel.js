@@ -12,9 +12,22 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
 
-const { div, button, span, h3, p } = dd;
+const { div, button, span, h3, p, pre } = dd;
 
 const STATUS_ICON = { running: 'refresh', done: 'check', failed: 'close', cancelled: 'close' };
+
+/**
+ * Clipboard, with the value shown if the write is refused.
+ *
+ * Clipboard permission is denied often enough that a button which silently does nothing
+ * reads as broken — and the remedy is the one thing on this panel the user has to get out
+ * of the app and into a terminal.
+ */
+function copyText(text, ui) {
+  navigator.clipboard?.writeText(text)
+    .then(() => ui.platform.notifications.success('Copied'))
+    .catch(() => ui.platform.notifications.info(text, { sticky: true }));
+}
 
 function amount(task) {
   if (task.total == null) return null;
@@ -61,10 +74,18 @@ function issueRow(issue, ui) {
       div({ className: 'act-body' },
         div({ className: 'act-title' }, issue.title),
         issue.detail ? div({ className: 'act-detail' }, issue.detail) : null,
+        // The fix, kept apart from the description and rendered as-is. A remedy is often
+        // a policy document or a shell command, and a problem report that describes the
+        // fix in prose leaves the reader to retype it.
+        issue.remedy ? pre({ className: 'act-remedy' }, issue.remedy) : null,
         div({ className: 'act-meta' }, issue.count > 1 ? `${issue.count} times, since ${since}` : `since ${since}`),
       ),
     ),
     div({ className: 'act-actions' },
+      issue.remedy
+        ? button({ className: 'btn small ghost' }, 'Copy fix')
+          .on({ click: () => copyText(issue.remedy, ui) })
+        : null,
       // Retry only when the server said pressing it will actually do something.
       issue.retryable
         ? button({ className: 'btn small act-retry' }, icon('refresh', { size: 12 }), span('Retry'))
@@ -127,6 +148,12 @@ export default function activityPanel(state, ui) {
         .on({ click: () => ui.exec('workbench.rebuildIndex') }),
       button({ className: 'btn small ghost act-scan' }, icon('refresh', { size: 12 }), span('Scan for outside changes'))
         .on({ click: () => ui.exec('workbench.scanCollection') }),
+      // On demand as well as on a schedule, because the moment an admin wants to know
+      // whether they fixed the bucket is right after they changed it — not up to five
+      // minutes later. It also checks against THIS browser's origin, which the scheduled
+      // run can only do if the deployment configured one.
+      button({ className: 'btn small ghost act-storage' }, icon('plug', { size: 12 }), span('Check storage'))
+        .on({ click: () => ui.exec('workbench.checkStorage') }),
     ),
   );
 }

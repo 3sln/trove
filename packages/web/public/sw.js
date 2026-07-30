@@ -53,6 +53,51 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(staleWhileRevalidate(req));
 });
 
+/**
+ * What a failed fetch actually means — which is not "offline" unless the browser says so.
+ *
+ * Every arm of this worker used to answer a rejected fetch with a synthesised 504 whose
+ * body said "Offline". Both halves of that were wrong, and together they cost a day of
+ * debugging: a bucket with no CORS policy rejects the fetch, so an online drive with a
+ * misconfigured store reported itself as a gateway timeout while offline, and the tab was
+ * neither. A worker cannot diagnose why a fetch failed, so it must not claim to.
+ *
+ *   503, not 504 — a made-up 504 is indistinguishable from a real proxy timeout, and
+ *   that is exactly the wrong tree to send someone up.
+ *   `x-trove-sw` — so a client (and a person reading the network panel) can tell this
+ *   response was invented here and never reached a server.
+ *   The real error, and `navigator.onLine`, because those are the two facts available.
+ *
+ * `kind` is how far the guess is allowed to go. A file request is the one that leaves this
+ * origin — the server answers it with a redirect to the store — so a store that refuses
+ * the browser is the likely cause there and nowhere else. For everything else the honest
+ * statement is that the server did not answer; naming CORS would send someone to check a
+ * bucket policy when their drive is simply down.
+ */
+function failed(err, kind) {
+  const offline = self.navigator.onLine === false;
+  const detail = err?.message || String(err || 'the request failed');
+  const cause = kind === 'file'
+    ? 'The browser reports it is online, so this is usually the backing store refusing it — '
+      + 'check Activity → Needs attention for the store’s CORS policy.'
+    : 'The browser reports it is online, so the server did not answer.';
+  const message = offline
+    ? 'You are offline, and this is not available offline.'
+    : `This request could not be completed (${detail}). ${cause}`;
+  const json = kind === 'api';
+  return new Response(
+    json ? JSON.stringify({ error: { code: offline ? 'offline' : 'unavailable', message } }) : message,
+    {
+      status: 503,
+      statusText: offline ? 'Offline' : 'Request Failed',
+      headers: {
+        'content-type': json ? 'application/json' : 'text/plain; charset=utf-8',
+        'x-trove-sw': offline ? 'offline' : 'fetch-failed',
+      },
+    },
+  );
+}
+
 // Pinned files live in trove-files (keyed by the full download URL). If present,
 // serve from cache (works offline and avoids re-downloading); else go to network.
 async function pinnedFirst(req) {
@@ -61,8 +106,8 @@ async function pinnedFirst(req) {
   if (hit) return sliceForRange(hit, req.headers.get('range'));
   try {
     return await fetch(req);
-  } catch {
-    return new Response('Offline and not available offline', { status: 504 });
+  } catch (err) {
+    return failed(err, 'file');
   }
 }
 
@@ -108,12 +153,10 @@ async function networkFirst(req) {
     const res = await fetch(req);
     if (res.ok) cache.put(req, res.clone());
     return res;
-  } catch {
+  } catch (err) {
     const hit = await cache.match(req);
     if (hit) return hit;
-    return new Response(JSON.stringify({ error: { code: 'offline', message: 'Offline — this data isn’t cached.' } }), {
-      status: 503, headers: { 'content-type': 'application/json' },
-    });
+    return failed(err, 'api');
   }
 }
 
@@ -140,13 +183,19 @@ function typeMatches(req, res) {
 async function staleWhileRevalidate(req) {
   const cache = await caches.open(SHELL);
   const cached = await cache.match(req, { ignoreSearch: true });
+  // The error is kept rather than discarded: it is the only description of what went
+  // wrong that anyone will ever see, and `failed` needs it to avoid inventing a reason.
+  let reason = null;
   const network = fetch(req).then((res) => {
     // Let a mismatch through — the browser's own error is clearer than anything we
     // could synthesise — but never keep it.
     if (res.ok && typeMatches(req, res)) cache.put(req, res.clone());
     return res;
-  }).catch(() => null);
-  return cached || (await network) || new Response('Offline', { status: 504 });
+  }).catch((err) => {
+    reason = err;
+    return null;
+  });
+  return cached || (await network) || failed(reason, 'asset');
 }
 
 // --- web push (bodyless → pull inbox) --------------------------------------

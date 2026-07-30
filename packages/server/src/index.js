@@ -15,6 +15,7 @@ import {
   VectorStore, KeywordStore, IndexerRegistry,
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
+  diagnoseStorage, STORAGE_ISSUE_CODES,
 } from '@3sln/trove/core';
 import { createRouter, routeHelpers } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
@@ -157,6 +158,68 @@ export async function createServer(config = {}) {
   const routeBeginScan = lifecycleState.background.beginScan;
   const routeBeginReindex = lifecycleState.background.beginReindex;
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
+
+  // --- storage self-check ----------------------------------------------------
+  // The failure this exists for: a bucket with no CORS policy serves the server fine and
+  // serves the browser nothing, so the drive looks healthy and every file opens to a
+  // spinner. See core/storage/diagnose.js for why the check has to be a real preflight.
+  //
+  // `origin` is the browser origin to check the policy against, and there is no guessing
+  // it: a policy may legitimately name one origin, so checking the wrong one would invent
+  // a problem. A request supplies its own; a cron firing has only `config.publicUrl`, and
+  // without either the CORS half is skipped rather than assumed.
+  const STORAGE_ISSUE_KIND = 'storage';
+  async function checkStorage({ origin = null } = {}) {
+    // `all()`, not `list(null)`: this has no user, and asking what the anonymous principal
+    // may read means checking nothing at all on a drive that is not public.
+    const list = collections ? await collections.all().catch(() => []) : [];
+    const results = [];
+    for (const c of list) {
+      let findings;
+      try {
+        const storage = await collections.storageFor(c.id);
+        findings = await diagnoseStorage({
+          storage, origin, driver: c.store?.driver || null, fetchImpl: config.fetch,
+        });
+      } catch (err) {
+        // Failing to BUILD the store is itself the most severe version of unreachable —
+        // an unknown driver or a config missing a required field never gets far enough
+        // to be asked whether it can be read.
+        findings = [{
+          code: 'storage-unreachable',
+          severity: 'error',
+          title: 'This collection’s store could not be opened',
+          detail: err?.message || String(err),
+        }];
+      }
+      const found = new Set(findings.map((f) => f.code));
+      for (const f of findings) {
+        await issues.raise({
+          kind: STORAGE_ISSUE_KIND,
+          subject: `${c.id}:${f.code}`,
+          title: `${c.name || c.id}: ${f.title}`,
+          detail: f.detail,
+          remedy: f.remedy || null,
+          severity: f.severity,
+          collectionId: c.id,
+          // Re-running the check IS the fix verification, so Retry rechecks against the
+          // same origin the finding was made for. Checking a different one would report
+          // a pass for a policy the affected browser still cannot use.
+          retry: { op: 'storage-check', origin },
+        });
+      }
+      // Whatever is no longer true stops being listed. Without this, fixing the bucket
+      // leaves the warning up, and a problem list that outlives its problems is one
+      // people learn to scroll past.
+      for (const code of STORAGE_ISSUE_CODES) {
+        if (!found.has(code)) await issues.clear(STORAGE_ISSUE_KIND, `${c.id}:${code}`);
+      }
+      results.push({ collectionId: c.id, name: c.name || c.id, findings });
+    }
+    return { checked: results.length, corsChecked: !!origin, results };
+  }
+  issues.handle('storage-check', (issue) => checkStorage({ origin: issue.retry?.origin || config.publicUrl || null }));
+  lifecycleState.storageCheck = checkStorage;
 
   issues.handle('reindex-node', (issue) => tasks.run(
     // Carries the issue's collection, so the person who can see the file can also see
@@ -368,7 +431,7 @@ export async function createServer(config = {}) {
    * does, so it does as much as it can and stores where it got to.
    */
   async function runMaintenance({ budgetMs = 20_000, scan = true } = {}) {
-    const out = { swept: false, purged: 0, scans: [], notified: 0 };
+    const out = { swept: false, purged: 0, scans: [], notified: 0, storage: 0 };
     await vfs.uploads.sweepExpired(Date.now());
     await sidecar.sweep();
     // Mentions are batched and drained on an interval — a timer, and a timer registered
@@ -381,15 +444,26 @@ export async function createServer(config = {}) {
       console.error('[trove] mention flush failed', e);
       return 0;
     });
+    // Cheap (one preflight per collection) and the only thing that will ever notice a
+    // bucket policy that was fine yesterday, so it runs on every firing rather than
+    // waiting for someone to open the Activity panel and press a button.
+    out.storage = await checkStorage({ origin: config.publicUrl || null })
+      .then((r) => r.checked)
+      .catch((e) => {
+        console.error('[trove] storage check failed', e);
+        return 0;
+      });
     const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     if (trashMs > 0) out.purged = (await vfs.purgeTrash({ before: Date.now() - trashMs }))?.purged || 0;
     out.swept = true;
     if (!scan) return out;
-    const list = collections ? await collections.list(null).catch(() => []) : [];
+    // `all()` rather than `list(null)`. Maintenance has no user, and `list(null)` answers
+    // "what may the anonymous principal read" — which on any drive that is not open to the
+    // public is nothing, so the scheduled scan silently scanned no collection whatsoever.
     // No collections means nothing to scan. It used to mean "scan the one called
     // default", which on a drive that has none is a scan of a collection that does not
     // exist — work that fails every cron firing and reports it as a scan error.
-    const targets = list;
+    const targets = collections ? await collections.all().catch(() => []) : [];
     if (!targets.length) return out;
     // Share the budget across collections so one huge bucket can't starve the rest.
     const each = Math.max(1000, Math.floor(budgetMs / targets.length));
@@ -408,7 +482,7 @@ export async function createServer(config = {}) {
     // inside a Durable Object want. `begin*` goes wherever `config.background` says,
     // which for a front-line Worker isolate is the object rather than itself.
     startScan, startReindex, beginScan: routeBeginScan, beginReindex: routeBeginReindex,
-    runMaintenance, mcp, auth, close };
+    runMaintenance, checkStorage, mcp, auth, close };
 }
 
 /**

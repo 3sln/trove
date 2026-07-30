@@ -185,6 +185,18 @@ export class TroveApiClient {
     return this.request('POST', `/api/collections/${encodeURIComponent(id)}/scan`);
   }
 
+  /**
+   * Check every collection's backing store for problems a browser would hit — chiefly a
+   * missing CORS policy, which leaves the file list and search working while every file
+   * fails to open.
+   *
+   * Worth asking from the browser rather than only on a timer: the server checks against
+   * the origin of THIS request, and a bucket policy may name exactly one origin.
+   */
+  checkStorage() {
+    return this.request('POST', '/api/diagnostics/storage');
+  }
+
   // --- server plugin installs (account-scoped, synced across devices) ---------
   /** Upload a package zip for account install; returns the server install record. */
   async installPlugin(bytes, grants) {

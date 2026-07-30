@@ -202,3 +202,24 @@ test('a collection shared with a user by email reaches them', async () => {
   expect(svc.can({ id: 'other-uuid', email: 'other@example.com', roles: [] }, record, 'read')).toBe(false);
   expect(c.id).toStartWith('col_');
 });
+
+test('system work enumerates every collection, not the anonymous view of them', async () => {
+  // The bug this pins: maintenance asked `list(null)`, which answers "what may the
+  // ANONYMOUS principal read". On a drive that is not open to the public that is nothing,
+  // so the scheduled scan and the storage self-check ran, reported success, and looked at
+  // no collection at all.
+  const { CollectionService, MemoryKV, MemoryStorage: MS } = await import('../src/index.js');
+  const svc = new CollectionService({
+    kv: new MemoryKV(), storageFactory: () => new MS(), admins: ['boss@example.com'], defaultOpen: false,
+  });
+  await svc.init();
+  const boss = { id: 'boss', email: 'boss@example.com', roles: [] };
+  await svc.create({ name: 'Private', store: { driver: 'memory' } }, boss);
+  await svc.create({ name: 'Also private', store: { driver: 'memory' } }, boss);
+
+  expect(await svc.list(null)).toEqual([]); // still true, and still the right answer to ask
+  expect((await svc.all()).length).toBe(2);
+  // Unfiltered records, so system work can read the store config it needs — which is also
+  // exactly why this must never be handed to a request.
+  expect((await svc.all()).every((c) => c.store)).toBe(true);
+});

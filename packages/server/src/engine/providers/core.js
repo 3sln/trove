@@ -168,6 +168,13 @@ export function coreProviders(config, lifecycleState) {
       beginReindex: (opts) => lifecycleState.background.beginReindex(opts),
     }),
 
+    // The storage self-check, late-bound for the same reason: it needs `collections` and
+    // `issues` from this container, so it is assembled in createServer and reached back
+    // into rather than built here.
+    storageCheck: Provider.fromSingleton({
+      run: (opts) => lifecycleState.storageCheck(opts),
+    }),
+
     storage: Provider.fromLazySingleton(
       () => resolve(config.storage ?? config.vfs?.storage, StorageBackend, (cfg) => buildStorage(cfg, config)),
     ),

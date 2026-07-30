@@ -660,6 +660,19 @@ export function createRouter() {
     return { ok: true };
   });
 
+  // Check the backing stores on demand, and answer with what was found rather than only
+  // leaving issues behind — an admin who just pressed "Check storage" is owed the result
+  // of the check they asked for.
+  //
+  // Origin comes from THIS request, which is the whole reason the on-demand version
+  // exists alongside the scheduled one: a bucket policy may legitimately name a single
+  // origin, and the origin that matters is the one browsers are actually using to reach
+  // the drive. A cron firing can only fall back to a configured TROVE_PUBLIC_URL.
+  r.post('/api/diagnostics/storage', ['collections', 'issues', 'storageCheck'], async (ctx) => {
+    await requireWholeDrive(ctx, 'check the backing stores');
+    return ctx.storageCheck.run({ origin: publicOrigin(ctx.req, ctx.config) });
+  });
+
   // Rebuild the search index on demand. Admin-only: it re-reads every object in the
   // drive, so it is a real load, and it is drive-wide rather than scoped to anything
   // the caller owns. Returns the task, which is how the caller watches it.

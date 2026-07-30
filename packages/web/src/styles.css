@@ -1022,6 +1022,14 @@ kbd {
 .act-detail, .act-meta { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; overflow-wrap: anywhere; }
 .act-meta { color: var(--text-faint); }
 .act-error { font-size: 11.5px; color: var(--danger); margin-top: 2px; overflow-wrap: anywhere; }
+/* A remedy is a policy or a command, so it keeps its own whitespace and scrolls rather
+   than reflowing — a JSON document rewrapped to the panel width is not pasteable. */
+.act-remedy {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; line-height: 1.5;
+  color: var(--text-dim); background: var(--bg-inset, var(--bg-hover)); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; margin: 6px 0 2px; max-height: 220px;
+  overflow: auto; white-space: pre; tab-size: 2;
+}
 .act-amount { font-size: 11px; color: var(--text-faint); margin-top: 3px; }
 .act-action { background: none; border: none; color: var(--text-faint); cursor: pointer; padding: 2px; border-radius: 4px; }
 .act-action:hover { background: var(--bg-hover); color: var(--text); }

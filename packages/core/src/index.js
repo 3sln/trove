@@ -15,6 +15,7 @@ export { MemoryStorage } from './storage/memory.js';
 // '@3sln/trove/core/storage/filesystem.js' in an entry point that has a filesystem.
 export { StorageDriverRegistry } from './storage/registry.js';
 export { portableDrivers } from './storage/drivers.js';
+export { diagnoseStorage, corsPolicy, STORAGE_ISSUE_CODES } from './storage/diagnose.js';
 export { S3Storage } from './storage/s3.js';
 export { PrefixedStorage } from './storage/prefixed.js';
 

@@ -67,6 +67,9 @@ export class IssueRegistry {
    * @param {string} [spec.subject]     what it is about (a node id); omit for drive-wide
    * @param {string} spec.title         one line, in the user's terms
    * @param {string} [spec.detail]      the underlying error, for someone who wants it
+   * @param {string} [spec.remedy]      what to DO about it, kept separate from `detail`
+   *   because it is the part a client should render as something copyable — a remedy is
+   *   often a policy or a command, and folded into prose it stops being pasteable.
    * @param {string} [spec.severity]    'error' (default) | 'warning'
    * @param {string} [spec.collectionId] scopes visibility; null = drive-wide (admin)
    * @param {{op: string}} [spec.retry] declarative retry, executed by a registered handler
@@ -82,6 +85,7 @@ export class IssueRegistry {
       subject: spec.subject ?? null,
       title: spec.title,
       detail: spec.detail ?? null,
+      remedy: spec.remedy ?? null,
       severity: spec.severity || 'error',
       collectionId: spec.collectionId ?? null,
       retry: spec.retry ?? null,

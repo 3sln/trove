@@ -57,8 +57,20 @@ export function registerCommands(app) {
   // Trove is not the only thing that can write to the bucket. This is how files added,
   // replaced, or removed by something else get picked up.
   cmd('workbench.scanCollection', 'Scan Collection for Outside Changes',
-    () => app.activity.scanCollection(explorer.state.collectionId || 'default').catch(() => {}),
+    () => {
+      // No collection means no scan. This used to fall back to one called 'default',
+      // which on a drive that has none scanned a collection that does not exist and
+      // reported the failure as a scan error.
+      const id = explorer.state.collectionId;
+      if (!id) return platform.notifications.info('Open a collection first — a scan is per collection.');
+      return app.activity.scanCollection(id).catch(() => {});
+    },
     { category: 'Explorer', icon: 'refresh' });
+  // Whether the backing stores are usable from a browser at all. Separate from a scan:
+  // a scan asks what the store HOLDS, this asks whether the store can be READ from here,
+  // which is the failure that makes every file open to a spinner.
+  cmd('workbench.checkStorage', 'Check Storage Configuration',
+    () => app.activity.checkStorage().catch(() => {}), { category: 'View', icon: 'plug' });
 
   // --- explorer --------------------------------------------------------------
   cmd('explorer.refresh', 'Refresh', () => go(new RefreshAction()), { category: 'Explorer', icon: 'refresh' });

@@ -77,6 +77,22 @@ export class CollectionService {
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
+  /**
+   * Every collection record, with no principal and no ACL filtering.
+   *
+   * For system work — a scheduled scan, a storage self-check — which has no user and must
+   * not pretend to have one. `list(null)` is the wrong tool for that, and quietly so: it
+   * asks what the ANONYMOUS principal may read, which on a drive that is not open to the
+   * public is nothing. Maintenance that called it looked like it ran and scanned no
+   * collection at all.
+   *
+   * Never hand the result to a request — these records carry store configuration,
+   * credentials included. `list(principal)` is the answer to "what may you see".
+   */
+  async all() {
+    return (await this.kv.list(NS)).map((r) => r.value).filter(Boolean);
+  }
+
   async get(id) {
     const c = await this.kv.get(NS, id);
     if (!c) throw TroveError.notFound('Collection');
