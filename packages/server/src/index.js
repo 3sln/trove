@@ -624,6 +624,14 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   if (config.storage.driver === 'filesystem') config.storage.root = env.TROVE_FS_ROOT || './data/objects';
   if (config.storage.driver === 's3') config.storage.s3 = s3FromEnv(env, 'TROVE_');
 
+  // Which store types a COLLECTION may be created on, if not all of the ones this entry
+  // point registered. `TROVE_STORAGE` picks the drive's own primary store; this restricts
+  // the menu the collection form offers and what `build` will accept — see
+  // engine/providers/core.js for why removal is configuration and addition is code.
+  if (env.TROVE_STORAGE_DRIVERS) {
+    config.allowedStorageDrivers = env.TROVE_STORAGE_DRIVERS.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+
   config.metadata.driver = env.TROVE_METADATA || (config.storage.driver === 'memory' ? 'memory' : 'sqlite');
   config.metadata.path = env.TROVE_DB_PATH || './data/trove.db';
 

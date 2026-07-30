@@ -58,13 +58,41 @@ const resolve = (value, BaseClass, build) =>
  * portable ones — so a deployment adds Filesystem (Node/Bun), or a driver written
  * entirely outside this package, by naming it at the entry point. What is not registered
  * is not offered and cannot be built.
+ *
+ * `config.allowedStorageDrivers` (TROVE_STORAGE_DRIVERS) narrows the result to an explicit
+ * set. Adding drivers is a code decision made by an entry point, which knows what the
+ * runtime can run; REMOVING them is an operator decision about one deployment, and needs
+ * to be reachable from configuration alone. A drive on Workers is the case in point: memory
+ * is portable, so it is offered, and choosing it there produces a collection that accepts
+ * uploads and loses them when the isolate is recycled. `TROVE_STORAGE_DRIVERS=s3` takes it
+ * off the menu without a fork of the entry point.
+ *
+ * A name that matches nothing throws rather than narrowing to nothing — a typo that left a
+ * drive with no way to make a collection would be a puzzle, not a message.
  */
 export function storageRegistry(config = {}) {
   if (config.storageRegistry instanceof StorageDriverRegistry) return config.storageRegistry;
   if (config.storageDrivers instanceof StorageDriverRegistry) return config.storageDrivers;
   const registry = new StorageDriverRegistry(portableDrivers());
   for (const d of config.storageDrivers || []) registry.register(d);
-  return registry;
+
+  const allowed = config.allowedStorageDrivers;
+  if (!allowed?.length) return registry;
+  const unknown = allowed.filter((k) => !registry.has(k));
+  if (unknown.length) {
+    throw TroveError.invalid(
+      `TROVE_STORAGE_DRIVERS names ${unknown.map((k) => `"${k}"`).join(', ')}, which `
+      + `${unknown.length === 1 ? 'is not a driver' : 'are not drivers'} this deployment has: `
+      + `${registry.keys().join(', ')}`,
+    );
+  }
+  // Rebuilt from the descriptors that survived rather than mutated, so a registry never
+  // has to support removal — and the drivers keep their registration order.
+  const narrowed = new StorageDriverRegistry();
+  for (const key of registry.keys()) {
+    if (allowed.includes(key)) narrowed.register(registry.driver(key));
+  }
+  return narrowed;
 }
 
 /**

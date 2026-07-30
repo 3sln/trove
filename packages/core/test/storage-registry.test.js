@@ -90,3 +90,19 @@ test('descriptors carry what a form needs, and no implementation', () => {
   expect(s3.fields.find((f) => f.name === 'secretAccessKey').secret).toBe(true);
   expect(s3.fields.find((f) => f.name === 'bucket').required).toBe(true);
 });
+
+test('a driver can be copied into another registry, create included', async () => {
+  // `describe()` strips `create` because it answers a client; narrowing a deployment's set
+  // needs the real thing. There is deliberately no `unregister` — a driver vanishing from a
+  // live registry is a store that stops being buildable while collections still name it —
+  // so narrowing rebuilds from what survived.
+  const full = new StorageDriverRegistry(portableDrivers());
+  const narrowed = new StorageDriverRegistry();
+  narrowed.register(full.driver('s3'));
+  expect(narrowed.keys()).toEqual(['s3']);
+  expect(narrowed.build({ driver: 's3', bucket: 'b', accessKeyId: 'a', secretAccessKey: 'x' }))
+    .toBeInstanceOf(StorageBackend);
+  // And the copy is a real driver, not a description of one.
+  expect(full.describe().find((d) => d.key === 's3').create).toBeUndefined();
+  expect(typeof full.driver('s3').create).toBe('function');
+});

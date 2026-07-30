@@ -163,6 +163,12 @@ TROVE_S3_ACCESS_KEY_ID=…            # or AWS_ACCESS_KEY_ID
 TROVE_S3_SECRET_ACCESS_KEY=…        # or AWS_SECRET_ACCESS_KEY
 TROVE_S3_PATH_STYLE=true            # MinIO / custom endpoints
 
+# Which store types a COLLECTION may be created on. Defaults to everything this
+# runtime registered; naming a subset takes the rest off the collection form and
+# refuses them. Worth setting on Workers, where `memory` is offered because it is
+# portable but produces a collection that loses its uploads on isolate recycle.
+TROVE_STORAGE_DRIVERS=s3            # subset of: memory | filesystem | s3
+
 # Metadata (file tree + facets)
 TROVE_METADATA=sqlite               # memory | sqlite
 TROVE_DB_PATH=./data/trove.db

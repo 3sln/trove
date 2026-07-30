@@ -95,6 +95,20 @@ export class StorageDriverRegistry {
     return [...this._drivers.keys()];
   }
 
+  /**
+   * One registered driver, `create` included — unlike `describe()`, which deliberately
+   * strips it because it answers a client.
+   *
+   * For copying a driver into another registry, which is how a deployment narrows the set
+   * it offers: a registry has no `unregister`, so narrowing rebuilds from what survived
+   * rather than removing from what did not. Keeping removal out of this class is the point
+   * — a driver disappearing from a live registry is a store that stops being buildable
+   * while collections still reference it.
+   */
+  driver(key) {
+    return this._drivers.get(key);
+  }
+
   /** What a client needs to render a form. No `create`, because that is not data. */
   describe() {
     return [...this._drivers.values()].map(({ create, ...rest }) => rest);
