@@ -23,8 +23,8 @@ const ARROWS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 // stops being the right advice. The fallback covers the moment before capabilities
 // arrive and any server too old to say; `!` is ours either way, since running a command
 // from here is a client convention the server knows nothing about.
-function promptFor(ui, { compact = false, modal = false } = {}) {
-  const p = ui.platform.capabilities?.searchPrompt;
+function promptFor(caps, { compact = false, modal = false } = {}) {
+  const p = caps?.searchPrompt;
   const base = (compact ? p?.short || p?.placeholder : p?.placeholder)
     || (compact ? 'Search files' : 'Search files · # filter by tag');
   // On a phone the box is ~300px wide; adding a second clause guarantees an ellipsis
@@ -123,7 +123,7 @@ export default function launcher(state, ui, opts = {}) {
       // `false`, not `'false'`: this is set as a property, and the string is truthy —
       // so the search box had spellcheck ON, red-underlining every filename typed into it.
       input({ className: 'launch-input', value: q, autofocus: true, spellcheck: false,
-        placeholder: promptFor(ui, { compact: state.vp?.mode === 'phone', modal }) })
+        placeholder: promptFor(state.caps, { compact: state.vp?.mode === 'phone', modal }) })
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
         .on({ click: () => clearSearch(ui) }) : null,
@@ -189,7 +189,7 @@ function searchHelp(state, ui, mode) {
   if (mode === 'command') return null;
   const se = state.se;
   if (!se.ran || se.loading || se.error || (se.results || []).length) return null;
-  const p = ui.platform.capabilities?.searchPrompt;
+  const p = state.caps?.searchPrompt;
   if (!p?.hint && !p?.examples?.length) return null;
   const wb = ui.platform.workbench;
   const tryIt = (query) => () => {

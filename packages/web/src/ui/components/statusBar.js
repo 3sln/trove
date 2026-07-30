@@ -123,7 +123,7 @@ export function statusFacts(state, ui) {
     running: act.tasks.filter((t) => t.status === 'running'),
     issues: act.issues,
     off: state.off || { online: true, pins: [], queued: 0, syncing: false },
-    caps: ui.platform.capabilities,
+    caps: state.caps,
   };
 }
 

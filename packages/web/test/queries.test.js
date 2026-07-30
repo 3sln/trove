@@ -278,11 +278,32 @@ test('the keybinding view says which bindings the user changed', async () => {
   expect(bindings.find((b) => b.command === 'x.run').custom).toBe(false);
 });
 
-test('capabilities are a copy, so a view cannot grant itself one', async () => {
+test('capabilities are fetched once, however many regions read them', async () => {
+  // It used to be assigned onto `platform` at boot followed by `workbench.touch()` — a poke
+  // at an unrelated store to force a redraw, because writing a plain field invalidates
+  // nothing. The query has somewhere for the value to arrive.
+  //
+  // The promise is kept rather than the value because ngin re-boots a query observed again
+  // after going idle, and what the server can do does not change under a running page.
+  let calls = 0;
   const app = platformStub();
-  const caps = await readOnce(q.capabilities, app);
-  expect(caps).toEqual({ read: true, write: false });
-  expect(caps).not.toBe(app.platform.capabilities);
+  app.platform.api = { capabilities: async () => { calls++; return { storageDrivers: ['s3'] }; } };
+  const engine = engineWith(app);
+
+  const a = engine.query(q.capabilities).subscribe(() => {});
+  const b = engine.query(q.capabilities).subscribe(() => {});
+  await settle();
+  expect(calls).toBe(1);
+
+  // Away and back: still no second request.
+  a.unsubscribe(); b.unsubscribe();
+  await settle();
+  const seen = [];
+  const c = engine.query(q.capabilities).subscribe((v) => seen.push(v));
+  await settle();
+  expect(calls).toBe(1);
+  expect(seen.at(-1)).toEqual({ storageDrivers: ['s3'] });
+  c.unsubscribe();
 });
 
 test('a view recomputes when a context key flips, not only when its own list changes', async () => {

@@ -114,12 +114,11 @@ export function createWorkbench({
   // --- initial load ---------------------------------------------------------
   (async () => {
     try {
-      platform.capabilities = await platform.api.capabilities();
-      // What the server can do is read straight off `platform`, not held in a store, so
-      // nothing invalidated when it arrived. Re-pushing the same state object will not
-      // do it either: a cell compares with Object.is and drops a write of what it
-      // already holds. Saying "this changed under you" is the store's job.
-      platform.workbench.touch(); // the status bar reads capabilities
+      // What the server can do is an engine query now — see bl/queries.js. It used to be
+      // assigned onto `platform` here and followed by `workbench.touch()`, a poke at an
+      // unrelated store purely to make the shell redraw, because writing a plain field
+      // invalidates nothing. The query has somewhere for the value to arrive, so the fetch
+      // belongs to it and this no longer has to announce it.
     } catch (err) {
       platform.notifications.error(`Cannot reach the Trove server: ${err.message}`);
     }

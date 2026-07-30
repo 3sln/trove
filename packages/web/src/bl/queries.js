@@ -273,8 +273,34 @@ export const keybindings = new ViewQuery(registries, (app) => {
   }));
 });
 
-/** What this drive lets the current user do. Rebinding it is not a thing a view can do. */
-export const capabilities = new ViewQuery(
-  (app) => [app.platform.context.observe()],
-  (app) => ({ ...(app.platform.capabilities || {}) }),
-);
+/**
+ * What the server can do: which storage drivers it offers, whether it can suggest searches.
+ *
+ * This one FETCHES rather than watching a cell, and it is the reason the last `rerender`-
+ * shaped hack can go. The answer used to be assigned onto `platform` at boot and followed by
+ * `workbench.touch()` — a poke at an unrelated store purely to make the shell redraw,
+ * because nothing invalidated when a plain field was written. A query has somewhere for the
+ * value to arrive, so nothing has to be told about it.
+ *
+ * The promise is kept, not just the value. ngin re-boots a query when it is observed again
+ * after going idle, and this must not become a second HTTP call: what the server can do does
+ * not change under a running page. (A one-shot `fetch()` query would be the obvious fit and
+ * is wrong here for the same reason — ngin evicts after one, deliberately, so that the next
+ * subscriber gets a fresh answer rather than a stale one that can never refresh. That is the
+ * right default and the opposite of what this wants.)
+ */
+class Capabilities extends Query {
+  static deps = ['app'];
+
+  /** Not yet known, as against "knows there are none" — every reader already treats it so. */
+  initial = null;
+
+  async boot({ app }, { notify }) {
+    this.promise ??= app.platform.api.capabilities();
+    notify(await this.promise);
+  }
+
+  kill() {}
+}
+
+export const capabilities = new Capabilities();

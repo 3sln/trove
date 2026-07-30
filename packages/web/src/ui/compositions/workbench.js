@@ -7,6 +7,7 @@
 import { dd, derive, constant } from '../../runtime.js';
 import { localState } from '../localState.js';
 import { region } from '../region.js';
+import { watchQuery } from '../../bl/watchQuery.js';
 import * as q from '../../bl/queries.js';
 import { NavigateAction, ExecCommandAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
@@ -69,13 +70,17 @@ export default function workbench({ engine, app, platform }) {
       // Component-local UI state — see ui/localState.js. One input rather than one per
       // dialog, and the reason there is no longer a `rerender` hook to thread anywhere.
       localState.observe(),
+      // What the server can do, through the engine rather than off a field on `platform`.
+      // Its query declares `initial = null`, so this stays a normal value while the request
+      // is in flight instead of turning the whole snapshot PENDING and blanking the shell.
+      watchQuery(engine, q.capabilities),
     ],
     // No `_bump` any more. It existed to defeat `watch`'s shallow-equality check for a
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, local) =>
-      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, local }),
+    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, local, caps) =>
+      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, local, caps }),
   );
 
   // The chrome, subscribed to what it reads instead of to everything.
@@ -87,7 +92,7 @@ export default function workbench({ engine, app, platform }) {
   // list beneath it. Now it reaches the chrome and the tray, and nothing else.
   const chrome = {
     ex: q.explorer, tr: q.transfers, act: q.activity, off: q.offline,
-    so: q.social, wb: q.workbench, statusItems: q.statusItems,
+    so: q.social, wb: q.workbench, statusItems: q.statusItems, caps: q.capabilities,
   };
   // A query boots asynchronously — it awaits a container lease first — so a region is
   // PENDING for the first frame or two and `watch` renders its placeholder. For a bar with

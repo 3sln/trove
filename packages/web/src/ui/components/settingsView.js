@@ -17,7 +17,7 @@ export default function settingsView(state, ui) {
         h2('Settings'),
         p({ className: 'sub' }, 'Preferences are stored in this browser. Plugins contribute their own settings here too.'),
         ...groups.map((g) => group(g, ui)),
-        mcpSection(ui),
+        mcpSection(ui, state.caps),
         apiKeysSection(state, ui),
         openersSection(ui),
         keybindingsSection(ui),
@@ -91,8 +91,7 @@ function control(s, ui) {
 //
 // It reads straight off `capabilities`, which the app already fetched at startup, so
 // there is no loading state and nothing to go stale.
-function mcpSection(ui) {
-  const caps = ui.platform.capabilities;
+function mcpSection(ui, caps) {
   if (!caps) return null; // capabilities never arrived; the shell has bigger problems
   const mcp = caps.mcp;
   const auth = caps.auth || { authorizationServers: [], source: 'none' };

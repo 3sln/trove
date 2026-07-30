@@ -15,7 +15,7 @@ const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 export function dialog(state, ui) {
   const d = state.overlay.dialog;
   if (!d) return null;
-  if (d.kind === 'collection') return collectionDialog(d, ui);
+  if (d.kind === 'collection') return collectionDialog(d, ui, state.caps);
   if (d.kind === 'plugin-review') return pluginReview(d, ui);
   if (d.kind === 'opener-chooser') return openerChooserDialog(d, ui);
   const wb = ui.platform.workbench;
@@ -100,9 +100,9 @@ function openerChooserDialog(d, ui) {
 // which changes which fields render — invalidates the tree instead of needing a manual
 // nudge back up to the root. See ui/localState.js.
 const COL_FORM = 'collectionDialog';
-function collectionDialog(d, ui) {
+function collectionDialog(d, ui, caps) {
   const wb = ui.platform.workbench;
-  const drivers = ui.platform.capabilities?.storageDrivers || [];
+  const drivers = caps?.storageDrivers || [];
 
   let colState = localState.get(COL_FORM);
   if (colState?.ref !== d) {
