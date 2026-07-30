@@ -35,7 +35,7 @@ export class NavigateAction extends AppAction {
     try {
       const sort = platform.settings.get('explorer.sort');
       const order = platform.settings.get('explorer.sortOrder');
-      const res = await platform.api.list({ sort, order, collection: collectionId });
+      const res = await platform.api.list(collectionId, { sort, order });
       explorer.set({
         items: res.items, loading: false, selection: [], sort, order,
         collectionId: res.collectionId || collectionId,
@@ -132,9 +132,8 @@ export class LoadMoreAction extends AppAction {
     if (!cursor || explorer.state.loadingMore) return;
     explorer.set({ loadingMore: true });
     try {
-      const res = await platform.api.list({
-        sort: explorer.state.sort, order: explorer.state.order,
-        collection: explorer.state.collectionId, cursor,
+      const res = await platform.api.list(explorer.state.collectionId, {
+        sort: explorer.state.sort, order: explorer.state.order, cursor,
       });
       explorer.set({
         items: [...explorer.state.items, ...res.items],

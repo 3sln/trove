@@ -131,10 +131,13 @@ export class PluginRpcRouter {
       // ONE options object — `api.list(opts)`. Called as `list(pathOrId, params)` the
       // collection became the query string's key and everything else was dropped, so a
       // plugin asking for `photos` silently got the default collection unsorted.
-      case 'files:list': return cap('files'), this.platform.api.list({
-        collection: params.collection || params.pathOrId || undefined,
-        sort: params.sort, order: params.order, limit: params.limit, cursor: params.cursor,
-      });
+      // A plugin has to say which collection it means, like everything else. The host
+      // does not pick one for it — a plugin reaching into whatever collection happened to
+      // be the default is exactly the ambient authority the capability list exists to stop.
+      case 'files:list': return cap('files'), this.platform.api.list(
+        params.collection || params.pathOrId,
+        { sort: params.sort, order: params.order, limit: params.limit, cursor: params.cursor },
+      );
       case 'files:stat': return cap('files'), this.platform.api.stat(params.id);
       case 'files:downloadUrl': return cap('files'), { url: this.platform.api.downloadUrl(params.id) };
       case 'files:index': {

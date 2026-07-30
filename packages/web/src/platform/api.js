@@ -91,14 +91,24 @@ export class TroveApiClient {
       return res.ok;
     } catch { return false; }
   }
+  // Collection-scoped calls name their collection in the PATH. There is no default and
+  // no `?collection=`: the server refuses a request that does not say which collection it
+  // means, so a caller that forgets gets an error here rather than silently reaching one.
   /** Every item in a collection. */
-  list(opts = {}) {
-    return this.request('GET', '/api/items', { query: opts });
+  list(collection, opts = {}) {
+    return this.request('GET', `${this.#scope(collection)}/items`, { query: opts });
   }
   /** Resolve an item by id, by `trove:` URI, or by name within a collection. */
-  stat(ref, opts = {}) {
+  stat(ref, { collection, ...opts } = {}) {
     const key = String(ref).startsWith('trove:') ? 'uri' : 'id';
-    return this.request('GET', '/api/items/resolve', { query: { [key]: ref, ...opts } });
+    // A name is only unique inside a collection, so resolving one needs the scope. An id
+    // or a trove: URI names itself, and the flat resolve is fine for those.
+    const base = collection ? `${this.#scope(collection)}/items/resolve` : '/api/items/resolve';
+    return this.request('GET', base, { query: { [key]: ref, ...opts } });
+  }
+  #scope(collection) {
+    if (!collection) throw new Error('This call is scoped to a collection — pass one');
+    return `/api/collections/${encodeURIComponent(collection)}`;
   }
   /** What links to this item. */
   backlinks(id, opts = {}) {
@@ -112,26 +122,34 @@ export class TroveApiClient {
   }
   /** What's been deleted but not yet destroyed. */
   trash(collection) {
-    return this.request('GET', '/api/trash', { query: collection ? { collection } : {} });
+    return this.request('GET', `${this.#scope(collection)}/trash`);
   }
   restore(id) {
     return this.request('POST', '/api/trash/restore', { body: { id } });
   }
   /** Destroy for real — one item, or everything in a collection's trash. */
   purgeTrash({ id, collection } = {}) {
-    return this.request('POST', '/api/trash/purge', { body: id ? { id } : { collection } });
+    // One item names itself; emptying a whole collection has to name the collection, and
+    // says so in the URL — "everything in here" is the request that must never be able
+    // to mean somewhere you did not point at.
+    return id
+      ? this.request('POST', '/api/trash/purge', { body: { id } })
+      : this.request('POST', `${this.#scope(collection)}/trash/purge`);
   }
-  search(q, opts = {}) {
-    return this.request('GET', '/api/search', { query: { q, ...opts } });
+  search(q, { collection, ...opts } = {}) {
+    const base = collection ? `${this.#scope(collection)}/search` : '/api/search';
+    return this.request('GET', base, { query: { q, ...opts } });
   }
   // Unified query: server transforms the raw string (parse/LLM) → runs it → returns
   // { query, results, resolved }. `resolved` is what was actually searched.
-  query(q, opts = {}) {
-    return this.request('POST', '/api/query', { body: { q, ...opts } });
+  query(q, { collection, ...opts } = {}) {
+    const base = collection ? `${this.#scope(collection)}/query` : '/api/query';
+    return this.request('POST', base, { body: { q, ...opts } });
   }
   // Drive-wide tag/property filter (launcher #tag / #key:op:value).
-  tagSearch(filters, q, opts = {}) {
-    return this.request('POST', '/api/tags/search', { body: { filters, q, ...opts } });
+  tagSearch(filters, q, { collection, ...opts } = {}) {
+    const base = collection ? `${this.#scope(collection)}/tags/search` : '/api/tags/search';
+    return this.request('POST', base, { body: { filters, q, ...opts } });
   }
   indexers() {
     return this.request('GET', '/api/indexers');
@@ -357,8 +375,8 @@ export class TroveApiClient {
   async upload(file, opts) {
     const name = opts.name || file.name || 'untitled';
     const size = file.size;
-    const plan = await this.request('POST', '/api/uploads', {
-      body: { collection: opts.collection, name, size, contentType: file.type || undefined },
+    const plan = await this.request('POST', `${this.#scope(opts.collection)}/uploads`, {
+      body: { name, size, contentType: file.type || undefined },
       signal: opts.signal,
     });
     // Hand the caller the server upload id so a cancel/failure can abort the session

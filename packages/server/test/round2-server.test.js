@@ -138,7 +138,7 @@ test('list_files returns what its description promises', async () => {
     await new Promise((r) => setTimeout(r, 5)); // distinct updatedAt
   }
   const res = await post(handle, '/mcp', {
-    jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_files', arguments: {} },
+    jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_files', arguments: { collection: 'default' } },
   });
   const payload = JSON.parse((await res.json()).result.content[0].text);
   // The tool said "newest first" and passed no sort, so vfs.list's alphabetical default

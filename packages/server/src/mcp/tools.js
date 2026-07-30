@@ -98,6 +98,33 @@ async function readText(handle) {
  * `ctx` at call time carries { vfs, collections, principal } — the same objects the HTTP
  * routes get, so the two surfaces cannot drift apart on what a given user may do.
  */
+/**
+ * An agent has to say which collection it means.
+ *
+ * There used to be a `'default'` here, which made every tool call work on a fresh drive
+ * and quietly work on the WRONG collection on a real one — an agent asked to file
+ * something would put it wherever the default happened to be, which on a multi-user drive
+ * is a collection its user may not even be able to read. Naming it is one extra call to
+ * list_collections and removes a whole class of silently-misplaced writes.
+ */
+function requireCollection(collection) {
+  if (!collection) {
+    throw TroveError.invalid('A collection is required — call list_collections to see which ones you can use');
+  }
+}
+
+/**
+ * The same, but only when the reference needs it. A file id or a `trove:` URI already
+ * names its collection; a bare NAME is only unique within one.
+ */
+function requireCollectionForName(file, collection) {
+  const ref = String(file || '');
+  const selfNaming = ref.startsWith('trove:') || /^itm_/.test(ref);
+  if (!selfNaming && !collection) {
+    throw TroveError.invalid(`"${ref}" is a name, so it needs a collection — or pass a file id or trove: URI`);
+  }
+}
+
 export function registerTroveTools(server) {
   server.instructions = INSTRUCTIONS;
 
@@ -152,12 +179,13 @@ export function registerTroveTools(server) {
     inputSchema: {
       type: 'object',
       properties: {
-        collection: { type: 'string', description: 'Which collection (default: "default").' },
+        collection: { type: 'string', description: 'Which collection to act in. Required — call list_collections first.' },
         cursor: { type: 'string', description: 'Continue from a previous call.' },
         limit: { type: 'integer', description: `Maximum items (default 25, max ${MAX_RESULTS}).` },
       },
     },
-    async run({ collection = 'default', cursor, limit }, ctx) {
+    async run({ collection, cursor, limit }, ctx) {
+      requireCollection(collection);
       // The description promises recency and `list` defaults to alphabetical, so it
       // has to be asked for. An agent answering "what did I add recently?" off the top
       // of an alphabetical list is confidently wrong in a way nothing surfaces.
@@ -184,11 +212,12 @@ export function registerTroveTools(server) {
       type: 'object',
       properties: {
         file: { type: 'string', description: 'A file id, a name, or a trove: URI.' },
-        collection: { type: 'string', description: 'Which collection to look in when given a name (default: "default").' },
+        collection: { type: 'string', description: 'Which collection to look in. Required when `file` is a name; a file id or trove: URI names its own.' },
       },
       required: ['file'],
     },
-    async run({ file, collection = 'default' }, ctx) {
+    async run({ file, collection }, ctx) {
+      requireCollectionForName(file, collection);
       const handle = await fileHandle(ctx, file, collection, 'read');
       const node = handle.node;
       if (!textLike(node.contentType)) {
@@ -216,12 +245,13 @@ export function registerTroveTools(server) {
       properties: {
         name: { type: 'string', description: 'The file name, including its extension.' },
         content: { type: 'string', description: 'The text to write.' },
-        collection: { type: 'string', description: 'Which collection (default: "default").' },
+        collection: { type: 'string', description: 'Which collection to act in. Required — call list_collections first.' },
         contentType: { type: 'string', description: 'Override the type guessed from the name.' },
       },
       required: ['name', 'content'],
     },
-    async run({ name, content, collection = 'default', contentType }, ctx) {
+    async run({ name, content, collection, contentType }, ctx) {
+      requireCollection(collection);
       if (!name?.trim()) throw TroveError.invalid('name is required');
       const into = await ctx.access.collection(collection, 'write');
       // No contentType falls through to the vfs's own guess from the name.
@@ -245,7 +275,8 @@ export function registerTroveTools(server) {
       },
       required: ['file'],
     },
-    async run({ file, collection = 'default' }, ctx) {
+    async run({ file, collection }, ctx) {
+      requireCollectionForName(file, collection);
       const handle = await fileHandle(ctx, file, collection, 'delete');
       await handle.remove();
       return toolText(`Moved "${handle.name}" to the trash. It can be restored from the drive's trash.`);
@@ -284,7 +315,8 @@ export function registerTroveTools(server) {
       },
       required: ['file'],
     },
-    async run({ file, collection = 'default' }, ctx) {
+    async run({ file, collection }, ctx) {
+      requireCollectionForName(file, collection);
       const handle = await fileHandle(ctx, file, collection, 'read');
       const node = handle.node;
       // Scoped, exactly like the HTTP route. Backlinks reach ACROSS collections by

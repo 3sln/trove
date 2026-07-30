@@ -283,14 +283,14 @@ test('search finds a file, and an empty result says so in a sentence', async () 
 
 test('read, write, and delete round-trip through the same Vfs the browser uses', async () => {
   const { handle, vfs } = await openDrive();
-  const read = await callTool(handle, 'read_file', { file: 'recipe.txt' });
+  const read = await callTool(handle, 'read_file', { file: 'recipe.txt', collection: 'default' });
   expect(read.text).toBe('flour, water, salt');
 
-  const wrote = await callTool(handle, 'write_file', { name: 'agent-note.md', content: '# From an agent\n' });
+  const wrote = await callTool(handle, 'write_file', { name: 'agent-note.md', content: '# From an agent\n', collection: 'default' });
   expect(wrote.isError).toBe(false);
   expect(await (await vfs.find('agent-note.md')).name).toBe('agent-note.md');
 
-  const gone = await callTool(handle, 'delete_file', { file: 'agent-note.md' });
+  const gone = await callTool(handle, 'delete_file', { file: 'agent-note.md', collection: 'default' });
   expect(gone.isError).toBe(false);
   // Trash, not destruction — and the tool says which, because a model deciding whether
   // to delete needs to know it is recoverable.
@@ -300,7 +300,7 @@ test('read, write, and delete round-trip through the same Vfs the browser uses',
 
 test('a missing file is a readable failure the model can act on', async () => {
   const { handle } = await openDrive();
-  const r = await callTool(handle, 'read_file', { file: 'nothing-here.txt' });
+  const r = await callTool(handle, 'read_file', { file: 'nothing-here.txt', collection: 'default' });
   expect(r.status).toBe(200); // not a transport fault
   expect(r.isError).toBe(true);
   expect(r.text).toMatch(/No file called/);
@@ -309,7 +309,7 @@ test('a missing file is a readable failure the model can act on', async () => {
 test('a binary file returns its details rather than mangled bytes as text', async () => {
   const { handle, vfs } = await openDrive();
   await vfs.writeFile('photo.png', new Uint8Array([137, 80, 78, 71, 0, 1, 2]), { contentType: 'image/png' });
-  const r = await callTool(handle, 'read_file', { file: 'photo.png' });
+  const r = await callTool(handle, 'read_file', { file: 'photo.png', collection: 'default' });
   expect(r.isError).toBe(false);
   expect(r.text).toMatch(/image\/png/);
 });
