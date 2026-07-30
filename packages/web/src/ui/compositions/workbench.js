@@ -6,6 +6,8 @@
 
 import { dd, derive, constant } from '../../runtime.js';
 import { localState } from '../localState.js';
+import { region } from '../region.js';
+import * as q from '../../bl/queries.js';
 import { NavigateAction, ExecCommandAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
@@ -55,12 +57,10 @@ export default function workbench({ engine, app, platform }) {
       app.explorer.observe(),
       app.search.observe(),
       app.apiKeys.observe(),
-      app.transfers.observe(),
       platform.notifications.observe(),
       platform.context.observe(),
       platform.settings.observe(),
       platform.plugins.observe() ?? constant([]),
-      platform.contributions.observeType('statusItem'),
       app.social.observe(),
       app.offline.observe(),
       app.activity.observe(),
@@ -74,27 +74,52 @@ export default function workbench({ engine, app, platform }) {
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, pluginList, statusItems, so, off, act, vp, voice, local) =>
-      ({ wb, overlay, nav, ex, se, keys, tr, notif, ctx, settings, plugins: pluginList, statusItems, so, off, act, vp, voice, local }),
+    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, local) =>
+      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, local }),
   );
 
-  return alias(() => watch(combined, (state) => view(state, ui)));
+  // The chrome, subscribed to what it reads instead of to everything.
+  //
+  // These four render the same facts in different shapes — `statusFacts` is shared between
+  // them — so they share a query set. Splitting them out is what takes `tr` off the main
+  // snapshot: an upload progress tick used to invalidate the one watch that builds the whole
+  // shell, so moving one number in the transfer tray reconstructed every row of the file
+  // list beneath it. Now it reaches the chrome and the tray, and nothing else.
+  const chrome = {
+    ex: q.explorer, tr: q.transfers, act: q.activity, off: q.offline,
+    so: q.social, wb: q.workbench, statusItems: q.contributionsOfType('statusItem'),
+  };
+  // A query boots asynchronously — it awaits a container lease first — so a region is
+  // PENDING for the first frame or two and `watch` renders its placeholder. For a bar with
+  // a fixed height that has to be an empty bar rather than nothing, or the layout jumps
+  // once on load and settles.
+  const regions = {
+    statusBar: region(engine, chrome, (s) => statusBar(s, ui), { placeholder: () => div({ className: 'statusbar' }) }),
+    phoneTopBar: region(engine, chrome, (s) => phoneTopBar(s, ui), { placeholder: () => div({ className: 'phonebar top' }) }),
+    phoneBottomBar: region(engine, chrome, (s) => phoneBottomBar(s, ui), { placeholder: () => div({ className: 'phonebar bottom' }) }),
+    // Both render nothing when there is nothing to show, so an absent first frame is what
+    // they would have drawn anyway.
+    phoneSheet: region(engine, chrome, (s) => phoneSheet(s, ui)),
+    transferTray: region(engine, { tr: q.transfers }, (s) => transferTray(s, ui)),
+  };
+
+  return alias(() => watch(combined, (state) => view(state, ui, regions)));
 }
 
-function view(state, ui) {
+function view(state, ui, regions) {
   const mode = state.vp?.mode || 'desktop';
   const phone = mode === 'phone';
   return div({ className: `shell ${mode} ${state.settings['workbench.density'] === 'compact' ? 'compact' : ''}` },
     // On a phone the rail becomes a bottom bar and the status bar folds behind one icon
     // in a top bar — see phoneChrome. Everything between them is identical, which is the
     // point: only the chrome changes shape, not the app.
-    phone ? phoneTopBar(state, ui) : null,
+    phone ? regions.phoneTopBar() : null,
     div({ className: 'body' },
       phone ? null : activityBar(state, ui),
       mainArea(state, ui),
     ),
-    phone ? phoneBottomBar(state, ui) : statusBar(state, ui),
-    phone ? phoneSheet(state, ui) : null,
+    phone ? regions.phoneBottomBar() : regions.statusBar(),
+    phone ? regions.phoneSheet() : null,
     // Overlays.
     searchModal(state, ui),
     commandPalette(state, ui),
@@ -102,7 +127,7 @@ function view(state, ui) {
     contextMenu(state, ui),
     pluginPanel(state, ui),
     toasts(state, ui),
-    transferTray(state, ui),
+    regions.transferTray(),
     activityPanel(state, ui),
   );
 }
