@@ -206,7 +206,13 @@ function platformStub() {
         isAvailable: () => true,
       },
       keybindings: {
-        resolved: () => [{ command: 'x.run', key: 'mod+r' }],
+        // Two commands on one chord, so the view has something to detect a clash from.
+        resolved: () => [
+          { bindingId: 'x.run|mod+r', command: 'x.run', key: 'mod+r' },
+          { bindingId: 'y.go|mod+r', command: 'y.go', key: 'mod+r' },
+          { bindingId: 'z.solo|mod+k', command: 'z.solo', key: 'mod+k' },
+        ],
+        overrides: () => ({ 'z.solo|mod+k': 'mod+k' }),
         labelFor: (c) => (c === 'x.run' ? '⌘R' : null),
       },
     },
@@ -249,10 +255,27 @@ test('the status item view resolves when/visibility, so a component does not hav
 test('the keybinding view names the command rather than carrying it', async () => {
   const app = platformStub();
   const bindings = await readOnce(q.keybindings, app);
-  expect(bindings).toEqual([
-    { command: 'x.run', key: 'mod+r', label: '⌘R', title: 'Title of x.run', when: null },
-  ]);
+  expect(bindings.map((b) => b.command)).toEqual(['x.run', 'y.go', 'z.solo']);
+  expect(bindings[0].bindingId).toBe('x.run|mod+r');
+  expect(bindings[0].title).toBe('Title of x.run');
   expect(callablesIn(bindings)).toEqual([]);
+});
+
+test('the keybinding view flags a clash, which one row cannot see for itself', async () => {
+  // Nothing rejects a collision and the LAST registration wins, so binding something onto
+  // an occupied chord silently stops the other command working. Spotting it needs the whole
+  // list at once — the thing a component rendering one row structurally cannot do.
+  const bindings = await readOnce(q.keybindings, platformStub());
+  const byCommand = Object.fromEntries(bindings.map((b) => [b.command, b]));
+  expect(byCommand['x.run'].clash).toBe(true);
+  expect(byCommand['y.go'].clash).toBe(true);
+  expect(byCommand['z.solo'].clash).toBe(false);
+});
+
+test('the keybinding view says which bindings the user changed', async () => {
+  const bindings = await readOnce(q.keybindings, platformStub());
+  expect(bindings.find((b) => b.command === 'z.solo').custom).toBe(true);
+  expect(bindings.find((b) => b.command === 'x.run').custom).toBe(false);
 });
 
 test('capabilities are a copy, so a view cannot grant itself one', async () => {

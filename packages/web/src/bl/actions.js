@@ -643,3 +643,29 @@ export class RevokeApiKeyAction extends AppAction {
     }
   }
 }
+
+
+/**
+ * Rebind a keyboard shortcut, or clear it with `key: null`.
+ *
+ * Carries the binding ID rather than the binding, because a view emits descriptions and an
+ * action carries an id — the component that dispatches this has never held the binding
+ * object, only a row describing it.
+ */
+export class RebindKeyAction extends AppAction {
+  constructor(bindingId, key) {
+    super();
+    this.bindingId = bindingId;
+    this.key = key;
+  }
+
+  async execute({ app }) {
+    const kb = app.platform.keybindings;
+    // `rebind` resolves a binding object or a command id, not a binding id, so look the
+    // row back up. Resolving here rather than widening the service keeps the id the only
+    // thing that crosses the boundary.
+    const binding = kb.resolved().find((b) => b.bindingId === this.bindingId);
+    if (!binding) return;
+    kb.rebind(binding, this.key);
+  }
+}

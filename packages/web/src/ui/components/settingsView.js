@@ -1,8 +1,11 @@
 import { dd } from '../../runtime.js';
-import { prettyKey, eventToKey } from '../../platform/keybindings.js';
+import { eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
 import { localState } from '../localState.js';
+import { region } from '../region.js';
+import * as q from '../../bl/queries.js';
+import { RebindKeyAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -397,17 +400,26 @@ function openersSection(ui) {
 const capturingOf = () => localState.get('keybindingCapture') ?? null;
 const setCapturing = (id) => localState.set('keybindingCapture', id);
 
+// Its own region, over the keybindings view and the capture state.
+//
+// Everything a row needs is decided by the query — the command's title, whether the user
+// changed it, and whether another command answers to the same chord. That last one is not
+// something a row could work out for itself: it needs the whole list at once.
+//
+// Rebinding dispatches with the binding ID. The component has never held a binding object,
+// only a description of one, which is the point.
+let kbRegion = null;
 function keybindingsSection(ui) {
-  const kb = ui.platform.keybindings;
-  const bindings = kb.resolved();
-  const cmds = ui.platform.contributions;
-  const overrides = kb.overrides();
+  // Built once. A fresh region per render would rebuild its alias every pass, and dodo
+  // identifies an alias by the function — see ui/region.js.
+  kbRegion ??= region(ui.engine, { bindings: q.keybindings, local: q.localUi },
+    (st) => keybindingRows(st.bindings || [], ui));
+  return kbRegion();
+}
+
+function keybindingRows(bindings, ui) {
   const stop = () => setCapturing(null);
-  // Which chords more than one command answers to. Nothing rejects a collision, and
-  // `#matchFor` scans in reverse so the LAST registration wins — bind Delete onto
-  // ⌘P and Quick Open stops opening, with no hint anywhere that that is why.
-  const byKey = new Map();
-  for (const b of bindings) byKey.set(b.key, (byKey.get(b.key) || 0) + 1);
+  const rebind = (bindingId, key) => ui.go(new RebindKeyAction(bindingId, key));
   return div({ className: 'group' },
     h3('Keyboard Shortcuts'),
     p({ className: 'sub' }, 'Click a shortcut to record a new one. Esc cancels; Backspace clears it.'),
@@ -415,22 +427,19 @@ function keybindingsSection(ui) {
     // more" anywhere, the shortcuts past it simply did not exist as far as anyone could
     // tell, and one plugin keymap was enough to push real ones off the end.
     ...bindings.map((b) => {
-      const cmd = cmds.get(b.command);
       const listening = capturingOf() === b.bindingId;
-      const custom = !!overrides[b.bindingId];
-      const clash = byKey.get(b.key) > 1;
       return div({ className: 'setting' },
         div({ className: 'info' },
-          div({ className: 't' }, cmd?.title || b.command),
+          div({ className: 't' }, b.title),
           div({ className: 'd' }, b.command),
         ),
         div({ className: 'control' },
-          clash && !listening
+          b.clash && !listening
             ? span({ className: 'kbd-clash', title: 'Another command answers to this shortcut too — the one registered last wins' },
               icon('warn', { size: 12 }))
             : null,
-          button({ className: `kbd-edit ${listening ? 'listening' : ''} ${clash ? 'clash' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
-            listening ? span('Press keys…') : dd.h('kbd', prettyKey(b.key)))
+          button({ className: `kbd-edit ${listening ? 'listening' : ''} ${b.clash ? 'clash' : ''}`, title: listening ? 'Press the new shortcut' : 'Click to rebind' },
+            listening ? span('Press keys…') : dd.h('kbd', b.label))
             .on({
               click: () => setCapturing(listening ? null : b.bindingId),
               blur: () => { if (listening) stop(); },
@@ -439,17 +448,17 @@ function keybindingsSection(ui) {
                 e.preventDefault();
                 e.stopPropagation();
                 if (e.key === 'Escape') return stop();
-                if (e.key === 'Backspace') { kb.rebind(b, null); return stop(); }
+                if (e.key === 'Backspace') { rebind(b.bindingId, null); return stop(); }
                 // A bare modifier isn't a chord yet — wait for the key it modifies.
                 if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return;
-                kb.rebind(b, eventToKey(e));
+                rebind(b.bindingId, eventToKey(e));
                 stop();
               },
               $attach: (el) => { if (listening) queueMicrotask(() => el.focus()); },
             }),
-          custom
+          b.custom
             ? button({ className: 'c-link', title: 'Back to the default' }, 'reset')
-              .on({ click: () => { kb.rebind(b, null); setCapturing(null); } })
+              .on({ click: () => { rebind(b.bindingId, null); setCapturing(null); } })
             : null,
         ),
       );

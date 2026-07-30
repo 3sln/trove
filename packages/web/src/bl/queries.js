@@ -32,6 +32,7 @@
 import { Query } from '@3sln/ngin';
 import { localState } from '../ui/localState.js';
 import { queryOf } from './intern.js';
+import { prettyKey } from '../platform/keybindings.js';
 
 /**
  * A live query over one of the existing cell-backed services.
@@ -245,15 +246,30 @@ export const statusItems = new ViewQuery(registries, (app) => {
     }));
 });
 
-/** The effective keybindings, for the settings view: what is bound to what, right now. */
+/**
+ * The effective keybindings, for the settings view: what is bound to what, right now.
+ *
+ * Everything the UI decides from is decided here — the command's title, whether the binding
+ * is a user override, and whether another command answers to the same chord. That last one
+ * is why the view carries `clash`: nothing rejects a collision and `#matchFor` scans in
+ * reverse so the LAST registration wins, which means binding Delete onto ⌘P silently stops
+ * Quick Open from opening. Detecting that needs the whole list at once, which is exactly the
+ * sort of thing a component rendering one row cannot do and a view can.
+ */
 export const keybindings = new ViewQuery(registries, (app) => {
   const p = app.platform;
-  return p.keybindings.resolved().map((b) => ({
+  const resolved = p.keybindings.resolved();
+  const overrides = p.keybindings.overrides();
+  const perKey = new Map();
+  for (const b of resolved) perKey.set(b.key, (perKey.get(b.key) || 0) + 1);
+  return resolved.map((b) => ({
+    bindingId: b.bindingId,
     command: b.command,
-    key: b.key,
-    label: p.keybindings.labelFor(b.command),
     title: p.contributions.get(b.command)?.title ?? b.command,
-    when: b.when ?? null,
+    key: b.key,
+    label: prettyKey(b.key),
+    custom: !!overrides[b.bindingId],
+    clash: perKey.get(b.key) > 1,
   }));
 });
 
