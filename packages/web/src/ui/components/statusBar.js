@@ -97,7 +97,15 @@ export function statusFacts(state, ui) {
   const items = ex.items || [];
   const act = state.act || { tasks: [], issues: [] };
   return {
-    collectionId: ex.collectionId || 'default',
+    // `null` with nothing open — `collectionLabel` renders that as "no collection". The
+    // old fallback made the bar name a collection that may not exist, on a drive where
+    // the user had not yet chosen one.
+    collectionId: ex.collectionId ?? null,
+    // What to CALL it, so the phone shell and the desktop bar cannot end up saying
+    // different things — which is the entire reason these facts are derived once. The
+    // phone rendered `collectionId` raw, which showed an opaque `col_…` id where the
+    // desktop showed the name.
+    collectionLabel: collectionLabel(ex),
     // The COLLECTION's totals when the server could give them, not the page's. Summing
     // what happens to be loaded reports a 3,000-file drive as 500 files — a wrong number,
     // not a rounded one. Falls back to the page only when the server didn't say.

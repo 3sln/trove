@@ -40,10 +40,14 @@ export function createApp(platform) {
   // (e.g. the Delete keybinding needs `explorer.hasSelection`), and previously only
   // NavigateAction set them — so selecting a file never flipped hasSelection true and
   // Delete silently did nothing. Deriving them from the observable keeps them honest.
-  platform.context.setMany({ 'explorer.collectionId': 'default', 'explorer.hasSelection': false });
+  //
+  // `null` when no collection is open, never the string 'default'. A when-clause reading
+  // this is asking which collection is open, and answering with the name of one that may
+  // not exist made every such clause true before the user had chosen anything.
+  platform.context.setMany({ 'explorer.collectionId': null, 'explorer.hasSelection': false });
   effect(explorer.observe(), (ex) => {
     platform.context.setMany({
-      'explorer.collectionId': ex.collectionId || 'default',
+      'explorer.collectionId': ex.collectionId ?? null,
       'explorer.hasSelection': (ex.selection?.length || 0) > 0,
     });
   });

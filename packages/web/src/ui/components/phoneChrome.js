@@ -43,7 +43,7 @@ export function phoneTopBar(state, ui) {
   // rows of chrome repeating "notes.txt" costs a fifth of the screen to say it twice.
   const title = state.wb.activity === 'settings' ? 'Settings'
     : state.wb.activity === 'plugins' ? 'Plugins'
-      : f.collectionId;
+      : f.collectionLabel;
   return div({ className: 'phonebar top' },
     button({ className: 'pb-brand', title: 'Trove — home' }, img({ src: '/icon.svg', alt: 'Trove' }))
       .on({ click: () => ui.exec('workbench.view.home') }),
@@ -112,7 +112,7 @@ function statusSheet(state, ui) {
   const wb = ui.platform.workbench;
   const go = (cmd) => () => { wb.closeSheet(); ui.exec(cmd); };
   return div({ className: 'sheet-body' },
-    div({ className: 'sheet-title' }, f.collectionId),
+    div({ className: 'sheet-title' }, f.collectionLabel),
 
     // Problems and running work first: they are the reason someone opened this.
     f.issues.length

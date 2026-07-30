@@ -208,7 +208,10 @@ export function registerCommands(app) {
   // The menu of "where else could I be". Shared by the palette command and the status
   // bar's collection segment, so both offer the same list.
   const collectionMenu = () => {
-    const current = explorer.state.collectionId || 'default';
+    // No fallback: this only decides which row gets a tick, and with nothing open the
+    // answer is that none of them do. `|| 'default'` ticked a collection the user had
+    // not chosen, and on a drive with one actually called "default", the wrong one.
+    const current = explorer.state.collectionId;
     const items = (explorer.state.collections || []).map((c) => ({
       label: c.name || c.id,
       icon: c.id === current ? 'check' : 'files',
