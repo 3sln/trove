@@ -33,6 +33,7 @@ import path from 'node:path';
 // The policy lives in its own module because index.js needs it too and has to stay
 // loadable on Workers, where `node:path` is not there to be imported.
 import { IMMUTABLE_PREFIX, cacheControlFor } from '../cachePolicy.js';
+import { SHARE_PATH } from '@3sln/trove/core/links.js';
 
 export { IMMUTABLE_PREFIX, cacheControlFor };
 
@@ -46,10 +47,16 @@ export const MIME = {
 /**
  * Should a miss here fall back to the SPA entry point?
  *
- * The client never puts a path in the URL — `navigation.js` calls pushState with no URL
- * argument, so the whole app lives at `/`. The fallback is therefore for robustness
- * (a refresh somewhere unexpected), never for deep links, which is what makes it safe
- * to refuse anything that looks like a file rather than a route.
+ * Most of the app lives at `/` — `navigation.js` pushes state with no URL — so for those
+ * views the fallback is only robustness, a refresh landing somewhere unexpected.
+ *
+ * Share links are the exception, and they break the rule this used to rest on. A share
+ * link is `/c/<collection>/i/<item>`, and an item name ends in a filename, so
+ * "anything with an extension is asking for a file" refused exactly the deep link the
+ * scheme exists to provide: the server 404'd before the app could load, and the
+ * client-side routing that would have resolved it never ran. A share path is a route
+ * whatever it ends with, so it is recognised before the extension rule rather than
+ * fighting it.
  *
  * @param {string} pathname
  */
@@ -58,7 +65,9 @@ export function shouldFallBack(pathname) {
   // Content-addressed: a miss is a stale reference to a build that no longer exists.
   // Answering it with HTML is what poisons a service worker cache.
   if (pathname.startsWith(IMMUTABLE_PREFIX)) return false;
-  // Anything with an extension is asking for a file, not a view.
+  // A route the app owns, named by the same module that produces the links.
+  if (pathname === SHARE_PATH || pathname.startsWith(`${SHARE_PATH}/`)) return true;
+  // Anything else with an extension is asking for a file, not a view.
   if (path.extname(pathname)) return false;
   return true;
 }

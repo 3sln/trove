@@ -10,7 +10,7 @@ import {
   LoadApiKeysAction, MintApiKeyAction, RevokeApiKeyAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
-import { troveUri } from '@3sln/trove/core/links.js';
+import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;
@@ -87,6 +87,24 @@ export function registerCommands(app) {
     if (!node) platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
     return node;
   };
+
+  // Two spellings of one address, and which you want depends on where it is going.
+  //
+  // `trove:` is what one document writes to link another; it means nothing to a browser.
+  // A share link is a URL you can paste into a message. Offering both, labelled for the
+  // destination rather than for the format, is the difference between a choice and a
+  // riddle.
+  cmd('explorer.copyShareLink', 'Copy Shareable Link', async () => {
+    const node = subject();
+    if (!node) return;
+    const url = shareUrl(node, location.origin);
+    try {
+      await navigator.clipboard.writeText(url);
+      platform.notifications.success('Link copied — anyone with access to this collection can open it');
+    } catch {
+      platform.notifications.info(url, { sticky: true });
+    }
+  }, { category: 'Explorer', icon: 'link' });
 
   cmd('explorer.copyLink', 'Copy Link to Item', async () => {
     const node = subject();

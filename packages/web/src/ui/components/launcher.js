@@ -351,7 +351,10 @@ function fileMenu(node, ui) {
   return [
     { label: 'Open', icon: 'file-text', run: () => ui.exec('explorer.open', node) },
     { label: 'Download', icon: 'download', run: () => ui.exec('explorer.download', node) },
-    { label: 'Copy link', icon: 'link', kbd: kbd('explorer.copyLink'), run: () => ui.exec('explorer.copyLink') },
+    // Labelled by destination rather than by format: one goes in a document, the other
+    // goes to a person.
+    { label: 'Copy shareable link', icon: 'link', run: () => ui.exec('explorer.copyShareLink') },
+    { label: 'Copy trove: link', icon: 'link', kbd: kbd('explorer.copyLink'), run: () => ui.exec('explorer.copyLink') },
     { sep: true },
     { label: 'Rename…', run: () => ui.exec('explorer.rename') },
     pinned

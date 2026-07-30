@@ -8,6 +8,8 @@ import { Action } from '@3sln/ngin';
 import { newId } from '@3sln/trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
 import { availableOpeners, rememberedOpenerId } from './openers.js';
+// A share link and a `trove:` URI are the same address in two spellings — see core/links.js.
+import { parseShareUrl } from '@3sln/trove/core/links.js';
 
 class AppAction extends Action {
   static deps = ['app'];
@@ -86,6 +88,15 @@ export class LoadCollectionsAction extends AppAction {
  */
 export class OpenInitialCollectionAction extends AppAction {
   async execute({ app }) {
+    // A share link decides where we land, ahead of everything below.
+    //
+    // Arriving at a link to a specific item and being asked which collection you would
+    // like to open would be absurd — the link already said. So this runs before the
+    // remembered choice and before the gate, and only falls through to them when the URL
+    // is not a share link or cannot be honoured.
+    const shared = parseShareUrl(typeof location !== 'undefined' ? location.pathname : '');
+    if (shared) return this.#openShared(app, shared);
+
     // Calls the API directly rather than dispatching LoadCollectionsAction: ngin's
     // dispatch() returns an event feed, not the action's value, so awaiting it would
     // hand back an EventTarget and this would fail in a way nothing reports.
@@ -130,6 +141,67 @@ export class OpenInitialCollectionAction extends AppAction {
 
     app.explorer.set({ gate: null });
     return app.engine.dispatch(new NavigateAction(remembered));
+  }
+
+  /**
+   * Open the collection and item a share link names.
+   *
+   * Every way this can fail says which way it failed. A link to a collection you cannot
+   * read, and a link to an item that has been renamed, are different problems with
+   * different answers, and both used to be indistinguishable from an empty drive.
+   */
+  async #openShared(app, shared) {
+    const { platform, explorer, engine } = app;
+    // The URL is consumed rather than kept. The app does not otherwise reflect its state
+    // in the address bar, so leaving a share path there would go stale the moment the user
+    // navigated anywhere — a URL that lies is worse than one that is merely uninformative.
+    if (typeof history !== 'undefined') history.replaceState(null, '', '/');
+
+    let collections = [];
+    try {
+      const res = await platform.api.collections();
+      collections = res.collections || [];
+      explorer.set({ collections, canCreateCollection: !!res.canCreate });
+    } catch (err) {
+      explorer.set({ loading: false, error: `Couldn’t load your collections: ${err.message}` });
+      return;
+    }
+
+    if (!collections.some((c) => c.id === shared.collection)) {
+      // Said plainly rather than shown as an empty drive. The recipient may simply not
+      // have been granted this collection, and that is worth knowing rather than guessing.
+      explorer.set({
+        loading: false, items: [], gate: null,
+        error: `This link points at a collection you do not have access to (“${shared.collection}”). Ask whoever shared it to grant you access.`,
+      });
+      return;
+    }
+
+    explorer.set({ gate: null });
+    await engine.dispatch(new NavigateAction(shared.collection));
+
+    let node;
+    try {
+      // `stat` answers `{ node }` rather than the node — see bl/links.js, which unwraps it
+      // the same way. Reading `.id` off the envelope silently looks like "not found".
+      const res = shared.by === 'id'
+        ? await platform.api.stat(shared.value)
+        : await platform.api.stat(shared.value, { collection: shared.collection });
+      node = res?.node || null;
+    } catch {
+      node = null;
+    }
+    if (!node?.id) {
+      // A link by name breaks on rename, deliberately and visibly. Saying so beats
+      // landing in the right collection with no explanation of what was expected.
+      platform.notifications.warn(
+        shared.by === 'name'
+          ? `“${shared.value}” is not in this collection any more — it may have been renamed or removed.`
+          : 'That item no longer exists.',
+      );
+      return;
+    }
+    engine.dispatch(new OpenFileAction(node, { reset: true }));
   }
 }
 
