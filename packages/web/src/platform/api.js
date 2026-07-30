@@ -387,10 +387,28 @@ export class TroveApiClient {
   async upload(file, opts) {
     const name = opts.name || file.name || 'untitled';
     const size = file.size;
-    const plan = await this.request('POST', `${this.#scope(opts.collection)}/uploads`, {
+    // Every step of an upload is retried, not just the parts.
+    //
+    // Multipart parts already had this; nothing else did — so a transient failure on
+    // `create`, on the single presigned PUT, or on `complete` killed the whole upload on
+    // the first stumble, while the same failure mid-multipart was shrugged off. The
+    // single-PUT path is the one most uploads take (anything under the multipart floor),
+    // which is to say the retries were on the rarer half.
+    //
+    // `withRetry` decides what is worth retrying — see errors.js. Notably a lost upload
+    // session is NOT retryable, and must not be: a session that has genuinely expired or
+    // been aborted will never come back, and hammering it just delays the error. That
+    // case is what the manual retry is for.
+    const step = (fn) => withRetry(fn, {
+      signal: opts.signal,
+      retries: 4,
+      onRetry: ({ attempt, delayMs, error }) => opts.onRetry?.({ attempt, delayMs, message: error.message }),
+    });
+
+    const plan = await step(() => this.request('POST', `${this.#scope(opts.collection)}/uploads`, {
       body: { name, size, contentType: file.type || undefined },
       signal: opts.signal,
-    });
+    }));
     // Hand the caller the server upload id so a cancel/failure can abort the session
     // (otherwise a multipart upload leaks server + storage state).
     if (plan.uploadId) opts.onStart?.(plan.uploadId);
@@ -401,18 +419,18 @@ export class TroveApiClient {
 
     if (plan.strategy === 'single') {
       // One presigned PUT straight to storage (bytes never touch our server).
-      await xhrPut(t.url || plan.url, file, { headers: t.requiredHeaders, signal: opts.signal, onProgress: (l) => progress.set('single', l) });
-      const done = await this.request('POST', completeUrl, { body: {}, signal: opts.signal });
+      await step(() => xhrPut(t.url || plan.url, file, { headers: t.requiredHeaders, signal: opts.signal, onProgress: (l) => progress.set('single', l) }));
+      const done = await step(() => this.request('POST', completeUrl, { body: {}, signal: opts.signal }));
       return done.node;
     }
     if (plan.strategy === 'direct-single') {
-      await xhrPut(this.baseUrl + this.#partUrl(plan, 1), file, {
+      await step(() => xhrPut(this.baseUrl + this.#partUrl(plan, 1), file, {
         // Our own server, so it needs our bearer token; `t.authHeaders` lets the plan
         // add its own and wins on a clash.
         headers: { ...this.authHeaders(), ...t.authHeaders },
         signal: opts.signal, onProgress: (l) => progress.set(1, l),
-      });
-      const done = await this.request('POST', completeUrl, { body: {}, signal: opts.signal });
+      }));
+      const done = await step(() => this.request('POST', completeUrl, { body: {}, signal: opts.signal }));
       return done.node;
     }
 
@@ -459,7 +477,11 @@ export class TroveApiClient {
           () => this.#uploadPart(plan, n, blob, {
             signal: inner.signal, onProgress: (l) => progress.set(n, l),
           }),
-          { signal: inner.signal, retries: 4 },
+          {
+            signal: inner.signal,
+            retries: 4,
+            onRetry: ({ attempt, delayMs, error }) => opts.onRetry?.({ attempt, delayMs, part: n, message: error.message }),
+          },
         );
         results[n - 1] = { partNumber: n, etag };
       }
@@ -474,9 +496,9 @@ export class TroveApiClient {
     }
 
     const reportedParts = results.filter(Boolean);
-    const done = await this.request('POST', completeUrl, {
+    const done = await step(() => this.request('POST', completeUrl, {
       body: { parts: reportedParts }, signal: opts.signal,
-    });
+    }));
     return done.node;
   }
 
