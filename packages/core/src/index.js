@@ -50,6 +50,7 @@ export {
   deriveDataKey, fingerprint, fingerprintHex, toHex, describeKey, matchesCollection,
   newSalt, DEFAULT_KDF,
 } from './encryption/keys.js';
+export { normalizeEncryption, shouldEncrypt, describeEncryption } from './encryption/policy.js';
 export { Vfs, CONTENT_TYPES } from './vfs.js';
 export { IndexingCoordinator } from './indexing.js';
 // Work in flight (ephemeral) and standing problems (durable) — see the header of each.

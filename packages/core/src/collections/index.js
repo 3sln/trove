@@ -13,6 +13,7 @@
 // secrets (access keys); treat that store as sensitive.
 
 import { TroveError } from '../errors.js';
+import { normalizeEncryption, describeEncryption } from '../encryption/policy.js';
 import { PrefixedStorage } from '../storage/prefixed.js';
 import { newId } from '../util.js';
 
@@ -106,6 +107,11 @@ export class CollectionService {
       id: c.id, name: c.name, description: c.description || '',
       driver: c.store?.driver, system: !!c.system,
       capabilities: caps, createdAt: c.createdAt,
+      // Safe to hand to anyone who can see the collection: the salt, the KDF parameters
+      // and the fingerprint are what turn a passphrase into the key, and are useless
+      // without the passphrase. Null when the collection is not encrypted, so a client
+      // never has to ask a second question to find out.
+      encryption: describeEncryption(c.encryption),
     };
   }
 
@@ -269,7 +275,7 @@ export class CollectionService {
     return { record, created: true };
   }
 
-  async create({ name, description, store, acl }, principal) {
+  async create({ name, description, store, acl, encryption }, principal) {
     if (!this.canCreate(principal)) throw TroveError.forbidden('You cannot create collections');
     if (!name?.trim()) throw TroveError.invalid('Collection name is required');
     if (!store?.driver) throw TroveError.invalid('A backing store (driver + config) is required');
@@ -283,6 +289,10 @@ export class CollectionService {
     const grants = acl?.grants ? [...acl.grants] : [];
     grants.push({ type: 'user', subject: principal.id, capabilities: ['admin'] });
     const record = { id, name: name.trim(), description: description || '', store, acl: { grants }, createdAt: Date.now(), createdBy: principal.id };
+    // Set at creation so the very first upload is covered. Enabling it later is allowed and
+    // only affects what arrives after — nothing retroactively encrypts what is already
+    // there, and pretending otherwise would be the more dangerous lie.
+    if (encryption !== undefined) record.encryption = normalizeEncryption(encryption);
     await this.kv.set(NS, id, record);
     return this.describe(record, principal);
   }
@@ -296,6 +306,21 @@ export class CollectionService {
     if (patch.store) {
       next.store = patch.store;
       this._storage.delete(id); // rebuild backend next use
+    }
+    // Turning encryption ON affects only what is uploaded from now on, and turning it OFF
+    // does not decrypt anything: every object records its own envelope, so what is already
+    // stored keeps working either way. Changing the FINGERPRINT is a different act — that
+    // is a key rotation, and rotating without re-encrypting would orphan every existing
+    // object. Refused here; the rotation job is what does it safely.
+    if (patch.encryption !== undefined) {
+      const nextEnc = normalizeEncryption(patch.encryption);
+      const prevFp = c.encryption?.fingerprint;
+      if (prevFp && nextEnc && nextEnc.fingerprint !== prevFp) {
+        throw TroveError.invalid(
+          'Changing this collection\u2019s key would orphan every object already encrypted with the old one. Rotate the key instead.',
+        );
+      }
+      next.encryption = nextEnc;
     }
     await this.kv.set(NS, id, next);
     return this.describe(next, principal);
