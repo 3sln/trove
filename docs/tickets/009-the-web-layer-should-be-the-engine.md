@@ -68,8 +68,16 @@ different queries identically, which is the original bug reintroduced by the fix
 instead.
 
 ngin also exposes `hooks.createQueryControllersMap` for custom keying, which is where this
-could live instead. Interning was chosen because it fixes `watchQuery` at the same time —
-overriding ngin's map alone would still mint two cells for one shared realization.
+could live instead. Interning was chosen because it is the layer where the problem actually
+is: two instances are two realizations no matter what the layer above does.
+
+`watchQuery`'s cache was originally justified as preventing this, and that was wrong.
+Measured: two independent bridges over one instance boot the query once and kill it once,
+because ngin shares by instance and does not care how many observers arrive. The cache buys
+idempotence — so calling `watchQuery` in a render does not make `watch` resubscribe every
+pass — and one invalidation fan-out per change instead of one per bridge. Both are
+worthwhile; neither is correctness, and the safeguard against duplicate realizations is
+interning.
 
 What this buys, concretely: the status bar used to call `context.evaluate(item.when)` and
 `plugins.isAvailable(item)` per item, mid-render. Those are view decisions, so they moved

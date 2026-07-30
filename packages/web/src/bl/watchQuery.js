@@ -1,5 +1,10 @@
 // Reading an engine query from the render layer.
 //
+// Mostly this exists to be the ONE place that knows how a query reaches a component. The
+// bridging itself is a single call; the value is that it is not re-derived at fifteen call
+// sites, and that if it ever needs an initial value or an error view, there is somewhere to
+// put it.
+//
 // `engine.query(q)` answers an observable — `subscribe({next, error, complete})` — and dodo's
 // `watch` takes a Cell — `onDirty(fn)` plus `getValue()`. `fromObservable` already bridges
 // exactly those two shapes, so this is thin on purpose: the point is that there is ONE place
@@ -19,19 +24,25 @@ import { fromObservable } from '../runtime.js';
 /**
  * Cache the bridged cell per (engine, query instance).
  *
- * Two components watching the same query must land on the same cell, or each gets its own
- * subscription and dodo connects the underlying query twice. ngin already shares the
- * realization by instance identity; this keeps the layer above from undoing that.
+ * Not, as this first claimed, because two cells would "undo ngin's sharing" — they would
+ * not. Measured: two independent `fromObservable(engine.query(q))` over one instance boot
+ * the query ONCE and kill it once, because ngin shares the realization by instance and does
+ * not care how many observers arrive or through what. The sharing was never at risk.
+ *
+ * What the cache actually buys is smaller and worth stating accurately:
+ *
+ *   - **Idempotence.** `watchQuery` can be called freely and returns the same cell, so it
+ *     is safe in a render. Without it, `watch` — which compares its source by identity and
+ *     resubscribes when it changes — would tear down and re-establish every pass.
+ *   - **One fan-out per change** instead of one per bridge. Each extra cell is another
+ *     observer on the controller and another invalidation to propagate.
+ *
+ * Neither is correctness, so this is an optimisation and a convenience, not a safeguard.
+ * The safeguard against duplicate realizations is interning the query instance — see
+ * bl/intern.js, which is where that problem is actually solved.
  *
  * Weak on the engine so a disposed engine takes its cells with it, and weak on the query so
- * a memoised parameterised query that falls out of use does too.
- */
-const cells = new WeakMap();
-
-/**
- * @param {object} engine
- * @param {object} queryInstance a SHARED instance — see bl/queries.js on why never a fresh one
- * @returns {object} a dodo Cell, PENDING until the query produces its first value
+ * an interned instance that falls out of use does too.
  */
 export function watchQuery(engine, queryInstance) {
   let forEngine = cells.get(engine);
