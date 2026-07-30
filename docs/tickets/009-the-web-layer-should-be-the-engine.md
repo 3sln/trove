@@ -211,3 +211,25 @@ Two `ui.app` calls are left, and neither is a mutation. `offline.isPinned(node.i
 `apiKeys.draftScopes()` are READS taken during a render — they want to be part of the slice
 the component already receives, or of an apiKeys view, rather than becoming actions. Turning
 a read into an action would be the same category error as a query handing out a handle.
+
+## Where it stands
+
+| member | at the start | now |
+|---|---|---|
+| `ui.platform` | 81 | 44 |
+| `ui.app` | 32 | 2 |
+| `ui.exec` | 46 | 48 |
+| `ui.go` | 12 | 70 |
+| `ui.engine` | 0 | 1 |
+
+`go` and `exec` going UP is the shape of the work rather than a regression: every service
+call that became an action is now a dispatch. They are sugar over `engine.dispatch`, and
+they go last, when there is nothing left for a component to reach for except the engine.
+
+Done: the state as queries; the chrome, palette and shortcuts as regions; view queries for
+commands, keybindings, status items and capabilities; actions for commands, notifications,
+clipboard, the shell's overlays, and the drive's services.
+
+Left: the file list and the remaining overlays as regions; `showDialog`/`showContextMenu`
+(callbacks — see above); `moveLaunch` (read-after-write); the two `ui.app` reads; then the
+snapshot, `app`, `platform`, `go` and `exec`.
