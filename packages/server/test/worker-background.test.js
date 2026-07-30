@@ -46,6 +46,10 @@ const ENV = { TROVE_STORAGE: 'memory' };
 test('work a request started is handed to waitUntil', async () => {
   const kept = [];
   const ctx = { waitUntil: (p) => kept.push(p) };
+  // The Worker builds its own drive from ENV, and nothing seeds a collection any more —
+  // so the one this scans has to be created through the same server the adapter uses.
+  const seeded = await getServer(ENV);
+  await seeded.collections?.ensure({ id: 'default', name: 'My Drive' });
   const res = await worker.fetch(
     new Request('http://t/api/collections/default/scan', { method: 'POST' }), ENV, ctx,
   );
@@ -74,6 +78,7 @@ test('the cron handler awaits its own work', async () => {
 
 test('a scan that runs out of budget resumes where it stopped', async () => {
   const server = await createServer(configFromEnv(ENV));
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const { vfs } = server;
   // Objects that arrived without Trove, more than one page of them.
   const storage = await vfs.storageFor('default');
@@ -114,7 +119,9 @@ test('two processes cannot scan the same collection at once', async () => {
   const storage = new GatedStorage();
   const shared = { kv: new MemoryKV(), storage };
   const a = await createServer({ ...configFromEnv(ENV), ...shared });
+  await a.collections?.ensure({ id: 'default', name: 'My Drive' });
   const b = await createServer({ ...configFromEnv(ENV), ...shared });
+  await b.collections?.ensure({ id: 'default', name: 'My Drive' });
 
   // A is held inside its first list(), so it is unambiguously still scanning.
   const first = a.startScan('default', { reason: 'isolate a' });
@@ -133,7 +140,9 @@ test('two processes cannot scan the same collection at once', async () => {
 test('the claim is released, so the next scan is not locked out', async () => {
   const shared = { kv: new MemoryKV(), storage: new MemoryStorage() };
   const a = await createServer({ ...configFromEnv(ENV), ...shared });
+  await a.collections?.ensure({ id: 'default', name: 'My Drive' });
   const b = await createServer({ ...configFromEnv(ENV), ...shared });
+  await b.collections?.ensure({ id: 'default', name: 'My Drive' });
   await a.startScan('default', { reason: 'first' });
   // A lock nobody ever releases is worse than no lock: the collection would simply
   // stop being scanned, and nothing would say so.
@@ -146,6 +155,7 @@ test('the claim is per collection, not drive-wide', async () => {
   // block on everything else.
   const kv = new MemoryKV();
   const server = await createServer({ ...configFromEnv(ENV), kv });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const held = await kv.acquire('scan-cursor', 'photos', 60_000);
   expect(held).toBeTruthy();
   expect((await server.startScan('default', { reason: 'unrelated' })).alreadyRunning).toBeUndefined();
@@ -153,6 +163,7 @@ test('the claim is per collection, not drive-wide', async () => {
 
 test('a resumed scan does not report the items it has not reached as orphaned', async () => {
   const server = await createServer(configFromEnv(ENV));
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const { vfs } = server;
   for (let i = 0; i < 5; i++) await vfs.writeFile(`mine-${i}.txt`, 'x', { contentType: 'text/plain' });
 

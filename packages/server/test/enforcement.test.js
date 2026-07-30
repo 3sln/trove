@@ -22,6 +22,7 @@ test('a service that is absent throws rather than waving the request through', a
   // "Just let it error" is the right answer for a resource that should be there.
   // What must never happen is the check quietly passing.
   const server = await createServer(configFromEnv(ENV));
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('x.md', 'hi', { contentType: 'text/markdown' });
 
   // Stand in for a broken graph: the service is there but cannot answer, while
@@ -43,6 +44,7 @@ test('a service that is absent throws rather than waving the request through', a
 test('an unowned contributor namespace is refused', async () => {
   // The check the fail-open guard was disabling.
   const server = await createServer(configFromEnv(ENV));
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('y.md', 'hi', { contentType: 'text/markdown' });
   const res = await server.handle(new Request(`http://t/api/index/${encodeURIComponent('trove+contrib:ghost.example/p/idx')}`, {
     method: 'POST',
@@ -53,20 +55,14 @@ test('an unowned contributor namespace is refused', async () => {
   await server.close();
 });
 
-test('turning collections off is a configuration decision, and it works', async () => {
-  // The legitimate case the presence check was standing in for. It has to keep
-  // working, or "read config instead" would just be a stricter server.
-  const server = await createServer({ ...configFromEnv(ENV), collections: false });
-  const res = await server.handle(new Request('http://t/api/collections'));
-  expect(res.status).toBe(200);
-  expect((await res.json()).collections[0].id).toBe('default');
-
-  const write = await server.handle(new Request('http://t/api/items/rename', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ id: 'nope', newName: 'x' }),
-  }));
-  // Refused for not existing, NOT for permissions — the ACL layer is off.
-  expect(write.status).toBe(404);
-  await server.close();
+test('turning collections off is refused at boot, not per request', async () => {
+  // This used to be the legitimate case the presence check stood in for: one open store,
+  // no ACLs, `collections: false`. It cannot exist now — every collection-scoped endpoint
+  // names its collection in the path, so an unnamed single store has nothing to answer.
+  //
+  // And it fails at startup rather than on the first request, which is the right moment:
+  // an operator who mis-set this finds out while they are still looking at the terminal,
+  // instead of from a user hitting a 500 later.
+  await expect(createServer({ ...configFromEnv(ENV), collections: false }))
+    .rejects.toThrow(/no longer supported/i);
 });

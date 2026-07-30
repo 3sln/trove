@@ -365,11 +365,19 @@ export function coreProviders(config, lifecycleState) {
     ),
 
     // The ownership + permission boundary; each collection is a store config.
-    // `config.collections === false` disables it (single open storage, no ACLs),
-    // and the resource is then null — a provider is allowed to provide nothing.
+    // There is no "off" any more. Every collection-scoped endpoint names its collection
+    // in the path, so a drive with no collection layer has nothing to answer with — and
+    // the ACL check standing down because the service is absent was the failure mode this
+    // graph was rebuilt to make impossible. Refused here as well as in configFromEnv, so
+    // there is one answer whichever way the config arrived.
     collections: Provider.fromLazySingleton(
       async (deps) => {
-        if (config.collections === false) return null;
+        if (config.collections === false) {
+          throw TroveError.invalid(
+            'collections: false is no longer supported — endpoints are scoped to a named '
+            + 'collection. Create one collection and use it.',
+          );
+        }
         const { kv, storage } = await need(deps, ['kv', 'storage']);
         return resolve(config.collections, CollectionService, () => new CollectionService({
           kv,

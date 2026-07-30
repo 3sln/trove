@@ -56,6 +56,7 @@ async function sign(claims) {
 
 async function openDrive(extra = {}) {
   const server = await createServer({ rebuildIndexOnStart: false, ...extra });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   await server.vfs.writeFile('welcome.md', '# Welcome\n\nNotes about sailing and the boat refit.\n', { contentType: 'text/markdown' });
   await server.vfs.writeFile('recipe.txt', 'flour, water, salt', { contentType: 'text/plain' });
   return server;
@@ -114,13 +115,13 @@ test('the discovery document is served, and served without a token', async () =>
 
 test('the JSON API refuses with the same directions the MCP endpoint gives', async () => {
   // The generalization that makes this one mechanism instead of two: an agent hitting
-  // /mcp and a client hitting /api/items are both stuck on "where do I sign in", and
+  // /mcp and a client hitting /api/collections/default/items are both stuck on "where do I sign in", and
   // both get pointed at a document naming the same authorization server.
   const { handle } = await openDrive({
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
     authServer: 'https://auth.example.com',
   });
-  const res = await handle(new Request(`${ORIGIN}/api/items`));
+  const res = await handle(new Request(`${ORIGIN}/api/collections/default/items`));
   expect(res.status).toBe(401);
   const challenge = res.headers.get('www-authenticate');
   expect(challenge).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`);
@@ -329,6 +330,7 @@ test('an agent is exactly as privileged as the person whose token it holds', asy
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
     authServer: 'https://auth.example.com',
   });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const { handle, vfs } = server;
   const admin = { id: 'admin@example.com', email: 'admin@example.com', roles: [] };
   const priv = await collections.create({ name: 'Private', store: { driver: 'memory' } }, admin);
@@ -429,7 +431,7 @@ test('one setting serves both surfaces, so they cannot disagree', async () => {
   const { handle } = await openDrive({
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true, issuer: 'https://login.example.com' } },
   });
-  const apiChallenge = (await handle(new Request(`${ORIGIN}/api/items`))).headers.get('www-authenticate');
+  const apiChallenge = (await handle(new Request(`${ORIGIN}/api/collections/default/items`))).headers.get('www-authenticate');
   const mcpChallenge = (await rpc(handle, 'tools/list', {})).headers.get('www-authenticate');
   expect(apiChallenge).toContain('resource_metadata=');
   expect(mcpChallenge).toContain('resource_metadata=');
@@ -464,12 +466,13 @@ test('deleting through an agent needs delete, not merely write', async () => {
     kv, storageFactory: () => new MemoryStorage(), admins: ['admin@example.com'],
     defaultOpen: false, defaultStore: { driver: 'memory' },
   });
-  const { handle, vfs } = await createServer({
+  const { handle, vfs, collections: __cols } = await createServer({
     rebuildIndexOnStart: false,
     collections,
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
     authServer: 'https://auth.example.com',
   });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const admin = { id: 'admin@example.com', email: 'admin@example.com', roles: [] };
   const c = await collections.create({ name: 'Work', store: { driver: 'memory' } }, admin);
   await collections.setGrant(c.id, { type: 'user', subject: 'bob@example.com', capabilities: ['read', 'write'] }, admin);
@@ -491,12 +494,13 @@ test('an ACL layer that cannot answer refuses the agent rather than serving it',
     kv, storageFactory: () => new MemoryStorage(), admins: ['admin@example.com'],
     defaultOpen: false, defaultStore: { driver: 'memory' },
   });
-  const { handle, vfs } = await createServer({
+  const { handle, vfs, collections: __cols } = await createServer({
     rebuildIndexOnStart: false,
     collections,
     identity: { driver: 'jwt', jwt: { jwks: { keys: [publicJwk] }, required: true } },
     authServer: 'https://auth.example.com',
   });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   await vfs.writeFile('secret.txt', 'the combination is swordfish', { contentType: 'text/plain' });
   collections.assert = () => { throw new Error('service unavailable'); };
 

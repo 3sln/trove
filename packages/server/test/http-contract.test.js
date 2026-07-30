@@ -36,7 +36,8 @@ test('parseRange understands both forms, and neither more', () => {
 });
 
 test('a downloaded file keeps its real name', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const node = await vfs.writeFile('Q3 report, final.pdf', 'x', { contentType: 'application/pdf' });
   const res = await handle(new Request(`http://t/api/items/download?id=${node.id}&disposition=attachment`));
   const cd = res.headers.get('content-disposition');
@@ -79,14 +80,15 @@ test('an operator who opted into CORS for an origin meant it', () => {
 });
 
 test('a GET is never refused — it is supposed to be safe', () => {
-  const req = new Request('http://drive.example/api/items', {
+  const req = new Request('http://drive.example/api/collections/default/items', {
     headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' },
   });
   expect(crossSiteRefusal(req)).toBe(null);
 });
 
 test('the refusal reaches the real API and the MCP endpoint', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const node = await vfs.writeFile('keep.md', 'mine', { contentType: 'text/markdown' });
   const cross = { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example', 'content-type': 'text/plain' };
 

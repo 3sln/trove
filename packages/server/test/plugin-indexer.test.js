@@ -41,7 +41,7 @@ async function json(handle, method, path, body) {
 
 // Full proxied upload of a small text body; returns the created node.
 async function upload(handle, name, content) {
-  const create = await json(handle, 'POST', '/api/uploads', { parentId: 'root', name, size: content.length, contentType: 'application/octet-stream' });
+  const create = await json(handle, 'POST', '/api/collections/default/uploads', { parentId: 'root', name, size: content.length, contentType: 'application/octet-stream' });
   const d = create.json;
   await handle(new Request(`http://t${d.transfer.partUrl.replace('{partNumber}', '1')}`, { method: 'PUT', body: content }));
   const done = await json(handle, 'POST', d.endpoints.complete, {});
@@ -49,24 +49,25 @@ async function upload(handle, name, content) {
 }
 
 test('installing a server indexer backfills existing files; uninstall purges', async () => {
-  const { handle } = await createServer({ admins: ['anonymous'] });
+  const { handle, collections: __cols } = await createServer({ admins: ['anonymous'] });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
 
   // A file exists before the indexer is installed (its .demo ext matches nothing yet).
   const node = await upload(handle, 'report.demo', 'alpha beta gamma');
-  let stat = await json(handle, 'GET', `/api/items/resolve?id=${node.id}`);
+  let stat = await json(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions?.[IDX]).toBeUndefined();
 
   // Admin installs it → activate() backfills synchronously within the request.
   const inst = await handle(new Request('http://t/api/plugins/install', { method: 'POST', body: indexerPackage() }));
   expect(inst.status).toBe(200);
 
-  stat = await json(handle, 'GET', `/api/items/resolve?id=${node.id}`);
+  stat = await json(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions[IDX].tags).toEqual({ indexed: true, words: 3 });
   expect(stat.json.node.tags.words).toBe(3); // merged view
 
   // Uninstall → purge() clears the contribution.
   const rm = await json(handle, 'DELETE', `/api/plugins/${encodeURIComponent(DEMO_ID)}/install`);
   expect(rm.json.removed).toBe(DEMO_ID);
-  stat = await json(handle, 'GET', `/api/items/resolve?id=${node.id}`);
+  stat = await json(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions?.[IDX]).toBeUndefined();
 });

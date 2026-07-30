@@ -19,6 +19,7 @@ const ENV = { TROVE_STORAGE: 'memory' };
 
 async function drive(extra = {}) {
   const server = await createServer({ ...configFromEnv(ENV), ...extra });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('notes.md', 'hello', { contentType: 'text/markdown' });
   return { server, item, container: server.engineContainer };
 }
@@ -32,7 +33,7 @@ const methodsOf = (handle) =>
 //
 // A method under the wrong capability is silent: the handle simply lacks it, and
 // nothing says so until a route calls it. That is how `listTrash` shipped under
-// `read` while every trash route asks for `delete` — GET /api/trash threw
+// `read` while every trash route asks for `delete` — GET /api/collections/default/trash threw
 // "listTrash is not a function" in a browser, not in a test.
 //
 // So the surface is pinned. Adding a method means adding it here, which means
@@ -207,11 +208,12 @@ test('the system grant is a separate provider, not an option anyone can pass', a
   await server.close();
 });
 
-test('turning collections off grants everything, by configuration', async () => {
-  const { server, item } = await drive({ collections: false });
-  const { node } = await lease(server, { node: { id: item.id, capability: 'delete' } });
-  expect(typeof node.remove).toBe('function');
-  await server.close();
+test('turning collections off is not a configuration any more', async () => {
+  // It used to be: no ACL layer, every handle wide open. That mode cannot exist now —
+  // endpoints name their collection in the path, so there is nothing for an unnamed
+  // single store to answer, and a wide-open handle is not something to arrive at by
+  // switching off the thing that narrows it.
+  await expect(drive({ collections: false })).rejects.toThrow(/no longer supported/i);
 });
 
 test('the handle reflects what the principal HOLDS, not what it asserted', async () => {
@@ -222,6 +224,7 @@ test('the handle reflects what the principal HOLDS, not what it asserted', async
   // download and view to a principal the ACL had never given them to. Two models
   // of one rule, with the more permissive winning.
   const server = await createServer({ ...configFromEnv(ENV), defaultOpen: false, admins: ['root'] });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('w.md', 'x', { contentType: 'text/markdown' });
   const writer = { id: 'writer@example.com' };
   await server.collections.update('default',
@@ -244,6 +247,7 @@ test('a missing collections service refuses rather than allows', async () => {
   const collections = engine.container.get('collections');
   collections.obtain = async () => { throw new Error('service unavailable'); };
   const server = await createServer(configFromEnv(ENV));
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('x.md', 'x', { contentType: 'text/markdown' });
 
   await expect(engine.container.use({ node: { id: item.id, capability: 'delete' } }, () => {}))

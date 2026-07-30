@@ -17,7 +17,8 @@ async function jsonReq(handle, method, path, body) {
 }
 
 test('capabilities + health', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const h = await jsonReq(handle, 'GET', '/api/health');
   expect(h.json.ok).toBe(true);
   const caps = await jsonReq(handle, 'GET', '/api/capabilities');
@@ -26,11 +27,12 @@ test('capabilities + health', async () => {
 });
 
 test('upload + download + range + search', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
 
   const content = 'Dune is a science fiction novel about desert planet Arrakis and spice.';
   const size = new TextEncoder().encode(content).length;
-  const plan = await jsonReq(handle, 'POST', '/api/uploads', {
+  const plan = await jsonReq(handle, 'POST', '/api/collections/default/uploads', {
     name: 'dune.txt', size, contentType: 'text/plain',
   });
   expect(plan.json.strategy).toBe('direct');
@@ -65,7 +67,8 @@ test('upload + download + range + search', async () => {
 
 test('plugin indexer pushes namespaced docs', async () => {
   // An indexer runs server-side, so installing one is admin-gated.
-  const { handle, vfs } = await createServer({ admins: ['anonymous'] });
+  const { handle, vfs, collections: __cols } = await createServer({ admins: ['anonymous'] });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const file = await vfs.writeFile('photo.jpg', new Uint8Array([1, 2, 3]), { contentType: 'image/jpeg' });
   // Contributing under a plugin's namespace is a claim to BE that plugin, so it has to
   // actually be installed — otherwise the namespace is only as unforgeable as a string.
@@ -95,7 +98,8 @@ test('plugin indexer pushes namespaced docs', async () => {
 });
 
 test('plugin storage SQL: scoped round-trip + ATTACH rejected', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const sql = (op, extra) => jsonReq(handle, 'POST', '/api/plugins/com.acme.demo/sql', { op, ...extra });
 
   // Create + write + read back in the plugin's private scope.
@@ -117,44 +121,47 @@ test('plugin storage SQL: scoped round-trip + ATTACH rejected', async () => {
 });
 
 test('adding a tag exposes it in the node\'s merged tags (filterable)', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const file = await vfs.writeFile('x.txt', 'hi', { contentType: 'text/plain' });
   await jsonReq(handle, 'POST', `/api/items/${file.id}/tags`, { name: 'fav', value: 'yes' });
-  const list = await jsonReq(handle, 'GET', '/api/items');
+  const list = await jsonReq(handle, 'GET', '/api/collections/default/items');
   const row = list.json.items.find((n) => n.id === file.id);
   expect(row.tags.fav).toBe('yes'); // merged view
   expect(row.contributions.user.tags.fav).toBe('yes'); // namespaced under the 'user' scope
 
   await jsonReq(handle, 'DELETE', `/api/items/${file.id}/tags/fav`);
-  const after = await jsonReq(handle, 'GET', '/api/items');
+  const after = await jsonReq(handle, 'GET', '/api/collections/default/items');
   expect(after.json.items.find((n) => n.id === file.id).tags.fav).toBeFalsy(); // removed reads as absent
 });
 
 test('an item resolves by id, by name, and by its trove: URI', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const node = await vfs.writeFile('notes.txt', 'hello', { contentType: 'text/plain' });
 
-  const byId = await jsonReq(handle, 'GET', `/api/items/resolve?id=${node.id}`);
+  const byId = await jsonReq(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(byId.json.node.name).toBe('notes.txt');
-  const byName = await jsonReq(handle, 'GET', '/api/items/resolve?name=notes.txt');
+  const byName = await jsonReq(handle, 'GET', '/api/collections/default/items/resolve?name=notes.txt');
   expect(byName.json.node.id).toBe(node.id);
-  const byUri = await jsonReq(handle, 'GET', `/api/items/resolve?uri=${encodeURIComponent('trove:default?name=notes.txt')}`);
+  const byUri = await jsonReq(handle, 'GET', `/api/collections/default/items/resolve?uri=${encodeURIComponent('trove:default?name=notes.txt')}`);
   expect(byUri.json.node.id).toBe(node.id);
   // No selector at all is a bad request, not a silent listing.
-  expect((await jsonReq(handle, 'GET', '/api/items/resolve')).status).toBe(400);
+  expect((await jsonReq(handle, 'GET', '/api/collections/default/items/resolve')).status).toBe(400);
 
   const renamed = await jsonReq(handle, 'POST', '/api/items/rename', { id: node.id, newName: 'renamed.txt' });
   expect(renamed.json.node.name).toBe('renamed.txt');
   // The old name is free, and no longer resolves.
-  expect((await jsonReq(handle, 'GET', '/api/items/resolve?name=notes.txt')).status).toBe(404);
+  expect((await jsonReq(handle, 'GET', '/api/collections/default/items/resolve?name=notes.txt')).status).toBe(404);
 
-  const listed = await jsonReq(handle, 'GET', '/api/items');
+  const listed = await jsonReq(handle, 'GET', '/api/collections/default/items');
   expect(listed.json.items.map((n) => n.name)).toEqual(['renamed.txt']);
   expect(listed.json.collectionId).toBe('default');
 });
 
 test('backlinks report what links to an item', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const target = await vfs.writeFile('sailing.txt', 'Tacking upwind.', { contentType: 'text/plain' });
   await vfs.writeFile('trips.md', 'Trips\n\n- [Sailing](trove:default/sailing.txt)\n', { contentType: 'text/markdown' });
   await vfs.writeFile('unrelated.md', 'Nothing here.', { contentType: 'text/markdown' });

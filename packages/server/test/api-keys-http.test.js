@@ -69,12 +69,12 @@ test('a key authorizes the collection it names, and only that one', async () => 
   });
 
   // Reading the scoped collection works with no session at all.
-  const ok = await get(d.handle, `/api/items?collection=${d.photos.id}`, withKey(secret));
+  const ok = await get(d.handle, `/api/collections/${d.photos.id}/items`, withKey(secret));
   expect(ok.status).toBe(200);
 
   // The other collection is refused, even though the same admin minted the key and
   // holds admin on both. The key's scope is the ceiling, not the minter's.
-  const nope = await get(d.handle, `/api/items?collection=${d.invoices.id}`, withKey(secret));
+  const nope = await get(d.handle, `/api/collections/${d.invoices.id}/items`, withKey(secret));
   expect(nope.status).toBe(403);
 });
 
@@ -83,8 +83,8 @@ test('a read key cannot write, and is refused rather than quietly narrowed', asy
   const { secret } = await mint(d.handle, {
     name: 'photo reader', scopes: [{ collectionId: d.photos.id, capabilities: ['read'] }],
   });
-  const res = await post(d.handle, '/api/uploads',
-    { name: 'x.txt', size: 1, collection: d.photos.id }, withKey(secret));
+  const res = await post(d.handle, `/api/collections/${d.photos.id}/uploads`,
+    { name: 'x.txt', size: 1 }, withKey(secret));
   // 403, not a 200 that silently did nothing and not a handle with fewer capabilities.
   expect(res.status).toBe(403);
 });
@@ -94,8 +94,8 @@ test('a write key can actually upload to its collection', async () => {
   const { secret } = await mint(d.handle, {
     name: 'ingest', scopes: [{ collectionId: d.photos.id, capabilities: ['read', 'write'] }],
   });
-  const res = await post(d.handle, '/api/uploads',
-    { name: 'note.txt', size: 5, contentType: 'text/plain', collection: d.photos.id }, withKey(secret));
+  const res = await post(d.handle, `/api/collections/${d.photos.id}/uploads`,
+    { name: 'note.txt', size: 5, contentType: 'text/plain' }, withKey(secret));
   expect(res.status).toBe(200);
   expect((await res.json()).uploadId).toBeTruthy();
 });
@@ -139,12 +139,12 @@ test('a revoked key stops working immediately', async () => {
   const { key, secret } = await mint(d.handle, {
     name: 'temp', scopes: [{ collectionId: d.photos.id, capabilities: ['read'] }],
   });
-  expect((await get(d.handle, `/api/items?collection=${d.photos.id}`, withKey(secret))).status).toBe(200);
+  expect((await get(d.handle, `/api/collections/${d.photos.id}/items`, withKey(secret))).status).toBe(200);
 
   expect((await del(d.handle, `/api/keys/${key.id}`, asAdmin)).status).toBe(200);
 
   // 401, not 403: the credential is no longer a credential at all.
-  const after = await get(d.handle, `/api/items?collection=${d.photos.id}`, withKey(secret));
+  const after = await get(d.handle, `/api/collections/${d.photos.id}/items`, withKey(secret));
   expect(after.status).toBe(401);
 });
 
@@ -175,7 +175,7 @@ test('a key and a session are never combined', async () => {
   // The admin session would grant write on invoices; the key grants nothing there. Sent
   // together, the request must get the key's authority and not the union — the confused
   // deputy, arrived at by being accommodating.
-  const res = await get(d.handle, `/api/items?collection=${d.invoices.id}`,
+  const res = await get(d.handle, `/api/collections/${d.invoices.id}/items`,
     { ...withKey(secret), ...asAdmin });
   expect(res.status).toBe(403);
 });

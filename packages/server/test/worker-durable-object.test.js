@@ -71,6 +71,7 @@ function fakeNamespace(obj) {
 async function drive({ env = {}, objects = 0, storage = new MemoryStorage() } = {}) {
   const shared = { kv: new MemoryKV(), storage };
   const inner = await createServer({ ...configFromEnv({ TROVE_STORAGE: 'memory' }), ...shared });
+  await inner.collections?.ensure({ id: 'default', name: 'My Drive' });
   for (let i = 0; i < objects; i++) {
     await (await inner.vfs.storageFor('default')).put(`outside-${String(i).padStart(3, '0')}.txt`, new Uint8Array([i]));
   }
@@ -83,6 +84,7 @@ async function drive({ env = {}, objects = 0, storage = new MemoryStorage() } = 
     ...configFromEnv({ TROVE_STORAGE: 'memory' }), ...shared,
     tasks: remote.tasks, background: remote.background, startFlusher: false,
   });
+  await edge.collections?.ensure({ id: 'default', name: 'My Drive' });
   return { inner, edge, object, state, remote };
 }
 

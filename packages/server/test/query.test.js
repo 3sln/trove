@@ -22,7 +22,8 @@ async function seed(vfs) {
 }
 
 test('/api/query default parser: free text + #tag filter, reports resolved', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   await seed(vfs);
 
   const free = await jsonReq(handle, 'POST', '/api/query', { q: 'spice desert' });
@@ -43,7 +44,8 @@ test('/api/query with a custom transformer reports the interpreted query', async
       return { semanticText: 'beach', tagFilters: [{ key: 'fav', present: true }], source: 'llm' };
     }
   }
-  const { handle, vfs } = await createServer({ searchTransformer: new FakeLlm() });
+  const { handle, vfs, collections: __cols } = await createServer({ searchTransformer: new FakeLlm() });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   await seed(vfs);
 
   const res = await jsonReq(handle, 'POST', '/api/query', { q: 'that sunny outing I liked' });

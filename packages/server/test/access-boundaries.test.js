@@ -118,7 +118,8 @@ test('a plugin may only open the domain store of its own domain', async () => {
 test('the MCP endpoint does not approve every origin', async () => {
   // On the zero-config deployment MCP needs no token, so a blanket CORS approval let any
   // page the user was visiting call write_file and delete_file on their drive.
-  const { handle } = await createServer({ rebuildIndexOnStart: false });
+  const { handle, collections: __cols } = await createServer({ rebuildIndexOnStart: false });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const res = await handle(new Request(`${ORIGIN}/mcp`, {
     method: 'OPTIONS', headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
   }));

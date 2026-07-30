@@ -204,6 +204,55 @@ export class CollectionService {
    * Create a collection from a store config. Requires the create capability.
    * The creator is granted admin on the new collection.
    */
+  /**
+   * Create a collection if it is absent; leave it alone if it is present.
+   *
+   * Idempotent, and that is the point: this is the shape a deploy script, a boot hook or
+   * a test setup wants — "make sure this exists" — where `create` throws the second time
+   * and forces every caller to write the same try/ignore around it.
+   *
+   * Unlike `create` this takes an explicit `id` and no principal. It is a server-side
+   * operation, the way `init()` used to be, so anything exposing it over HTTP does its
+   * own authorization first. `store` defaults to the service's configured store, so the
+   * common case — one collection on the drive's own storage — is a name and nothing else.
+   *
+   * @param {object} spec
+   * @param {string} spec.id
+   * @param {string} [spec.name]
+   * @param {object} [spec.store] defaults to the configured defaultStore
+   * @param {object} [spec.acl] defaults to open when the service was built with defaultOpen
+   * @returns {Promise<{record: object, created: boolean}>}
+   */
+  async ensure({ id, name, description, store, acl, system = false } = {}) {
+    if (!id) throw TroveError.invalid('ensure needs a collection id');
+    const existing = await this.kv.get(NS, id);
+    if (existing) return { record: existing, created: false };
+
+    const config = store || this.defaultStore;
+    if (!config?.driver) throw TroveError.invalid('A backing store (driver + config) is required');
+    try {
+      this.storageFactory(config);
+    } catch (err) {
+      throw TroveError.invalid(`Invalid store config: ${err.message}`, { cause: err });
+    }
+    const record = {
+      id,
+      name: (name || id).trim(),
+      description: description || '',
+      store: config,
+      acl: acl || {
+        grants: this.defaultOpen
+          ? [{ type: 'anyone', capabilities: [...CAPABILITIES] }]
+          : [],
+      },
+      createdAt: Date.now(),
+      createdBy: 'system',
+      system,
+    };
+    await this.kv.set(NS, id, record);
+    return { record, created: true };
+  }
+
   async create({ name, description, store, acl }, principal) {
     if (!this.canCreate(principal)) throw TroveError.forbidden('You cannot create collections');
     if (!name?.trim()) throw TroveError.invalid('Collection name is required');

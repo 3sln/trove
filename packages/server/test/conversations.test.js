@@ -28,7 +28,8 @@ async function req(handle, method, path, { token, body } = {}) {
 }
 
 test('anonymous default: /api/me is the shared anonymous user', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const me = await req(handle, 'GET', '/api/me');
   expect(me.json.principal.id).toBe('anonymous');
   const caps = await req(handle, 'GET', '/api/capabilities');
@@ -36,10 +37,11 @@ test('anonymous default: /api/me is the shared anonymous user', async () => {
 });
 
 test('JWT identity + comment mention → recipient inbox', async () => {
-  const { handle, vfs, notifications } = await createServer({
+  const { handle, vfs, notifications, collections: __cols } = await createServer({
     identity: { driver: 'jwt', jwt: { secret: SECRET, now: NOW, algorithms: ['HS256'] } },
     startFlusher: false, // we flush manually for determinism
   });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const file = await vfs.writeFile('design.md', '# Design', { contentType: 'text/markdown' });
 
   const aliceToken = await mint({ sub: 'alice', name: 'Alice', email: 'alice@x.io' });
@@ -76,7 +78,8 @@ test('JWT identity + comment mention → recipient inbox', async () => {
 });
 
 test('tags round-trip through the API', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const file = await vfs.writeFile('a.txt', 'hi', { contentType: 'text/plain' });
   await req(handle, 'POST', `/api/items/${file.id}/tags`, { body: { name: 'starred' } });
   await req(handle, 'POST', `/api/items/${file.id}/tags`, { body: { name: 'priority', value: 'high' } });

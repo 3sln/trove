@@ -27,8 +27,8 @@ async function api(handle, method, path, { token, body } = {}) {
 // Put an item into a collection THROUGH THE API, so the capability checks that gate a
 // real write are the ones exercised. Returns the created node (or the failing status).
 async function writeInto(handle, collection, token, name, content = 'x') {
-  const start = await api(handle, 'POST', '/api/uploads', {
-    token, body: { collection, name, size: content.length, contentType: 'text/plain' },
+  const start = await api(handle, 'POST', `/api/collections/${collection}/uploads`, {
+    token, body: { name, size: content.length, contentType: 'text/plain' },
   });
   if (start.status !== 200) return { status: start.status };
   await handle(new Request(`http://t${start.json.transfer.partUrl.replace('{partNumber}', '1')}`, {
@@ -39,20 +39,25 @@ async function writeInto(handle, collection, token, name, content = 'x') {
 }
 
 test('default collection is open in zero-config', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const cols = await api(handle, 'GET', '/api/collections');
   expect(cols.json.collections[0].id).toBe('default');
   // anonymous can list (and write to) the default (open) collection
-  const f = await api(handle, 'GET', '/api/items');
+  const f = await api(handle, 'GET', '/api/collections/default/items');
   expect(f.status).toBe(200);
 });
 
 async function adminServer() {
-  return createServer({
+  const server = await createServer({
     identity: { driver: 'jwt', jwt: { secret: SECRET, now: NOW, algorithms: ['HS256'] } },
     admins: ['boss'],
     startFlusher: false,
   });
+  // Nothing is seeded any more, and this suite is about isolation BETWEEN collections —
+  // so it needs the one it compares against to exist.
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
+  return server;
 }
 
 test('collection creation is gated by the create capability', async () => {
@@ -81,7 +86,7 @@ test('collections isolate data and enforce read/write/delete', async () => {
   const cid = created.json.collection.id;
 
   // The new collection is its own namespace, initially empty.
-  const listed = await api(handle, 'GET', `/api/items?collection=${cid}`, { token: boss });
+  const listed = await api(handle, 'GET', `/api/collections/${cid}/items`, { token: boss });
   expect(listed.status).toBe(200);
   expect(listed.json.items).toEqual([]);
   expect(listed.json.collectionId).toBe(cid);
@@ -92,17 +97,17 @@ test('collections isolate data and enforce read/write/delete', async () => {
 
   // The default collection does NOT see it — collections are separate namespaces, so
   // the same name can exist in both without colliding.
-  const defaultList = await api(handle, 'GET', '/api/items', { token: boss });
+  const defaultList = await api(handle, 'GET', '/api/collections/default/items', { token: boss });
   expect(defaultList.json.items.some((i) => i.name === 'secret.txt')).toBe(false);
   expect((await writeInto(handle, 'default', boss, 'secret.txt')).status).toBe(200);
 
   // A reader with no grant can't even read the new collection.
-  const noAccess = await api(handle, 'GET', `/api/items?collection=${cid}`, { token: reader });
+  const noAccess = await api(handle, 'GET', `/api/collections/${cid}/items`, { token: reader });
   expect(noAccess.status).toBe(403);
 
   // Grant the reader read-only, then they can list but not write or delete.
   await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
-  const canRead = await api(handle, 'GET', `/api/items?collection=${cid}`, { token: reader });
+  const canRead = await api(handle, 'GET', `/api/collections/${cid}/items`, { token: reader });
   expect(canRead.status).toBe(200);
   expect(canRead.json.items.map((i) => i.name)).toEqual(['secret.txt']);
   expect((await writeInto(handle, cid, reader, 'nope.txt')).status).toBe(403);
@@ -119,7 +124,7 @@ test('upload lifecycle routes re-check write on the session collection', async (
   await api(handle, 'POST', `/api/collections/${cid}/grants`, { token: boss, body: { type: 'user', subject: 'reader', capabilities: ['read'] } });
 
   // Boss starts an upload into the vault.
-  const start = await api(handle, 'POST', '/api/uploads', { token: boss, body: { collection: cid, name: 'f.bin', size: 4, contentType: 'application/octet-stream' } });
+  const start = await api(handle, 'POST', `/api/collections/${cid}/uploads`, { token: boss, body: { name: 'f.bin', size: 4, contentType: 'application/octet-stream' } });
   const uploadId = start.json.uploadId;
 
   // A read-only principal can't inspect, drive, complete, or abort someone's upload.
@@ -149,7 +154,7 @@ test('a read-only user cannot add OR remove tags (tag DELETE is write-gated)', a
   const cantRemove = await api(handle, 'DELETE', `/api/items/${id}/tags/fav`, { token: reader });
   expect(cantRemove.status).toBe(403);
   // And the tag survived the denied removal.
-  const boss2 = await api(handle, 'GET', `/api/items/resolve?id=${id}`, { token: boss });
+  const boss2 = await api(handle, 'GET', `/api/collections/default/items/resolve?id=${id}`, { token: boss });
   expect(boss2.json.node.tags?.fav).toBe('yes');
 });
 

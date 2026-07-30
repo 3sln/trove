@@ -12,6 +12,7 @@ const ENV = { TROVE_STORAGE: 'memory' };
 
 async function drive(extra = {}) {
   const server = await createServer({ ...configFromEnv(ENV), ...extra });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('cliff.png', 'PNGBYTES', { contentType: 'image/png' });
   return { server, item };
 }

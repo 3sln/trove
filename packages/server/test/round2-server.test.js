@@ -18,29 +18,33 @@ test('TROVE_MCP=off removes the agent endpoint', async () => {
   // documented TROVE_MCP_* variable was a no-op. An operator who used the documented
   // way to remove the agent endpoint still had it live at /mcp, with write_file and
   // delete_file on it, unauthenticated on a zero-config drive.
-  const { handle } = await createServer(configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }));
+  const { handle, collections: __cols } = await createServer(configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }));
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const res = await post(handle, '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
   expect(res.status).toBe(404);
 });
 
 test('TROVE_MCP_PATH moves it, and TROVE_MCP_REQUIRE_AUTH locks it', async () => {
   const moved = await createServer(configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP_PATH: '/agent' }));
+  await moved.collections?.ensure({ id: 'default', name: 'My Drive' });
   expect((await post(moved.handle, '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status).toBe(404);
   expect((await post(moved.handle, '/agent', { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status).toBe(200);
 
   // An open web app with a locked-down agent endpoint is the whole point of this knob.
   const locked = await createServer(configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP_REQUIRE_AUTH: 'true' }));
+  await locked.collections?.ensure({ id: 'default', name: 'My Drive' });
   const res = await post(locked.handle, '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
   expect(res.status).toBe(401);
   expect(res.headers.get('www-authenticate')).toContain('Bearer');
   // …while the drive itself stays open.
-  expect((await locked.handle(new Request('http://t/api/items'))).status).toBe(200);
+  expect((await locked.handle(new Request('http://t/api/collections/default/items'))).status).toBe(200);
 });
 
 // --- a plugin package must not be able to allocate without limit ----------------
 
 test('a zip bomb is refused before it is inflated', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   // 200 MB of zeroes compresses to almost nothing. The 32 MiB cap is on the COMPRESSED
   // bytes; nothing bounded the inflated size, and unzipSync is synchronous — so one
   // small request cost a gigabyte of RSS and thirteen seconds of blocked event loop,
@@ -65,7 +69,8 @@ test('a zip bomb is refused before it is inflated', async () => {
 }, 60_000);
 
 test('an oversized body is refused while streaming, not after buffering', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   // No content-length, so the declared-size check can't fire. `arrayBuffer()` then
   // checking `.byteLength` meant the whole body was resident before being refused.
   let sent = 0;
@@ -100,7 +105,8 @@ test('a malformed percent-escape in a path is a 404, not a rejected promise', as
 // --- a re-install must not serve the previous bytes -----------------------------
 
 test('re-installing a plugin at the same version replaces its package', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const pkg = (marker) => zipSync({
     'manifest.json': strToU8(JSON.stringify({
       domain: 'acme.com', name: 'demo', version: '1.0.0', entry: 'plugin.js', capabilities: { ui: true },
@@ -125,7 +131,8 @@ test('re-installing a plugin at the same version replaces its package', async ()
 // --- MCP tells the truth about its own ordering ---------------------------------
 
 test('list_files returns what its description promises', async () => {
-  const { handle, vfs } = await createServer();
+  const { handle, vfs, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   for (const name of ['zebra.txt', 'apple.txt', 'mango.txt']) {
     await vfs.writeFile(name, name, { contentType: 'text/plain' });
     await new Promise((r) => setTimeout(r, 5)); // distinct updatedAt
@@ -152,6 +159,7 @@ test('runMaintenance flushes pending mentions', async () => {
   const srv = await createServer(configFromEnv({
     TROVE_STORAGE: 'memory', TROVE_MCP: 'off',
   }));
+  await srv.collections?.ensure({ id: 'default', name: 'My Drive' });
   await srv.notifications.enqueue([
     { userId: 'bob', nodeId: 'f1', by: { id: 'alice', name: 'Alice' }, excerpt: 'look at this', at: 1 },
   ]);
@@ -178,6 +186,7 @@ test('no web push configured means no /api/push/* at all', async () => {
   // advertises a transport nobody configured is a route table describing something
   // other than this drive.
   const srv = await createServer(configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }));
+  await srv.collections?.ensure({ id: 'default', name: 'My Drive' });
   expect((await get(srv.handle, '/api/push/vapid')).status).toBe(404);
   expect((await post(srv.handle, '/api/push/subscribe', { subscription: {} })).status).toBe(404);
   // The inbox is not a channel and is always there.
@@ -192,6 +201,7 @@ test('configuring VAPID mounts the channel’s routes', async () => {
     ...configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }),
     vapid: { ...keys, subject: 'mailto:admin@example.com' },
   });
+  await srv.collections?.ensure({ id: 'default', name: 'My Drive' });
 
   const res = await get(srv.handle, '/api/push/vapid');
   expect(res.status).toBe(200);
@@ -217,6 +227,7 @@ test('a channel cannot shadow a built-in route', async () => {
     ...configFromEnv({ TROVE_STORAGE: 'memory', TROVE_MCP: 'off' }),
     notificationChannels: [new Greedy()],
   });
+  await srv.collections?.ensure({ id: 'default', name: 'My Drive' });
   const health = await (await get(srv.handle, '/api/health')).json();
   expect(health.hijacked).toBeUndefined();
   expect(health.ok).toBe(true);

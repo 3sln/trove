@@ -24,7 +24,8 @@ const DEMO = 'acme.com/demo';
 const enc = (id) => encodeURIComponent(id);
 
 test('install → list → download → remove lifecycle', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const zip = pkg({ ...base, capabilities: { ui: true, commands: true, storage: true } });
 
   const inst = await req(handle, 'POST', '/api/plugins/install?grants=ui,commands,storage', { body: zip });
@@ -51,7 +52,8 @@ test('install → list → download → remove lifecycle', async () => {
 });
 
 test('capabilities are enforced for a server-installed plugin', async () => {
-  const { handle } = await createServer();
+  const { handle, collections: __cols } = await createServer();
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   // Install WITHOUT storage granted.
   await req(handle, 'POST', '/api/plugins/install?grants=ui,commands', { body: pkg({ ...base, capabilities: { ui: true, commands: true, storage: true } }) });
   const denied = await req(handle, 'POST', `/api/plugins/${enc(DEMO)}/sql`, {
@@ -69,7 +71,8 @@ test('capabilities are enforced for a server-installed plugin', async () => {
 });
 
 test('server-component / shared-resource packages need an admin', async () => {
-  const { handle } = await createServer(); // anonymous principal → not admin
+  const { handle, collections: __cols } = await createServer(); // anonymous principal → not admin
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   // Shared (domain) storage requires admin.
   const shared = await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ ...base, capabilities: { storage: { domain: true } } }) });
   expect(shared.status).toBe(403);
@@ -84,7 +87,8 @@ test('server-component / shared-resource packages need an admin', async () => {
 });
 
 test('strict mode denies plugin API calls with no install record', async () => {
-  const { handle } = await createServer({ enforcePluginCaps: true });
+  const { handle, collections: __cols } = await createServer({ enforcePluginCaps: true });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   // No install record → strict deny (closes the "any client names any pluginId" gap).
   const denied = await req(handle, 'POST', `/api/plugins/${enc('nope.example/n')}/sql`, {
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'exec', sql: 'CREATE TABLE t (x)' }),
@@ -101,14 +105,16 @@ test('strict mode denies plugin API calls with no install record', async () => {
 
 test('admin can install an admin-gated package', async () => {
   // Grant the anonymous principal admin via config.
-  const { handle } = await createServer({ admins: ['anonymous'] });
+  const { handle, collections: __cols } = await createServer({ admins: ['anonymous'] });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const shared = await req(handle, 'POST', '/api/plugins/install?grants=storage', { body: pkg({ ...base, capabilities: { storage: { domain: true } } }) });
   expect(shared.status).toBe(200);
   expect(shared.json.install.adminApprovedBy).toBe('anonymous');
 });
 
 test('a contributor namespace can only be written by the plugin that owns it', async () => {
-  const { handle, vfs } = await createServer({ admins: ['anonymous'] });
+  const { handle, vfs, collections: __cols } = await createServer({ admins: ['anonymous'] });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   // Installed, because the namespace is only unforgeable if being the plugin is a fact
   // on the server rather than a string in the URL — see the ghost case below.
   await req(handle, 'POST', '/api/plugins/install?grants=indexer', {
@@ -142,7 +148,8 @@ test('a contributor namespace can only be written by the plugin that owns it', a
 });
 
 test('strict mode also requires the plugin to be installed with the indexer capability', async () => {
-  const { handle, vfs } = await createServer({ enforcePluginCaps: true });
+  const { handle, vfs, collections: __cols } = await createServer({ enforcePluginCaps: true });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   const n = await vfs.writeFile('x.md', 'hi', { contentType: 'text/markdown' });
   const push = (ns) => handle(new Request(`http://t/api/index/${encodeURIComponent(ns)}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nodeId: n.id, tags: { a: 1 } }),
@@ -160,7 +167,8 @@ test('strict mode also requires the plugin to be installed with the indexer capa
 // payload too big to even parse, and the contribution caps bound what a payload that
 // DID parse may store. This exercises the second — the first is covered in hardening.
 test('a contribution is clamped wherever it came from, including the API push', async () => {
-  const { handle, vfs } = await createServer({ admins: ['anonymous'] });
+  const { handle, vfs, collections: __cols } = await createServer({ admins: ['anonymous'] });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   await req(handle, 'POST', '/api/plugins/install?grants=indexer', {
     body: pkg({ domain: 'acme.com', name: 'p', version: '1.0.0', capabilities: { indexer: true }, entry: 'plugin.js', contributes: { idx: { type: 'indexer', match: { ext: ['.md'] } } } }),
   });

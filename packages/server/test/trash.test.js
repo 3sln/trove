@@ -2,7 +2,7 @@
 //
 // These exist because the routes did not. Every trash endpoint was rewritten onto
 // access handles with no HTTP test to catch it, and one of them shipped broken:
-// `listTrash` sat under `read` on the collection handle while `GET /api/trash` asks
+// `listTrash` sat under `read` on the collection handle while `GET /api/collections/default/trash` asks
 // for `delete`, so the route threw "listTrash is not a function". A browser probe
 // found it. A three-line request would have found it first.
 //
@@ -20,6 +20,7 @@ const post = (server, path, b) => server.handle(new Request(`http://t${path}`, {
 
 async function drive(extra = {}) {
   const server = await createServer({ ...configFromEnv(ENV), ...extra });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('doomed.md', 'bye', { contentType: 'text/markdown' });
   return { server, item };
 }
@@ -28,7 +29,7 @@ test('delete, list, restore — the round trip', async () => {
   const { server, item } = await drive();
   expect((await post(server, '/api/items/delete', { id: item.id })).status).toBe(200);
 
-  const listed = await (await server.handle(new Request('http://t/api/trash'))).json();
+  const listed = await (await server.handle(new Request('http://t/api/collections/default/trash'))).json();
   expect(listed.items.map((i) => i.id)).toContain(item.id);
   expect(listed.collectionId).toBe('default');
 
@@ -39,8 +40,8 @@ test('delete, list, restore — the round trip', async () => {
   expect(restored.node.deletedAt).toBeFalsy();
 
   // Back in the drive, and out of the trash.
-  expect((await (await server.handle(new Request('http://t/api/trash'))).json()).items).toHaveLength(0);
-  expect((await (await server.handle(new Request(`http://t/api/items/resolve?id=${item.id}`))).json()).node.id)
+  expect((await (await server.handle(new Request('http://t/api/collections/default/trash'))).json()).items).toHaveLength(0);
+  expect((await (await server.handle(new Request(`http://t/api/collections/default/items/resolve?id=${item.id}`))).json()).node.id)
     .toBe(item.id);
   await server.close();
 });
@@ -73,9 +74,9 @@ test('purging a collection empties only that collection', async () => {
   await post(server, '/api/items/delete', { id: item.id });
   await post(server, '/api/items/delete', { id: spared.id });
 
-  expect(await (await post(server, '/api/trash/purge', {})).json()).toEqual({ purged: 1 });
+  expect(await (await post(server, '/api/collections/default/trash/purge', {})).json()).toEqual({ purged: 1 });
 
-  const still = await (await server.handle(new Request(`http://t/api/trash?collection=${other.id}`))).json();
+  const still = await (await server.handle(new Request(`http://t/api/collections/${other.id}/trash`))).json();
   expect(still.items.map((i) => i.id)).toEqual([spared.id]);
   await server.close();
 });
@@ -87,12 +88,13 @@ test('the trash follows delete, not read', async () => {
   const server = await createServer({
     ...configFromEnv(ENV), defaultOpen: false, admins: ['root'],
   });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const item = await server.vfs.writeFile('x.md', 'x', { contentType: 'text/markdown' });
   await server.collections.update('default',
     { acl: { grants: [{ type: 'anyone', capabilities: ['read', 'write'] }] } }, { id: 'root' });
 
-  expect((await server.handle(new Request('http://t/api/trash'))).status).toBe(403);
-  expect((await post(server, '/api/trash/purge', {})).status).toBe(403);
+  expect((await server.handle(new Request('http://t/api/collections/default/trash'))).status).toBe(403);
+  expect((await post(server, '/api/collections/default/trash/purge', {})).status).toBe(403);
   expect((await post(server, '/api/trash/restore', { id: item.id })).status).toBe(403);
   await server.close();
 });

@@ -31,8 +31,9 @@ const api = async (handle, method, path, body) => {
 };
 
 test('a presigned upload can be signed, reported, and inspected', async () => {
-  const { handle, close } = await createServer({ storage: new PresigningStorage() });
-  const start = await api(handle, 'POST', '/api/uploads', {
+  const { handle, close, collections: __cols } = await createServer({ storage: new PresigningStorage() });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
+  const start = await api(handle, 'POST', '/api/collections/default/uploads', {
     name: 'big.bin', size: 12 * 1024 * 1024, contentType: 'application/octet-stream',
   });
   expect(start.status).toBe(200);
@@ -56,8 +57,9 @@ test('a presigned upload can be signed, reported, and inspected', async () => {
 });
 
 test('reporting a part outside the plan is refused, not recorded', async () => {
-  const { handle, close } = await createServer({ storage: new PresigningStorage() });
-  const start = await api(handle, 'POST', '/api/uploads', {
+  const { handle, close, collections: __cols } = await createServer({ storage: new PresigningStorage() });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
+  const start = await api(handle, 'POST', '/api/collections/default/uploads', {
     name: 'big.bin', size: 12 * 1024 * 1024, contentType: 'application/octet-stream',
   });
   const bad = await api(handle, 'POST', `/api/uploads/${start.json.uploadId}/parts/99999/report`, { etag: 'x' });
@@ -66,7 +68,8 @@ test('reporting a part outside the plan is refused, not recorded', async () => {
 });
 
 test('an upload id that names nothing is a 404, not a 500', async () => {
-  const { handle, close } = await createServer({ storage: new PresigningStorage() });
+  const { handle, close, collections: __cols } = await createServer({ storage: new PresigningStorage() });
+  await __cols?.ensure({ id: 'default', name: 'My Drive' });
   expect((await api(handle, 'GET', '/api/uploads/up_nope/status')).status).toBe(404);
   expect((await api(handle, 'POST', '/api/uploads/up_nope/parts/1/sign')).status).toBe(404);
   await close();

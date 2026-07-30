@@ -88,8 +88,8 @@ test('a route with no extension still gets the app', async () => {
 });
 
 test('the API is never answered with the app', async () => {
-  expect(shouldFallBack('/api/items')).toBe(false);
-  expect(await get('/api/items')).toBe(null);
+  expect(shouldFallBack('/api/collections/default/items')).toBe(false);
+  expect(await get('/api/collections/default/items')).toBe(null);
 });
 
 // --- validators ----------------------------------------------------------------

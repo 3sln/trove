@@ -96,6 +96,7 @@ test('an injected instance is still exactly what comes out', async () => {
   const storage = new MemoryStorage();
   const tasks = new TaskRegistry();
   const server = await createServer({ ...configFromEnv(ENV), storage, tasks });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   expect(server.tasks).toBe(tasks);
   expect(await server.vfs.storageFor('default')).toBe(storage);
   await server.close();
@@ -103,6 +104,7 @@ test('an injected instance is still exactly what comes out', async () => {
 
 test('closing the server disposes the graph', async () => {
   const server = await createServer(configFromEnv(ENV));
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   await server.close();
   // The container refuses further leases once disposed, which is how a use
   // after close fails loudly instead of touching a closed database.
@@ -122,6 +124,7 @@ test('who runs long work is a dependency, not a branch at the call site', async 
       beginReindex: () => { started.push(['index']); return { task: null, alreadyRunning: false }; },
     },
   });
+  await server.collections?.ensure({ id: 'default', name: 'My Drive' });
   const res = await server.handle(new Request('http://t/api/collections/default/scan', { method: 'POST' }));
   expect(res.status).toBe(200);
   expect(started).toEqual([['scan', 'default']]);
