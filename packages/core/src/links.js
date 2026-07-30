@@ -139,3 +139,88 @@ export function troveUrisFor(node) {
   if (node?.collectionId && node?.id) out.push(troveUri(node, 'id'));
   return out;
 }
+
+// --- shareable web links -------------------------------------------------------
+//
+// `trove:` addresses an item INSIDE the drive: it is what one document writes to link
+// another, and it means nothing to a browser. A share link is the other half — a URL you
+// can paste into a message so that someone else's browser opens the same item.
+//
+// They are deliberately the same addressing, not two competing schemes. A share link is a
+// `trove:` URI wearing an http(s) coat: same collection, same explicit `name`-or-`id`
+// selector, same refusal to infer which one you meant. So anything that can already
+// resolve a `trove:` URI can resolve a share link by parsing it back, and a rename breaks
+// both in the same visible way rather than one silently retargeting.
+//
+// The path form — /c/<collection>/i/<selector> — rather than the query form
+// `?coll=&item=`. Both put the ids in the URL and therefore in server logs and browser
+// history, so that is not the difference; the path reads as a location, survives being
+// truncated in a chat client more gracefully, and leaves the query string free for the
+// things that genuinely are parameters.
+//
+// Nothing secret ever rides in one. An encrypted collection's key is not in the link and
+// must not be: a link is pasted into chats, logged by proxies, and kept in history
+// forever. The recipient gets the item because they are allowed the collection, which is
+// the same rule as everywhere else here.
+
+/** The path a share link uses. Exported so a client router and the server agree. */
+export const SHARE_PATH = '/c';
+
+/**
+ * A URL that opens this item in a browser.
+ *
+ * @param {object} node
+ * @param {string} [origin] where the drive is served; omitted gives a root-relative link
+ * @param {'name'|'id'} [by] `name` reads better and breaks on rename; `id` is the reverse
+ */
+export function shareUrl(node, origin = '', by = 'name') {
+  if (!node?.collectionId) throw TroveError.invalid('An item needs a collection to be linked to');
+  const selector = by === 'id'
+    ? `id:${node.id}`
+    : encodeURIComponent(node.name);
+  if (!selector || (by === 'id' && !node.id)) throw TroveError.invalid('Nothing to link to');
+  const path = `${SHARE_PATH}/${encodeURIComponent(node.collectionId)}/i/${selector}`;
+  return origin ? `${String(origin).replace(/\/$/, '')}${path}` : path;
+}
+
+/**
+ * Read a share link back, from a full URL or just a path.
+ *
+ * Returns the same shape `parseTroveUri` does, so a caller resolves either without caring
+ * which it was handed. Null rather than a throw: this parses whatever was in the address
+ * bar, and a URL that is not a share link is an ordinary page, not an error.
+ */
+export function parseShareUrl(url) {
+  let path;
+  try {
+    path = url.startsWith('/') ? url : new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  const m = /^\/c\/([^/]+)\/i\/(.+)$/.exec(path);
+  if (!m) return null;
+  let collection;
+  let raw;
+  try {
+    collection = decodeURIComponent(m[1]);
+    raw = decodeURIComponent(m[2]);
+  } catch {
+    return null; // a malformed escape is not a link to anything
+  }
+  if (!COLLECTION_RE.test(collection)) return null;
+  // `id:` is the explicit selector, mirroring `?id=` — a name is never guessed at just
+  // because it happens to look like an id.
+  const byId = raw.startsWith('id:');
+  const value = byId ? raw.slice(3) : raw;
+  if (!value || value.length > MAX_SELECTOR) return null;
+  return { collection, by: byId ? 'id' : 'name', value };
+}
+
+/** The `trove:` URI a share link denotes — the two are the same address. */
+export function troveUriFromShareUrl(url) {
+  const parsed = parseShareUrl(url);
+  if (!parsed) return null;
+  return parsed.by === 'id'
+    ? `${TROVE_SCHEME}${parsed.collection}?id=${encodeURIComponent(parsed.value)}`
+    : `${TROVE_SCHEME}${parsed.collection}?name=${encodeURIComponent(parsed.value)}`;
+}
