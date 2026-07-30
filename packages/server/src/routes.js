@@ -5,6 +5,7 @@
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
+  shouldEncrypt,
 } from '@3sln/trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@3sln/trove/core/plugins/identity.js';
 
@@ -444,10 +445,20 @@ export function createRouter() {
 
   // --- uploads ---------------------------------------------------------------
 
-  r.post('/api/collections/:collection/uploads', [], async (ctx) => {
+  r.post('/api/collections/:collection/uploads', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
     const collection = await ctx.access.collection(scopedCollection(ctx), 'write');
+    // An upload onto an encrypted collection is handed the collection's key, so the client
+    // can seal the bytes before they reach the bucket. That key decrypts EVERYTHING in the
+    // collection, which makes it a read capability however it arrives — and `write` does
+    // not imply `read` here (only `admin` expands). Without this, a write-only API key,
+    // which the key model explicitly supports, could ask for a plan for a one-byte file and
+    // receive the means to decrypt the whole collection.
+    //
+    // Refused rather than quietly narrowed to a plaintext upload: silently storing in the
+    // clear on a collection someone set up to be encrypted is the worse failure.
+    await assertReadIfKeyed(ctx, b);
     return uploadDescriptor(await collection.createUpload({
       name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
       overwrite: b.overwrite === true,
@@ -1150,6 +1161,23 @@ async function assertTaskAccess(ctx, task, what) {
  * manage API keys, however broadly it was scoped, because a key that can mint keys can
  * outlive its own revocation. Then the ordinary admin check on the principal.
  */
+
+/**
+ * An upload plan that will carry the collection key needs `read`, not merely `write`.
+ *
+ * Checked before the session is created, so a refusal costs nothing and leaves no orphan.
+ */
+async function assertReadIfKeyed(ctx, body) {
+  if (!ctx.collections?.encryptionFor) return;
+  const collectionId = scopedCollection(ctx);
+  const encryption = await ctx.collections.encryptionFor(collectionId);
+  if (!encryption?.enabled) return;
+  const contentType = body.contentType || ctx.vfs?.guessContentType?.(body.name) || '';
+  if (!shouldEncrypt(encryption, { name: body.name, contentType })) return;
+  // Throws if the caller does not hold read on this collection.
+  await ctx.access.collection(collectionId, 'read');
+}
+
 function requireHumanAdmin(ctx, action) {
   if (ctx.grant) {
     throw TroveError.forbidden(`An API key cannot ${action} — sign in as an administrator`);

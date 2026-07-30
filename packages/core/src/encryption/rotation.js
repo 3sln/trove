@@ -107,6 +107,27 @@ export class RotationService {
     const state = await this.state(collectionId);
     if (!state || state.status !== 'running') return state;
 
+    // One walker at a time, claimed the way a scan claims its collection.
+    //
+    // Two slices running together — a cron overlapping a manual run, or two cron firings on
+    // a slow collection — can both pick up the same object. Each writes a new object and
+    // points the item at it, and then each deletes the object IT replaced: the second
+    // delete removes the object the item is now pointing at. With the old key still in the
+    // ring nothing reports an error, and the file is simply gone.
+    //
+    // A lease rather than a flag, because the holder can die mid-slice and a lock that
+    // outlives its holder stops the rotation permanently with nobody left to notice.
+    const claim = await this.kv.acquire('rotation', collectionId, Math.max(30_000, budgetMs * 3));
+    if (!claim) return state;
+    try {
+      return await this.#slice(collectionId, state, { budgetMs, now });
+    } finally {
+      await this.kv.release('rotation', collectionId, claim).catch(() => {});
+    }
+  }
+
+  async #slice(collectionId, state, { budgetMs, now }) {
+
     const deadline = now() + budgetMs;
     const key = await this.collections.dataKeyFor(collectionId, state.to);
     if (!key) throw TroveError.invalid('The key this rotation is moving onto is gone');

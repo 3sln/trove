@@ -541,21 +541,29 @@ export class Vfs {
     //
     // The plaintext range the caller asked for is mapped onto the chunks that hold it, so a
     // seek into a video still fetches a chunk rather than the film.
-    const key = await this.#keyForNode(node);
-    const header = {
-      chunkSize: node.encryption.chunkSize,
-      plaintextSize: node.size,
-      noncePrefix: null, // filled from the object's own header below
-    };
-    const want = range
-      ? cipherRangeFor({ start: range.start, end: range.end }, header)
-      : { cipherStart: 0, cipherEnd: cipherSize(node.size, header.chunkSize) - 1, firstChunk: 0, trimStart: 0, trimEnd: node.size };
-
-    // The header carries the nonce prefix, and only the object has it.
+    // The ENVELOPE is read first, and it is authoritative.
+    //
+    // The item's own record says which key sealed it and at what chunk size, and that is
+    // what makes a listing cheap — but it is a copy, and a copy can be stale: an object
+    // restored from a backup, adopted by a scan, or written by another version. Deriving
+    // the byte ranges from the record and then decrypting with the object's real geometry
+    // is how you get chunk indices computed against one layout and nonces against another,
+    // which surfaces as "the data has been altered" on data nobody altered.
     const head = await storage.get(node.storageKey, { range: { start: 0, end: HEADER_BYTES - 1 }, signal });
-    const real = decodeHeader(await bytesOf(head.stream));
-    header.noncePrefix = real.noncePrefix;
-    header.chunkSize = real.chunkSize;
+    const header = decodeHeader(await bytesOf(head.stream));
+    // The plaintext size likewise: the envelope knows, the record remembers.
+    const plaintextSize = header.plaintextSize ?? node.size;
+    const key = await this.#keyForNode(node, header);
+
+    const want = range
+      ? cipherRangeFor({ start: range.start, end: range.end }, { ...header, plaintextSize })
+      : {
+        cipherStart: 0,
+        cipherEnd: cipherSize(plaintextSize, header.chunkSize) - 1,
+        firstChunk: 0,
+        trimStart: 0,
+        trimEnd: plaintextSize,
+      };
 
     const body = await storage.get(node.storageKey, {
       range: { start: Math.max(want.cipherStart, HEADER_BYTES), end: want.cipherEnd }, signal,
@@ -566,19 +574,26 @@ export class Vfs {
       size: want.trimEnd - want.trimStart,
       contentType: node.contentType,
       etag: head.etag,
-      range: range ? { start: range.start, end: range.start + (want.trimEnd - want.trimStart) - 1, total: node.size } : null,
+      range: range ? { start: range.start, end: range.start + (want.trimEnd - want.trimStart) - 1, total: plaintextSize } : null,
     };
   }
 
-  /** The key that opens this object, by the fingerprint its envelope names. */
-  async #keyForNode(node) {
+  /**
+   * The key that opens this object, chosen by what the ENVELOPE names.
+   *
+   * The object is the authority on which key sealed it; the item's record is a copy kept
+   * for cheap listings. Trusting the record would mean a stale one sends us to the wrong
+   * key and the failure reads as corruption.
+   */
+  async #keyForNode(node, header) {
+    const want = toHex(header.fingerprint);
     const key = this.collections?.dataKeyFor
-      ? await this.collections.dataKeyFor(node.collectionId, node.encryption.fingerprint)
+      ? await this.collections.dataKeyFor(node.collectionId, want)
       : null;
     if (!key) {
       throw TroveError.invalid(
         'This item is encrypted with a key this collection no longer holds. It was probably '
-        + 'retired before a key rotation finished.',
+        + 'retired before a key rotation finished moving everything onto the new one.',
       );
     }
     return key;

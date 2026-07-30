@@ -23,6 +23,8 @@
 import { TroveError } from './errors.js';
 import { extname } from './util.js';
 import { PACKAGE_PREFIX } from './plugins/packageStore.js';
+import { isEnvelope, decodeHeader, HEADER_BYTES } from './encryption/envelope.js';
+import { toHex } from './encryption/keys.js';
 
 /** Objects Trove wrote itself. Anything else in the store arrived some other way. */
 const TROVE_KEY = /^obj_[0-9a-f]+$/i;
@@ -184,6 +186,26 @@ export class CollectionScanner {
     return false;
   }
 
+
+  /**
+   * Read an object's envelope header, or null if it does not have one.
+   *
+   * A fixed-size range read, so it costs one small request per adopted object and never
+   * pulls the object itself. A failure to read or parse means "not one of ours", which is
+   * the right answer for an ordinary file that happens to start with something odd.
+   */
+  async #envelopeOf(collectionId, storageKey) {
+    try {
+      const storage = await this.vfs.storageFor(collectionId);
+      const head = await storage.get(storageKey, { range: { start: 0, end: HEADER_BYTES - 1 } });
+      const bytes = new Uint8Array(await new Response(head.stream).arrayBuffer());
+      if (!isEnvelope(bytes)) return null;
+      return decodeHeader(bytes);
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Create an item for an object that arrived without us.
    *
@@ -196,13 +218,25 @@ export class CollectionScanner {
   async #adopt(collectionId, object) {
     if (TROVE_KEY.test(object.key)) return null; // orphaned blob from an interrupted upload
     const name = await this.#uniqueName(collectionId, object.key);
+    // Is this an encrypted object somebody copied in?
+    //
+    // The envelope says so, and says which key it wants, WITHOUT the key — which is the
+    // entire reason the header is readable. Without this an adopted object is recorded as
+    // plaintext, and every read of it hands back raw ciphertext with no error: the drive
+    // shows a file, and opening it gives you an unreadable blob. Sideloading is a named
+    // use case here, so it has to be the case that works.
+    const envelope = await this.#envelopeOf(collectionId, object.key);
     const node = await this.vfs.metadata.create({
       collectionId,
       name,
       storageKey: object.key,
-      size: object.size ?? 0,
+      // The size the file has, not the size the envelope occupies.
+      size: envelope ? envelope.plaintextSize : (object.size ?? 0),
       etag: object.etag ?? null,
       contentType: this.vfs.guessContentType(name),
+      encryption: envelope
+        ? { fingerprint: toHex(envelope.fingerprint), chunkSize: envelope.chunkSize }
+        : null,
       meta: { adopted: true, adoptedAt: Date.now() },
     });
     // Adopted files are indexed like any other, so they are findable immediately —

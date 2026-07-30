@@ -143,14 +143,6 @@ export class UploadManager {
   async create(req) {
     if (!isValidItemName(req.name)) throw TroveError.invalid(`Invalid file name "${req.name}"`);
     if (!(req.size >= 0)) throw TroveError.invalid('size must be a non-negative number');
-    if (this.maxBytes && req.size > this.maxBytes) {
-      // Deterministic per-file limit — retrying can't help, so it's non-retryable
-      // (capacity/rate quotas stay retryable via the default).
-      // TOO_LARGE (413), not QUOTA: the store has plenty of room, this file is simply
-      // bigger than this deployment permits. Reporting it as a capacity problem would
-      // send the user looking for space to free that would not help.
-      throw TroveError.tooLarge(`File exceeds the maximum upload size of ${this.maxBytes} bytes`, { details: { maxBytes: this.maxBytes, size: req.size } });
-    }
     const collectionId = req.collectionId || 'default';
     const storage = await this.#storage(collectionId);
     const caps = storage.capabilities;
@@ -171,6 +163,30 @@ export class UploadManager {
     const encrypting = !!policy && shouldEncrypt(policy.encryption, { name: req.name, contentType });
     const chunkSize = policy?.encryption?.chunkSize || DEFAULT_CHUNK_SIZE;
     const storedSize = encrypting ? cipherSize(req.size, chunkSize) : req.size;
+
+    // The per-file limit is checked against what will be STORED, and checked here rather
+    // than against `req.size` at the top of this method.
+    //
+    // `complete` compares the size read back from the store, which for an encrypted upload
+    // is the envelope. Checking the plaintext size at negotiation and the envelope size at
+    // completion meant a file just under the limit was accepted, transferred in full, and
+    // then DELETED by the too-large branch at the end — the user paying for the whole
+    // upload and losing the file. Both ends now measure the same thing.
+    if (this.maxBytes && storedSize > this.maxBytes) {
+      // Deterministic per-file limit — retrying can't help, so it's non-retryable
+      // (capacity/rate quotas stay retryable via the default).
+      // TOO_LARGE (413), not QUOTA: the store has plenty of room, this file is simply
+      // bigger than this deployment permits. Reporting it as a capacity problem would
+      // send the user looking for space to free that would not help.
+      throw TroveError.tooLarge(
+        encrypting && req.size <= this.maxBytes
+          // Naming the reason, because "your 10MB file exceeds the 10MB limit" is a
+          // maddening thing to be told.
+          ? `Encrypted, this file needs ${storedSize} bytes of storage, over the ${this.maxBytes}-byte limit`
+          : `File exceeds the maximum upload size of ${this.maxBytes} bytes`,
+        { details: { maxBytes: this.maxBytes, size: req.size, storedSize } },
+      );
+    }
 
     const session = {
       id: newId('up'),

@@ -33,7 +33,11 @@
  * @param {(manifest: object) => string[]} [deps.endpointsOf]  how to read declared egress
  * @param {object|null} [deps.encryption]  the collection's encryption config
  */
-export function describeExposure({ indexers = [], plugins = [], endpointsOf = () => [], encryption = null } = {}) {
+export function describeExposure({ indexers = [], plugins = [], endpointsOf = null, encryption = null } = {}) {
+  // Defaulting this to `() => []` would have every plugin report "reaches nowhere" whenever
+  // a caller forgot to wire it — an affirmative safety claim made with no evidence, which
+  // is the same mistake as calling an unresolved plugin built-in. No reader means unknown.
+  const readEndpoints = typeof endpointsOf === 'function' ? endpointsOf : null;
   // A plugin indexer's id is a contribution URI — `trove+contrib:<domain>/<name>/<what>` —
   // so the plugin it belongs to is derivable from the id rather than tracked separately.
   const byId = new Map();
@@ -56,7 +60,7 @@ export function describeExposure({ indexers = [], plugins = [], endpointsOf = ()
       // `[]` is an affirmative claim that this reaches nowhere. Without a manifest we
       // cannot make it, so an unresolved plugin gets `null` — unknown — and is counted
       // among the things that might send data out rather than among the things that cannot.
-      endpoints: owner ? [...new Set(endpointsOf(owner.manifest) || [])] : (contributed ? null : []),
+      endpoints: owner && readEndpoints ? [...new Set(readEndpoints(owner.manifest) || [])] : (contributed ? null : []),
     };
   });
 
