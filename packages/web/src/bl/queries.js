@@ -212,6 +212,11 @@ export const paletteCommands = new ViewQuery(registries, (app) => {
     category: c.category ?? null,
     icon: c.icon ?? null,
     keybinding: p.keybindings.labelFor(c.id),
+    // Two different reasons a command might not run, and they are labelled differently in
+    // the palette: `available` is the plugin behind it being reachable, `enabled` also
+    // folds in the when-clause. Collapsing them would tag a command disabled by context as
+    // "offline", which is a false explanation rather than a vague one.
+    available: p.commands.isAvailable(c),
     enabled: p.commands.isEnabled(c.id),
   }));
 });

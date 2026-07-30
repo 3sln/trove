@@ -101,6 +101,11 @@ export default function workbench({ engine, app, platform }) {
     // they would have drawn anyway.
     phoneSheet: region(engine, chrome, (s) => phoneSheet(s, ui)),
     transferTray: region(engine, { tr: q.transfers }, (s) => transferTray(s, ui)),
+    // The palette is the first thing to read a composed view rather than a service's state:
+    // `commands` arrives with keybinding labels resolved and availability decided, so the
+    // component stopped asking the keybinding and command services anything mid-render.
+    commandPalette: region(engine, { overlay: q.overlay, se: q.search, commands: q.paletteCommands },
+      (s) => commandPalette(s, ui)),
   };
 
   return alias(() => watch(combined, (state) => view(state, ui, regions)));
@@ -122,7 +127,7 @@ function view(state, ui, regions) {
     phone ? regions.phoneSheet() : null,
     // Overlays.
     searchModal(state, ui),
-    commandPalette(state, ui),
+    regions.commandPalette(),
     dialog(state, ui),
     contextMenu(state, ui),
     pluginPanel(state, ui),

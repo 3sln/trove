@@ -203,6 +203,7 @@ function platformStub() {
         // A real command carries a handler; the view must not.
         paletteCommands: () => [{ id: 'x.run', title: 'Run it', category: 'Test', when: 'ok', handler() {} }],
         isEnabled: () => true,
+        isAvailable: () => true,
       },
       keybindings: {
         resolved: () => [{ command: 'x.run', key: 'mod+r' }],
@@ -226,7 +227,8 @@ test('the palette command view is a description, not a command', async () => {
   const app = platformStub();
   const list = await readOnce(q.paletteCommands, app);
   expect(list).toEqual([
-    { id: 'x.run', title: 'Run it', category: 'Test', icon: null, keybinding: '⌘R', enabled: true },
+    { id: 'x.run', title: 'Run it', category: 'Test', icon: null, keybinding: '⌘R',
+      available: true, enabled: true },
   ]);
   // The source command had a `handler`. Emitting it would hand a component a way to run
   // something without going through the engine at all.

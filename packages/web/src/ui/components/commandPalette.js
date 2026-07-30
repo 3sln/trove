@@ -4,7 +4,6 @@
 
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
-import { prettyKey } from '../../platform/keybindings.js';
 import { OpenFileAction, QuickOpenAction } from '../../bl/actions.js';
 
 const { div, input, span } = dd;
@@ -17,7 +16,7 @@ export default function commandPalette(state, ui) {
   // would be worse than nothing, since they don't match what the field now says.
   const items = pal.mode === 'files'
     ? (pal.query.trim() ? state.se.paletteFiles || [] : [])
-    : filterCommands(state, ui, pal.query);
+    : filterCommands(state.commands || [], pal.query);
   const index = Math.min(pal.index, Math.max(0, items.length - 1));
 
   const run = (item) => {
@@ -72,21 +71,17 @@ function emptyResults(pal, state) {
   return div({ className: 'none' }, pal.query.trim() ? 'No files found' : 'Type to search files by name');
 }
 
+// Everything here arrives decided — see the paletteCommands view query. This used to ask
+// the keybinding service for a label, then throw the label away and re-resolve the raw key
+// to prettify it again, which was two lookups to render one `<kbd>`.
 function cmdOpt(cmd, active, ui, run, hover) {
-  const key = ui.platform.keybindings.labelFor(cmd.id);
-  const available = ui.platform.commands.isAvailable(cmd);
-  return div({ className: `opt ${active ? 'active' : ''} ${available ? '' : 'unavailable'}` },
+  return div({ className: `opt ${active ? 'active' : ''} ${cmd.available ? '' : 'unavailable'}` },
     span({ className: 'ico' }, icon(cmd.icon || 'command', { size: 16 })),
     cmd.category ? span({ className: 'cat' }, cmd.category + ' ›') : null,
     span({ className: 'title' }, cmd.title),
-    !available ? span({ className: 'offline-tag' }, 'offline') : null,
-    key ? span({ className: 'kbd' }, dd.h('kbd', prettyKey(keyRaw(ui, cmd.id)))) : null,
+    !cmd.available ? span({ className: 'offline-tag' }, 'offline') : null,
+    cmd.keybinding ? span({ className: 'kbd' }, dd.h('kbd', cmd.keybinding)) : null,
   ).on({ click: () => run(cmd), mouseenter: hover });
-}
-
-function keyRaw(ui, id) {
-  const b = ui.platform.keybindings.resolved().find((x) => x.command === id);
-  return b ? b.key : '';
 }
 
 function fileOpt(item, active, run, hover) {
@@ -97,8 +92,7 @@ function fileOpt(item, active, run, hover) {
   ).on({ click: () => run(item), mouseenter: hover });
 }
 
-function filterCommands(state, ui, query) {
-  const all = ui.platform.commands.paletteCommands();
+function filterCommands(all, query) {
   const q = query.trim().toLowerCase();
   if (!q) return all.slice(0, 60);
   const scored = [];
