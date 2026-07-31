@@ -49,16 +49,30 @@ import { prettyKey } from '../platform/keybindings.js';
  * and the snapshot describe the same state rather than two subtly different ones.
  */
 class ServiceQuery extends Query {
-  static deps = ['app'];
+  /**
+   * @param {string} dep the engine resource this views
+   * @param {(resource: object) => {onDirty: Function, getValue: Function}} cellOf
+   */
+  /** Empty at the class level; the lease is per instance — see `deps` below. */
+  static deps = [];
 
-  /** @param {(app: object) => {onDirty: Function, getValue: Function}} cellOf */
-  constructor(cellOf) {
+  constructor(dep, cellOf) {
     super();
+    this.dep = dep;
     this.cellOf = cellOf;
   }
 
-  boot({ app }, { notify }) {
-    const cell = this.cellOf(app);
+  /**
+   * Leased per instance rather than per class, because these all share one class and each
+   * views a different resource. ngin leases `constructor.deps` AND `this.deps`, so an
+   * instance can name its own.
+   */
+  get deps() {
+    return [this.dep];
+  }
+
+  boot(resources, { notify }) {
+    const cell = this.cellOf(resources[this.dep]);
     // A service may not exist in every build — `plugins` is absent when the plugin host is
     // not installed, which is why the snapshot has a `?? constant([])` beside it.
     if (!cell) {
@@ -80,40 +94,40 @@ class ServiceQuery extends Query {
 // --- the drive -----------------------------------------------------------------
 
 /** Items, selection, the open collection, and the gate. */
-export const explorer = new ServiceQuery((app) => app.explorer.observe());
+export const explorer = new ServiceQuery('explorer', (r) => r.observe());
 /** Query text, results, and the palette's file list. */
-export const search = new ServiceQuery((app) => app.search.observe());
+export const search = new ServiceQuery('search', (r) => r.observe());
 /** Uploads and downloads in flight. */
-export const transfers = new ServiceQuery((app) => app.transfers.observe());
+export const transfers = new ServiceQuery('transfers', (r) => r.observe());
 /** Running tasks and standing issues, both sides of the wire. */
-export const activity = new ServiceQuery((app) => app.activity.observe());
+export const activity = new ServiceQuery('activity', (r) => r.observe());
 /** Conversations, tags and backlinks for the open item. */
-export const social = new ServiceQuery((app) => app.social.observe());
+export const social = new ServiceQuery('social', (r) => r.observe());
 /** Online state, pinned files, and the queue waiting to sync. */
-export const offline = new ServiceQuery((app) => app.offline.observe());
+export const offline = new ServiceQuery('offline', (r) => r.observe());
 /** The admin API-key list. */
-export const apiKeys = new ServiceQuery((app) => app.apiKeys.observe());
+export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe());
 
 // --- the shell -----------------------------------------------------------------
 
 /** Which activity is showing, and the rest of the shell's own state. */
-export const workbench = new ServiceQuery((app) => app.platform.workbench.observe());
+export const workbench = new ServiceQuery('workbench', (r) => r.observe());
 /** The tab and panel stack. */
-export const navigation = new ServiceQuery((app) => app.platform.workbench.observeNav());
+export const navigation = new ServiceQuery('workbench', (r) => r.observeNav());
 /** Dialogs, menus and panels. */
-export const overlay = new ServiceQuery((app) => app.platform.workbench.observeOverlay());
+export const overlay = new ServiceQuery('workbench', (r) => r.observeOverlay());
 /** Toasts. */
-export const notifications = new ServiceQuery((app) => app.platform.notifications.observe());
+export const notifications = new ServiceQuery('notifications', (r) => r.observe());
 /** Settings, defaults merged with overrides. */
-export const settings = new ServiceQuery((app) => app.platform.settings.observe());
+export const settings = new ServiceQuery('settings', (r) => r.observe());
 /** The when-clause keys: what is selected, what is open, what is focused. */
-export const context = new ServiceQuery((app) => app.platform.context.observe());
+export const context = new ServiceQuery('context', (r) => r.observe());
 /** Phone, desktop or TV. */
-export const viewport = new ServiceQuery((app) => app.platform.viewport.observe());
+export const viewport = new ServiceQuery('viewport', (r) => r.observe());
 /** Whether this browser can transcribe on-device. */
-export const voice = new ServiceQuery((app) => app.platform.voice.observe());
+export const voice = new ServiceQuery('voice', (r) => r.observe());
 /** Installed plugins; null where the plugin host is not installed. */
-export const plugins = new ServiceQuery((app) => app.platform.plugins?.observe());
+export const plugins = new ServiceQuery('plugins', (r) => r?.observe?.());
 /**
  * Component-local UI state that still has to reach the render — see ui/localState.js.
  *
@@ -121,7 +135,7 @@ export const plugins = new ServiceQuery((app) => app.platform.plugins?.observe()
  * resource. It still goes through a query so that a component reads it the same way it
  * reads everything else, and so it has somewhere to land when the rest of the bag is gone.
  */
-export const localUi = new ServiceQuery(() => localState.observe());
+export const localUi = new ServiceQuery('workbench', () => localState.observe());
 
 /**
  * Contributions of one type — status items, openers, views.
@@ -136,7 +150,7 @@ class ContributionsOfType extends ServiceQuery {
   static of = queryOf(ContributionsOfType);
 
   constructor(type) {
-    super((app) => app.platform.contributions.observeType(type));
+    super('contributions', (r) => r.observeType(type));
     this.type = type;
   }
 }
@@ -166,22 +180,24 @@ class ContributionsOfType extends ServiceQuery {
  * context key flips, because that is what decides `enabled`.
  */
 class ViewQuery extends Query {
-  static deps = ['app'];
+  static deps = [];
 
   /**
-   * @param {(app: object) => Array<{onDirty: Function}>} sources
-   * @param {(app: object) => any} project must return plain data — see the note above
+   * @param {string[]} deps the engine resources this composes
+   * @param {(r: object) => Array<{onDirty: Function}>} sources
+   * @param {(r: object) => any} project must return plain data — see the note above
    */
-  constructor(sources, project) {
+  constructor(deps, sources, project) {
     super();
+    this.deps = deps;
     this.sources = sources;
     this.project = project;
   }
 
-  boot({ app }, { notify }) {
-    const emit = () => notify(this.project(app));
+  boot(r, { notify }) {
+    const emit = () => notify(this.project(r));
     emit();
-    this.offs = this.sources(app).filter(Boolean).map((c) => c.onDirty(emit));
+    this.offs = this.sources(r).filter(Boolean).map((c) => c.onDirty(emit));
   }
 
   kill() {
@@ -191,11 +207,12 @@ class ViewQuery extends Query {
 }
 
 /** Contributions, context keys and plugin health — what most of these views depend on. */
-const registries = (app) => [
-  app.platform.contributions.observe(),
-  app.platform.context.observe(),
-  app.platform.plugins?.observe(),
-  app.platform.settings.observe(),
+const REGISTRY_DEPS = ['contributions', 'context', 'plugins', 'settings', 'commands', 'keybindings'];
+const registries = (r) => [
+  r.contributions.observe(),
+  r.context.observe(),
+  r.plugins?.observe?.(),
+  r.settings.observe(),
 ];
 
 /**
@@ -205,20 +222,19 @@ const registries = (app) => [
  * No `when` expression and no handler. A component shows the title, greys out what is
  * disabled, and dispatches `ExecCommandAction(id)`.
  */
-export const paletteCommands = new ViewQuery(registries, (app) => {
-  const p = app.platform;
-  return p.commands.paletteCommands().map((c) => ({
+export const paletteCommands = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
+  return r.commands.paletteCommands().map((c) => ({
     id: c.id,
     title: c.title ?? c.id,
     category: c.category ?? null,
     icon: c.icon ?? null,
-    keybinding: p.keybindings.labelFor(c.id),
+    keybinding: r.keybindings.labelFor(c.id),
     // Two different reasons a command might not run, and they are labelled differently in
     // the palette: `available` is the plugin behind it being reachable, `enabled` also
     // folds in the when-clause. Collapsing them would tag a command disabled by context as
     // "offline", which is a false explanation rather than a vague one.
-    available: p.commands.isAvailable(c),
-    enabled: p.commands.isEnabled(c.id),
+    available: r.commands.isAvailable(c),
+    enabled: r.commands.isEnabled(c.id),
   }));
 });
 
@@ -230,12 +246,11 @@ export const paletteCommands = new ViewQuery(registries, (app) => {
  * markup and is still sanitised at the point it becomes nodes — a query emitting plain data
  * says nothing about that data being safe.
  */
-export const statusItems = new ViewQuery(registries, (app) => {
-  const p = app.platform;
-  return p.contributions.ofType('statusItem')
+export const statusItems = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
+  return r.contributions.ofType('statusItem')
     .filter((i) => i.visible !== false && i.html)
-    .filter((i) => !i.when || p.context.evaluate(i.when))
-    .filter((i) => p.plugins?.isAvailable(i) ?? true)
+    .filter((i) => !i.when || r.context.evaluate(i.when))
+    .filter((i) => r.plugins?.isAvailable?.(i) ?? true)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.name).localeCompare(String(b.name)))
     .map((i) => ({
       id: i.id,
@@ -256,16 +271,15 @@ export const statusItems = new ViewQuery(registries, (app) => {
  * Quick Open from opening. Detecting that needs the whole list at once, which is exactly the
  * sort of thing a component rendering one row cannot do and a view can.
  */
-export const keybindings = new ViewQuery(registries, (app) => {
-  const p = app.platform;
-  const resolved = p.keybindings.resolved();
-  const overrides = p.keybindings.overrides();
+export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
+  const resolved = r.keybindings.resolved();
+  const overrides = r.keybindings.overrides();
   const perKey = new Map();
   for (const b of resolved) perKey.set(b.key, (perKey.get(b.key) || 0) + 1);
   return resolved.map((b) => ({
     bindingId: b.bindingId,
     command: b.command,
-    title: p.contributions.get(b.command)?.title ?? b.command,
+    title: r.contributions.get(b.command)?.title ?? b.command,
     key: b.key,
     label: prettyKey(b.key),
     custom: !!overrides[b.bindingId],
@@ -290,13 +304,13 @@ export const keybindings = new ViewQuery(registries, (app) => {
  * right default and the opposite of what this wants.)
  */
 class Capabilities extends Query {
-  static deps = ['app'];
+  static deps = ['api'];
 
   /** Not yet known, as against "knows there are none" — every reader already treats it so. */
   initial = null;
 
-  async boot({ app }, { notify }) {
-    this.promise ??= app.platform.api.capabilities();
+  async boot({ api }, { notify }) {
+    this.promise ??= api.capabilities();
     notify(await this.promise);
   }
 

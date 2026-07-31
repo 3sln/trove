@@ -239,3 +239,37 @@ clipboard, the shell's overlays, and the drive's services.
 Left: the file list and the remaining overlays as regions; `showDialog`/`showContextMenu`
 (callbacks — see above); `moveLaunch` (read-after-write); the two `ui.app` reads; then the
 snapshot, `app`, `platform`, `go` and `exec`.
+
+## The engine's state is its resources
+
+A correction to how the first half of this ticket was done. I had been wrapping the existing
+services in queries — which is hacking ngin onto the existing shape rather than adopting it.
+
+The engine's state IS the state of the resources it has access to. There was one resource,
+`app`, holding everything, so "engine state" was an opaque blob and every query and every
+action leased the whole world. A lease that always covers everything says nothing about what
+a piece of work touches or how long it needs it, which is most of what a lease is for.
+
+Each service is now its own provider — `explorer`, `search`, `transfers`, `social`,
+`offline`, `activity`, `apiKeys`, `workbench`, `settings`, `notifications`, `context`,
+`commands`, `keybindings`, `contributions`, `viewport`, `voice`, `api`, `mediaUrls`,
+`plugins` — and `static deps = ['explorer']` now means what it says.
+
+`ServiceQuery` leases per INSTANCE rather than per class: they share one class and each views
+a different resource, and ngin leases `constructor.deps` and `this.deps` both, so an instance
+can name its own.
+
+`app` still exists for the older actions, which reach across several resources at once and
+are converted as they are touched. Nothing new should ask for it.
+
+### What comes next, in this spirit
+
+The services themselves are the remaining hack. A resource that holds a cell AND exposes an
+imperative API is doing both jobs — actions should be the only thing that writes it, and a
+query the only thing that reads it. Dissolving each service into a plain state holder, plus
+actions that mutate it, is the rest of the conversion.
+
+`localState.js` deserves the same look. Component state that drives rendered STRUCTURE (the
+keybinding mid-capture, the unsubmitted form) is engine state by this reading, whatever it is
+called and wherever it lives. What legitimately stays outside is interaction that changes no
+structure — hover, focus, animation.

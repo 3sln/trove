@@ -29,8 +29,40 @@ function service(initial) {
   };
 }
 
+/**
+ * An engine with the resources a query actually leases.
+ *
+ * Each service is its own provider, as in the app — `static deps = ['explorer']` only means
+ * something if there IS an explorer resource. A single `app` provider would make every
+ * lease cover everything, which is what this conversion is undoing.
+ */
 function engineWith(app) {
-  return new Engine({ providers: { app: Provider.fromSingleton(app) } });
+  const p = app.platform || {};
+  const singleton = (v) => Provider.fromSingleton(v ?? {});
+  return new Engine({
+    providers: {
+      app: Provider.fromSingleton(app),
+      explorer: singleton(app.explorer),
+      search: singleton(app.search),
+      transfers: singleton(app.transfers),
+      social: singleton(app.social),
+      offline: singleton(app.offline),
+      activity: singleton(app.activity),
+      apiKeys: singleton(app.apiKeys),
+      workbench: singleton(p.workbench),
+      settings: singleton(p.settings),
+      notifications: singleton(p.notifications),
+      context: singleton(p.context),
+      commands: singleton(p.commands),
+      keybindings: singleton(p.keybindings),
+      contributions: singleton(p.contributions),
+      viewport: singleton(p.viewport),
+      voice: singleton(p.voice),
+      api: singleton(p.api),
+      mediaUrls: singleton(p.mediaUrls),
+      plugins: singleton(p.plugins),
+    },
+  });
 }
 
 test('a query is live: a change reaches every observer', async () => {

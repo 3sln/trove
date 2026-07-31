@@ -26,8 +26,43 @@ export function createApp(platform) {
 
   const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, engine: null };
 
+  // Every resource the engine has, named. The engine's STATE is the state of its
+  // resources, so a single `app` provider made that state one opaque blob: every query and
+  // every action leased the whole world, and a lease that always covers everything tells
+  // you nothing about what a piece of work touches or how long it needs it.
+  //
+  // Named individually, `static deps = ['explorer']` means what it says. `app` is still
+  // here because the older actions reach across several of these at once and are converted
+  // as they are touched, not in one sweep — but nothing NEW should ask for it.
   const engine = new Engine({
-    providers: { app: Provider.fromSingleton(app) },
+    providers: {
+      app: Provider.fromSingleton(app),
+
+      // The drive.
+      explorer: Provider.fromSingleton(explorer),
+      search: Provider.fromSingleton(search),
+      transfers: Provider.fromSingleton(transfers),
+      social: Provider.fromSingleton(social),
+      offline: Provider.fromSingleton(offline),
+      activity: Provider.fromSingleton(activity),
+      apiKeys: Provider.fromSingleton(apiKeys),
+
+      // The shell.
+      workbench: Provider.fromSingleton(platform.workbench),
+      settings: Provider.fromSingleton(platform.settings),
+      notifications: Provider.fromSingleton(platform.notifications),
+      context: Provider.fromSingleton(platform.context),
+      commands: Provider.fromSingleton(platform.commands),
+      keybindings: Provider.fromSingleton(platform.keybindings),
+      contributions: Provider.fromSingleton(platform.contributions),
+      viewport: Provider.fromSingleton(platform.viewport),
+      voice: Provider.fromSingleton(platform.voice),
+
+      // The outside world.
+      api: Provider.fromSingleton(platform.api),
+      mediaUrls: Provider.fromSingleton(platform.mediaUrls),
+      plugins: Provider.fromSingleton(platform.plugins),
+    },
   });
   app.engine = engine;
 

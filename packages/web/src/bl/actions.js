@@ -228,14 +228,15 @@ export class OpenInitialCollectionAction extends AppAction {
  * rather than the handler's result. That costs nothing today: every one of the call sites
  * is fire-and-forget, and a command that needs to answer its caller wants a query.
  */
-export class ExecCommandAction extends AppAction {
+export class ExecCommandAction extends Action {
+  static deps = ['commands'];
   constructor(id, ...args) {
     super();
     this.id = id;
     this.args = args;
   }
-  async execute({ app }) {
-    return app.platform.commands.execute(this.id, ...this.args);
+  async execute({ commands }) {
+    return commands.execute(this.id, ...this.args);
   }
 }
 
@@ -652,15 +653,15 @@ export class RevokeApiKeyAction extends AppAction {
  * action carries an id — the component that dispatches this has never held the binding
  * object, only a row describing it.
  */
-export class RebindKeyAction extends AppAction {
+export class RebindKeyAction extends Action {
+  static deps = ['keybindings'];
   constructor(bindingId, key) {
     super();
     this.bindingId = bindingId;
     this.key = key;
   }
 
-  async execute({ app }) {
-    const kb = app.platform.keybindings;
+  async execute({ keybindings: kb }) {
     // `rebind` resolves a binding object or a command id, not a binding id, so look the
     // row back up. Resolving here rather than widening the service keeps the id the only
     // thing that crosses the boundary.
@@ -683,7 +684,8 @@ export class RebindKeyAction extends AppAction {
  * Clipboard access is denied outside a user gesture and in an insecure context, so the
  * failure path is ordinary rather than exceptional.
  */
-export class CopyTextAction extends AppAction {
+export class CopyTextAction extends Action {
+  static deps = ['notifications'];
   /**
    * @param {string} text
    * @param {string} [label] what the toast says on success
@@ -694,8 +696,7 @@ export class CopyTextAction extends AppAction {
     this.label = label;
   }
 
-  async execute({ app }) {
-    const notes = app.platform.notifications;
+  async execute({ notifications: notes }) {
     try {
       await navigator.clipboard.writeText(this.text);
       notes.success(this.label);
@@ -706,7 +707,8 @@ export class CopyTextAction extends AppAction {
 }
 
 /** Say something to the user. `kind` is one of info, success, warn, error. */
-export class NotifyAction extends AppAction {
+export class NotifyAction extends Action {
+  static deps = ['notifications'];
   constructor(kind, message, opts) {
     super();
     this.kind = kind;
@@ -714,21 +716,21 @@ export class NotifyAction extends AppAction {
     this.opts = opts;
   }
 
-  async execute({ app }) {
-    const notes = app.platform.notifications;
+  async execute({ notifications: notes }) {
     (notes[this.kind] ?? notes.info).call(notes, this.message, this.opts);
   }
 }
 
 /** Dismiss one notification, by id. */
-export class DismissNotificationAction extends AppAction {
+export class DismissNotificationAction extends Action {
+  static deps = ['notifications'];
   constructor(id) {
     super();
     this.id = id;
   }
 
-  async execute({ app }) {
-    app.platform.notifications.dismiss(this.id);
+  async execute({ notifications }) {
+    notifications.dismiss(this.id);
   }
 }
 
@@ -749,9 +751,10 @@ export class DismissNotificationAction extends AppAction {
 // the outcome to be an ACTION TO DISPATCH rather than a function to call, which is a real
 // change at each call site rather than a swap. See docs/tickets/009.
 
-class ShellAction extends AppAction {
-  async execute({ app }) {
-    this.apply(app.platform.workbench);
+class ShellAction extends Action {
+  static deps = ['workbench'];
+  async execute({ workbench }) {
+    this.apply(workbench);
   }
 }
 
@@ -843,8 +846,9 @@ export class OpenInPanelAction extends ShellAction {
 //
 // Named per operation for the same reason the shell actions are: the feed is the point.
 
-class ActivityAction extends AppAction {
-  async execute({ app }) { this.apply(app.activity); }
+class ActivityAction extends Action {
+  static deps = ['activity'];
+  async execute(r) { this.apply(r.activity); }
 }
 export class ToggleActivityPanelAction extends ActivityAction {
   constructor(which) { super(); this.which = which; }
@@ -867,8 +871,9 @@ export class DismissIssueAction extends ActivityAction {
   apply(s) { s.dismissIssue(this.id); }
 }
 
-class TransfersAction extends AppAction {
-  async execute({ app }) { this.apply(app.transfers); }
+class TransfersAction extends Action {
+  static deps = ['transfers'];
+  async execute(r) { this.apply(r.transfers); }
 }
 export class CancelTransferAction extends TransfersAction {
   constructor(id) { super(); this.id = id; }
@@ -886,8 +891,9 @@ export class ClearFinishedTransfersAction extends TransfersAction {
   apply(s) { s.clearDone(); }
 }
 
-class SocialAction extends AppAction {
-  async execute({ app }) { this.apply(app.social); }
+class SocialAction extends Action {
+  static deps = ['social'];
+  async execute(r) { this.apply(r.social); }
 }
 export class ToggleInboxAction extends SocialAction {
   apply(s) { s.toggleInbox(); }
@@ -905,8 +911,9 @@ export class LoadSidecarAction extends SocialAction {
   apply(s) { s.loadSidecar(this.nodeId); }
 }
 
-class ApiKeysAction extends AppAction {
-  async execute({ app }) { this.apply(app.apiKeys); }
+class ApiKeysAction extends Action {
+  static deps = ['apiKeys'];
+  async execute(r) { this.apply(r.apiKeys); }
 }
 export class PatchApiKeyDraftAction extends ApiKeysAction {
   constructor(patch) { super(); this.patch = patch; }
@@ -929,9 +936,10 @@ export class ToggleApiKeyCapAction extends ApiKeysAction {
  * rows come from search, which is scoped across collections, so the node has to travel with
  * the id.
  */
-export class SelectItemsAction extends AppAction {
+export class SelectItemsAction extends Action {
+  static deps = ['explorer'];
   constructor(ids, opts = {}) { super(); this.ids = ids; this.opts = opts; }
-  async execute({ app }) { app.explorer.select(this.ids, this.opts); }
+  async execute({ explorer }) { explorer.select(this.ids, this.opts); }
 }
 
 /**
@@ -947,25 +955,26 @@ export class SelectItemsAction extends AppAction {
  * Here the read-back is inside the action, where it IS sequenced. `nodes` is the results in
  * display order — the component knows the running order, the store only knows the index.
  */
-export class MoveLaunchAction extends AppAction {
+export class MoveLaunchAction extends Action {
+  static deps = ['workbench', 'explorer'];
   constructor(delta, nodes) { super(); this.delta = delta; this.nodes = nodes; }
-  async execute({ app }) {
-    const wb = app.platform.workbench;
-    wb.moveLaunch(this.delta, this.nodes.length);
-    selectNode(app, this.nodes[wb.state.launch.index]);
+  async execute({ workbench, explorer }) {
+    workbench.moveLaunch(this.delta, this.nodes.length);
+    selectNode(explorer, this.nodes[workbench.state.launch.index]);
   }
 }
 
 /** Highlight a launcher row by position and select it — the pointer/Enter counterpart. */
-export class SelectLaunchAction extends AppAction {
+export class SelectLaunchAction extends Action {
+  static deps = ['workbench', 'explorer'];
   constructor(index, node) { super(); this.index = index; this.node = node; }
-  async execute({ app }) {
-    app.platform.workbench.setLaunchIndex(this.index);
-    selectNode(app, this.node);
+  async execute({ workbench, explorer }) {
+    workbench.setLaunchIndex(this.index);
+    selectNode(explorer, this.node);
   }
 }
 
 /** Select exactly one node, or nothing. Carries the node itself — see SelectItemsAction. */
-function selectNode(app, node) {
-  app.explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
+function selectNode(explorer, node) {
+  explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
 }
