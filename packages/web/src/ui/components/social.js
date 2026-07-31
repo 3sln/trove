@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
-import { AddTagAction, CopyTextAction, LoadSidecarAction, NotifyAction, OpenFileAction, RemoveTagAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
+import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, LoadSidecarAction, NotifyAction, OpenFileAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
@@ -28,26 +28,24 @@ export function principalChip(state) {
 
 export function notificationBell(state, ui) {
   const n = state.so.notifications;
-  const social = ui.app.social;
   return div({ className: 'bell-wrap' },
     button({ className: 'iconbtn bell', title: 'Notifications' },
       icon('bell', { size: 19 }),
       n.unread ? span({ className: 'bell-badge' }, String(n.unread > 9 ? '9+' : n.unread)) : null,
-    ).on({ click: () => social.toggleInbox() }),
+    ).on({ click: () => ui.go(new ToggleInboxAction()) }),
     state.so.inboxOpen ? inboxDropdown(state, ui) : null,
   );
 }
 
 function inboxDropdown(state, ui) {
   const items = state.so.notifications.items;
-  const social = ui.app.social;
   return div({},
-    div({ className: 'scrim', $styling: { background: 'transparent', 'z-index': '54' } }).on({ click: () => social.toggleInbox(false) }),
+    div({ className: 'scrim', $styling: { background: 'transparent', 'z-index': '54' } }).on({ click: () => ui.go(new ToggleInboxAction(false)) }),
     div({ className: 'inbox' },
       div({ className: 'inbox-head' },
         span('Notifications'),
         state.so.pushSupported && !state.so.pushEnabled
-          ? button({ className: 'link' }, 'Enable push').on({ click: () => social.enablePush() })
+          ? button({ className: 'link' }, 'Enable push').on({ click: () => ui.go(new EnablePushAction()) })
           : state.so.pushEnabled ? span({ className: 'muted' }, icon('check', { size: 13 })) : null,
       ),
       items.length
@@ -108,9 +106,9 @@ export function infoPanel(state, ui) {
 }
 
 function fileHeader(node, state, ui) {
-  // A READ, not a mutation — so neither an action nor something to convert blindly. It
-  // belongs in the offline slice the component already receives; see docs/tickets/009.
-  const pinned = ui.app.offline.isPinned(node.id);
+  // From the offline view, which resolves the pin set — the component asks whether this
+  // file is pinned without knowing that pins are a list to be scanned.
+  const pinned = state.off?.pinnedIds?.has(node.id) ?? false;
   return div({ className: 'ip-file' },
     div({ className: 'ip-name' }, node.name),
     div({ className: 'ip-path' }, node.contentType || ''),
@@ -204,7 +202,6 @@ function conversationSection(state, sc, ui) {
 
 function commentNode(c, state, ui, depth) {
   const me = state.so.me;
-  const social = ui.app.social;
   const mine = me && c.author?.id === me.id;
   return div({ className: 'comment', $styling: depth ? { marginLeft: '18px' } : {} },
     div({ className: 'c-head' },
@@ -219,17 +216,16 @@ function commentNode(c, state, ui, depth) {
       ...REACTIONS.map((emoji) => {
         const users = c.reactions?.[emoji] || [];
         return button({ className: `react ${users.includes(me?.id) ? 'on' : ''}` }, emoji, users.length ? span({ className: 'rc' }, String(users.length)) : null)
-          .on({ click: () => social.react(c.id, emoji) });
+          .on({ click: () => ui.go(new ReactToCommentAction(c.id, emoji)) });
       }),
-      button({ className: 'c-link' }, 'Reply').on({ click: () => social.setReplyTo({ id: c.id, author: c.author }) }),
-      mine ? button({ className: 'c-link danger' }, 'Delete').on({ click: () => social.deleteComment(c.id) }) : null,
+      button({ className: 'c-link' }, 'Reply').on({ click: () => ui.go(new SetReplyToAction({ id: c.id, author: c.author })) }),
+      mine ? button({ className: 'c-link danger' }, 'Delete').on({ click: () => ui.go(new DeleteCommentAction(c.id)) }) : null,
     ) : null,
     (c.replies || []).length ? div({ className: 'replies' }, ...c.replies.map((r) => commentNode(r, state, ui, depth + 1))) : null,
   ).key(c.id);
 }
 
 function composer(state, ui) {
-  const social = ui.app.social;
   const me = state.so.me;
   const replyTo = state.so.replyTo;
   // `me` is null only when /api/me didn't answer — offline, or refused. It is NOT the
@@ -249,11 +245,11 @@ function composer(state, ui) {
   }
   return div({ className: 'composer' },
     replyTo ? div({ className: 'replying' }, `Replying to ${replyTo.author?.name || 'comment'}`,
-      button({ className: 'c-link' }, 'cancel').on({ click: () => social.setReplyTo(null) })) : null,
+      button({ className: 'c-link' }, 'cancel').on({ click: () => ui.go(new SetReplyToAction(null)) })) : null,
     textarea({ className: 'composer-input', placeholder: 'Write a comment…  @mention someone', rows: 2, value: '' }).on({
       keydown: (e) => {
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-          social.comment(e.target.value);
+          ui.go(new PostCommentAction(e.target.value));
           e.target.value = '';
         }
       },
@@ -263,7 +259,7 @@ function composer(state, ui) {
       button({ className: 'btn primary', disabled: state.so.posting }, 'Comment').on({
         click: (e) => {
           const box = e.target.closest('.composer').querySelector('.composer-input');
-          social.comment(box.value);
+          ui.go(new PostCommentAction(box.value));
           box.value = '';
         },
       }),

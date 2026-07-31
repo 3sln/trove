@@ -893,10 +893,40 @@ export class ClearFinishedTransfersAction extends TransfersAction {
 
 class SocialAction extends Action {
   static deps = ['social'];
-  async execute(r) { this.apply(r.social); }
+  // Awaited: several of these are network calls, and a dispatch feed that settles before
+  // the work does reports success for something still in flight.
+  async execute(r) { return this.apply(r.social); }
 }
 export class ToggleInboxAction extends SocialAction {
-  apply(s) { s.toggleInbox(); }
+  constructor(open) { super(); this.open = open; }
+  apply(s) { s.toggleInbox(this.open); }
+}
+
+/** Ask the browser for push permission and register. */
+export class EnablePushAction extends SocialAction {
+  apply(s) { return s.enablePush(); }
+}
+
+/** Post a comment on the open item. */
+export class PostCommentAction extends SocialAction {
+  constructor(body) { super(); this.body = body; }
+  apply(s) { return s.comment(this.body); }
+}
+
+export class DeleteCommentAction extends SocialAction {
+  constructor(commentId) { super(); this.commentId = commentId; }
+  apply(s) { return s.deleteComment(this.commentId); }
+}
+
+export class ReactToCommentAction extends SocialAction {
+  constructor(commentId, emoji) { super(); this.commentId = commentId; this.emoji = emoji; }
+  apply(s) { return s.react(this.commentId, this.emoji); }
+}
+
+/** Aim the comment box at a comment, or clear it with `null`. */
+export class SetReplyToAction extends SocialAction {
+  constructor(target) { super(); this.target = target; }
+  apply(s) { s.setReplyTo(this.target); }
 }
 export class AddTagAction extends SocialAction {
   constructor(name, value) { super(); this.name = name; this.value = value; }

@@ -69,10 +69,6 @@ export class OfflineService {
     await this.platform.plugins?.setOnline?.(false);
   }
 
-  isPinned(id) {
-    return this.state.pins.some((p) => p.id === id);
-  }
-
   // --- pinning ---------------------------------------------------------------
 
   async pin(node) {

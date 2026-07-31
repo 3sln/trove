@@ -233,7 +233,7 @@ function buildContent(state, ui, q, mode, modal) {
       // Shown as typed: a tag is a value, not a heading.
       verbatim: state.se.loading || err ? null : label,
       action: err ? retryBtn(new FilterAction(filters, text)) : null,
-      items: nodes.map((n) => fileItem(n, ui, modal)),
+      items: nodes.map((n) => fileItem(n, ui, modal, state)),
       empty: state.se.loading ? 'Filtering…' : err ? `Couldn’t filter: ${err}` : 'No files match those filters.',
     }];
   }
@@ -243,7 +243,7 @@ function buildContent(state, ui, q, mode, modal) {
     return [{
       title: state.se.loading ? 'Searching…' : err ? 'Search failed' : 'Results',
       action: err ? retryBtn(new SearchAction(q)) : null,
-      items: nodes.map((n) => fileItem(n, ui, modal)),
+      items: nodes.map((n) => fileItem(n, ui, modal, state)),
       empty: state.se.loading ? 'Searching…' : err ? `Couldn’t search: ${err}` : 'No files match.',
     }];
   }
@@ -251,7 +251,7 @@ function buildContent(state, ui, q, mode, modal) {
   // Home: recents, then everything in the collection. There is nothing to descend
   // into — this is the "show me everything" fallback for when search isn't the answer.
   const groups = [];
-  const recents = (state.nav.recents || []).map((r) => fileItem(r, ui, modal));
+  const recents = (state.nav.recents || []).map((r) => fileItem(r, ui, modal, state));
   if (recents.length) groups.push({ title: 'Recent', items: recents });
 
   const ex = state.ex;
@@ -262,7 +262,7 @@ function buildContent(state, ui, q, mode, modal) {
   const knownTotal = ex.stats?.items ?? null;
   const total = knownTotal ?? shown;
   const totalLabel = knownTotal != null ? knownTotal.toLocaleString() : `${shown.toLocaleString()}+`;
-  const items = (ex.items || []).map((n) => fileItem(n, ui, modal));
+  const items = (ex.items || []).map((n) => fileItem(n, ui, modal, state));
   // A partial list must not be titled "All items" — that is a claim about the drive,
   // and on a collection bigger than one page it is false. Say what is on screen, and
   // offer the rest rather than leaving it unreachable.
@@ -321,7 +321,7 @@ function buildContent(state, ui, q, mode, modal) {
   return groups;
 }
 
-function fileItem(node, ui, modal) {
+function fileItem(node, ui, modal, state) {
   return {
     icon: fileIcon(node),
     title: node.name,
@@ -332,12 +332,12 @@ function fileItem(node, ui, modal) {
       ui.go(new OpenFileAction(node, { reset: !!modal }));
       if (modal) ui.go(new CloseSearchModalAction());
     },
-    menu: () => fileMenu(node, ui),
+    menu: () => fileMenu(node, ui, state),
   };
 }
 
-function fileMenu(node, ui) {
-  const pinned = (ui.app.offline?.state?.pins || []).some((p) => p.id === node.id);
+function fileMenu(node, ui, state) {
+  const pinned = state.off?.pinnedIds?.has(node.id) ?? false;
   // Ask what the shortcut actually IS. Hardcoding "⌘⇧L" told a Windows or Linux user
   // about a key their machine does not have, and told everyone the default even after
   // they had rebound it.

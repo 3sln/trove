@@ -251,9 +251,9 @@ function mintedBanner(minted, ui) {
 
 function draftForm(keys, collections, ui) {
   const draft = keys.draft;
-  // Also a read. Derived from the draft, so it wants to be part of an apiKeys view
-  // rather than a call from the render; see docs/tickets/009.
-  const scopes = ui.app.apiKeys.draftScopes();
+  // Resolved by the apiKeys view: what this draft would actually grant, or null when it
+  // would grant nothing.
+  const scopes = keys.draftScopes;
   const ready = !!draft.name.trim() && !!scopes;
 
   return div({ className: 'key-form' },

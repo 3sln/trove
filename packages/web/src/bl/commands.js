@@ -11,7 +11,7 @@ import {
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
-import { selectedNodesOf } from './services.js';
+import { selectedNodesOf, draftScopesOf } from './services.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;
@@ -174,7 +174,7 @@ export function registerCommands(app) {
   cmd('keys.revoke', 'Revoke API Key', (id) => id && go(new RevokeApiKeyAction(id)), { palette: false });
   cmd('keys.mint', 'Create API Key', () => {
     const draft = app.apiKeys.state.draft;
-    const scopes = app.apiKeys.draftScopes();
+    const scopes = draftScopesOf(app.apiKeys.state);
     if (!draft?.name?.trim() || !scopes) return;
     // Days in the form, an absolute instant on the wire: the server compares against its
     // own clock, and "30 days from whenever this arrives" is not what was chosen.

@@ -283,6 +283,16 @@ actions that mutate it, is the rest of the conversion.
 That last one is the general shape: a method on a resource is usually either a rule that
 belongs to an action or a derivation that belongs to a view.
 
+`offline.isPinned(id)` and `apiKeys.draftScopes()` went the same way — the view carries
+`pinnedIds` (a Set, since the question is asked once per row) and `draftScopes`, so a
+component asks whether THIS file is pinned without knowing that pins are a list to be
+scanned. Social's six mutations became actions, awaited, because several are network calls
+and a dispatch feed that settles before the work does reports success for something still in
+flight.
+
+`ui.app` is down to one use: `collectionMenu()`, which builds menu items carrying `run`
+closures — the same deferred problem as `showContextMenu`.
+
 ~~`localState.js` deserves the same look~~ — done. It is `bl/viewState.js`, an engine
 resource, read through a query and written through `SetViewStateAction`. Component state that
 drives rendered STRUCTURE is engine state whatever it is called and wherever it lives. What

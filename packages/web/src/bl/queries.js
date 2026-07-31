@@ -31,7 +31,7 @@
 
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
-import { selectedNodesOf } from './services.js';
+import { selectedNodesOf, draftScopesOf } from './services.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
@@ -121,10 +121,18 @@ export const transfers = new ServiceQuery('transfers', (r) => r.observe());
 export const activity = new ServiceQuery('activity', (r) => r.observe());
 /** Conversations, tags and backlinks for the open item. */
 export const social = new ServiceQuery('social', (r) => r.observe());
-/** Online state, pinned files, and the queue waiting to sync. */
-export const offline = new ServiceQuery('offline', (r) => r.observe());
-/** The admin API-key list. */
-export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe());
+/**
+ * Online state, pinned files, and the queue waiting to sync.
+ *
+ * `pinnedIds` is folded in so a component can ask whether THIS file is pinned without
+ * calling a method on the service to find out. A Set rather than a repeated scan: the
+ * question is asked once per row.
+ */
+export const offline = new ServiceQuery('offline', (r) => r.observe(),
+  (v) => ({ ...v, pinnedIds: new Set((v?.pins || []).map((p) => p.id)) }));
+/** The admin API-key list, with the unsubmitted draft resolved into what it would grant. */
+export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe(),
+  (v) => ({ ...v, draftScopes: draftScopesOf(v) }));
 
 // --- the shell -----------------------------------------------------------------
 

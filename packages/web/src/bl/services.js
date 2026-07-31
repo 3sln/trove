@@ -109,14 +109,6 @@ export class ApiKeysService {
     this.patchDraft({ caps });
   }
 
-  /** The draft as the API wants it, or null when it would grant nothing. */
-  draftScopes() {
-    const caps = this.state.draft?.caps || {};
-    const scopes = Object.entries(caps)
-      .filter(([, list]) => list.length)
-      .map(([collectionId, capabilities]) => ({ collectionId, capabilities }));
-    return scopes.length ? scopes : null;
-  }
   observe() {
     return this.cell;
   }
@@ -271,4 +263,20 @@ export class TransfersService {
     this.state = { items: kept };
     this.#emit();
   }
+}
+
+
+/**
+ * The API-key draft as the API wants it, or null when it would grant nothing.
+ *
+ * A pure function rather than a method, for the same reason as `selectedNodesOf`: it is a
+ * derivation, so it belongs to the view that shows it and to the action that submits it,
+ * not to the resource that happens to hold the draft.
+ */
+export function draftScopesOf(state) {
+  const caps = state?.draft?.caps || {};
+  const scopes = Object.entries(caps)
+    .filter(([, list]) => list.length)
+    .map(([collectionId, capabilities]) => ({ collectionId, capabilities }));
+  return scopes.length ? scopes : null;
 }
