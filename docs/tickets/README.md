@@ -9,7 +9,5 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [001](001-encryption-admin-ui.md) | Encryption admin UI | Encryption works end to end and is reachable only by hand-written API calls |
-| [002](002-admin-console.md) | Admin console | Drive-level administration is scattered across Settings, the Activity panel and nothing |
-| [005](005-rotation-resume-mid-object.md) | Rotation: resume mid-object | A single object larger than a slice budget retries from the start forever |
-| [007](007-encrypted-multipart-is-sequential.md) | Encrypted multipart is sequential | Large uploads to encrypted collections lose upload concurrency |
+| [002](002-admin-console.md) | Admin console | Collections, API keys and per-plugin egress are still not where an administrator would look |
+| [010](010-direct-read-round-trips.md) | Direct reads cost two round trips and a plan each | A gallery of a hundred thumbnails fetches a hundred collection keys |
