@@ -52,11 +52,13 @@ change it would justify is large enough to deserve a measurement first.
 
 ## The work, in the order it pays
 
-1. **One GET for a full read.** Split the header off the front of the single body fetch.
-   Strict win, no migration, small.
-2. **Cache the collection key in the worker**, keyed by collection and fingerprint. Needs the
-   endpoint split into "key for this collection" and "URL for this object", the latter
-   batched the way `mediaUrls` already batches signing.
+1. ~~**One GET for a full read.**~~ Done. The header is peeled off the front of the single
+   body fetch. A ranged read still costs two — see 3.
+2. ~~**Cache the plan.**~~ Done, and better than the split this originally proposed: the plan
+   carries `expiresAt`, and the worker holds URL and key together per node id. Splitting key
+   from URL would have saved nothing on its own, because the URL is per-object and still
+   needs a call; holding both is what removes the round trip. A scrubbing `<video>` now
+   costs no traffic to the drive at all.
 3. **Persist `noncePrefix`** (8 bytes) on the item record at upload, so a ranged read is one
    GET too. Objects without it fall back to reading the header, and a scan can backfill —
    this is a metadata migration and wants its own change.
@@ -73,6 +75,13 @@ plaintext locally, because `pinnedFirst` caches the decrypted response.
 Read direct only above a size threshold. The overhead is fixed, so it is irrelevant against a
 2 GB video and dominant against a 4 KB thumbnail, and proxying the small ones costs little.
 Worth knowing about; not the plan, because 1–3 make the threshold unnecessary.
+
+## What is left
+
+3 and 4 above, plus the batching that 2 turned out not to need for the repeat case but which
+still applies to the FIRST read of each object in a large gallery: a hundred cold tiles are
+still a hundred plan requests. Coalescing them the way `mediaUrls` coalesces minting is the
+remaining win, and it is only worth doing if a real library shows it matters.
 
 ## Done when
 
