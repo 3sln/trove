@@ -1,8 +1,9 @@
-// Root composition. Assembles the `ui` helper (stable for the app's life),
-// zips every reactive slice the shell needs into one snapshot, and renders the
-// full workbench from it. Components stay pure — they receive (state, ui) and
-// either call ui.engine.dispatch(new ExecCommandAction(commandId)) or ui.engine.dispatch(action). This is the only module that
-// knows about every service at once.
+// Root composition. Assembles the `ui` helper (stable for the app's life), zips every
+// query the shell reads into one snapshot, and renders the workbench from it.
+//
+// Components are pure: they receive (state, ui) and dispatch. This module knows about
+// every QUERY at once — which is a different thing from what it used to know, when it
+// held the bag of services every component reached through.
 
 import { dd, derive, constant, watch } from '../../runtime.js';
 import { region } from '../region.js';
@@ -24,7 +25,7 @@ import { phoneTopBar, phoneBottomBar, phoneSheet } from '../components/phoneChro
 
 const { alias, div } = dd;
 
-export default function workbench({ engine, app, platform }) {
+export default function workbench({ engine, platform }) {
   // What a component is handed, and it is nearly nothing now.
   //
   // `engine` is the thing components talk to: `dispatch` for an action, `query` for a
@@ -46,10 +47,10 @@ export default function workbench({ engine, app, platform }) {
   // (see the `views` query) because a renderer is pure — it builds a vnode from what it is
   // given. The rule is about SIDE EFFECTS escaping through a callable, not about callables.
   //
-  // `app` is passed and no longer read by anything in `ui/` — it goes when the last action
-  // stops leasing it. See docs/tickets/009.
+  // See docs/tickets/009. `app` used to be here too — the whole bag of services — and is
+  // gone: nothing in `ui/` reads a service directly any more.
   const ui = {
-    engine, app, platform,
+    engine, platform,
     // Rendering a cell is a UI concern, not a platform subsystem to reach through.
     watch,
   };
@@ -78,15 +79,11 @@ export default function workbench({ engine, app, platform }) {
       watchQuery(engine, q.voice),
       // What the UI is in the middle of doing — see bl/viewState.js.
       watchQuery(engine, q.viewState),
-      // What the server can do. Its query declares `initial = null`, so this stays a normal
-      // value while the request is in flight instead of turning the snapshot PENDING and
-      // blanking the shell.
+      // What the server can do. Its resource hands out a cell that starts null and fills
+      // in, so this is a normal value while the request is in flight rather than turning
+      // the whole snapshot PENDING and blanking the shell.
       watchQuery(engine, q.capabilities),
-      // Views the shell reads but no region owns yet.
-      //
-      // The launcher's `!` mode gets the list already RANKED against what has been typed,
-      // rather than the raw list plus a scorer of its own. Nothing reads the unranked
-      // `paletteCommands` any more — the palette has its own ranked query, in its region.
+      // Command id -> its shortcut label, for anything that shows one next to an action.
       watchQuery(engine, q.commandKeys),
       // What the launcher shows, twice: the home screen and the double-shift overlay are
       // both mounted when the overlay is up, and they differ in what picking a row does —

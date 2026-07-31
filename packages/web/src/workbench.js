@@ -76,7 +76,7 @@ export function createWorkbench({
   platform.plugins.restore();
 
   // --- mount ----------------------------------------------------------------
-  const App = workbenchComposition({ engine, app, platform });
+  const App = workbenchComposition({ engine, platform });
   dd.reconcile(root, [App()]);
 
   // --- theme ----------------------------------------------------------------
