@@ -21,8 +21,8 @@
 //
 // Nothing sets a built-in key now. They are derived — see bl/context.js.
 
-import { cell } from '../runtime.js';
-import { evaluateWhen } from './whenclause.js';
+import { cell, derive } from '../runtime.js';
+import { evaluateWhen, compileWhen } from './whenclause.js';
 
 /** A cell whose value never changes — for facts about the machine rather than the drive. */
 const constant = (value) => ({ onDirty: () => () => {}, getValue: () => value });
@@ -30,6 +30,7 @@ const constant = (value) => ({ onDirty: () => () => {}, getValue: () => value })
 export class ContextRegistry {
   #cells = new Map(); // key -> a Cell its owner holds
   #offs = new Map(); // key -> unsubscribe
+  #slots = new Map(); // key -> a stable cell that outlives any one owner
   #snapshot = cell({});
 
   constructor(initial = {}) {
@@ -58,8 +59,8 @@ export class ContextRegistry {
       throw new Error(`Context key "${key}" already has an owner`);
     }
     this.#cells.set(key, source);
-    this.#offs.set(key, source.onDirty(() => this.#recompute()));
-    this.#recompute();
+    this.#offs.set(key, source.onDirty(() => this.#changed(key)));
+    this.#changed(key); // gaining an owner is itself a change
     return () => this.unregister(key);
   }
 
@@ -69,7 +70,62 @@ export class ContextRegistry {
     off();
     this.#offs.delete(key);
     this.#cells.delete(key);
+    this.#changed(key); // and so is losing one
+  }
+
+  /**
+   * A cell for one key, whether or not anything owns it yet.
+   *
+   * The indirection is the point. A keymap naming a plugin's register is parsed long before
+   * that plugin installs, and the plugin may later be uninstalled — so a watcher cannot
+   * hold the OWNER's cell, which does not exist at either end. It holds this slot, which
+   * reads through to whoever currently owns the key and goes dirty when ownership changes
+   * as well as when the value does. Unowned reads as `undefined`, which every clause
+   * already treats as falsy.
+   *
+   * Slots are kept once created. They are bounded by the number of distinct keys any
+   * when-clause has ever named, which is small and does not grow with use.
+   */
+  cellFor(key) {
+    let slot = this.#slots.get(key);
+    if (!slot) {
+      const listeners = new Set();
+      slot = {
+        listeners,
+        onDirty: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+        getValue: () => this.#cells.get(key)?.getValue(),
+      };
+      this.#slots.set(key, slot);
+    }
+    return slot;
+  }
+
+  /**
+   * A when-clause as a live boolean.
+   *
+   * Derived over exactly the keys the expression NAMES (the parser collects them — see
+   * whenclause.js), so a clause about `view.active` does not recompute when the selection
+   * changes. That is the difference from `evaluate`, which reads the whole snapshot: a
+   * consumer holding many clauses — the palette holds one per registered command — stops
+   * re-running all of them on every unrelated change.
+   *
+   * A clause naming nothing derives over nothing and is computed once, which is right: a
+   * constant cannot become false.
+   */
+  watch(expr) {
+    const predicate = compileWhen(expr);
+    const keys = predicate.keys ?? [];
+    return derive(keys.map((key) => this.cellFor(key)), (...values) => {
+      const ctx = {};
+      for (let i = 0; i < keys.length; i++) ctx[keys[i]] = values[i];
+      return predicate(ctx);
+    });
+  }
+
+  #changed(key) {
     this.#recompute();
+    const slot = this.#slots.get(key);
+    if (slot) for (const fn of [...slot.listeners]) fn();
   }
 
   /**

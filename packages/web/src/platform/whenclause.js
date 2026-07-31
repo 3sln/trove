@@ -3,9 +3,15 @@
 // a context (a flat key→value map from the ContextKeyService) and returns a
 // boolean.
 //
-// Supported: bare keys (truthy), !key, ==, !=, >, <, >=, <=, =~ /re/, && , ||,
+// Supported: bare keys (truthy), !key, ==, !=, >, <, >=, <=, =~ /re/flags, && , ||,
 // parentheses, string/number/boolean literals. Expressions are parsed once into
 // a predicate function and cached, so evaluation on every keydown is cheap.
+//
+// The compiled predicate carries `.keys`: every context key the expression names. That is
+// what lets a clause be WATCHED rather than polled — see ContextRegistry#watch, which
+// derives a cell over exactly those keys, so a clause about `view.active` stops recomputing
+// every time the selection changes. Collected while parsing because that is the only place
+// the distinction between a key and a literal is known.
 //
 // A key is either a core context key (`view.active`, `explorer.hasSelection`) or a
 // contribution URI naming a plugin's `register` — `trove+contrib:acme.com/docs/busy`.
@@ -19,10 +25,16 @@ export function compileWhen(expr) {
   if (cache.has(expr)) return cache.get(expr);
   let fn;
   try {
-    fn = new Parser(expr).parseExpression();
+    const parser = new Parser(expr);
+    fn = parser.parseExpression();
+    // The keys this clause reads. Frozen: it is shared by every caller through the cache.
+    fn.keys = Object.freeze([...parser.keys]);
   } catch (err) {
     console.warn(`Invalid when clause: "${expr}" — ${err.message}`);
     fn = () => false;
+    // A clause that could not be parsed depends on nothing, so watching it yields a cell
+    // that is constantly false rather than one that never settles.
+    fn.keys = Object.freeze([]);
   }
   cache.set(expr, fn);
   return fn;
@@ -32,15 +44,21 @@ export function evaluateWhen(expr, ctx) {
   return compileWhen(expr)(ctx || {});
 }
 
+/** Every context key `expr` names — `[]` for a constant or unparseable clause. */
+export function keysOf(expr) {
+  return compileWhen(expr).keys ?? [];
+}
+
 // Note the `trove+contrib:` alternative comes before the regex-literal one: a URI's
 // slashes would otherwise start a /…/ literal and swallow the rest of the expression.
-const TOKEN = /\s*(=~|==|!=|>=|<=|&&|\|\||[()!<>]|trove\+contrib:[A-Za-z0-9_./-]+|\/(?:\\.|[^/])*\/|'(?:\\.|[^'])*'|"(?:\\.|[^"])*"|[A-Za-z0-9_.:-]+)/y;
+const TOKEN = /\s*(=~|==|!=|>=|<=|&&|\|\||[()!<>]|trove\+contrib:[A-Za-z0-9_./-]+|\/(?:\\.|[^/])*\/[a-z]*|'(?:\\.|[^'])*'|"(?:\\.|[^"])*"|[A-Za-z0-9_.:-]+)/y;
 
 class Parser {
   constructor(src) {
     this.src = src;
     this.tokens = this.#lex(src);
     this.pos = 0;
+    this.keys = new Set();
   }
   #lex(src) {
     const out = [];
@@ -137,6 +155,7 @@ class Parser {
       return () => s;
     }
     // A context key.
+    this.keys.add(t);
     return (c) => c[t];
   }
 }

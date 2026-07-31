@@ -32,6 +32,17 @@ import {
   InstallPluginFromUrlPromptAction, PickAndInstallPluginAction,
 } from './actions.js';
 
+// Everything that acts on "the file you mean" — the selection, or the one you have open.
+//
+// Without this the palette offered Rename and Delete on an empty drive, accepted the click,
+// and answered with "Pick a file first". A when-clause greys them instead, which is the
+// difference between an offer the drive cannot honour and an accurate menu.
+//
+// Row menus satisfy it because opening one SELECTS the row first (see openRowMenu), so a
+// command reached that way always has a subject even though the clause cannot see the node
+// argument it was handed.
+const HAS_SUBJECT = 'explorer.hasSelection || editor.open';
+
 export function registerCommands(app) {
   const cmd = (id, title, actions, extra = {}) =>
     app.platform.commands.register({ id, title, actions, ...extra });
@@ -65,12 +76,12 @@ export function registerCommands(app) {
   // `trove:` is what one document writes to link another; a share link is a URL you can
   // paste into a message. Offered under both names, labelled for the destination rather
   // than for the format, which is the difference between a choice and a riddle.
-  cmd('explorer.copyShareLink', 'Copy Shareable Link', (node) => new CopyLinkAction('share', node), { category: 'Explorer', icon: 'link' });
-  cmd('explorer.copyLink', 'Copy Link to Item', (node) => new CopyLinkAction('trove', node), { category: 'Explorer', icon: 'link' });
-  cmd('explorer.rename', 'Rename', (node) => new RenameSubjectAction(node), { category: 'Explorer' });
-  cmd('explorer.delete', 'Delete', () => new DeleteSubjectAction(), { category: 'Explorer', icon: 'trash' });
+  cmd('explorer.copyShareLink', 'Copy Shareable Link', (node) => new CopyLinkAction('share', node), { category: 'Explorer', icon: 'link', when: HAS_SUBJECT });
+  cmd('explorer.copyLink', 'Copy Link to Item', (node) => new CopyLinkAction('trove', node), { category: 'Explorer', icon: 'link', when: HAS_SUBJECT });
+  cmd('explorer.rename', 'Rename', (node) => new RenameSubjectAction(node), { category: 'Explorer', when: HAS_SUBJECT });
+  cmd('explorer.delete', 'Delete', () => new DeleteSubjectAction(), { category: 'Explorer', icon: 'trash', when: HAS_SUBJECT });
   cmd('explorer.open', 'Open', (node) => new OpenSubjectAction(node), { palette: false });
-  cmd('explorer.download', 'Download', (node) => new DownloadSubjectAction(node), { category: 'Explorer', icon: 'download' });
+  cmd('explorer.download', 'Download', (node) => new DownloadSubjectAction(node), { category: 'Explorer', icon: 'download', when: HAS_SUBJECT });
 
   // --- trash -----------------------------------------------------------------
   cmd('explorer.showTrash', 'Show Trash', () => new ShowTrashAction(), { category: 'Explorer', icon: 'trash' });
@@ -94,7 +105,7 @@ export function registerCommands(app) {
   cmd('keys.mint', 'Create API Key', () => new MintApiKeyFromDraftAction(), { palette: false });
 
   // --- offline ---------------------------------------------------------------
-  cmd('offline.pin', 'Make Available Offline', (node) => new PinAction(node, true), { category: 'Offline', icon: 'download' });
+  cmd('offline.pin', 'Make Available Offline', (node) => new PinAction(node, true), { category: 'Offline', icon: 'download', when: HAS_SUBJECT });
   cmd('offline.unpin', 'Remove from Offline', (node) => new PinAction(node, false), { palette: false });
 
   // --- collections -----------------------------------------------------------
