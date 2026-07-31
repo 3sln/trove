@@ -23,7 +23,7 @@ function statusSlot(item, ui) {
   if (!content.length) return null;
   const title = item.tooltip ? htmlToText(item.tooltip) : '';
   return item.command
-    ? button({ className: 'seg', title }, ...content).on({ click: () => ui.exec(item.command) })
+    ? button({ className: 'seg', title }, ...content).on({ click: () => ui.engine.dispatch(new ExecCommandAction(item.command)) })
     : span({ className: 'seg', title }, ...content);
 }
 
@@ -38,7 +38,7 @@ function statusSlot(item, ui) {
 export function activityChips(state, ui) {
   const act = state.act || { tasks: [], issues: [] };
   const running = act.tasks.filter((t) => t.status === 'running');
-  const open = () => ui.go(new ToggleActivityPanelAction(true));
+  const open = () => ui.engine.dispatch(new ToggleActivityPanelAction(true));
   const chips = [];
 
   if (running.length) {
@@ -169,7 +169,7 @@ export default function statusBar(state, ui) {
           ]);
           if (off.pins.length > 12) items.push({ label: `…and ${off.pins.length - 12} more`, actions: [] });
           const r = e.currentTarget.getBoundingClientRect();
-          ui.go(new ShowContextMenuAction(r.left, r.top - 8 - items.length * 34, items));
+          ui.engine.dispatch(new ShowContextMenuAction(r.left, r.top - 8 - items.length * 34, items));
         } })
       : null,
     button({ className: 'seg', title: 'Switch collection' },
@@ -182,12 +182,12 @@ export default function statusBar(state, ui) {
         // With nowhere else to go, the segment is a label, not a dead menu.
         if (items.length > 1 || ex.canCreateCollection) {
           const r = e.currentTarget.getBoundingClientRect();
-          ui.go(new ShowContextMenuAction(r.left, r.top - 8 - items.length * 34, items));
-        } else ui.exec('workbench.view.home');
+          ui.engine.dispatch(new ShowContextMenuAction(r.left, r.top - 8 - items.length * 34, items));
+        } else ui.engine.dispatch(new ExecCommandAction('workbench.view.home'));
       } }),
     active.length
       ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
-        .on({ click: (e) => ui.go(new ShowContextMenuAction(e.clientX, e.clientY, active.map((t) => ({
+        .on({ click: (e) => ui.engine.dispatch(new ShowContextMenuAction(e.clientX, e.clientY, active.map((t) => ({
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
           actions: [new CancelTransferAction(t.id)],
         })))) })
@@ -212,6 +212,6 @@ export default function statusBar(state, ui) {
       span(caps.storage?.presignDownload ? 'S3 direct' : 'proxied'),
     ) : null,
     caps?.features?.semanticSearch ? button({ className: 'seg', title: 'Semantic search enabled' }, icon('star', { size: 12 }), span('semantic'))
-      .on({ click: () => ui.exec('workbench.view.home') }) : null,
+      .on({ click: () => ui.engine.dispatch(new ExecCommandAction('workbench.view.home')) }) : null,
   );
 }

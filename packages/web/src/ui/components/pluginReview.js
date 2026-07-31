@@ -26,13 +26,13 @@ export function pluginReview(d, ui, view) {
   });
   // A new array rather than a mutated Set: the write has to be a different value for the
   // cell to see it as a change at all.
-  const toggle = (cap) => ui.go(new SetViewStateAction(KEY, {
+  const toggle = (cap) => ui.engine.dispatch(new SetViewStateAction(KEY, {
     ref: sel.ref,
     grants: sel.grants.includes(cap) ? sel.grants.filter((c) => c !== cap) : [...sel.grants, cap],
   }));
 
   return div({},
-    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
+    div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
     div({ className: 'dialog review', $styling: { width: 'min(560px, 96vw)' } },
       header(s),
       div({ className: 'review-body' },
@@ -50,7 +50,7 @@ export function pluginReview(d, ui, view) {
         div({ className: 'review-meta' }, `${s.fileCount} files · ${fmtBytes(s.sizeBytes)} · id ${s.id}`),
       ),
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
         button({ className: 'btn primary' }, icon('plug', { size: 15 }), 'Install').on({ click: () => d.onInstall([...sel.grants]) }),
       ),
     ),

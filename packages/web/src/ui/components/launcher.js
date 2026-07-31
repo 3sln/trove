@@ -37,15 +37,15 @@ let searchTimer = null;
 function runSearch(ui, query) {
   // SearchAction owns search state; the launcher only dispatches (no direct .set).
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => ui.go(new SearchAction(query)), 240);
+  searchTimer = setTimeout(() => ui.engine.dispatch(new SearchAction(query)), 240);
 }
 function clearSearch(ui) {
-  ui.go(new SetLaunchQueryAction(''));
-  ui.go(new SearchAction('')); // empty query resets results/ran/error in the service
+  ui.engine.dispatch(new SetLaunchQueryAction(''));
+  ui.engine.dispatch(new SearchAction('')); // empty query resets results/ran/error in the service
 }
 function runFilter(ui, filters, text) {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => ui.go(new FilterAction(filters, text)), 200);
+  searchTimer = setTimeout(() => ui.engine.dispatch(new FilterAction(filters, text)), 200);
 }
 
 export default function launcher(state, ui, opts = {}) {
@@ -59,7 +59,7 @@ export default function launcher(state, ui, opts = {}) {
 
   const onInput = (e) => {
     const v = e.target.value;
-    ui.go(new SetLaunchQueryAction(v));
+    ui.engine.dispatch(new SetLaunchQueryAction(v));
     if (v.startsWith('!')) return; // command mode: no query dispatch
     const { text, filters } = parseTagQuery(v);
     if (filters.length) runFilter(ui, filters, text); // drive-wide tag/property query
@@ -75,12 +75,12 @@ export default function launcher(state, ui, opts = {}) {
   // move re-renders the list under the pointer, and a row replaced between mousedown and
   // mouseup never receives its click. A pointer user acts through the row's own menu,
   // which selects explicitly before it opens.
-  const hoverAt = (at) => ui.go(new SetLaunchIndexAction(at));
+  const hoverAt = (at) => ui.engine.dispatch(new SetLaunchIndexAction(at));
   // Moving the highlight and selecting what it lands on are one action, not two. The index
   // wraps, so only the store can say where a move ends up — and reading that back out here
   // would read it before the dispatch had applied. See MoveLaunchAction.
-  const selectAt = (at) => ui.go(new SelectLaunchAction(at, flat[at]?.node));
-  const move = (delta) => ui.go(new MoveLaunchAction(delta, flat.map((i) => i.node)));
+  const selectAt = (at) => ui.engine.dispatch(new SelectLaunchAction(at, flat[at]?.node));
+  const move = (delta) => ui.engine.dispatch(new MoveLaunchAction(delta, flat.map((i) => i.node)));
   // How the results are drawn right now. The view gets a say in what an arrow key
   // means — one row down is one tile down in a grid, not one tile across — but the
   // index, the selection and the wrapping stay here, so up and down mean the same
@@ -135,7 +135,7 @@ export default function launcher(state, ui, opts = {}) {
           className: `launch-mic ${state.voice?.listening ? 'on' : ''}`,
           title: state.voice?.listening ? 'Stop listening' : 'Search by voice',
           'aria-pressed': state.voice?.listening ? 'true' : 'false',
-        }, icon('mic', { size: 15 })).on({ click: () => ui.exec('search.voice') })
+        }, icon('mic', { size: 15 })).on({ click: () => ui.engine.dispatch(new ExecCommandAction('search.voice')) })
         : null,
       // Which way to look at the drive. Not in the modal search, where the answer is
       // always "the one thing I am about to press Enter on".
@@ -188,10 +188,10 @@ function searchHelp(state, ui, mode) {
   const p = state.caps?.searchPrompt;
   if (!p?.hint && !p?.examples?.length) return null;
   const tryIt = (query) => () => {
-    ui.go(new SetLaunchQueryAction(query));
+    ui.engine.dispatch(new SetLaunchQueryAction(query));
     const { text, filters } = parseTagQuery(query);
-    if (filters.length) ui.go(new FilterAction(filters, text));
-    else ui.go(new SearchAction(text));
+    if (filters.length) ui.engine.dispatch(new FilterAction(filters, text));
+    else ui.engine.dispatch(new SearchAction(text));
   };
   return div({ className: 'launch-help' },
     p.hint ? div({ className: 'lh-hint' }, icon('info', { size: 13 }), span(p.hint)) : null,
@@ -227,7 +227,7 @@ function buildContent(state, ui, q, mode, modal) {
   const err = state.se.error;
 
   // A one-click retry so a transient search/filter failure isn't a dead end.
-  const retryBtn = (action) => button({ className: 'launch-up', title: 'Retry' }, icon('refresh', { size: 13 }), 'Retry').on({ click: () => ui.go(action) });
+  const retryBtn = (action) => button({ className: 'launch-up', title: 'Retry' }, icon('refresh', { size: 13 }), 'Retry').on({ click: () => ui.engine.dispatch(action) });
 
   // Drive-wide tag/property filter (server-side), optionally narrowed by free text.
   if (filters.length) {
@@ -291,11 +291,11 @@ function buildContent(state, ui, q, mode, modal) {
       action: div({ className: 'lh-actions' },
         ex.trash.length
           ? button({ className: 'launch-up', title: 'Destroy everything in the trash' },
-            icon('trash', { size: 13 }), 'Empty trash').on({ click: () => ui.exec('explorer.emptyTrash') })
+            icon('trash', { size: 13 }), 'Empty trash').on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.emptyTrash')) })
           : null,
         // The way back out. Opening the trash used to be one-way until a page reload.
         button({ className: 'launch-up', title: 'Hide the trash' },
-          icon('close', { size: 13 }), 'Close').on({ click: () => ui.exec('explorer.hideTrash') }),
+          icon('close', { size: 13 }), 'Close').on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.hideTrash')) }),
       ),
       items: ex.trash.length
         ? ex.trash.map((n) => ({
@@ -315,7 +315,7 @@ function buildContent(state, ui, q, mode, modal) {
     // The empty state told people to upload a file, and on desktop and TV there was
     // nothing anywhere that would let them. (Phone has the + in its bottom bar.)
     action: modal ? null : button({ className: 'launch-up', title: 'Upload files to this collection' },
-      icon('upload', { size: 13 }), 'Upload').on({ click: () => ui.exec('explorer.upload') }),
+      icon('upload', { size: 13 }), 'Upload').on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.upload')) }),
     items,
     // Don't show a false "empty" when the load actually FAILED (e.g. server
     // unreachable) — say so, so the user knows to retry rather than believing the

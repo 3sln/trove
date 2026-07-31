@@ -13,6 +13,7 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
+import { ExecCommandAction } from '../../bl/actions.js';
 
 const { div, h2, p, button, span } = dd;
 
@@ -44,7 +45,7 @@ function createPrompt(ui) {
       + 'there is somewhere to put it.'),
     div({ className: 'gate-actions' },
       button({ className: 'btn primary' }, icon('plus', { size: 14 }), 'New collection')
-        .on({ click: () => ui.exec('collections.create') }),
+        .on({ click: () => ui.engine.dispatch(new ExecCommandAction('collections.create')) }),
     ),
   );
 }
@@ -69,12 +70,12 @@ function choosePrompt(ex, ui) {
         // What they may do, from the server's own answer — so a read-only collection says
         // so before they open it and find the Upload button missing.
         span({ className: 'gate-caps' }, (c.capabilities || []).join(' · ')),
-      ).on({ click: () => ui.exec('collections.switch', c.id) })),
+      ).on({ click: () => ui.engine.dispatch(new ExecCommandAction('collections.switch', c.id)) })),
     ),
     ex.canCreateCollection
       ? div({ className: 'gate-actions' },
         button({ className: 'btn' }, icon('plus', { size: 14 }), 'New collection')
-          .on({ click: () => ui.exec('collections.create') }),
+          .on({ click: () => ui.engine.dispatch(new ExecCommandAction('collections.create')) }),
       )
       : null,
   );

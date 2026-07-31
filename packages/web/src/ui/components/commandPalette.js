@@ -4,7 +4,7 @@
 
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
-import { ClosePaletteAction, MovePaletteAction, OpenFileAction, QuickOpenAction, SetPaletteIndexAction, SetPaletteQueryAction } from '../../bl/actions.js';
+import { ClosePaletteAction, ExecCommandAction, MovePaletteAction, OpenFileAction, QuickOpenAction, SetPaletteIndexAction, SetPaletteQueryAction } from '../../bl/actions.js';
 
 const { div, input, span } = dd;
 
@@ -20,13 +20,13 @@ export default function commandPalette(state, ui) {
 
   const run = (item) => {
     if (!item) return;
-    ui.go(new ClosePaletteAction());
-    if (pal.mode === 'files') ui.go(new OpenFileAction(item.node));
-    else ui.exec(item.id);
+    ui.engine.dispatch(new ClosePaletteAction());
+    if (pal.mode === 'files') ui.engine.dispatch(new OpenFileAction(item.node));
+    else ui.engine.dispatch(new ExecCommandAction(item.id));
   };
 
   return div({},
-    div({ className: 'scrim' }).on({ click: () => ui.go(new ClosePaletteAction()) }),
+    div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new ClosePaletteAction()) }),
     div({ className: 'palette' },
       div({ className: 'search' },
         icon(pal.mode === 'files' ? 'search' : 'command', { size: 18 }),
@@ -52,7 +52,7 @@ export default function commandPalette(state, ui) {
       div({ className: 'results' },
         items.length
           ? items.map((item, i) => {
-            const hover = () => ui.go(new SetPaletteIndexAction(i));
+            const hover = () => ui.engine.dispatch(new SetPaletteIndexAction(i));
             return pal.mode === 'files' ? fileOpt(item, i === index, run, hover) : cmdOpt(item, i === index, ui, run, hover);
           })
           : emptyResults(pal, state),
@@ -119,26 +119,26 @@ function fuzzyScore(hay, q) {
 function onKey(e, ui, items, index, run) {
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    ui.go(new MovePaletteAction(1, items.length));
+    ui.engine.dispatch(new MovePaletteAction(1, items.length));
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    ui.go(new MovePaletteAction(-1, items.length));
+    ui.engine.dispatch(new MovePaletteAction(-1, items.length));
   } else if (e.key === 'Enter') {
     e.preventDefault();
     run(items[index]);
   } else if (e.key === 'Escape') {
     e.preventDefault();
-    ui.go(new ClosePaletteAction());
+    ui.engine.dispatch(new ClosePaletteAction());
   }
 }
 
 let fileTimer = null;
 function onQuery(ui, value) {
-  ui.go(new SetPaletteQueryAction(value));
+  ui.engine.dispatch(new SetPaletteQueryAction(value));
   clearTimeout(fileTimer);
   // The mode guard moved into QuickOpenAction, where "current" means current: the timer
   // below outlives the render that set it, so checking here would test a stale mode.
   // Results land in the search service (state.se.paletteFiles), so the palette re-renders
   // without ad-hoc state.
-  fileTimer = setTimeout(() => ui.go(new QuickOpenAction(value)), 200);
+  fileTimer = setTimeout(() => ui.engine.dispatch(new QuickOpenAction(value)), 200);
 }

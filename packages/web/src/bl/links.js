@@ -29,7 +29,7 @@ export async function openTroveLink(ui, uri, { from } = {}) {
   try {
     const res = await ui.platform.api.stat(uri);
     if (!res?.node) throw new Error('not found');
-    ui.go(new OpenFileAction(res.node));
+    ui.engine.dispatch(new OpenFileAction(res.node));
     return res.node;
   } catch (err) {
     notify.warn(describeBrokenLink(ref, err, from));

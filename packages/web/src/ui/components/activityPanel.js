@@ -11,7 +11,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
-import { CancelTaskAction, CopyTextAction, DismissIssueAction, DismissTaskAction, RetryIssueAction, ToggleActivityPanelAction } from '../../bl/actions.js';
+import { CancelTaskAction, CopyTextAction, DismissIssueAction, DismissTaskAction, ExecCommandAction, RetryIssueAction, ToggleActivityPanelAction } from '../../bl/actions.js';
 
 const { div, button, span, h3, p, pre } = dd;
 
@@ -25,7 +25,7 @@ const STATUS_ICON = { running: 'refresh', done: 'check', failed: 'close', cancel
  * of the app and into a terminal.
  */
 function copyText(text, ui) {
-  ui.go(new CopyTextAction(text));
+  ui.engine.dispatch(new CopyTextAction(text));
 }
 
 function amount(task) {
@@ -50,9 +50,9 @@ function taskRow(task, ui) {
         task.error ? div({ className: 'act-error' }, task.error) : null,
       ),
       running && task.cancellable
-        ? button({ className: 'act-action', title: 'Cancel' }, icon('close', { size: 12 })).on({ click: () => ui.go(new CancelTaskAction(task.id)) })
+        ? button({ className: 'act-action', title: 'Cancel' }, icon('close', { size: 12 })).on({ click: () => ui.engine.dispatch(new CancelTaskAction(task.id)) })
         : !running
-          ? button({ className: 'act-action', title: 'Dismiss' }, icon('close', { size: 12 })).on({ click: () => ui.go(new DismissTaskAction(task.id)) })
+          ? button({ className: 'act-action', title: 'Dismiss' }, icon('close', { size: 12 })).on({ click: () => ui.engine.dispatch(new DismissTaskAction(task.id)) })
           : null,
     ),
     running
@@ -88,10 +88,10 @@ function issueRow(issue, ui) {
       // Retry only when the server said pressing it will actually do something.
       issue.retryable
         ? button({ className: 'btn small act-retry' }, icon('refresh', { size: 12 }), span('Retry'))
-          .on({ click: () => ui.go(new RetryIssueAction(issue.id)) })
+          .on({ click: () => ui.engine.dispatch(new RetryIssueAction(issue.id)) })
         : null,
       button({ className: 'btn small ghost act-dismiss' }, 'Dismiss')
-        .on({ click: () => ui.go(new DismissIssueAction(issue.id)) }),
+        .on({ click: () => ui.engine.dispatch(new DismissIssueAction(issue.id)) }),
     ),
   );
 }
@@ -106,7 +106,7 @@ export default function activityPanel(state, ui) {
     div({ className: 'act-head' },
       h3('Activity'),
       button({ className: 'act-action', title: 'Close' }, icon('close', { size: 13 }))
-        .on({ click: () => ui.go(new ToggleActivityPanelAction(false)) }),
+        .on({ click: () => ui.engine.dispatch(new ToggleActivityPanelAction(false)) }),
     ),
 
     // "Nothing is wrong" and "we couldn't ask" look identical unless one says so. Both
@@ -144,15 +144,15 @@ export default function activityPanel(state, ui) {
 
     div({ className: 'act-foot act-actions' },
       button({ className: 'btn small ghost act-rebuild' }, icon('refresh', { size: 12 }), span('Rebuild search index'))
-        .on({ click: () => ui.exec('workbench.rebuildIndex') }),
+        .on({ click: () => ui.engine.dispatch(new ExecCommandAction('workbench.rebuildIndex')) }),
       button({ className: 'btn small ghost act-scan' }, icon('refresh', { size: 12 }), span('Scan for outside changes'))
-        .on({ click: () => ui.exec('workbench.scanCollection') }),
+        .on({ click: () => ui.engine.dispatch(new ExecCommandAction('workbench.scanCollection')) }),
       // On demand as well as on a schedule, because the moment an admin wants to know
       // whether they fixed the bucket is right after they changed it — not up to five
       // minutes later. It also checks against THIS browser's origin, which the scheduled
       // run can only do if the deployment configured one.
       button({ className: 'btn small ghost act-storage' }, icon('plug', { size: 12 }), span('Check storage'))
-        .on({ click: () => ui.exec('workbench.checkStorage') }),
+        .on({ click: () => ui.engine.dispatch(new ExecCommandAction('workbench.checkStorage')) }),
     ),
   );
 }

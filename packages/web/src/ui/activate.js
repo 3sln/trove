@@ -1,6 +1,6 @@
 // Running a menu item or a list row.
 //
-// These used to carry a `run` closure — `run: () => ui.exec('explorer.open', node)` —  which
+// These used to carry a `run` closure — `run: () => ui.engine.dispatch(new ExecCommandAction('explorer.open', node))` —  which
 // made a menu item a piece of behaviour wearing a data shape. Nothing could inspect one,
 // nothing could contribute one from outside the module that built it, and the engine saw
 // only whatever the closure happened to do.
@@ -18,5 +18,5 @@
  * @param {{actions?: object[]}} item
  */
 export function activate(ui, item) {
-  for (const action of item?.actions || []) ui.go(action);
+  for (const action of item?.actions || []) ui.engine.dispatch(action);
 }

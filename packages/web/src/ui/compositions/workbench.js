@@ -1,7 +1,7 @@
 // Root composition. Assembles the `ui` helper (stable for the app's life),
 // zips every reactive slice the shell needs into one snapshot, and renders the
 // full workbench from it. Components stay pure — they receive (state, ui) and
-// either call ui.exec(commandId) or ui.go(action). This is the only module that
+// either call ui.engine.dispatch(new ExecCommandAction(commandId)) or ui.engine.dispatch(action). This is the only module that
 // knows about every service at once.
 
 import { dd, derive, constant, watch } from '../../runtime.js';
@@ -25,26 +25,25 @@ import { phoneTopBar, phoneBottomBar, phoneSheet } from '../components/phoneChro
 const { alias, div } = dd;
 
 export default function workbench({ engine, app, platform }) {
-  // What a component is handed.
+  // What a component is handed, and it is nearly nothing now.
   //
-  // `engine` is here because it is the thing components actually talk to: `dispatch` for
-  // an action, `query` for a question. It was removed once for being unreferenced, which
-  // was true and backwards — nothing referenced it precisely BECAUSE `go` and `exec` stood
-  // in for it, and one of those was reaching around the engine rather than through it.
+  // `engine` is the thing components talk to: `dispatch` for an action, `query` for a
+  // question. It was removed once for being unreferenced, which was true and backwards —
+  // nothing referenced it precisely BECAUSE `go` and `exec` stood in for it, and `exec`
+  // called the command service directly, so every menu item, keybinding and palette entry
+  // a person triggered was invisible to the engine.
   //
-  // `go` and `exec` stay as sugar, not as the only door. `exec` in particular now
-  // dispatches: running a command used to call the command service directly, so every
-  // menu item, keybinding and palette entry a user triggered was invisible to the engine.
+  // Both are gone. `go(action)` was `engine.dispatch(action)` with a shorter name, and a
+  // shorter name for the one door is how the door stops being obvious. Call sites say
+  // `ui.engine.dispatch(new SomeAction(...))` now: longer, and it names what happens.
   //
-  // `app` and `platform` are how a component reaches the services it renders from. Whether
-  // those stay a parameter, become a factory closure per component, or become a context is
-  // the open question in docs/tickets.
+  // `app` and `platform` are still passed and are down to four uses between them — the
+  // plugin iframe mounts, the media URL machinery, and one registry lookup for a callable.
+  // See docs/tickets/009 for why those stay imperative.
   const ui = {
     engine, app, platform,
     // Rendering a cell is a UI concern, not a platform subsystem to reach through.
     watch,
-    go: (action) => engine.dispatch(action),
-    exec: (id, ...args) => engine.dispatch(new ExecCommandAction(id, ...args)),
   };
 
   // One derived snapshot of every slice the shell reads. `derive` invalidates when any
@@ -178,7 +177,7 @@ function mainArea(state, ui) {
 function searchModal(state, ui) {
   if (!state.wb.searchModal) return div();
   return div({ className: 'search-modal' },
-    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseSearchModalAction()) }),
+    div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new CloseSearchModalAction()) }),
     div({ className: 'search-modal-panel' }, launcher(state, ui, { modal: true })),
   );
 }

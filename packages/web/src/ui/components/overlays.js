@@ -29,11 +29,11 @@ export function dialog(state, ui) {
   // typed value is not in the engine yet — see docs/tickets/009.
   const submit = () => {
     if (d.kind !== 'confirm') return d.onSubmit?.(value);
-    ui.go(new CloseDialogAction());
+    ui.engine.dispatch(new CloseDialogAction());
     activate(ui, { actions: d.confirmActions });
   };
   return div({},
-    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
+    div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
     div({ className: 'dialog' },
       h3(d.title),
       d.body ? div({ className: 'body' }, d.body) : null,
@@ -43,13 +43,13 @@ export function dialog(state, ui) {
             input({ className: 'input', value: d.value ?? '', placeholder: d.placeholder || '', autofocus: true })
               .on({
                 input: (e) => { value = e.target.value; },
-                keydown: (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') ui.go(new CloseDialogAction()); },
+                keydown: (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') ui.engine.dispatch(new CloseDialogAction()); },
                 $attach: (el) => queueMicrotask(() => { el.focus(); el.select(); }),
               }),
           )
         : null,
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
         button({ className: `btn ${d.danger ? 'danger' : 'primary'}` }, d.confirmLabel || 'OK').on({ click: submit }),
       ),
     ),
@@ -65,32 +65,32 @@ function openerChooserDialog(d, ui) {
   const remember = !!d.remember;
   const confirm = () => {
     if (remember && selected) rememberOpener(platform, typeKeyFor(d.node), selected);
-    ui.go(new CloseDialogAction());
-    ui.go(new OpenInPanelAction(d.node, selected, { reset: !!d.reset }));
+    ui.engine.dispatch(new CloseDialogAction());
+    ui.engine.dispatch(new OpenInPanelAction(d.node, selected, { reset: !!d.reset }));
   };
   return div({},
-    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
+    div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
     div({ className: 'dialog opener-chooser' },
       h3(`Open “${d.node.name}” with…`),
       div({ className: 'opener-list' },
         ...d.openers.map((o) =>
           label({ className: `opener-opt ${o.id === selected ? 'sel' : ''}` },
             input({ type: 'radio', name: 'opener-choice', checked: o.id === selected })
-              .on({ change: () => ui.go(new UpdateDialogAction({ openerId: o.id })) }),
+              .on({ change: () => ui.engine.dispatch(new UpdateDialogAction({ openerId: o.id })) }),
             icon(o.icon || iconForNode(d.node), { size: 18 }),
             div({ className: 'oo-main' },
               span({ className: 'oo-title' }, o.title || o.id),
               span({ className: 'oo-src' }, openerSource(platform, o)),
             ),
-          ).on({ click: () => ui.go(new UpdateDialogAction({ openerId: o.id })) }),
+          ).on({ click: () => ui.engine.dispatch(new UpdateDialogAction({ openerId: o.id })) }),
         ),
       ),
       label({ className: 'opener-remember' },
-        input({ type: 'checkbox', checked: remember }).on({ change: (e) => ui.go(new UpdateDialogAction({ remember: e.target.checked })) }),
+        input({ type: 'checkbox', checked: remember }).on({ change: (e) => ui.engine.dispatch(new UpdateDialogAction({ remember: e.target.checked })) }),
         span(`Always use this for ${typeLabelFor(d.node)}`),
       ),
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
         button({ className: 'btn primary' }, 'Open').on({ click: confirm }),
       ),
     ),
@@ -127,7 +127,7 @@ function collectionDialog(d, ui, caps, view) {
   // in place at all.
   const set = (k) => (e) => {
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    ui.go(new SetViewStateAction(COL_FORM, { ref: colState.ref, form: { ...form, [k]: value } }));
+    ui.engine.dispatch(new SetViewStateAction(COL_FORM, { ref: colState.ref, form: { ...form, [k]: value } }));
   };
 
   const submit = () => {
@@ -148,7 +148,7 @@ function collectionDialog(d, ui, caps, view) {
     && (driver?.fields || []).every((f) => !f.required || String(form[f.name] ?? '').trim());
 
   return div({},
-    div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
+    div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
     div({ className: 'dialog', $styling: { width: 'min(480px, 94vw)' } },
       h3('New collection'),
       div({ className: 'body' }, 'A collection is a backing store you own. Configure where its files live.'),
@@ -164,7 +164,7 @@ function collectionDialog(d, ui, caps, view) {
         : div({ className: 'body' }, 'This server has no storage drivers registered, so a collection cannot be created.'),
       driver ? storeFields(driver, form, set) : null,
       div({ className: 'row-actions' },
-        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.go(new CloseDialogAction()) }),
+        button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
         button({ className: 'btn primary', $attrs: ready ? {} : { disabled: 'true' } }, 'Create collection')
           .on({ click: () => ready && submit() }),
       ),
@@ -211,7 +211,7 @@ export function contextMenu(state, ui) {
   const x = Math.max(8, Math.min(m.x, window.innerWidth - 220));
   const y = Math.max(8, Math.min(m.y, window.innerHeight - wanted));
   return div({},
-    div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => ui.go(new CloseContextMenuAction()), contextmenu: (e) => { e.preventDefault(); ui.go(new CloseContextMenuAction()); } }),
+    div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => ui.engine.dispatch(new CloseContextMenuAction()), contextmenu: (e) => { e.preventDefault(); ui.engine.dispatch(new CloseContextMenuAction()); } }),
     div({ className: 'menu', $styling: { left: x + 'px', top: y + 'px' } },
       ...m.items.map((it, i) =>
         it.sep
@@ -224,9 +224,9 @@ export function contextMenu(state, ui) {
               span(it.label),
               it.kbd ? span({ className: 'kbd' }, it.kbd) : null,
             ).on({
-              click: () => { ui.go(new CloseContextMenuAction()); activate(ui, it); },
+              click: () => { ui.engine.dispatch(new CloseContextMenuAction()); activate(ui, it); },
               // The first item is focused on open, so Escape has to get you back out.
-              keydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); ui.go(new CloseContextMenuAction()); } },
+              keydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); ui.engine.dispatch(new CloseContextMenuAction()); } },
               $attach: (el) => { if (i === 0) queueMicrotask(() => el.focus()); },
             }),
       ),
@@ -243,7 +243,7 @@ export function toasts(state, ui) {
       div({ className: `toast ${n.level}` },
         div({ className: 'bar' }),
         div({ className: 'msg' }, n.message),
-        button({ className: 'x' }, icon('close', { size: 14 })).on({ click: () => ui.go(new DismissNotificationAction(n.id)) }),
+        button({ className: 'x' }, icon('close', { size: 14 })).on({ click: () => ui.engine.dispatch(new DismissNotificationAction(n.id)) }),
       ).key(n.id),
     ),
   );
@@ -259,7 +259,7 @@ export function transferTray(state, ui) {
       span({ $styling: { 'margin-left': '6px' } }, 'Transfers'),
       div({ className: 'actions' },
         button({ className: 'iconbtn', title: 'Clear finished' }, icon('check', { size: 14 }))
-          .on({ click: () => ui.go(new ClearFinishedTransfersAction()) }),
+          .on({ click: () => ui.engine.dispatch(new ClearFinishedTransfersAction()) }),
       ),
     ),
     div({ className: 'items' },
@@ -269,7 +269,7 @@ export function transferTray(state, ui) {
             icon(t.status === 'error' ? 'warn' : t.status === 'done' ? 'check' : 'upload', { size: 14 }),
             span({ className: 'name' }, t.name),
             t.status === 'active'
-              ? button({ className: 'iconbtn', title: 'Cancel' }, icon('close', { size: 13 })).on({ click: () => ui.go(new CancelTransferAction(t.id)) })
+              ? button({ className: 'iconbtn', title: 'Cancel' }, icon('close', { size: 13 })).on({ click: () => ui.engine.dispatch(new CancelTransferAction(t.id)) })
               : span({ className: 'pct' }, t.status === 'done' ? bytes(t.total) : t.status),
           ),
           t.status === 'active'
@@ -284,9 +284,9 @@ export function transferTray(state, ui) {
           (t.status === 'error' || t.status === 'cancelled') && t.retryable
             ? div({ className: 'xfer-actions' },
               button({ className: 'btn small' }, icon('refresh', { size: 12 }), span('Retry'))
-                .on({ click: () => ui.go(new RetryTransferAction(t.id)) }),
+                .on({ click: () => ui.engine.dispatch(new RetryTransferAction(t.id)) }),
               button({ className: 'btn small ghost' }, 'Dismiss')
-                .on({ click: () => ui.go(new DismissTransferAction(t.id)) }),
+                .on({ click: () => ui.engine.dispatch(new DismissTransferAction(t.id)) }),
             )
             : null,
         ).key(t.id),
@@ -304,7 +304,7 @@ export function pluginPanel(state, ui) {
     div({ className: 'head' },
       icon('plug', { size: 14 }),
       span(plugin?.name || pid),
-      button({ className: 'iconbtn x' }, icon('close', { size: 14 })).on({ click: () => ui.go(new ClosePluginPanelAction()) }),
+      button({ className: 'iconbtn x' }, icon('close', { size: 14 })).on({ click: () => ui.engine.dispatch(new ClosePluginPanelAction()) }),
     ),
     // The host mounts the plugin's iframe into this element on attach.
     div({ className: 'host' }).on({

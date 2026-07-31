@@ -30,21 +30,21 @@ export default function editorArea(state, ui) {
 function navBar(files, active, ui) {
   return div({ className: 'viewer-nav' },
     button({ className: 'vn-back', title: 'Back (Esc)' }, icon('chevron-left', { size: 16 }))
-      .on({ click: () => ui.go(new NavigateBackAction()) }),
+      .on({ click: () => ui.engine.dispatch(new NavigateBackAction()) }),
     div({ className: 'vn-trail' },
       button({ className: 'vn-crumb' }, icon('search', { size: 13 }), span('Search'))
-        .on({ click: () => ui.go(new ShowHomeAction()) }),
+        .on({ click: () => ui.engine.dispatch(new ShowHomeAction()) }),
       ...files.map((p) =>
         button({ className: `vn-crumb ${p.id === active.id ? 'active' : ''}`, title: p.node.name },
           icon(iconForNode(p.node), { size: 13 }), span({ className: 'label' }, p.node.name))
-          .on({ click: () => ui.go(new OpenInPanelAction(p.node, p.openerId)) })),
+          .on({ click: () => ui.engine.dispatch(new OpenInPanelAction(p.node, p.openerId)) })),
     ),
     div({ className: 'vn-actions' },
       openerSwitch(active, ui),
       button({ className: 'iconbtn', title: 'Details & comments' }, icon('info', { size: 15 }))
-        .on({ click: () => ui.go(new ToggleInfoPanelAction()) }),
+        .on({ click: () => ui.engine.dispatch(new ToggleInfoPanelAction()) }),
       button({ className: 'iconbtn', title: 'Close (Esc)' }, icon('close', { size: 15 }))
-        .on({ click: () => ui.go(new ShowHomeAction()) }),
+        .on({ click: () => ui.engine.dispatch(new ShowHomeAction()) }),
     ),
   );
 }
@@ -56,7 +56,7 @@ function openerSwitch(active, ui) {
   const openers = availableOpeners(ui.platform, active.node);
   if (openers.length <= 1) return null;
   return button({ className: 'iconbtn', title: 'Open with…' }, icon('dots', { size: 15 }))
-    .on({ click: () => ui.go(new ShowDialogAction({ kind: 'opener-chooser', node: active.node, openers, current: active.openerId })) });
+    .on({ click: () => ui.engine.dispatch(new ShowDialogAction({ kind: 'opener-chooser', node: active.node, openers, current: active.openerId })) });
 }
 
 function openerHost(panel, ui) {

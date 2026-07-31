@@ -4,7 +4,7 @@ import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
-import { CopyTextAction, PatchApiKeyDraftAction, RebindKeyAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
+import { CopyTextAction, ExecCommandAction, PatchApiKeyDraftAction, RebindKeyAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -43,7 +43,7 @@ function setting(s, ui) {
 }
 
 function control(s, ui) {
-  const set = (v) => ui.go(new SetSettingAction(s.key, v));
+  const set = (v) => ui.engine.dispatch(new SetSettingAction(s.key, v));
   if (s.type === 'boolean') {
     return label({ className: 'switch' },
       input({ type: 'checkbox', checked: !!s.value }).on({ change: (e) => set(e.target.checked) }),
@@ -101,7 +101,7 @@ function mcpSection(ui, caps) {
 
   // The "denied clipboard still has to hand the value over" reasoning moved into
   // CopyTextAction, which is where the other three copies of it went too.
-  const copy = (text) => () => ui.go(new CopyTextAction(text));
+  const copy = (text) => () => ui.engine.dispatch(new CopyTextAction(text));
 
   const servers = auth.authorizationServers || [];
   // Where the value came from matters when it is wrong: "we took this from your JWT
@@ -190,7 +190,7 @@ function apiKeysSection(state, ui) {
   // sessions never need it, so it is not worth a request at boot.
   if (!keysRequested && !keys.loaded && !keys.loading) {
     keysRequested = true;
-    ui.exec('keys.load');
+    ui.engine.dispatch(new ExecCommandAction('keys.load'));
   }
 
   // A non-admin gets a 403 here, which is the correct answer rather than an error worth
@@ -213,7 +213,7 @@ function apiKeysSection(state, ui) {
     !keys.draft && !keys.minted
       ? div({ className: 'keys-actions' },
         button({ className: 'btn' }, icon('plus', { size: 14 }), 'New key')
-          .on({ click: () => ui.exec('keys.new') }))
+          .on({ click: () => ui.engine.dispatch(new ExecCommandAction('keys.new')) }))
       : null,
 
     keys.keys?.length
@@ -230,7 +230,7 @@ function apiKeysSection(state, ui) {
  * table would be dismissed without being copied.
  */
 function mintedBanner(minted, ui) {
-  const copy = () => ui.go(new CopyTextAction(minted.secret, 'Key copied'));
+  const copy = () => ui.engine.dispatch(new CopyTextAction(minted.secret, 'Key copied'));
   return div({ className: 'key-minted' },
     div({ className: 'key-minted-head' },
       icon('warn', { size: 15 }),
@@ -244,7 +244,7 @@ function mintedBanner(minted, ui) {
       button({ className: 'btn small', title: 'Copy' }, icon('link', { size: 13 })).on({ click: copy }),
     ),
     div({ className: 'keys-actions' },
-      button({ className: 'btn' }, 'Done').on({ click: () => ui.exec('keys.dismissMinted') }),
+      button({ className: 'btn' }, 'Done').on({ click: () => ui.engine.dispatch(new ExecCommandAction('keys.dismissMinted')) }),
     ),
   );
 }
@@ -264,7 +264,7 @@ function draftForm(keys, collections, ui) {
       ),
       div({ className: 'control' },
         input({ className: 'input', value: draft.name, $attrs: { placeholder: 'CI uploader' } })
-          .on({ input: (e) => ui.go(new PatchApiKeyDraftAction({ name: e.target.value })) }),
+          .on({ input: (e) => ui.engine.dispatch(new PatchApiKeyDraftAction({ name: e.target.value })) }),
       ),
     ),
 
@@ -277,7 +277,7 @@ function draftForm(keys, collections, ui) {
         input({
           className: 'input', type: 'number', value: draft.expiresInDays,
           $attrs: { min: '1', max: '3650', placeholder: 'never' },
-        }).on({ input: (e) => ui.go(new PatchApiKeyDraftAction({ expiresInDays: e.target.value })) }),
+        }).on({ input: (e) => ui.engine.dispatch(new PatchApiKeyDraftAction({ expiresInDays: e.target.value })) }),
       ),
     ),
 
@@ -294,8 +294,8 @@ function draftForm(keys, collections, ui) {
     div({ className: 'keys-actions' },
       button({ className: 'btn primary', $attrs: ready ? {} : { disabled: 'true' } },
         keys.busy === 'mint' ? 'Creating\u2026' : 'Create key')
-        .on({ click: () => ready && ui.exec('keys.mint') }),
-      button({ className: 'btn' }, 'Cancel').on({ click: () => ui.exec('keys.cancel') }),
+        .on({ click: () => ready && ui.engine.dispatch(new ExecCommandAction('keys.mint')) }),
+      button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new ExecCommandAction('keys.cancel')) }),
     ),
   );
 }
@@ -310,7 +310,7 @@ function scopeRow(collection, draft, ui) {
     div({ className: 'key-scope-caps' },
       ...CAPS.map((c) => label({ className: `cap ${held.has(c.id) ? 'on' : ''}`, title: c.hint },
         input({ type: 'checkbox', checked: held.has(c.id) })
-          .on({ change: () => ui.go(new ToggleApiKeyCapAction(collection.id, c.id)) }),
+          .on({ change: () => ui.engine.dispatch(new ToggleApiKeyCapAction(collection.id, c.id)) }),
         span(c.label),
       )),
     ),
@@ -335,7 +335,7 @@ function keyRow(k, keys, collections, ui) {
       ? button({
         className: 'btn small danger',
         $attrs: keys.busy === k.id ? { disabled: 'true' } : {},
-      }, keys.busy === k.id ? '\u2026' : 'Revoke').on({ click: () => ui.exec('keys.revoke', k.id) })
+      }, keys.busy === k.id ? '\u2026' : 'Revoke').on({ click: () => ui.engine.dispatch(new ExecCommandAction('keys.revoke', k.id)) })
       : null,
   );
 }
@@ -407,9 +407,9 @@ function keybindingsSection(ui) {
 }
 
 function keybindingRows(bindings, ui, capturing) {
-  const setCapturing = (id) => ui.go(new SetViewStateAction(CAPTURE, id));
+  const setCapturing = (id) => ui.engine.dispatch(new SetViewStateAction(CAPTURE, id));
   const stop = () => setCapturing(null);
-  const rebind = (bindingId, key) => ui.go(new RebindKeyAction(bindingId, key));
+  const rebind = (bindingId, key) => ui.engine.dispatch(new RebindKeyAction(bindingId, key));
   return div({ className: 'group' },
     h3('Keyboard Shortcuts'),
     p({ className: 'sub' }, 'Click a shortcut to record a new one. Esc cancels; Backspace clears it.'),

@@ -9,6 +9,7 @@ import { markdownOpener } from './markdown.js';
 import { attachMedia } from '../../media.js';
 import { FileText } from '../../../bl/queries.js';
 import { watchQuery } from '../../../bl/watchQuery.js';
+import { ExecCommandAction } from '../../../bl/actions.js';
 
 const { div, pre, img, span, button, video, audio } = dd;
 
@@ -164,7 +165,7 @@ function fallbackOpener(node, ui, reason) {
       span({ $styling: { color: 'var(--text-faint)', 'max-width': '340px' } },
         reason || 'No preview available for this file type. Install a plugin that handles it, or download the file.'),
       button({ className: 'btn primary' }, icon('download', { size: 15 }), 'Download')
-        .on({ click: () => ui.exec('explorer.download', node) }),
+        .on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.download', node)) }),
     ),
   );
 }

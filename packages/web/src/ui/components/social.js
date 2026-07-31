@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
-import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, LoadSidecarAction, OpenFileAction, OpenNotificationTargetAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
+import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, ExecCommandAction, LoadSidecarAction, OpenFileAction, OpenNotificationTargetAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
@@ -32,7 +32,7 @@ export function notificationBell(state, ui) {
     button({ className: 'iconbtn bell', title: 'Notifications' },
       icon('bell', { size: 19 }),
       n.unread ? span({ className: 'bell-badge' }, String(n.unread > 9 ? '9+' : n.unread)) : null,
-    ).on({ click: () => ui.go(new ToggleInboxAction()) }),
+    ).on({ click: () => ui.engine.dispatch(new ToggleInboxAction()) }),
     state.so.inboxOpen ? inboxDropdown(state, ui) : null,
   );
 }
@@ -40,12 +40,12 @@ export function notificationBell(state, ui) {
 function inboxDropdown(state, ui) {
   const items = state.so.notifications.items;
   return div({},
-    div({ className: 'scrim', $styling: { background: 'transparent', 'z-index': '54' } }).on({ click: () => ui.go(new ToggleInboxAction(false)) }),
+    div({ className: 'scrim', $styling: { background: 'transparent', 'z-index': '54' } }).on({ click: () => ui.engine.dispatch(new ToggleInboxAction(false)) }),
     div({ className: 'inbox' },
       div({ className: 'inbox-head' },
         span('Notifications'),
         state.so.pushSupported && !state.so.pushEnabled
-          ? button({ className: 'link' }, 'Enable push').on({ click: () => ui.go(new EnablePushAction()) })
+          ? button({ className: 'link' }, 'Enable push').on({ click: () => ui.engine.dispatch(new EnablePushAction()) })
           : state.so.pushEnabled ? span({ className: 'muted' }, icon('check', { size: 13 })) : null,
       ),
       items.length
@@ -65,8 +65,8 @@ function inboxItem(note, ui) {
     click: () => {
       // One intent, one action — including what to say when the item a notification
       // points at is gone. See OpenNotificationTargetAction.
-      if (first?.nodeId) ui.go(new OpenNotificationTargetAction(first.nodeId));
-      ui.go(new ToggleInboxAction(false));
+      if (first?.nodeId) ui.engine.dispatch(new OpenNotificationTargetAction(first.nodeId));
+      ui.engine.dispatch(new ToggleInboxAction(false));
     },
   });
 }
@@ -81,7 +81,7 @@ export function infoPanel(state, ui) {
     div({ className: 'ip-head' },
       icon('info', { size: 15 }),
       span('Details'),
-      button({ className: 'iconbtn', title: 'Close' }, icon('close', { size: 14 })).on({ click: () => ui.go(new ToggleInfoPanelAction(false)) }),
+      button({ className: 'iconbtn', title: 'Close' }, icon('close', { size: 14 })).on({ click: () => ui.engine.dispatch(new ToggleInfoPanelAction(false)) }),
     ),
     !active
       ? div({ className: 'ip-empty' }, span('Open a file to see its tags and conversation.'))
@@ -107,7 +107,7 @@ function fileHeader(node, state, ui) {
     button({ className: `btn small ${pinned ? 'on' : ''}`, $styling: { 'margin-top': '10px' } },
       icon(pinned ? 'check' : 'download', { size: 14 }),
       pinned ? 'Available offline' : 'Make available offline',
-    ).on({ click: () => (pinned ? ui.exec('offline.unpin', node) : ui.exec('offline.pin', node)) }),
+    ).on({ click: () => (pinned ? ui.engine.dispatch(new ExecCommandAction('offline.unpin', node)) : ui.engine.dispatch(new ExecCommandAction('offline.pin', node))) }),
   );
 }
 
@@ -136,13 +136,13 @@ function linkSection(node, state, ui) {
         : mine?.items?.length
           ? div({ className: 'ip-backlinks' }, ...mine.items.map((n) =>
             button({ className: 'ip-backlink', title: n.name }, icon('file-text', { size: 12 }), span(n.name))
-              .on({ click: () => ui.go(new OpenFileAction(n)) })))
+              .on({ click: () => ui.engine.dispatch(new OpenFileAction(n)) })))
           : div({ className: 'ip-muted' }, 'Nothing links here yet.'),
   );
 }
 
 function copyLink(ui, uri) {
-  ui.go(new CopyTextAction(uri, `Copied ${uri}`));
+  ui.engine.dispatch(new CopyTextAction(uri, `Copied ${uri}`));
 }
 
 function tagSection(sc, ui) {
@@ -153,7 +153,7 @@ function tagSection(sc, ui) {
       ...tags.map((t) =>
         span({ className: 'tag' },
           t.value ? `${t.name}: ${t.value}` : t.name,
-          button({ className: 'tag-x' }, icon('close', { size: 11 })).on({ click: () => ui.go(new RemoveTagAction(t.name)) }),
+          button({ className: 'tag-x' }, icon('close', { size: 11 })).on({ click: () => ui.engine.dispatch(new RemoveTagAction(t.name)) }),
         ),
       ),
       input({ className: 'tag-input', placeholder: '+ tag', value: '' }).on({
@@ -161,7 +161,7 @@ function tagSection(sc, ui) {
           if (e.key === 'Enter' && e.target.value.trim()) {
             const raw = e.target.value.trim();
             const [name, ...rest] = raw.split(':');
-            ui.go(new AddTagAction(name.trim(), rest.join(':').trim() || undefined));
+            ui.engine.dispatch(new AddTagAction(name.trim(), rest.join(':').trim() || undefined));
             e.target.value = '';
           }
         },
@@ -178,7 +178,7 @@ function conversationSection(state, sc, ui) {
   const body = sc?.error
     ? div({ className: 'conv-empty' },
         span(`Couldn't load the conversation: ${sc.error}`),
-        button({ className: 'btn', $styling: { 'margin-top': '8px' } }, 'Retry').on({ click: () => ui.go(new LoadSidecarAction(sc.nodeId)) }))
+        button({ className: 'btn', $styling: { 'margin-top': '8px' } }, 'Retry').on({ click: () => ui.engine.dispatch(new LoadSidecarAction(sc.nodeId)) }))
     : comments.length
       ? div({ className: 'thread' }, ...comments.map((c) => commentNode(c, state, ui, 0)))
       : div({ className: 'conv-empty' }, 'No comments yet. Start the discussion — use @ to mention someone.');
@@ -205,10 +205,10 @@ function commentNode(c, state, ui, depth) {
       ...REACTIONS.map((emoji) => {
         const users = c.reactions?.[emoji] || [];
         return button({ className: `react ${users.includes(me?.id) ? 'on' : ''}` }, emoji, users.length ? span({ className: 'rc' }, String(users.length)) : null)
-          .on({ click: () => ui.go(new ReactToCommentAction(c.id, emoji)) });
+          .on({ click: () => ui.engine.dispatch(new ReactToCommentAction(c.id, emoji)) });
       }),
-      button({ className: 'c-link' }, 'Reply').on({ click: () => ui.go(new SetReplyToAction({ id: c.id, author: c.author })) }),
-      mine ? button({ className: 'c-link danger' }, 'Delete').on({ click: () => ui.go(new DeleteCommentAction(c.id)) }) : null,
+      button({ className: 'c-link' }, 'Reply').on({ click: () => ui.engine.dispatch(new SetReplyToAction({ id: c.id, author: c.author })) }),
+      mine ? button({ className: 'c-link danger' }, 'Delete').on({ click: () => ui.engine.dispatch(new DeleteCommentAction(c.id)) }) : null,
     ) : null,
     (c.replies || []).length ? div({ className: 'replies' }, ...c.replies.map((r) => commentNode(r, state, ui, depth + 1))) : null,
   ).key(c.id);
@@ -234,11 +234,11 @@ function composer(state, ui) {
   }
   return div({ className: 'composer' },
     replyTo ? div({ className: 'replying' }, `Replying to ${replyTo.author?.name || 'comment'}`,
-      button({ className: 'c-link' }, 'cancel').on({ click: () => ui.go(new SetReplyToAction(null)) })) : null,
+      button({ className: 'c-link' }, 'cancel').on({ click: () => ui.engine.dispatch(new SetReplyToAction(null)) })) : null,
     textarea({ className: 'composer-input', placeholder: 'Write a comment…  @mention someone', rows: 2, value: '' }).on({
       keydown: (e) => {
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-          ui.go(new PostCommentAction(e.target.value));
+          ui.engine.dispatch(new PostCommentAction(e.target.value));
           e.target.value = '';
         }
       },
@@ -248,7 +248,7 @@ function composer(state, ui) {
       button({ className: 'btn primary', disabled: state.so.posting }, 'Comment').on({
         click: (e) => {
           const box = e.target.closest('.composer').querySelector('.composer-input');
-          ui.go(new PostCommentAction(box.value));
+          ui.engine.dispatch(new PostCommentAction(box.value));
           box.value = '';
         },
       }),

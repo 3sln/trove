@@ -1,6 +1,6 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseDialogAction, OpenPluginPanelAction, RefreshPluginAction, SetPluginSecretAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
+import { CloseDialogAction, ExecCommandAction, OpenPluginPanelAction, RefreshPluginAction, SetPluginSecretAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
 
 const { div, span, p, button, h2, input, label } = dd;
 
@@ -14,9 +14,9 @@ export default function pluginsView(state, ui) {
           'Plugins are sandboxed packages you install from a file or URL. They run in an isolated iframe and reach Trove only through a message channel, using the capabilities you granted.'),
         div({ className: 'plugin-install' },
           button({ className: 'btn primary' }, icon('upload', { size: 15 }), 'Install from file…')
-            .on({ click: () => ui.exec('plugins.installFromFile') }),
+            .on({ click: () => ui.engine.dispatch(new ExecCommandAction('plugins.installFromFile')) }),
           button({ className: 'btn' }, icon('plug', { size: 15 }), 'Install from URL…')
-            .on({ click: () => ui.exec('plugins.installFromUrl') }),
+            .on({ click: () => ui.engine.dispatch(new ExecCommandAction('plugins.installFromUrl')) }),
         ),
         plugins.length
           ? div({ $styling: { display: 'flex', 'flex-direction': 'column', gap: '12px', 'margin-top': '14px' } }, ...plugins.map((pl) => installedCard(pl, state, ui)))
@@ -55,10 +55,10 @@ function installedCard(pl, state, ui) {
       : null,
     (pl.settingsSchema || []).length ? settingsSection(pl, ui, state) : null,
     div({ className: 'actions' },
-      pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.go(new OpenPluginPanelAction(pl.id)) }) : null,
-      button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.go(new RefreshPluginAction(pl.id)) }),
+      pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.engine.dispatch(new OpenPluginPanelAction(pl.id)) }) : null,
+      button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.engine.dispatch(new RefreshPluginAction(pl.id)) }),
       button({ className: 'btn danger' }, 'Uninstall').on({
-        click: () => ui.go(new ShowDialogAction({
+        click: () => ui.engine.dispatch(new ShowDialogAction({
           kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
           body: 'The plugin and all data it stored will be removed.',
           confirmActions: [new UninstallPluginAction(pl.id)],
@@ -85,11 +85,11 @@ function settingRow(pl, s, ui, state) {
     div({ className: 'control' },
       s.secret
         ? input({ className: 'input', type: 'password', placeholder: 'Set secret…' }).on({
-            change: (e) => { if (e.target.value) { ui.go(new SetPluginSecretAction(pl.id, s.key, e.target.value)); e.target.value = ''; e.target.placeholder = 'Saved ✓'; } },
+            change: (e) => { if (e.target.value) { ui.engine.dispatch(new SetPluginSecretAction(pl.id, s.key, e.target.value)); e.target.value = ''; e.target.placeholder = 'Saved ✓'; } },
           })
         : s.type === 'boolean'
-          ? label({ className: 'switch' }, input({ type: 'checkbox', checked: !!value }).on({ change: (e) => ui.go(new SetSettingAction(key, e.target.checked)) }), span({ className: 'track' }))
-          : input({ className: 'input', value }).on({ change: (e) => ui.go(new SetSettingAction(key, e.target.value)) }),
+          ? label({ className: 'switch' }, input({ type: 'checkbox', checked: !!value }).on({ change: (e) => ui.engine.dispatch(new SetSettingAction(key, e.target.checked)) }), span({ className: 'track' }))
+          : input({ className: 'input', value }).on({ change: (e) => ui.engine.dispatch(new SetSettingAction(key, e.target.value)) }),
     ),
   );
 }

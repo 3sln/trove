@@ -230,13 +230,14 @@ a read into an action would be the same category error as a query handing out a 
 |---|---|---|
 | `ui.platform` | 81 | 44 |
 | `ui.app` | 32 | **0** |
-| `ui.exec` | 46 | 48 |
-| `ui.go` | 12 | 70 |
-| `ui.engine` | 0 | 1 |
+| `ui.exec` | 46 | **0** |
+| `ui.go` | 12 | **0** |
+| `ui.engine` | 0 | 151 |
 
-`go` and `exec` going UP is the shape of the work rather than a regression: every service
-call that became an action is now a dispatch. They are sugar over `engine.dispatch`, and
-they go last, when there is nothing left for a component to reach for except the engine.
+`go` and `exec` went up before they went away — every service call that became an action was
+a dispatch first. Now they are gone: `go(action)` was `engine.dispatch(action)` with a
+shorter name, and a shorter name for the one door is how the door stops being obvious. Call
+sites say `ui.engine.dispatch(new SomeAction(...))`. Longer, and it names what happens.
 
 Done: the state as queries; the chrome, palette and shortcuts as regions; view queries for
 commands, keybindings, status items and capabilities; actions for commands, notifications,
