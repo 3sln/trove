@@ -27,7 +27,7 @@ import { pluginId, contribUri } from '@3sln/trove/core/plugins/identity.js';
 import { endpointSummary } from './pluginNet.js';
 import { MediaController } from './pluginMedia.js';
 import { FrameDock } from './pluginDock.js';
-import { InvokePluginCommandAction } from '../bl/actions.js';
+import { InvokePluginCommandAction, OpenInPanelAction } from '../bl/actions.js';
 import { FrameManager } from './pluginFrames.js';
 import { PluginRpcRouter } from './pluginRpc.js';
 // The canonical capability list lives in core (the server's authority); import it so
@@ -55,7 +55,9 @@ export class PluginHost {
     this.media = new MediaController();
     this.dock = new FrameDock({
       destroyFrame: (frame) => this.frames.destroy(frame),
-      openFile: (node, openerId) => this.platform.workbench.openFile(node, openerId),
+      // Dispatched, not called: opening a file from a docked plugin frame is the same
+      // intent as opening one from the drive, and the engine should see both.
+      openFile: (node, openerId) => this.platform.dispatch?.(new OpenInPanelAction(node, openerId)),
       onChange: () => this.#emit(),
     });
     this.frames = new FrameManager({ media: this.media, dock: this.dock });

@@ -174,7 +174,7 @@ export class PluginRpcRouter {
       case 'ui:showPanel':
         cap('ui');
         record.hasUi = true;
-        this.platform.workbench.openPluginPanel(pid);
+        this.platform.openPluginPanel(pid);
         this.onChange();
         return { ok: true };
 

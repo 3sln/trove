@@ -19,10 +19,10 @@ import { derive } from '../runtime.js';
  * @param {object} r the resources these summarise
  * @returns {() => void} unregister them all
  */
-export function registerCoreContext(registry, { workbench, explorer }) {
+export function registerCoreContext(registry, { workbench, overlay, navigation, explorer }) {
   const wb = workbench.observe();
-  const nav = workbench.observeNav();
-  const overlay = workbench.observeOverlay();
+  const nav = navigation.observe();
+  const ov = overlay.observe();
   const ex = explorer.observe();
 
   const keys = {
@@ -35,7 +35,7 @@ export function registerCoreContext(registry, { workbench, explorer }) {
     'sheet.open': derive([wb], (s) => s.sheet || ''),
     'infoPanel.open': derive([wb], (s) => !!s.infoPanel),
 
-    'palette.open': derive([overlay], (s) => !!s.palette),
+    'palette.open': derive([ov], (s) => !!s.palette),
 
     // What is open in the viewer, for openers and viewer-scoped shortcuts.
     'editor.open': derive([nav], (s) => !!s.activeFile),

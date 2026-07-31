@@ -176,9 +176,9 @@ export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe(),
 /** Which activity is showing, and the rest of the shell's own state. */
 export const workbench = new ServiceQuery('workbench', (r) => r.observe());
 /** The tab and panel stack. */
-export const navigation = new ServiceQuery('workbench', (r) => r.observeNav());
+export const navigation = new ServiceQuery('navigation', (r) => r.observe());
 /** Dialogs, menus and panels. */
-export const overlay = new ServiceQuery('workbench', (r) => r.observeOverlay());
+export const overlay = new ServiceQuery('overlay', (r) => r.observe());
 /** Toasts. */
 export const notifications = new ServiceQuery('notifications', (r) => r.observe());
 /** Settings, defaults merged with overrides. */
@@ -318,12 +318,12 @@ function paletteCommandsOf(r) {
 // this is an ordinary query with no arguments, and the ranking is settled before a
 // component sees anything. The launcher's `!` mode ranks the same way inside
 // `launcherContent`, which already holds everything it needs.
-const OVERLAY_DEPS = [...REGISTRY_DEPS, 'workbench'];
-const withShell = (r) => [...registries(r), r.workbench.observe(), r.workbench.observeOverlay()];
+const OVERLAY_DEPS = [...REGISTRY_DEPS, 'overlay', 'workbench'];
+const withShell = (r) => [...registries(r), r.workbench.observe(), r.overlay.observe()];
 
 /** What the command palette should list right now. */
 export const paletteMatches = new ViewQuery(OVERLAY_DEPS, withShell, (r) =>
-  rankCommands(paletteCommandsOf(r), r.workbench.overlay.state.palette?.query || ''));
+  rankCommands(paletteCommandsOf(r), r.overlay.get().palette?.query || ''));
 
 
 /**
@@ -388,7 +388,7 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
  */
 export const launcherContent = (modal = false) => LauncherContent.of(!!modal);
 
-const LAUNCHER_DEPS = [...REGISTRY_DEPS, 'explorer', 'search', 'workbench', 'offline', 'capabilities'];
+const LAUNCHER_DEPS = [...REGISTRY_DEPS, 'explorer', 'search', 'workbench', 'navigation', 'offline', 'capabilities'];
 
 class LauncherContent extends ViewQuery {
   static of = queryOf(LauncherContent);
@@ -399,19 +399,19 @@ class LauncherContent extends ViewQuery {
       (r) => [
         ...registries(r),
         r.explorer.observe(), r.search.observe(),
-        r.workbench.observe(), r.workbench.observeNav(), r.offline.observe(),
+        r.workbench.observe(), r.navigation.observe(), r.offline.observe(),
         // Capabilities arrive after the first render — the provider hands out a cell that
         // fills in — so this has to be watched, not merely read, or the search help would
         // never appear on a drive whose prompt the server supplies.
         r.capabilities,
       ],
       (r) => {
-        const wb = r.workbench.state;
+        const wb = r.workbench.get();
         const off = r.offline.observe().getValue() || {};
         const slices = {
           ex: r.explorer.observe().getValue() || {},
           se: r.search.observe().getValue() || {},
-          nav: r.workbench.observeNav().getValue() || {},
+          nav: r.navigation.observe().getValue() || {},
           query: wb.launch.query || '',
           commandMatches: rankCommands(paletteCommandsOf(r), (wb.launch.query || '').slice(1)),
           pinnedIds: new Set((off.pins || []).map((p) => p.id)),

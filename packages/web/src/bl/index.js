@@ -8,12 +8,13 @@ import { Engine, Provider } from '@3sln/ngin';
 import { cell } from '../runtime.js';
 import { registerCoreContext, registerViewportContext } from './context.js';
 import { TransfersService } from './services.js';
-import { explorerState, searchState, apiKeysState, viewState as viewStateSlice } from './state.js';
+import { explorerState, searchState, apiKeysState, viewState as viewStateSlice, overlayState, workbenchState } from './state.js';
+import { NavigationService } from '../platform/navigation.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { ActivityService } from './activity.js';
 import { registerCommands } from './commands.js';
-import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction } from './actions.js';
+import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction, OpenPluginPanelAction } from './actions.js';
 
 export function createApp(platform) {
   // Named slices, not services — see bl/state.js. Each is still its own provider, so a
@@ -26,6 +27,14 @@ export function createApp(platform) {
   // What the UI is in the middle of doing — see bl/state.js. A resource, because it
   // decides what is on screen.
   const viewState = viewStateSlice();
+  // The shell, split into what it actually is. `workbench` and `overlay` are slices; the
+  // panel stack stays a service, because it mirrors itself into browser history and
+  // persists recents — neither of which a state bag can do. The WorkbenchService that used
+  // to sit over all three was a 17-method delegation facade, and the provider graph could
+  // not see through it: closing a dialog leased the whole shell.
+  const workbench = workbenchState();
+  const overlay = overlayState();
+  const navigation = new NavigationService();
   const transfers = new TransfersService(activity);
   // Offline first: social queues comment and tag writes through it while disconnected, so
   // it is a dependency rather than something bolted on afterwards. It used to be assigned
@@ -34,7 +43,7 @@ export function createApp(platform) {
   const offline = new OfflineService(platform);
   const social = new SocialService(platform, offline);
 
-  const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, engine: null };
+  const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, workbench, overlay, navigation, engine: null };
 
   // Every resource the engine has, named. The engine's STATE is the state of its
   // resources, so the single `app` provider this started with made that state one opaque
@@ -71,7 +80,9 @@ export function createApp(platform) {
       engine: Provider.fromLazySingleton(async () => engine, () => {}),
 
       // The shell.
-      workbench: Provider.fromSingleton(platform.workbench),
+      workbench: Provider.fromSingleton(workbench),
+      overlay: Provider.fromSingleton(overlay),
+      navigation: Provider.fromSingleton(navigation),
       settings: Provider.fromSingleton(platform.settings),
       notifications: Provider.fromSingleton(platform.notifications),
       context: Provider.fromSingleton(platform.context),
@@ -134,13 +145,17 @@ export function createApp(platform) {
   // outside the engine, and one of them has to carry the intent in. Everything past this
   // point is an action on the feed.
   platform.commands.dispatch = (action) => engine.dispatch(action);
+  // The same seam for the two other places that originate outside the engine: a docked
+  // plugin frame opening a file, and the plugin RPC asking for its panel.
+  platform.dispatch = (action) => engine.dispatch(action);
+  platform.openPluginPanel = (pluginId) => engine.dispatch(new OpenPluginPanelAction(pluginId));
 
   registerCommands(app);
 
   // Every built-in when-clause key, derived from the resource it summarises. Registered
   // here because this is where those resources exist; see bl/context.js for the list and
   // for why deriving them is not the same as moving the writes.
-  registerCoreContext(platform.context, { workbench: platform.workbench, explorer });
+  registerCoreContext(platform.context, { workbench, overlay, navigation, explorer });
   registerViewportContext(platform.context, platform.viewport);
 
   social.init();

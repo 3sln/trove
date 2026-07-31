@@ -29,7 +29,7 @@
 import { dd, effect } from './runtime.js';
 import { createPlatform } from './platform/index.js';
 import { createApp } from './bl/index.js';
-import { NavigateAction, UploadFilesAction, OpenInitialCollectionAction } from './bl/actions.js';
+import { NavigateAction, UploadFilesAction, OpenInitialCollectionAction, OpenSearchModalAction, OpenInPanelAction } from './bl/actions.js';
 import { parsePackage } from './platform/pluginPackage.js';
 import workbenchComposition from './ui/compositions/workbench.js';
 import { registerBuiltinOpeners } from './ui/components/openers/index.js';
@@ -101,8 +101,10 @@ export function createWorkbench({
   platform.keybindings.install(window);
 
   // --- viewer stack ↔ browser history ---------------------------------------
-  window.addEventListener('popstate', (e) => platform.workbench.onPopState(e));
-  installDoubleShift(platform);
+  // Browser back/forward. The panel stack is the only thing that mirrors itself into
+  // history, so this reaches it directly rather than through a shell object.
+  window.addEventListener('popstate', (e) => app.navigation.onPopState(e));
+  installDoubleShift(engine);
 
   // --- service worker (offline shell + pinned files + push) -----------------
   if (serviceWorker && 'serviceWorker' in navigator) {
@@ -162,12 +164,12 @@ function register(platform, type, list) {
 
 // Double-shift → modal search overlay (Raycast-style). Two Shift presses within 400ms,
 // with no other key between, open it.
-function installDoubleShift(platform) {
+function installDoubleShift(engine) {
   let lastShift = 0;
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Shift' && !e.repeat) {
       const now = Date.now();
-      if (now - lastShift < 400) { platform.workbench.openSearchModal(); lastShift = 0; }
+      if (now - lastShift < 400) { engine.dispatch(new OpenSearchModalAction()); lastShift = 0; }
       else lastShift = now;
     } else if (e.key !== 'Shift') {
       lastShift = 0;

@@ -89,3 +89,44 @@ export const apiKeysState = () => slice({
  * patch — see SetViewStateAction.
  */
 export const viewState = () => slice({});
+
+/**
+ * The shell's transient overlays: the command palette, a modal dialog, the right-click
+ * menu, and the plugin popup panel.
+ *
+ * Four things that are independent of the panel stack and of each other, which is why they
+ * were split out of the workbench in the first place. What they are NOT is complex enough
+ * to need a service — the class was four setters and a `wrapIndex`, with an action standing
+ * in front of each one. The wrapping now lives in the action that moves a cursor, which is
+ * where it was needed: MovePaletteAction lost the count argument once already, precisely
+ * because deciding and writing were on opposite sides of a forwarding layer.
+ */
+export const overlayState = () => slice({
+  palette: null, // { mode: 'commands'|'files', query, index } when open
+  dialog: null,
+  contextMenu: null,
+  pluginPanel: null,
+});
+
+/**
+ * The shell itself: which activity is showing, and the launcher's own cursor.
+ *
+ * The panel stack is NOT here — that is NavigationService, which stays a service because it
+ * mirrors the stack into browser history and persists recents, neither of which a state bag
+ * can do.
+ */
+export const workbenchState = () => slice({
+  activity: 'home', // home (stack) | plugins | settings
+  sidebarVisible: true,
+  launch: { query: '', index: 0 },
+  searchModal: false, // the double-shift modal search overlay
+  // Phone chrome: which bottom sheet is up, if any ('status' | 'more'). A phone has no room
+  // for a permanent status bar or a left rail, so both fold into a sheet pulled up on demand.
+  sheet: null,
+  infoPanel: false,
+});
+
+/** Wrap a list cursor by `delta` within `[0, count)` — the palette and the launcher share it. */
+export function wrapIndex(index, delta, count) {
+  return (index + delta + count) % count;
+}

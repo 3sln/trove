@@ -15,6 +15,7 @@ import { parseShareUrl, troveUri, shareUrl } from '@3sln/trove/core/links.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
 import { beginInstallFromFile } from './pluginInstall.js';
 import { pickFiles, pickZip, triggerDownload } from '../platform/pickers.js';
+import { wrapIndex } from './state.js';
 
 /**
  * Load a collection's items. There is nothing to navigate INTO any more — a drive is
@@ -394,7 +395,7 @@ export class RenameAction extends Action {
 
 
 export class OpenFileAction extends Action {
-  static deps = ['context', 'contributions', 'plugins', 'settings', 'workbench'];
+  static deps = ['context', 'contributions', 'engine', 'plugins', 'settings'];
 
   /** @param {object} node @param {{reset?:boolean}} [opts] reset → start a fresh stack (modal search) */
   constructor(node, opts = {}) {
@@ -406,8 +407,7 @@ export class OpenFileAction extends Action {
     // Guard against being invoked with no target (e.g. a command fired with an empty
     // selection) — dereferencing a null node would throw an unhandled rejection.
     if (!this.node) return;
-    const { workbench } = r;
-    const open = (openerId) => workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
+    const open = (openerId) => r.engine.dispatch(new OpenInPanelAction(this.node, openerId, { reset: !!this.opts.reset }));
 
     // An explicit opener (e.g. the switch-opener control) wins outright.
     if (this.opts.openerId) return open(this.opts.openerId);
@@ -423,7 +423,7 @@ export class OpenFileAction extends Action {
     // Several openers and no saved preference → let the user choose (with an option to
     // remember). One or none → just open the best (or the download fallback).
     if (avail.length > 1) {
-      return workbench.showDialog({ kind: 'opener-chooser', node: this.node, openers: avail, reset: !!this.opts.reset });
+      return r.engine.dispatch(new ShowDialogAction({ kind: 'opener-chooser', node: this.node, openers: avail, reset: !!this.opts.reset }));
     }
     open(avail[0]?.id || 'core.fallback');
   }
@@ -531,19 +531,19 @@ export class FilterAction extends Action {
 /** Command-palette quick-open: a keyword file search whose results live in the search
  *  service (state.se.paletteFiles) instead of ad-hoc state hung off the UI. */
 export class QuickOpenAction extends Action {
-  static deps = ['api', 'search', 'workbench'];
+  static deps = ['api', 'overlay', 'search'];
 
   constructor(query) {
     super();
     this.query = query;
   }
   async execute(r) {
-    const { api, search, workbench } = r;
+    const { api, overlay, search } = r;
     // The palette's mode as it is NOW, not as it was when the keystroke's timer was set.
     // This guard used to live in the debounce callback in the component, which had to read
     // it back off the service for exactly this reason — a listener belongs to the render
     // that created it, and the mode can change under a pending timer.
-    if (workbench.overlay.state.palette?.mode !== 'files') return;
+    if (overlay.get().palette?.mode !== 'files') return;
     const q = (this.query || '').trim();
     if (!q) { search.set({ paletteFiles: [], paletteQuery: '', paletteError: null, paletteLoading: false }); return; }
     // Keystrokes outrun the network: a slower request for an earlier query must not
@@ -800,87 +800,149 @@ class ShellAction extends Action {
   }
 }
 
-export class CloseDialogAction extends ShellAction {
-  apply(wb) { wb.closeDialog(); }
+/**
+ * The overlays: palette, dialog, context menu, plugin panel.
+ *
+ * Their own lease. Closing a dialog used to go through the workbench facade and therefore
+ * leased the entire shell — the panel stack, the launcher cursor and the sheet included —
+ * to set one field to null.
+ */
+class OverlayAction extends Action {
+  static deps = ['overlay'];
+  async execute({ overlay }) {
+    this.apply(overlay);
+  }
 }
 
-export class UpdateDialogAction extends ShellAction {
+/** The panel stack. Still a service: it mirrors into browser history and persists recents. */
+class NavAction extends Action {
+  static deps = ['navigation'];
+  async execute({ navigation }) {
+    this.apply(navigation);
+  }
+}
+
+export class CloseDialogAction extends OverlayAction {
+  apply(o) { o.set({ dialog: null }); }
+}
+
+/** Merge a patch into the open dialog — a reactive dialog, like the opener chooser. */
+export class UpdateDialogAction extends OverlayAction {
   constructor(patch) { super(); this.patch = patch; }
-  apply(wb) { wb.updateDialog(this.patch); }
+  apply(o) {
+    const dialog = o.get().dialog;
+    if (dialog) o.set({ dialog: { ...dialog, ...this.patch } });
+  }
 }
 
-export class CloseContextMenuAction extends ShellAction {
-  apply(wb) { wb.closeContextMenu(); }
+export class CloseContextMenuAction extends OverlayAction {
+  apply(o) { o.set({ contextMenu: null }); }
 }
 
-export class ClosePaletteAction extends ShellAction {
-  apply(wb) { wb.closePalette(); }
+export class ClosePaletteAction extends OverlayAction {
+  apply(o) { o.set({ palette: null }); }
 }
 
-export class SetPaletteQueryAction extends ShellAction {
+export class SetPaletteQueryAction extends OverlayAction {
   constructor(query) { super(); this.query = query; }
-  apply(wb) { wb.setPaletteQuery(this.query); }
+  apply(o) {
+    const palette = o.get().palette;
+    // Back to the top: the previous highlight belonged to the previous result set.
+    if (palette) o.set({ palette: { ...palette, query: this.query, index: 0 } });
+  }
 }
 
-export class SetPaletteIndexAction extends ShellAction {
+export class SetPaletteIndexAction extends OverlayAction {
   constructor(index) { super(); this.index = index; }
-  apply(wb) { wb.setPaletteIndex(this.index); }
+  apply(o) {
+    const palette = o.get().palette;
+    if (palette) o.set({ palette: { ...palette, index: this.index } });
+  }
 }
 
-export class MovePaletteAction extends ShellAction {
-  // `count` is not optional: `movePalette` wraps the index, so without it the service
-  // cannot know where the end is and returns early — arrow keys in the palette silently
-  // did nothing.
+/**
+ * Move the palette's highlight, wrapping at either end.
+ *
+ * The wrapping is HERE now. It used to be in the service with this action forwarding two
+ * arguments to it — and it forwarded one, so the service could not tell where the end was,
+ * returned early, and the arrow keys did nothing at all. Deciding and writing in one place
+ * is what removes the chance.
+ */
+export class MovePaletteAction extends OverlayAction {
   constructor(delta, count) { super(); this.delta = delta; this.count = count; }
-  apply(wb) { wb.movePalette(this.delta, this.count); }
+  apply(o) {
+    const palette = o.get().palette;
+    if (!palette || !this.count) return;
+    o.set({ palette: { ...palette, index: wrapIndex(palette.index, this.delta, this.count) } });
+  }
+}
+
+/** The double-shift overlay: a search that starts empty and resets the stack on a pick. */
+export class OpenSearchModalAction extends ShellAction {
+  apply(wb) { wb.set({ searchModal: true, launch: { query: '', index: 0 } }); }
 }
 
 export class CloseSearchModalAction extends ShellAction {
-  apply(wb) { wb.closeSearchModal(); }
+  apply(wb) { wb.set({ searchModal: false }); }
 }
 
 export class SetLaunchQueryAction extends ShellAction {
   constructor(query) { super(); this.query = query; }
-  apply(wb) { wb.setLaunchQuery(this.query); }
+  // Back to the top, for the same reason the palette does: the old highlight belonged to
+  // the old results.
+  apply(wb) { wb.set({ launch: { query: this.query, index: 0 } }); }
 }
 
 export class SetLaunchIndexAction extends ShellAction {
   constructor(index) { super(); this.index = index; }
-  apply(wb) { wb.setLaunchIndex(this.index); }
+  apply(wb) { wb.set({ launch: { ...wb.get().launch, index: this.index } }); }
 }
 
+/** Raise, swap, or drop the phone bottom sheet. Tapping the open one closes it. */
 export class OpenSheetAction extends ShellAction {
   constructor(which) { super(); this.which = which; }
-  apply(wb) { wb.openSheet(this.which); }
+  apply(wb) { wb.set({ sheet: wb.get().sheet === this.which ? null : this.which }); }
 }
 
 export class CloseSheetAction extends ShellAction {
-  apply(wb) { wb.closeSheet(); }
+  apply(wb) { wb.set({ sheet: null }); }
 }
 
 export class ToggleInfoPanelAction extends ShellAction {
   constructor(open) { super(); this.open = open; }
-  apply(wb) { wb.toggleInfoPanel(this.open); }
+  apply(wb) { wb.set({ infoPanel: this.open ?? !wb.get().infoPanel }); }
 }
 
-export class OpenPluginPanelAction extends ShellAction {
+export class OpenPluginPanelAction extends OverlayAction {
   constructor(pluginId) { super(); this.pluginId = pluginId; }
-  apply(wb) { wb.openPluginPanel(this.pluginId); }
+  apply(o) { o.set({ pluginPanel: this.pluginId }); }
 }
 
-export class ClosePluginPanelAction extends ShellAction {
-  apply(wb) { wb.closePluginPanel(); }
+export class ClosePluginPanelAction extends OverlayAction {
+  apply(o) { o.set({ pluginPanel: null }); }
 }
 
-/** Open a node in a panel, with a chosen opener. */
-export class OpenInPanelAction extends ShellAction {
+/**
+ * Open a node in a panel, with a chosen opener.
+ *
+ * Three things at once, and they belong together: the panel goes on the stack, the shell
+ * switches to the drive, and the modal search — if that is where the pick came from —
+ * closes behind it. The workbench service used to do the coordinating because the stack
+ * lives in one place and the activity in another; an action is a better home for "these
+ * happen together" than a facade over both.
+ */
+export class OpenInPanelAction extends Action {
+  static deps = ['navigation', 'workbench'];
   constructor(node, openerId, opts = {}) {
     super();
     this.node = node;
     this.openerId = openerId;
     this.opts = opts;
   }
-  apply(wb) { wb.openFile(this.node, this.openerId, this.opts); }
+  async execute({ navigation, workbench }) {
+    workbench.set({ activity: 'home', searchModal: false });
+    navigation.openFile(this.node, this.openerId, this.opts);
+  }
 }
 
 // --- the drive's services --------------------------------------------------------
@@ -1076,8 +1138,11 @@ export class MoveLaunchAction extends Action {
   static deps = ['explorer', 'workbench'];
   constructor(delta, nodes) { super(); this.delta = delta; this.nodes = nodes; }
   async execute({ workbench, explorer }) {
-    workbench.moveLaunch(this.delta, this.nodes.length);
-    selectNode(explorer, this.nodes[workbench.state.launch.index]);
+    const count = this.nodes.length;
+    if (!count) return;
+    const index = wrapIndex(workbench.get().launch.index, this.delta, count);
+    workbench.set({ launch: { ...workbench.get().launch, index } });
+    selectNode(explorer, this.nodes[index]);
   }
 }
 
@@ -1086,7 +1151,7 @@ export class SelectLaunchAction extends Action {
   static deps = ['explorer', 'workbench'];
   constructor(index, node) { super(); this.index = index; this.node = node; }
   async execute({ workbench, explorer }) {
-    workbench.setLaunchIndex(this.index);
+    workbench.set({ launch: { ...workbench.get().launch, index: this.index } });
     selectNode(explorer, this.node);
   }
 }
@@ -1120,9 +1185,9 @@ export class SetViewStateAction extends Action {
  * a direct call precisely because dispatching a menu would have meant putting functions on
  * the feed. See ui/activate.js.
  */
-export class ShowContextMenuAction extends ShellAction {
+export class ShowContextMenuAction extends OverlayAction {
   constructor(x, y, items) { super(); this.x = x; this.y = y; this.items = items; }
-  apply(wb) { wb.showContextMenu(this.x, this.y, this.items); }
+  apply(o) { o.set({ contextMenu: { x: this.x, y: this.y, items: this.items } }); }
 }
 
 /**
@@ -1132,9 +1197,9 @@ export class ShowContextMenuAction extends ShellAction {
  * what was typed out of view state rather than being handed it — see PromptAction. Nothing
  * in a dialog spec is callable, which matters because the spec lives in workbench state.
  */
-export class ShowDialogAction extends ShellAction {
+export class ShowDialogAction extends OverlayAction {
   constructor(dialog) { super(); this.dialog = dialog; }
-  apply(wb) { wb.showDialog(this.dialog); }
+  apply(o) { o.set({ dialog: this.dialog }); }
 }
 
 /** Change one setting. */
@@ -1162,13 +1227,17 @@ export class RememberOpenerAction extends Action {
 }
 
 /** Back through the panel stack. */
-export class NavigateBackAction extends ShellAction {
-  apply(wb) { wb.back(); }
+export class NavigateBackAction extends NavAction {
+  apply(nav) { nav.back(); }
 }
 
 /** Close the viewer stack and return to the drive. */
-export class ShowHomeAction extends ShellAction {
-  apply(wb) { wb.showHome(); }
+export class ShowHomeAction extends Action {
+  static deps = ['navigation', 'workbench'];
+  async execute({ navigation, workbench }) {
+    workbench.set({ activity: 'home', searchModal: false });
+    navigation.reset();
+  }
 }
 
 /** Reload one plugin — re-read its manifest and restart its worker. */
@@ -1200,7 +1269,7 @@ export class SetPluginSecretAction extends Action {
  * lost access to. Either way the click must say so rather than do nothing.
  */
 export class OpenNotificationTargetAction extends Action {
-  static deps = ['api', 'explorer', 'notifications', 'workbench', 'context', 'contributions', 'plugins', 'settings'];
+  static deps = ['api', 'context', 'contributions', 'engine', 'explorer', 'notifications', 'plugins', 'settings', 'workbench'];
 
   constructor(nodeId) { super(); this.nodeId = nodeId; }
 
@@ -1215,7 +1284,7 @@ export class OpenNotificationTargetAction extends Action {
       return;
     }
     await new OpenFileAction(node).execute(r);
-    r.workbench.toggleInfoPanel(true);
+    r.workbench.set({ infoPanel: true });
   }
 }
 
@@ -1227,19 +1296,19 @@ export class OpenNotificationTargetAction extends Action {
  * because every one of these used to do that by hand and two forgot to do it consistently.
  */
 export class PromptAction extends Action {
-  static deps = ['viewState', 'workbench'];
+  static deps = ['overlay', 'viewState'];
 
   async execute(r) {
     const held = r.viewState.get()[PROMPT];
     const value = (held?.value ?? '').trim();
-    r.workbench.closeDialog();
+    r.overlay.set({ dialog: null });
     if (value) await this.withValue(value, r);
   }
 }
 
 /** Rename the node this prompt was opened for. */
 export class RenamePromptAction extends PromptAction {
-  static deps = ['viewState', 'workbench', 'engine'];
+  static deps = ['engine', 'overlay', 'viewState'];
   constructor(node) { super(); this.node = node; }
   async withValue(name, { engine }) {
     if (name !== this.node.name) await engine.dispatch(new RenameAction(this.node.id, name));
@@ -1248,7 +1317,7 @@ export class RenamePromptAction extends PromptAction {
 
 /** Fetch and review a plugin package from the URL that was typed. */
 export class InstallPluginFromUrlPromptAction extends PromptAction {
-  static deps = ['viewState', 'workbench', 'notifications', 'plugins', 'social'];
+  static deps = ['notifications', 'overlay', 'plugins', 'social', 'viewState', 'workbench'];
   async withValue(url, r) { await beginInstallFromUrl(r, url); }
 }
 
@@ -1261,10 +1330,10 @@ export class InstallPluginFromUrlPromptAction extends PromptAction {
  * driver declared.
  */
 export class CreateCollectionFromFormAction extends Action {
-  static deps = ['engine', 'workbench'];
+  static deps = ['engine', 'overlay'];
   constructor(record) { super(); this.record = record; }
-  async execute({ engine, workbench }) {
-    workbench.closeDialog();
+  async execute({ engine, overlay }) {
+    overlay.set({ dialog: null });
     if (this.record) await engine.dispatch(new CreateCollectionAction(this.record));
   }
 }
@@ -1324,27 +1393,48 @@ export class PatchDraftAction extends Action {
  * selected" is a real answer and has to be said out loud — returning silently is
  * indistinguishable from a broken command.
  */
-function subjectOf({ explorer, workbench, notifications }, node = null) {
-  const found = node || selectedNodesOf(explorer.get())[0] || workbench.activeTab()?.node;
+function subjectOf({ explorer, navigation, notifications }, node = null) {
+  const found = node || selectedNodesOf(explorer.get())[0] || navigation.activeTab()?.node;
   if (!found) notifications.info('Pick a file first — highlight one in the list, or open it.');
   return found;
 }
 
 /** Open the command palette, or quick-open, depending on the mode. */
-export class OpenPaletteAction extends ShellAction {
+export class OpenPaletteAction extends OverlayAction {
   constructor(mode = 'commands', query = '') { super(); this.mode = mode; this.query = query; }
-  apply(wb) { wb.openPalette(this.mode, this.query); }
+  apply(o) { o.set({ palette: { mode: this.mode, query: this.query, index: 0 } }); }
 }
 
 /** Switch the main area between the drive, plugins and settings. */
 export class SetActivityAction extends ShellAction {
   constructor(activity) { super(); this.activity = activity; }
-  apply(wb) { wb.setActivity(this.activity); }
+  apply(wb) { wb.set({ activity: this.activity, sidebarVisible: true }); }
 }
 
 /** Close the topmost transient overlay — the Escape key's command. */
-export class CloseOverlaysAction extends ShellAction {
-  apply(wb) { wb.closeOverlays(); }
+/**
+ * Close the topmost transient thing — what Escape does.
+ *
+ * The ORDER is the whole content of this action, and it spans three resources: the menu
+ * over the dialog, the dialog over the phone sheet, the sheet over the modal search, and
+ * only when none of those is up does Escape start popping the panel stack. Getting it wrong
+ * is not a crash — it is Escape closing the wrong thing, which is why it is written out
+ * once, here, rather than distributed over whoever owns each overlay.
+ */
+export class CloseOverlaysAction extends Action {
+  static deps = ['navigation', 'overlay', 'workbench'];
+  async execute({ navigation, overlay, workbench }) {
+    const o = overlay.get();
+    const wb = workbench.get();
+    if (o.contextMenu) return overlay.set({ contextMenu: null });
+    if (o.dialog) return overlay.set({ dialog: null });
+    if (wb.sheet) return workbench.set({ sheet: null });
+    if (wb.searchModal) return workbench.set({ searchModal: false });
+    if (o.palette) return overlay.set({ palette: null });
+    if (o.pluginPanel) return overlay.set({ pluginPanel: null });
+    // Nothing floating: Escape pops the top viewer panel instead.
+    if (navigation.state.stack.length > 1) navigation.back();
+  }
 }
 
 /**
@@ -1422,7 +1512,7 @@ export class PickAndUploadAction extends Action {
  * the thing that knows a failed copy must still leave the text somewhere selectable.
  */
 export class CopyLinkAction extends Action {
-  static deps = ['engine', 'explorer', 'notifications', 'workbench'];
+  static deps = ['engine', 'explorer', 'navigation', 'notifications'];
   /** @param {'trove'|'share'} kind */
   constructor(kind = 'trove', node = null) { super(); this.kind = kind; this.node = node; }
   async execute(r) {
@@ -1437,15 +1527,15 @@ export class CopyLinkAction extends Action {
 
 /** Ask for a new name for the subject. The prompt's value is read by RenamePromptAction. */
 export class RenameSubjectAction extends Action {
-  static deps = ['explorer', 'notifications', 'workbench'];
+  static deps = ['engine', 'explorer', 'navigation', 'notifications'];
   constructor(node = null) { super(); this.node = node; }
   async execute(r) {
     const node = subjectOf(r, this.node);
     if (!node) return;
-    r.workbench.showDialog({
+    r.engine.dispatch(new ShowDialogAction({
       kind: 'prompt', title: 'Rename', label: 'New name', value: node.name, confirmLabel: 'Rename',
       confirmActions: [new RenamePromptAction(node)],
-    });
+    }));
   }
 }
 
@@ -1458,10 +1548,10 @@ export class RenameSubjectAction extends Action {
  * action, and the reverse — promising recovery that doesn't exist — is worse.
  */
 export class DeleteSubjectAction extends Action {
-  static deps = ['engine', 'explorer', 'notifications', 'settings', 'workbench'];
+  static deps = ['engine', 'explorer', 'navigation', 'notifications', 'settings'];
   async execute(r) {
     const nodes = selectedNodesOf(r.explorer.get());
-    const open = nodes.length ? null : r.workbench.activeTab()?.node;
+    const open = nodes.length ? null : r.navigation.activeTab()?.node;
     if (open) nodes.push(open);
     if (!nodes.length) {
       r.notifications.info('Pick a file first — highlight one in the list, or open it.');
@@ -1469,7 +1559,7 @@ export class DeleteSubjectAction extends Action {
     }
     const deleteThem = new DeleteAction(nodes.map((n) => n.id));
     if (!r.settings.get('explorer.confirmDelete')) return r.engine.dispatch(deleteThem);
-    r.workbench.showDialog({
+    r.engine.dispatch(new ShowDialogAction({
       kind: 'confirm',
       title: `Move ${nodes.length} item${nodes.length > 1 ? 's' : ''} to the trash?`,
       body: nodes.length === 1
@@ -1477,22 +1567,22 @@ export class DeleteSubjectAction extends Action {
         : 'They leave the drive but are kept, and can be restored from the trash.',
       confirmLabel: 'Move to trash',
       confirmActions: [deleteThem],
-    });
+    }));
   }
 }
 
 /** Show the trash, and get back to the drive to see it. */
 export class ShowTrashAction extends Action {
-  static deps = ['engine', 'workbench'];
-  async execute({ engine, workbench }) {
+  static deps = ['engine'];
+  async execute({ engine }) {
     engine.dispatch(new TrashAction('list'));
-    workbench.showHome();
+    engine.dispatch(new ShowHomeAction());
   }
 }
 
 /** Open the subject in a viewer. */
 export class OpenSubjectAction extends Action {
-  static deps = ['engine', 'explorer', 'notifications', 'workbench'];
+  static deps = ['engine', 'explorer', 'navigation', 'notifications'];
   constructor(node = null) { super(); this.node = node; }
   async execute(r) {
     const node = subjectOf(r, this.node);
@@ -1502,7 +1592,7 @@ export class OpenSubjectAction extends Action {
 
 /** Save the subject to the machine. */
 export class DownloadSubjectAction extends Action {
-  static deps = ['api', 'explorer', 'notifications', 'workbench'];
+  static deps = ['api', 'explorer', 'navigation', 'notifications'];
   constructor(node = null) { super(); this.node = node; }
   async execute(r) {
     const target = subjectOf(r, this.node);
@@ -1521,7 +1611,7 @@ export class DownloadSubjectAction extends Action {
 
 /** Keep a copy of the subject for offline use, or stop keeping one. */
 export class PinAction extends Action {
-  static deps = ['explorer', 'notifications', 'offline', 'workbench'];
+  static deps = ['explorer', 'navigation', 'notifications', 'offline'];
   constructor(node = null, pinned = true) { super(); this.node = node; this.pinned = pinned; }
   async execute(r) {
     const target = subjectOf(r, this.node);
@@ -1579,12 +1669,12 @@ export class MintApiKeyFromDraftAction extends Action {
  * centred near the top.
  */
 export class SwitchCollectionAction extends Action {
-  static deps = ['engine', 'explorer', 'notifications', 'workbench'];
+  static deps = ['engine', 'explorer', 'notifications'];
   constructor(collectionId = null) { super(); this.collectionId = collectionId; }
-  async execute({ engine, explorer, notifications, workbench }) {
+  async execute({ engine, explorer, notifications }) {
     if (this.collectionId) {
       engine.dispatch(new NavigateAction(this.collectionId));
-      workbench.showHome();
+      engine.dispatch(new ShowHomeAction());
       return;
     }
     const items = collectionMenuOf(explorer.get(),
@@ -1592,7 +1682,7 @@ export class SwitchCollectionAction extends Action {
       () => new ExecCommandAction('collections.create'));
     if (!items.length) return notifications.info('This drive has one collection.');
     const w = typeof window === 'undefined' ? 800 : window.innerWidth;
-    workbench.showContextMenu(Math.max(12, Math.round(w / 2) - 110), 120, items);
+    engine.dispatch(new ShowContextMenuAction(Math.max(12, Math.round(w / 2) - 110), 120, items));
   }
 }
 
@@ -1603,13 +1693,13 @@ export class SwitchCollectionAction extends Action {
  * indistinguishable from a broken command.
  */
 export class ToggleDetailsAction extends Action {
-  static deps = ['notifications', 'workbench'];
-  async execute({ notifications, workbench }) {
-    if (!workbench.activeTab()) {
+  static deps = ['navigation', 'notifications', 'workbench'];
+  async execute({ navigation, notifications, workbench }) {
+    if (!navigation.activeTab()) {
       notifications.info('Open a file to see its details and conversation.');
       return;
     }
-    workbench.toggleInfoPanel();
+    workbench.set({ infoPanel: !workbench.get().infoPanel });
   }
 }
 

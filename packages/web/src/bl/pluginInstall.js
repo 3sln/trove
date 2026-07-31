@@ -10,7 +10,7 @@ import { parsePackage, fetchPackage, reviewSummary, displayName } from '../platf
 import { pluginId } from '@3sln/trove/core/plugins/identity.js';
 import { installPolicyFor } from './trust.js';
 
-/** @typedef {{notifications: object, plugins: object, workbench: object, social: object}} InstallResources */
+/** @typedef {{notifications: object, overlay: object, plugins: object, social: object, workbench: object}} InstallResources */
 
 /** @param {InstallResources} r */
 export async function beginInstallFromFile(r, file) {
@@ -55,17 +55,17 @@ async function review(r, pkg) {
   }
 
   const summary = reviewSummary(pkg, trust);
-  r.workbench.showDialog({
+  r.overlay.set({ dialog: {
     kind: 'plugin-review',
     summary,
     policy,
     isAdmin: !!r.social.state.admin,
     onInstall: async (grants) => {
-      r.workbench.closeDialog();
+      r.overlay.set({ dialog: null });
       // Account installs upload the package + run a handshake that can take a while —
       // switch to the plugins view (which shows the plugin's loading state) and hold a
       // sticky "Installing…" toast so the user isn't left staring at nothing.
-      r.workbench.setActivity('plugins');
+      r.workbench.set({ activity: 'plugins', sidebarVisible: true });
       const pending = r.notifications.info(`Installing “${label}”…`, { sticky: true });
       try {
         await r.plugins.install(pkg, { grants, trust });
@@ -76,5 +76,5 @@ async function review(r, pkg) {
         r.notifications.error(`Install failed: ${err.message}`);
       }
     },
-  });
+  } });
 }

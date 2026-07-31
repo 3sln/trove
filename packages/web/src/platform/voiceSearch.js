@@ -19,11 +19,9 @@ import { canTranscribeLocally, localAvailability, installLocal, listen } from '.
 export class VoiceSearchService {
   /**
    * @param {object} deps
-   * @param {import('./workbench.js').WorkbenchService} deps.workbench
    * @param {object} deps.notifications
    */
-  constructor({ workbench, notifications, settings } = {}) {
-    this.workbench = workbench;
+  constructor({ notifications, settings } = {}) {
     this.notifications = notifications;
     this.settings = settings;
     this.session = null;

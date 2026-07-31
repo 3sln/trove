@@ -1,9 +1,11 @@
 // createPlatform — assemble every service into one object the whole app shares.
-// This is the "workbench platform": the reactive registries and services that
-// core features and plugins both build on. It also registers the default
-// settings schema and keybindings so the shell has sensible behaviour out of the
-// box. UI-facing shell state (which activity is open, is the palette showing…)
-// lives in WorkbenchService; data and mutations go through ngin (see ../bl).
+// This is the "workbench platform": the reactive registries and services that core
+// features and plugins both build on. It also registers the default settings schema and
+// keybindings so the shell has sensible behaviour out of the box.
+//
+// It does NOT hold the shell's state. Which activity is open, whether the palette is
+// showing, what is on the panel stack — those are engine resources, built by createApp
+// (see ../bl/state.js). The platform is the machinery underneath them.
 
 import { reactive } from '../runtime.js';
 import { ContributionRegistry } from './contributions.js';
@@ -14,7 +16,6 @@ import { SettingsService } from './settings.js';
 import { NotificationService } from './notifications.js';
 import { TroveApiClient } from './api.js';
 import { PluginHost } from './pluginHost.js';
-import { WorkbenchService } from './workbench.js';
 import { ViewportService } from './viewport.js';
 import { SpatialNavigationService } from './spatialNav.js';
 import { VoiceSearchService } from './voiceSearch.js';
@@ -63,20 +64,22 @@ export function createPlatform({ baseUrl = '' } = {}) {
   // But a deployment where the user HOLDS a token has no other way to present it, and
   // reading it here — once, from one place — keeps that out of every call site.
   const api = new TroveApiClient({ baseUrl, token: () => readToken() });
-  const workbench = new WorkbenchService();
   // Which shell to render — phone, desktop, or TV. Constructed before the defaults are
   // registered, so it reads the setting through `settings.get` once that exists.
   const viewport = new ViewportService({ settings });
   // Arrow keys → geometry, but only on a TV. Inert everywhere else.
-  const spatialNav = new SpatialNavigationService({ workbench, viewport });
+  const spatialNav = new SpatialNavigationService({ viewport });
   // Speak to search. Mostly this just puts the search field under the remote's mic —
   // see voiceSearch.js for why that is the whole feature on a TV.
-  const voice = new VoiceSearchService({ workbench, notifications, settings });
+  const voice = new VoiceSearchService({ notifications, settings });
 
   const platform = {
     reactive,
-    contributions, context, commands, keybindings, settings, notifications, api, workbench,
+    contributions, context, commands, keybindings, settings, notifications, api,
     viewport, spatialNav, voice,
+    // The shell's own state is the engine's, not the platform's — createApp builds it and
+    // hands back what the few imperative edges below still need.
+    openPluginPanel: null,
   };
   platform.mediaUrls = new MediaUrlService({ api: platform.api, settings });
   platform.plugins = new PluginHost(platform);

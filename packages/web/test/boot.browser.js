@@ -32,6 +32,7 @@
 import { test, expect } from './testkit.js';
 import { createWorkbench } from '../src/workbench.js';
 import { dd } from '../src/runtime.js';
+import { OpenInPanelAction, ToggleInfoPanelAction } from '../src/bl/actions.js';
 
 /**
  * Let pending work land, then paint.
@@ -184,8 +185,10 @@ test('opening a file renders its viewer and its details panel', async () => {
   const app = await boot();
   try {
     const node = { id: 'itm_1', collectionId: 'col_test', name: 'notes.md', contentType: 'text/markdown', size: 12 };
-    app.platform.workbench.openFile(node, 'core.markdown');
-    app.platform.workbench.toggleInfoPanel(true);
+    // Through the engine, which is the only way in now that the shell has no facade to
+    // poke — and the way the app itself does it.
+    await app.engine.dispatch(new OpenInPanelAction(node, 'core.markdown')).next(['complete', 'error']);
+    await app.engine.dispatch(new ToggleInfoPanelAction(true)).next(['complete', 'error']);
     await settle(250);
 
     expect(app.root.querySelector('.viewer-nav')).toBeTruthy();

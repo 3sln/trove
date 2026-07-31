@@ -43,12 +43,10 @@ const ACTIVATES_ITSELF = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'])
 export class SpatialNavigationService {
   /**
    * @param {object} deps
-   * @param {import('./workbench.js').WorkbenchService} deps.workbench
    * @param {import('./viewport.js').ViewportService} deps.viewport
    * @param {Window} [deps.window]
    */
   constructor({ workbench, viewport, window: win = globalThis }) {
-    this.workbench = workbench;
     this.viewport = viewport;
     this.window = win;
     this.active = false;
