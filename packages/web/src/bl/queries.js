@@ -30,7 +30,6 @@
 // calling `new` on a shared query and quietly getting a second realization.
 
 import { Query } from '@3sln/ngin';
-import { localState } from '../ui/localState.js';
 import { queryOf } from './intern.js';
 import { prettyKey } from '../platform/keybindings.js';
 
@@ -128,14 +127,8 @@ export const viewport = new ServiceQuery('viewport', (r) => r.observe());
 export const voice = new ServiceQuery('voice', (r) => r.observe());
 /** Installed plugins; null where the plugin host is not installed. */
 export const plugins = new ServiceQuery('plugins', (r) => r?.observe?.());
-/**
- * Component-local UI state that still has to reach the render — see ui/localState.js.
- *
- * A module singleton rather than something hanging off `app`, so this ignores the leased
- * resource. It still goes through a query so that a component reads it the same way it
- * reads everything else, and so it has somewhere to land when the rest of the bag is gone.
- */
-export const localUi = new ServiceQuery('workbench', () => localState.observe());
+/** What the UI is in the middle of doing: drafts, captures, ticked boxes. See viewState.js. */
+export const viewState = new ServiceQuery('viewState', (r) => r.observe());
 
 /**
  * Contributions of one type — status items, openers, views.

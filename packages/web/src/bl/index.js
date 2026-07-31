@@ -10,6 +10,7 @@ import { ExplorerService, SearchClientService, TransfersService, ApiKeysService 
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { ActivityService } from './activity.js';
+import { ViewStateService } from './viewState.js';
 import { registerCommands } from './commands.js';
 import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction } from './actions.js';
 
@@ -19,6 +20,9 @@ export function createApp(platform) {
   const apiKeys = new ApiKeysService();
   // One place for "what's running" and "what's stuck", covering both sides of the wire.
   const activity = new ActivityService(platform);
+  // What the UI is in the middle of doing — see viewState.js. A resource, because it
+  // decides what is on screen.
+  const viewState = new ViewStateService();
   const transfers = new TransfersService(activity);
   const social = new SocialService(platform);
   const offline = new OfflineService(platform);
@@ -46,6 +50,7 @@ export function createApp(platform) {
       offline: Provider.fromSingleton(offline),
       activity: Provider.fromSingleton(activity),
       apiKeys: Provider.fromSingleton(apiKeys),
+      viewState: Provider.fromSingleton(viewState),
 
       // The shell.
       workbench: Provider.fromSingleton(platform.workbench),

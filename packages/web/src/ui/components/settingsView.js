@@ -2,7 +2,6 @@ import { dd } from '../../runtime.js';
 import { eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
-import { localState } from '../localState.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
 import { CopyTextAction, PatchApiKeyDraftAction, RebindKeyAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
@@ -386,12 +385,9 @@ function openersSection(ui) {
   );
 }
 
-// Which shortcut is currently listening for its new chord. Module-level because the
-// settings view re-renders from scratch and this is transient UI state, not a setting.
-// Which keybinding is mid-capture. In a cell rather than a module-level `let`, so writing
-// it invalidates the render the way every other state change does — see ui/localState.js.
-const capturingOf = () => localState.get('keybindingCapture') ?? null;
-const setCapturing = (id) => localState.set('keybindingCapture', id);
+// Which shortcut is listening for its new chord. Transient, and still engine state: it
+// decides whether a row renders a `<kbd>` or "Press keys…". See bl/viewState.js.
+const CAPTURE = 'keybindingCapture';
 
 // Its own region, over the keybindings view and the capture state.
 //
@@ -405,12 +401,13 @@ let kbRegion = null;
 function keybindingsSection(ui) {
   // Built once. A fresh region per render would rebuild its alias every pass, and dodo
   // identifies an alias by the function — see ui/region.js.
-  kbRegion ??= region(ui.engine, { bindings: q.keybindings, local: q.localUi },
-    (st) => keybindingRows(st.bindings || [], ui));
+  kbRegion ??= region(ui.engine, { bindings: q.keybindings, view: q.viewState },
+    (st) => keybindingRows(st.bindings || [], ui, st.view?.[CAPTURE] ?? null));
   return kbRegion();
 }
 
-function keybindingRows(bindings, ui) {
+function keybindingRows(bindings, ui, capturing) {
+  const setCapturing = (id) => ui.go(new SetViewStateAction(CAPTURE, id));
   const stop = () => setCapturing(null);
   const rebind = (bindingId, key) => ui.go(new RebindKeyAction(bindingId, key));
   return div({ className: 'group' },
@@ -420,7 +417,7 @@ function keybindingRows(bindings, ui) {
     // more" anywhere, the shortcuts past it simply did not exist as far as anyone could
     // tell, and one plugin keymap was enough to push real ones off the end.
     ...bindings.map((b) => {
-      const listening = capturingOf() === b.bindingId;
+      const listening = capturing === b.bindingId;
       return div({ className: 'setting' },
         div({ className: 'info' },
           div({ className: 't' }, b.title),

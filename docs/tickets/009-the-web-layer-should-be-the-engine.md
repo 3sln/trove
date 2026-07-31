@@ -269,7 +269,18 @@ imperative API is doing both jobs — actions should be the only thing that writ
 query the only thing that reads it. Dissolving each service into a plain state holder, plus
 actions that mutate it, is the rest of the conversion.
 
-`localState.js` deserves the same look. Component state that drives rendered STRUCTURE (the
-keybinding mid-capture, the unsubmitted form) is engine state by this reading, whatever it is
-called and wherever it lives. What legitimately stays outside is interaction that changes no
-structure — hover, focus, animation.
+~~`localState.js` deserves the same look~~ — done. It is `bl/viewState.js`, an engine
+resource, read through a query and written through `SetViewStateAction`. Component state that
+drives rendered STRUCTURE is engine state whatever it is called and wherever it lives. What
+legitimately stays outside is interaction that changes no structure — hover, focus, animation.
+
+It had gone wrong twice in the same direction, which is why it is worth recording. First as
+module-level `let`s with a `rerender()` hook threaded through fourteen modules — data down,
+invalidation back up out of band. Then, after moving it into a cell, components still READ it
+by calling the module during their own render, and two of them WROTE to it there as well, to
+install a default on the render that noticed the dialog had changed. A render that writes
+state is a render with a side effect, and the second version looked reactive enough that the
+first fix seemed finished.
+
+`draftFor` removes the write: it answers with the default when the held draft belongs to a
+different dialog instance, so the first write happens when the user does something.

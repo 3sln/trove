@@ -7,8 +7,8 @@ import { icon, iconForNode } from '../icon.js';
 import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
-import { localState } from '../localState.js';
-import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, UpdateDialogAction } from '../../bl/actions.js';
+import { draftFor } from '../../bl/viewState.js';
+import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -16,8 +16,8 @@ const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 export function dialog(state, ui) {
   const d = state.overlay.dialog;
   if (!d) return null;
-  if (d.kind === 'collection') return collectionDialog(d, ui, state.caps);
-  if (d.kind === 'plugin-review') return pluginReview(d, ui);
+  if (d.kind === 'collection') return collectionDialog(d, ui, state.caps, state.view);
+  if (d.kind === 'plugin-review') return pluginReview(d, ui, state.view);
   if (d.kind === 'opener-chooser') return openerChooserDialog(d, ui);
   const wb = ui.platform.workbench;
   let value = d.value ?? '';
@@ -97,19 +97,19 @@ function openerChooserDialog(d, ui) {
 //
 // The form persists across re-renders (keyed to the dialog instance) so switching driver
 // keeps what has been typed.
-// The collection dialog's unsubmitted form. In a cell, so changing the storage driver —
-// which changes which fields render — invalidates the tree instead of needing a manual
-// nudge back up to the root. See ui/localState.js.
+// The collection dialog's unsubmitted form. Engine state, because changing the storage
+// driver changes which fields are on screen — see bl/viewState.js.
 const COL_FORM = 'collectionDialog';
-function collectionDialog(d, ui, caps) {
-  const wb = ui.platform.workbench;
+function collectionDialog(d, ui, caps, view) {
   const drivers = caps?.storageDrivers || [];
 
-  let colState = localState.get(COL_FORM);
-  if (colState?.ref !== d) {
-    colState = { ref: d, form: { name: '', description: '', driver: drivers[0]?.key || '' } };
-    localState.set(COL_FORM, colState);
-  }
+  // Derived, not written. This used to install the empty form during the render that
+  // noticed the dialog had changed — a render with a side effect. `draftFor` answers with
+  // the default when the held draft belongs to a different dialog instance, so nothing is
+  // written until the user types something.
+  const colState = draftFor(view, COL_FORM, d, {
+    form: { name: '', description: '', driver: drivers[0]?.key || '' },
+  });
   const form = colState.form;
   const driver = drivers.find((x) => x.key === form.driver) || drivers[0];
   // Every field writes through the cell. Only the driver changes which fields are on
@@ -118,7 +118,7 @@ function collectionDialog(d, ui, caps) {
   // in place at all.
   const set = (k) => (e) => {
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    localState.set(COL_FORM, { ref: colState.ref, form: { ...form, [k]: value } });
+    ui.go(new SetViewStateAction(COL_FORM, { ref: colState.ref, form: { ...form, [k]: value } }));
   };
 
   const submit = () => {

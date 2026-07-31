@@ -5,7 +5,6 @@
 // knows about every service at once.
 
 import { dd, derive, constant } from '../../runtime.js';
-import { localState } from '../localState.js';
 import { region } from '../region.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import * as q from '../../bl/queries.js';
@@ -67,9 +66,9 @@ export default function workbench({ engine, app, platform }) {
       app.activity.observe(),
       platform.viewport.observe(),
       platform.voice.observe(),
-      // Component-local UI state — see ui/localState.js. One input rather than one per
-      // dialog, and the reason there is no longer a `rerender` hook to thread anywhere.
-      localState.observe(),
+      // What the UI is in the middle of doing — see bl/viewState.js. Through the engine
+      // like everything else now, rather than a module singleton read during a render.
+      watchQuery(engine, q.viewState),
       // What the server can do, through the engine rather than off a field on `platform`.
       // Its query declares `initial = null`, so this stays a normal value while the request
       // is in flight instead of turning the whole snapshot PENDING and blanking the shell.
@@ -79,8 +78,8 @@ export default function workbench({ engine, app, platform }) {
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, local, caps) =>
-      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, local, caps }),
+    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, view, caps) =>
+      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, view, caps }),
   );
 
   // The chrome, subscribed to what it reads instead of to everything.

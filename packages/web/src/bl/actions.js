@@ -978,3 +978,16 @@ export class SelectLaunchAction extends Action {
 function selectNode(explorer, node) {
   explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
 }
+
+/**
+ * Write one slice of view state — a draft, a capture, a set of ticked boxes.
+ *
+ * Components used to call the store directly, and two of them did it DURING their own
+ * render to install a default. The default is derived now (see `draftFor`), so this only
+ * ever runs because a person did something.
+ */
+export class SetViewStateAction extends Action {
+  static deps = ['viewState'];
+  constructor(key, value) { super(); this.key = key; this.value = value; }
+  async execute({ viewState }) { viewState.set(this.key, this.value); }
+}

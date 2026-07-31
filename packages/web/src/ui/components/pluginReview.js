@@ -7,30 +7,29 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes as fmtBytes } from '../format.js';
-import { localState } from '../localState.js';
-import { CloseDialogAction } from '../../bl/actions.js';
+import { draftFor } from '../../bl/viewState.js';
+import { CloseDialogAction, SetViewStateAction } from '../../bl/actions.js';
 
 const { div, span, button, h3, p, label, input } = dd;
 
-// Grant selection persists across re-renders, keyed to the dialog instance.
-// The ticked capabilities, in a cell — a Set mutated in place wrote the same reference
-// back, which a cell correctly drops as "nothing changed". See ui/localState.js.
+// The ticked capabilities, keyed to the dialog instance. Engine state — it decides which
+// boxes render checked. See bl/viewState.js.
 const KEY = 'pluginReview';
 
-export function pluginReview(d, ui) {
+export function pluginReview(d, ui, view) {
   const s = d.summary;
-  let sel = localState.get(KEY);
-  if (sel?.ref !== d) {
+  // Derived, not written: the default used to be installed during the render that noticed
+  // the dialog had changed, which made rendering a side-effecting operation.
+  const sel = draftFor(view, KEY, d, {
     // Default: request everything the user is allowed to grant.
-    sel = { ref: d, grants: s.capabilities.filter((c) => !c.adminOnly || d.isAdmin).map((c) => c.id) };
-    localState.set(KEY, sel);
-  }
+    grants: s.capabilities.filter((c) => !c.adminOnly || d.isAdmin).map((c) => c.id),
+  });
   // A new array rather than a mutated Set: the write has to be a different value for the
   // cell to see it as a change at all.
-  const toggle = (cap) => localState.set(KEY, {
+  const toggle = (cap) => ui.go(new SetViewStateAction(KEY, {
     ref: sel.ref,
     grants: sel.grants.includes(cap) ? sel.grants.filter((c) => c !== cap) : [...sel.grants, cap],
-  });
+  }));
 
   return div({},
     div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
