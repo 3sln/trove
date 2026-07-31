@@ -8,7 +8,7 @@ import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
 import { draftFor, promptValueOf, PROMPT } from '../../bl/viewState.js';
-import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, CreateCollectionFromFormAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
+import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, CreateCollectionFromFormAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, PatchDraftAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
 import { activate } from '../activate.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
@@ -115,18 +115,19 @@ function collectionDialog(d, ui, caps, view) {
   // noticed the dialog had changed — a render with a side effect. `draftFor` answers with
   // the default when the held draft belongs to a different dialog instance, so nothing is
   // written until the user types something.
-  const colState = draftFor(view, COL_FORM, d, {
-    form: { name: '', description: '', driver: drivers[0]?.key || '' },
-  });
+  const blankForm = { name: '', description: '', driver: drivers[0]?.key || '' };
+  const colState = draftFor(view, COL_FORM, d, { form: blankForm });
   const form = colState.form;
   const driver = drivers.find((x) => x.key === form.driver) || drivers[0];
   // Every field writes through the cell. Only the driver changes which fields are on
   // screen, but writing them all the same way means there is no second rule to remember —
   // and a text field that only mattered on submit was the reason `form` could be mutated
   // in place at all.
+  // Merged against STORED state, not against the `form` this render closed over — see
+  // PatchDraftAction. Changing two fields before the next render used to lose one.
   const set = (k) => (e) => {
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    ui.engine.dispatch(new SetViewStateAction(COL_FORM, { ref: colState.ref, form: { ...form, [k]: value } }));
+    ui.engine.dispatch(new PatchDraftAction(COL_FORM, colState.ref, { [k]: value }, blankForm));
   };
 
   const submit = () => {

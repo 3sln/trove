@@ -50,26 +50,31 @@ export default function workbench({ engine, app, platform }) {
   // of them does and recomputes once on the next read, so fifteen changes in a frame
   // still cost one render.
   const combined = derive(
+    // EVERY input is a query. Half of these used to read the service cell directly, which
+    // looked equivalent and was not: a query may PROJECT, and the projection is where
+    // `offline.pinnedIds` and `voice.canListen` come from. Reading the raw cell got the
+    // service's state without them, so a pinned file's menu still offered to pin it and the
+    // microphone button never appeared — silently, because an undefined field just reads as
+    // false. Going through the engine uniformly is what makes "the same slice" mean the
+    // same thing everywhere.
     [
-      platform.workbench.observe(),
-      platform.workbench.observeOverlay(),
-      platform.workbench.observeNav(),
-      app.explorer.observe(),
-      app.search.observe(),
-      platform.context.observe(),
-      platform.settings.observe(),
-      app.offline.observe(),
-      platform.viewport.observe(),
-      platform.voice.observe(),
-      // What the UI is in the middle of doing — see bl/viewState.js. Through the engine
-      // like everything else now, rather than a module singleton read during a render.
+      watchQuery(engine, q.workbench),
+      watchQuery(engine, q.overlay),
+      watchQuery(engine, q.navigation),
+      watchQuery(engine, q.explorer),
+      watchQuery(engine, q.search),
+      watchQuery(engine, q.context),
+      watchQuery(engine, q.settings),
+      watchQuery(engine, q.offline),
+      watchQuery(engine, q.viewport),
+      watchQuery(engine, q.voice),
+      // What the UI is in the middle of doing — see bl/viewState.js.
       watchQuery(engine, q.viewState),
-      // What the server can do, through the engine rather than off a field on `platform`.
-      // Its query declares `initial = null`, so this stays a normal value while the request
-      // is in flight instead of turning the whole snapshot PENDING and blanking the shell.
+      // What the server can do. Its query declares `initial = null`, so this stays a normal
+      // value while the request is in flight instead of turning the snapshot PENDING and
+      // blanking the shell.
       watchQuery(engine, q.capabilities),
-      // Views the shell reads but no region owns yet: the palette's command list, the
-      // settings schema, and command id -> keybinding label.
+      // Views the shell reads but no region owns yet.
       watchQuery(engine, q.paletteCommands),
       watchQuery(engine, q.commandKeys),
     ],

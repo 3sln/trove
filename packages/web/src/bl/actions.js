@@ -1216,3 +1216,39 @@ export class CreateCollectionFromFormAction extends Action {
     if (this.record) await engine.dispatch(new CreateCollectionAction(this.record));
   }
 }
+
+/**
+ * Change one field of a draft, merging against what is stored RATHER than against what the
+ * render saw.
+ *
+ * Every field handler used to build `{ ...form, [k]: value }` from the `form` its own render
+ * closed over. Two changes to different fields before the next render therefore both merged
+ * onto the same stale base, and the second silently dropped the first — type a name, switch
+ * the storage driver in the same frame, and the name is gone with the Create button quietly
+ * disabled. Renders are coalesced by rAF, so "in the same frame" is not rare, and a
+ * backgrounded tab makes it certain.
+ *
+ * Reading current state inside the action removes the window entirely.
+ *
+ * @param {string} key       which draft
+ * @param {object} ref       the dialog instance it belongs to
+ * @param {object} patch     the field(s) being changed
+ * @param {object} fallback  the draft's default, for when the held one is another dialog's
+ */
+export class PatchDraftAction extends Action {
+  static deps = ['viewState'];
+
+  constructor(key, ref, patch, fallback = {}) {
+    super();
+    this.key = key;
+    this.ref = ref;
+    this.patch = patch;
+    this.fallback = fallback;
+  }
+
+  async execute({ viewState }) {
+    const held = viewState.observe().getValue()[this.key];
+    const base = held && held.ref === this.ref ? held.form : this.fallback;
+    viewState.set(this.key, { ref: this.ref, form: { ...base, ...this.patch } });
+  }
+}
