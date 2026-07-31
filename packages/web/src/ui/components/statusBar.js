@@ -178,7 +178,7 @@ export default function statusBar(state, ui) {
       icon('files', { size: 13 }), span(collectionLabel(ex)),
       (ex.collections || []).length > 1 || ex.canCreateCollection ? icon('chevron-down', { size: 11 }) : null)
       .on({ click: (e) => {
-        const items = ui.app.collectionMenu?.() || [];
+        const items = ex.collectionMenu || [];
         // With nowhere else to go, the segment is a label, not a dead menu.
         if (items.length > 1 || ex.canCreateCollection) {
           const r = e.currentTarget.getBoundingClientRect();

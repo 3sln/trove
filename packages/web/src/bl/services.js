@@ -280,3 +280,35 @@ export function draftScopesOf(state) {
     .map(([collectionId, capabilities]) => ({ collectionId, capabilities }));
   return scopes.length ? scopes : null;
 }
+
+
+/**
+ * The collection switcher's menu, derived from what the explorer knows.
+ *
+ * A pure function for the same reason as `selectedNodesOf`: it answers a question about
+ * state, so it belongs to the view that shows it. It used to be a closure hung on `app` by
+ * `registerCommands` — reachable only through that one field, and impossible to see from
+ * the component that rendered it.
+ *
+ * Items carry `actions`, like every other menu item; see ui/activate.js.
+ *
+ * @param {object} state explorer state
+ * @param {(id?: string) => object} switchTo builds the action for picking a collection
+ * @param {() => object} create builds the action for making a new one
+ */
+export function collectionMenuOf(state, switchTo, create) {
+  // No fallback: this only decides which row gets a tick, and with nothing open the answer
+  // is that none of them do. `|| 'default'` ticked a collection the user had not chosen,
+  // and on a drive with one actually called "default", the wrong one.
+  const current = state?.collectionId;
+  const items = (state?.collections || []).map((c) => ({
+    label: c.name || c.id,
+    icon: c.id === current ? 'check' : 'files',
+    actions: [switchTo(c.id)],
+  }));
+  if (state?.canCreateCollection) {
+    if (items.length) items.push({ sep: true });
+    items.push({ label: 'New collection…', icon: 'plus', actions: [create()] });
+  }
+  return items;
+}

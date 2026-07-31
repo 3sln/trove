@@ -229,7 +229,7 @@ a read into an action would be the same category error as a query handing out a 
 | member | at the start | now |
 |---|---|---|
 | `ui.platform` | 81 | 44 |
-| `ui.app` | 32 | 2 |
+| `ui.app` | 32 | **0** |
 | `ui.exec` | 46 | 48 |
 | `ui.go` | 12 | 70 |
 | `ui.engine` | 0 | 1 |
@@ -296,8 +296,11 @@ scanned. Social's six mutations became actions, awaited, because several are net
 and a dispatch feed that settles before the work does reports success for something still in
 flight.
 
-`ui.app` is down to one use: `collectionMenu()`, which builds menu items carrying `run`
-closures — the same deferred problem as `showContextMenu`.
+`ui.app` is GONE. The last use was `collectionMenu()` — a closure hung on `app` by
+`registerCommands`, reachable through that one field and invisible from the component that
+rendered it. It is a pure function of explorer state, so it went the way of `selectedNodes`:
+into the view. The items it builds already carried `actions` by then, so nothing else had to
+change.
 
 ~~`localState.js` deserves the same look~~ — done. It is `bl/viewState.js`, an engine
 resource, read through a query and written through `SetViewStateAction`. Component state that

@@ -12,7 +12,7 @@ import {
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
-import { selectedNodesOf, draftScopesOf } from './services.js';
+import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;
@@ -224,23 +224,6 @@ export function registerCommands(app) {
   // --- collections -----------------------------------------------------------
   // The menu of "where else could I be". Shared by the palette command and the status
   // bar's collection segment, so both offer the same list.
-  const collectionMenu = () => {
-    // No fallback: this only decides which row gets a tick, and with nothing open the
-    // answer is that none of them do. `|| 'default'` ticked a collection the user had
-    // not chosen, and on a drive with one actually called "default", the wrong one.
-    const current = explorer.state.collectionId;
-    const items = (explorer.state.collections || []).map((c) => ({
-      label: c.name || c.id,
-      icon: c.id === current ? 'check' : 'files',
-      actions: [new ExecCommandAction('collections.switch', c.id)],
-    }));
-    if (explorer.state.canCreateCollection) {
-      if (items.length) items.push({ sep: true });
-      items.push({ label: 'New collection…', icon: 'plus', actions: [new ExecCommandAction('collections.create')] });
-    }
-    return items;
-  };
-  app.collectionMenu = collectionMenu;
 
   // `NavigateAction` takes a single collectionId. This passed ('/', cid) — a leftover
   // from a path+collection signature — so every switch navigated to a collection
@@ -253,7 +236,9 @@ export function registerCommands(app) {
       return;
     }
     // From the palette or a keybinding there is no pointer to anchor a menu to.
-    const items = collectionMenu();
+    const items = collectionMenuOf(explorer.state,
+      (id) => new ExecCommandAction('collections.switch', id),
+      () => new ExecCommandAction('collections.create'));
     if (!items.length) return platform.notifications.info('This drive has one collection.');
     const w = typeof window === 'undefined' ? 800 : window.innerWidth;
     workbench.showContextMenu(Math.max(12, Math.round(w / 2) - 110), 120, items);

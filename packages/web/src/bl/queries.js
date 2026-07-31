@@ -31,7 +31,8 @@
 
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
-import { selectedNodesOf, draftScopesOf } from './services.js';
+import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
+import { ExecCommandAction } from './actions.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
@@ -111,8 +112,15 @@ class ServiceQuery extends Query {
  * answer is the difference between a component knowing what is selected and a component
  * knowing how selection resolution works.
  */
-export const explorer = new ServiceQuery('explorer', (r) => r.observe(),
-  (v) => ({ ...v, selectedNodes: selectedNodesOf(v) }));
+export const explorer = new ServiceQuery('explorer', (r) => r.observe(), (v) => ({
+  ...v,
+  selectedNodes: selectedNodesOf(v),
+  // The collection switcher's rows. In the view because it is a question about state, and
+  // because the component that shows it could not otherwise see where it came from.
+  collectionMenu: collectionMenuOf(v,
+    (id) => new ExecCommandAction('collections.switch', id),
+    () => new ExecCommandAction('collections.create')),
+}));
 /** Query text, results, and the palette's file list. */
 export const search = new ServiceQuery('search', (r) => r.observe());
 /** Uploads and downloads in flight. */
