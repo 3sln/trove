@@ -86,15 +86,24 @@ const buildId = createHash('sha256')
   .digest('hex')
   .slice(0, 10);
 
+// The worker is BUNDLED, not copied. It decrypts objects read straight from the store
+// (see src/platform/directRead.js), which means it needs the same envelope code the app
+// and the server use — and the one thing that must not happen is a second, drifting copy
+// of chunk and nonce arithmetic. It keeps its stable `/sw.js` URL, because that is how a
+// browser finds a new worker.
+//
+// SHELL arrives through `define` rather than a regex over the emitted file: minification
+// renames a `const`, so stamping after bundling could only fail, and the failure would be
+// invisible — every deploy silently sharing one stale shell cache.
+await bundle('src/sw.js', 'sw', {
+  naming: { entry: '[name].js', chunk: 'assets/chunk-[hash].[ext]', asset: 'assets/[name]-[hash].[ext]' },
+  define: { __TROVE_SHELL__: JSON.stringify(`trove-shell-${buildId}`) },
+});
 const swPath = path.join(dist, 'sw.js');
-const sw = await readFile(swPath, 'utf8');
-const stamped = sw.replace(/const SHELL = '[^']*';/, `const SHELL = 'trove-shell-${buildId}';`);
-if (stamped === sw) {
-  // Loud, because the failure is otherwise invisible: the build succeeds, the worker
-  // ships, and every deploy from here on silently reuses one stale shell cache.
-  console.error('Could not stamp SHELL in public/sw.js — the declaration moved.');
+if (!(await readFile(swPath, 'utf8')).includes(buildId)) {
+  // Loud, because the failure is otherwise invisible.
+  console.error('sw.js did not receive the build id — the SHELL define moved.');
   process.exit(1);
 }
-await writeFile(swPath, stamped);
 
 console.log(`built ${jsPath} + ${cssPath}  (shell trove-shell-${buildId})`);

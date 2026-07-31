@@ -10,6 +10,8 @@
 // and replays them (CRDT-merge) on reconnect. On push (bodyless) we pull the
 // inbox and notify.
 
+import { directRead } from './platform/directRead.js';
+
 // The build stamps SHELL with a hash of the emitted assets (see build.mjs), so a deploy
 // gives the new worker a new shell cache and `activate` below retires the old one. It
 // was `trove-shell-v1` and never changed, which made that sweep a no-op — two builds
@@ -18,7 +20,7 @@
 // API and FILES deliberately do NOT rotate. API is data, not code, and FILES holds the
 // bytes of files the user pinned for offline use — naming it per build would throw away
 // someone's offline library every time the app was redeployed.
-const SHELL = 'trove-shell-v1';
+const SHELL = __TROVE_SHELL__;
 const API = 'trove-api-v1';
 const FILES = 'trove-files-v1';
 const KEEP = new Set([SHELL, API, FILES]);
@@ -104,6 +106,17 @@ async function pinnedFirst(req) {
   const cache = await caches.open(FILES);
   const hit = await cache.match(req.url, { ignoreVary: true });
   if (hit) return sliceForRange(hit, req.headers.get('range'));
+  // Straight from the store, decrypted here, when the deployment can presign and this
+  // worker can get a plan. Encryption defends the storage host, so the bytes are allowed
+  // to reach us — what must not reach the bucket is plaintext. Returns null for every
+  // reason it might not apply, and then this is the proxy path it always was.
+  const id = new URL(req.url).searchParams.get('id');
+  if (id) {
+    try {
+      const direct = await directRead(id, req.headers.get('range'), (path) => fetch(path, { credentials: 'same-origin' }));
+      if (direct) return direct;
+    } catch { /* fall through to the proxy */ }
+  }
   try {
     return await fetch(req);
   } catch (err) {
