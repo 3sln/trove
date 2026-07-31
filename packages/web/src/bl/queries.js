@@ -32,7 +32,7 @@
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
-import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction } from './actions.js';
+import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction, LoadRotationAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
 import { statusFactsOf, driveConditionOf } from './status.js';
@@ -167,6 +167,45 @@ export const social = new ServiceQuery('social', (r) => r.observe());
  */
 export const offline = new ServiceQuery('offline', (r) => r.observe(),
   (v) => ({ ...v, pinnedIds: new Set((v?.pins || []).map((p) => p.id)) }));
+/**
+ * The open collection's key, and any rotation running over it.
+ *
+ * Keyed by collection, so switching collections is a different query rather than a change
+ * to notice. `bootAction` loads it when the settings screen first looks — the alternative,
+ * which the API-keys section still does, is to dispatch from inside a render behind a
+ * module-level "have I asked yet" flag, which is a render with a side effect.
+ *
+ * It POLLS while a rotation is running, because the work is happening on the server and
+ * there is nothing to push. The interval belongs to the realization: it starts when
+ * somebody looks and stops when they look away, so a settings screen nobody has open costs
+ * nothing.
+ */
+export const rotationFor = (collectionId) => RotationView.of(collectionId);
+
+class RotationView extends Query {
+  static deps = ['rotation', 'appState', 'engine'];
+  static of = queryOf(RotationView);
+
+  constructor(collectionId) {
+    super();
+    this.collectionId = collectionId;
+    this.bootAction = new LoadRotationAction();
+  }
+
+  boot(r, { notify }) {
+    const cell = r.rotation.observe();
+    notify(cell.getValue());
+    const off = cell.onDirty(() => notify(cell.getValue()));
+    const timer = setInterval(() => {
+      if (r.rotation.get().rotation?.status === 'running') r.engine.dispatch(new LoadRotationAction());
+    }, 2500);
+    hold(r, this, [off, () => clearInterval(timer)]);
+  }
+
+  kill(r) {
+    release(r, this);
+  }
+}
 /** The admin API-key list, with the unsubmitted draft resolved into what it would grant. */
 export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe(),
   (v) => ({ ...v, draftScopes: draftScopesOf(v) }));

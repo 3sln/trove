@@ -3,7 +3,9 @@ import { eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
-import { CopyTextAction, ExecCommandAction, PatchApiKeyDraftAction, RebindKeyAction, RememberOpenerAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
+import { rotationFor } from '../../bl/queries.js';
+import { watchQuery } from '../../bl/watchQuery.js';
+import { BeginRotationAction, CancelRotationAction, CopyTextAction, ExecCommandAction, PatchApiKeyDraftAction, RebindKeyAction, RememberOpenerAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -16,6 +18,7 @@ export default function settingsView(state, ui) {
         p({ className: 'sub' }, 'Preferences are stored in this browser. Plugins contribute their own settings here too.'),
         ...groups.map((g) => group(g, ui)),
         mcpSection(ui, state.caps),
+        encryptionSection(state, ui),
         apiKeysSection(state, ui),
         openersSection(state.assoc, ui),
         keybindingsSection(ui),
@@ -359,6 +362,95 @@ function metaLine(k) {
   bits.push(k.lastUsedAt ? `last used ${when(k.lastUsedAt)}` : 'never used');
   if (k.expiresAt) bits.push(`expires ${when(k.expiresAt)}`);
   return bits.join(' \u00b7 ');
+}
+
+/**
+ * The open collection's key: which one it is, and moving it to a new one.
+ *
+ * Only for an encrypted collection, and only for an admin — a non-admin gets a 403 reading
+ * the rotation state, which is the correct answer rather than an error, so the section
+ * simply is not drawn.
+ */
+function encryptionSection(state, ui) {
+  const collectionId = state.ex?.collectionId;
+  const enc = state.ex?.collections?.find((c) => c.id === collectionId)?.encryption;
+  if (!enc?.enabled) return null;
+  // Watching the query is what LOADS it — its bootAction reads the rotation state and its
+  // realization polls while one is running. Nothing fetches while this screen is closed.
+  return ui.watch(watchQuery(ui.engine, rotationFor(collectionId)), (rot) => encryptionBody(enc, rot || {}, ui));
+}
+
+function encryptionBody(enc, rot, ui) {
+  const running = rot.rotation?.status === 'running';
+  const est = rot.estimate;
+
+  return div({ className: 'group' },
+    h3('Encryption'),
+    p({ className: 'sub' }, 'Files in this collection are sealed before they leave your browser. The drive holds the key.'),
+
+    // The only thing that identifies which key the collection is on, and what a sideloaded
+    // object is matched against — so it has to be somewhere findable and copyable.
+    div({ className: 'setting' },
+      div({ className: 'info' },
+        div({ className: 't' }, 'Key fingerprint'),
+        div({ className: 'd' }, 'Identifies the key this collection is on.'),
+      ),
+      div({ className: 'control' },
+        button({ className: 'btn small', title: 'Copy' }, dd.h('code', enc.fingerprint))
+          .on({ click: () => ui.engine.dispatch(new CopyTextAction(enc.fingerprint, 'Fingerprint copied')) }),
+      ),
+    ),
+
+    div({ className: 'setting' },
+      div({ className: 'info' },
+        div({ className: 't' }, running ? 'Rotating the key' : 'Rotate the key'),
+        div({ className: 'd' }, running
+          ? `${rot.rotation.moved} moved${rot.rotation.failed ? `, ${rot.rotation.failed} failed` : ''} — this continues in the background.`
+          : rotationCost(est)),
+      ),
+      div({ className: 'control' },
+        running
+          ? button({ className: 'btn small', disabled: !!rot.busy }, 'Stop')
+            .on({ click: () => ui.engine.dispatch(new CancelRotationAction()) })
+          : button({ className: 'btn small', disabled: !!rot.busy }, 'Rotate')
+            .on({ click: () => ui.engine.dispatch(new BeginRotationAction()) }),
+      ),
+    ),
+    running
+      ? null
+      // Said before it is started rather than after: what has moved stays moved, so this
+      // is not a job that can be undone by regretting it.
+      : div({},
+        rotationBill(est),
+        p({ className: 'sub' }, 'Every file is re-sealed under a new key and the old one is retired once nothing is left on it. Files stay readable throughout.'),
+      ),
+  );
+}
+
+/**
+ * What a rotation would cost, before anyone starts one.
+ *
+ * The server already composes this in words — it knows the provider and its pricing, and
+ * whether anyone is billed at all — so this shows what it said rather than recomputing a
+ * worse version from a file count. `applicable` is false for a store nobody charges for,
+ * where the only cost is time.
+ */
+function rotationCost(est) {
+  if (!est) return 'Re-seals every file under a fresh key.';
+  return est.summary || 'Re-seals every file under a fresh key.';
+}
+
+/** The itemised estimate, when the provider charges for the traffic. */
+function rotationBill(est) {
+  if (!est?.applicable || !(est.lines || []).length) return null;
+  return div({ className: 'rot-bill' },
+    ...est.lines.map((l) => div({ className: 'rb-line' },
+      span(l.label || l.name || ''), span({ className: 'mono' }, l.amount || l.value || ''))),
+    est.total ? div({ className: 'rb-line total' }, span('Estimated total'), span({ className: 'mono' }, est.total)) : null,
+    // Prices move and this is a guess against a snapshot of them; saying when stops it
+    // reading as a quote.
+    est.asOf ? div({ className: 'rb-asof' }, `Prices as of ${est.asOf}.`) : null,
+  );
 }
 
 function openersSection(rows, ui) {

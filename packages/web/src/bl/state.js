@@ -130,3 +130,15 @@ export const workbenchState = () => slice({
 export function wrapIndex(index, delta, count) {
   return (index + delta + count) % count;
 }
+
+/**
+ * What the open collection's key is doing.
+ *
+ * Rotation is long-running and lives on the server, so this is a local view of it kept in
+ * step by polling while the settings screen is open — see `RotationQuery`. It is state
+ * rather than a fetch-per-render because two things read it (the progress line and whether
+ * Start is offered) and they must not disagree.
+ */
+export const rotationState = () => slice({
+  collectionId: null, rotation: null, estimate: null, loading: false, error: null, busy: false,
+});

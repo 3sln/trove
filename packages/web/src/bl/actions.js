@@ -1748,3 +1748,86 @@ export class ClearSidecarAction extends Action {
     if (social.state.sidecar?.nodeId === this.nodeId) social.loadSidecar(null);
   }
 }
+
+// --- key rotation ---------------------------------------------------------------
+//
+// Rotation moves a collection onto a fresh key, object by object, bounded by wall-clock
+// time per slice. It runs on the server; what the UI needs is to see where it is, what it
+// would cost before anyone starts, and a way to stop it.
+
+/**
+ * Read where the rotation stands, and what one would cost.
+ *
+ * The estimate comes with the state rather than only before starting: on a metered store
+ * this is a real bill, and the number is worth having in front of the button.
+ */
+export class LoadRotationAction extends Action {
+  static deps = ['api', 'explorer', 'notifications', 'rotation'];
+  async execute({ api, explorer, notifications, rotation }) {
+    const collectionId = explorer.get().collectionId;
+    if (!collectionId) return;
+    rotation.set({ collectionId, loading: true, error: null });
+    try {
+      // Both together: the estimate is meaningless without knowing whether one is already
+      // running, and a screen showing one without the other invites starting a second.
+      const [state, estimate] = await Promise.all([
+        api.rotationState(collectionId),
+        api.rotationEstimate(collectionId).catch(() => null),
+      ]);
+      rotation.set({ rotation: state?.rotation ?? null, estimate: estimate ?? null, loading: false });
+    } catch (err) {
+      // A non-admin gets a 403 here and that is the correct answer, not an error worth a
+      // toast — the section simply does not render.
+      rotation.set({ loading: false, error: err?.message || 'Could not read the rotation state' });
+      if (err?.status !== 403) notifications.error?.(err?.message || 'Could not read the rotation state');
+    }
+  }
+}
+
+/** Start moving this collection onto a new key. */
+export class BeginRotationAction extends Action {
+  static deps = ['api', 'engine', 'explorer', 'notifications', 'rotation'];
+  async execute({ api, engine, explorer, notifications, rotation }) {
+    const collectionId = explorer.get().collectionId;
+    if (!collectionId) return;
+    rotation.set({ busy: true });
+    try {
+      const res = await api.beginRotation(collectionId);
+      rotation.set({ rotation: res?.rotation ?? null, busy: false });
+      // The new key becomes current immediately, before any file moves — so the
+      // fingerprint on screen is already out of date. Reload the collections or it keeps
+      // showing the key the collection is moving OFF, which is the one thing this field
+      // exists to get right.
+      await engine.dispatch(new LoadCollectionsAction());
+      notifications.info('Key rotation started. It runs in the background and survives a reload.');
+    } catch (err) {
+      rotation.set({ busy: false });
+      notifications.error(err?.message || 'Could not start the rotation');
+    }
+    return engine.dispatch(new LoadRotationAction());
+  }
+}
+
+/**
+ * Stop one.
+ *
+ * What has already moved stays moved and the new key stays current, so this is untidy
+ * rather than destructive — worth saying, because "cancel" on a job that has rewritten
+ * half a collection sounds like it might undo something.
+ */
+export class CancelRotationAction extends Action {
+  static deps = ['api', 'engine', 'explorer', 'notifications', 'rotation'];
+  async execute({ api, engine, explorer, notifications, rotation }) {
+    const collectionId = explorer.get().collectionId;
+    if (!collectionId) return;
+    rotation.set({ busy: true });
+    try {
+      await api.cancelRotation(collectionId);
+      notifications.info('Rotation stopped. Files already moved stay on the new key.');
+    } catch (err) {
+      notifications.error(err?.message || 'Could not stop the rotation');
+    }
+    rotation.set({ busy: false });
+    return engine.dispatch(new LoadRotationAction());
+  }
+}

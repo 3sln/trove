@@ -679,6 +679,14 @@ kbd {
 .review-meta { color: var(--text-faint); font-size: 11px; margin-top: 6px; }
 .dialog.review .row-actions { padding: 14px 18px; border-top: 1px solid var(--border); margin: 0; }
 
+/* The rotation bill, itemised. Only where a provider actually charges for the traffic. */
+.rot-bill { margin: 8px 0 10px; padding: 8px 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, transparent); }
+.rot-bill .rb-line { display: flex; justify-content: space-between; gap: 12px;
+  font-size: 12px; color: var(--text-dim); padding: 2px 0; }
+.rot-bill .rb-line.total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 5px; color: var(--text); }
+.rot-bill .rb-asof { font-size: 11px; color: var(--text-faint); margin-top: 5px; }
+
 /* ---- Encryption, on the collection form --------------------------------- */
 .enc-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
 .enc-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }

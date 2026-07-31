@@ -8,7 +8,7 @@ import { Engine, Provider } from '@3sln/ngin';
 import { cell } from '../runtime.js';
 import { registerCoreContext, registerViewportContext } from './context.js';
 import { TransfersService } from './services.js';
-import { explorerState, searchState, apiKeysState, viewState as viewStateSlice, overlayState, workbenchState } from './state.js';
+import { explorerState, searchState, apiKeysState, viewState as viewStateSlice, overlayState, workbenchState, rotationState } from './state.js';
 import { NavigationService } from '../platform/navigation.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
@@ -22,6 +22,7 @@ export function createApp(platform) {
   const explorer = explorerState(platform.settings);
   const search = searchState();
   const apiKeys = apiKeysState();
+  const rotation = rotationState();
   // One place for "what's running" and "what's stuck", covering both sides of the wire.
   const activity = new ActivityService(platform);
   // What the UI is in the middle of doing — see bl/state.js. A resource, because it
@@ -43,7 +44,7 @@ export function createApp(platform) {
   const offline = new OfflineService(platform);
   const social = new SocialService(platform, offline);
 
-  const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, workbench, overlay, navigation, engine: null };
+  const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, rotation, workbench, overlay, navigation, engine: null };
 
   // Every resource the engine has, named. The engine's STATE is the state of its
   // resources, so the single `app` provider this started with made that state one opaque
@@ -70,6 +71,7 @@ export function createApp(platform) {
       offline: Provider.fromSingleton(offline),
       activity: Provider.fromSingleton(activity),
       apiKeys: Provider.fromSingleton(apiKeys),
+      rotation: Provider.fromSingleton(rotation),
       viewState: Provider.fromSingleton(viewState),
 
       // The engine itself, for actions that choreograph — dispatching a follow-up rather
