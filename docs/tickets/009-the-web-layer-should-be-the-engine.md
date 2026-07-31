@@ -265,8 +265,13 @@ Each service is now its own provider — `explorer`, `search`, `transfers`, `soc
 a different resource, and ngin leases `constructor.deps` and `this.deps` both, so an instance
 can name its own.
 
-`app` still exists for the older actions, which reach across several resources at once and
-are converted as they are touched. Nothing new should ask for it.
+`app` is no longer leased by anything. All 27 actions declare what they touch, and the
+`AppAction` base that existed only to say `deps = ['app']` is gone.
+
+The engine is a resource too, registered LAZILY because it does not exist when its own
+providers are declared. Seven actions choreograph — dispatch a follow-up rather than doing
+its work inline — and ngin's execute context carries a `dispatchFeed` but no dispatcher, so
+a provider is the seam for it.
 
 ### What comes next, in this spirit
 

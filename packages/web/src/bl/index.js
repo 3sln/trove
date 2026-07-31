@@ -52,6 +52,13 @@ export function createApp(platform) {
       apiKeys: Provider.fromSingleton(apiKeys),
       viewState: Provider.fromSingleton(viewState),
 
+      // The engine itself, for actions that choreograph — dispatching a follow-up rather
+      // than doing the follow-up's work inline. LAZY because the engine does not exist
+      // when its own providers are declared; by the time anything leases this, it does.
+      // ngin's execute context carries a dispatchFeed but no dispatcher, so this is the
+      // seam for it.
+      engine: Provider.fromLazySingleton(async () => engine, () => {}),
+
       // The shell.
       workbench: Provider.fromSingleton(platform.workbench),
       settings: Provider.fromSingleton(platform.settings),

@@ -11,22 +11,20 @@ import { availableOpeners, rememberedOpenerId } from './openers.js';
 // A share link and a `trove:` URI are the same address in two spellings — see core/links.js.
 import { parseShareUrl } from '@3sln/trove/core/links.js';
 
-class AppAction extends Action {
-  static deps = ['app'];
-}
-
 /**
  * Load a collection's items. There is nothing to navigate INTO any more — a drive is
  * browsed by search and by following links — so this only ever switches which
  * collection is on screen, or refreshes the current one.
  */
-export class NavigateAction extends AppAction {
+export class NavigateAction extends Action {
+  static deps = ['api', 'explorer', 'notifications', 'settings'];
+
   constructor(collectionId) {
     super();
     this.collectionId = collectionId;
   }
-  async execute({ app }) {
-    const { explorer, platform } = app;
+  async execute(r) {
+    const { api, explorer, notifications, settings } = r;
     // No `|| 'default'`. Navigating nowhere in particular used to land on a collection
     // that may not exist and may not be readable; now it is a bug in the caller, said out
     // loud rather than papered over with a guess.
@@ -42,9 +40,9 @@ export class NavigateAction extends AppAction {
     // about which drive they were talking about.
     explorer.set({ loading: true, error: null, collectionId, ...(switching ? { trash: null } : {}) });
     try {
-      const sort = platform.settings.get('explorer.sort');
-      const order = platform.settings.get('explorer.sortOrder');
-      const res = await platform.api.list(collectionId, { sort, order });
+      const sort = settings.get('explorer.sort');
+      const order = settings.get('explorer.sortOrder');
+      const res = await api.list(collectionId, { sort, order });
       explorer.set({
         items: res.items, loading: false, selection: [], sort, order,
         collectionId: res.collectionId || collectionId,
@@ -55,23 +53,25 @@ export class NavigateAction extends AppAction {
         nextCursor: res.nextCursor || null,
       });
       // Remember where they were, so the next visit opens there rather than guessing.
-      platform.settings.set?.('explorer.lastCollection', collectionId);
+      settings.set?.('explorer.lastCollection', collectionId);
       explorer.set({ gate: null });
       // Explorer→context projection (collectionId/hasSelection) lives in bl/index.js
       // so it stays in sync with selection too — nothing to mirror here.
     } catch (err) {
       explorer.set({ loading: false, error: err.message });
-      platform.notifications.error(`Couldn't load this collection: ${err.message}`);
+      notifications.error(`Couldn't load this collection: ${err.message}`);
     }
   }
 }
 
-export class LoadCollectionsAction extends AppAction {
-  async execute({ app }) {
+export class LoadCollectionsAction extends Action {
+  static deps = ['api', 'explorer'];
+
+  async execute(r) {
     try {
-      const res = await app.platform.api.collections();
+      const res = await r.api.collections();
       const collections = res.collections || [];
-      app.explorer.set({ collections, canCreateCollection: !!res.canCreate });
+      r.explorer.set({ collections, canCreateCollection: !!res.canCreate });
       return collections;
     } catch { /* collections disabled */ return []; }
   }
@@ -86,8 +86,10 @@ export class LoadCollectionsAction extends AppAction {
  * is working correctly. So: keep the last collection if it is still readable, otherwise
  * take the first one they can actually see.
  */
-export class OpenInitialCollectionAction extends AppAction {
-  async execute({ app }) {
+export class OpenInitialCollectionAction extends Action {
+  static deps = ['api', 'engine', 'explorer', 'notifications', 'settings'];
+
+  async execute(r) {
     // A share link decides where we land, ahead of everything below.
     //
     // Arriving at a link to a specific item and being asked which collection you would
@@ -95,7 +97,7 @@ export class OpenInitialCollectionAction extends AppAction {
     // remembered choice and before the gate, and only falls through to them when the URL
     // is not a share link or cannot be honoured.
     const shared = parseShareUrl(typeof location !== 'undefined' ? location.pathname : '');
-    if (shared) return this.#openShared(app, shared);
+    if (shared) return this.#openShared(r, shared);
 
     // Calls the API directly rather than dispatching LoadCollectionsAction: ngin's
     // dispatch() returns an event feed, not the action's value, so awaiting it would
@@ -103,21 +105,21 @@ export class OpenInitialCollectionAction extends AppAction {
     let collections = [];
     let canCreate = false;
     try {
-      const res = await app.platform.api.collections();
+      const res = await r.api.collections();
       collections = res.collections || [];
       canCreate = !!res.canCreate;
-      app.explorer.set({ collections, canCreateCollection: canCreate });
+      r.explorer.set({ collections, canCreateCollection: canCreate });
     } catch (err) {
-      app.explorer.set({ loading: false, error: `Couldn't load your collections: ${err.message}` });
+      r.explorer.set({ loading: false, error: `Couldn't load your collections: ${err.message}` });
       return;
     }
 
     const ids = collections.map((c) => c.id);
-    const remembered = app.platform.settings.get('explorer.lastCollection');
+    const remembered = r.settings.get('explorer.lastCollection');
 
     // Nothing exists yet. Two different situations that used to read as one:
     if (!ids.length) {
-      app.explorer.set({
+      r.explorer.set({
         loading: false, items: [], collections: [],
         // Someone who may create one is on a fresh drive and should be asked to. Someone
         // who may not has no grants, and telling them to create a collection they cannot
@@ -135,12 +137,12 @@ export class OpenInitialCollectionAction extends AppAction {
     // plenty of people could not read — a permission error presented as their drive.
     // A remembered choice is theirs; anything else is a question.
     if (!remembered || !ids.includes(remembered)) {
-      app.explorer.set({ loading: false, items: [], gate: 'choose', error: null });
+      r.explorer.set({ loading: false, items: [], gate: 'choose', error: null });
       return;
     }
 
-    app.explorer.set({ gate: null });
-    return app.engine.dispatch(new NavigateAction(remembered));
+    r.explorer.set({ gate: null });
+    return r.engine.dispatch(new NavigateAction(remembered));
   }
 
   /**
@@ -150,8 +152,8 @@ export class OpenInitialCollectionAction extends AppAction {
    * read, and a link to an item that has been renamed, are different problems with
    * different answers, and both used to be indistinguishable from an empty drive.
    */
-  async #openShared(app, shared) {
-    const { platform, explorer, engine } = app;
+  async #openShared(r, shared) {
+    const { api, engine, explorer, notifications } = r;
     // The URL is consumed rather than kept. The app does not otherwise reflect its state
     // in the address bar, so leaving a share path there would go stale the moment the user
     // navigated anywhere — a URL that lies is worse than one that is merely uninformative.
@@ -159,7 +161,7 @@ export class OpenInitialCollectionAction extends AppAction {
 
     let collections = [];
     try {
-      const res = await platform.api.collections();
+      const res = await api.collections();
       collections = res.collections || [];
       explorer.set({ collections, canCreateCollection: !!res.canCreate });
     } catch (err) {
@@ -185,8 +187,8 @@ export class OpenInitialCollectionAction extends AppAction {
       // `stat` answers `{ node }` rather than the node — see bl/links.js, which unwraps it
       // the same way. Reading `.id` off the envelope silently looks like "not found".
       const res = shared.by === 'id'
-        ? await platform.api.stat(shared.value)
-        : await platform.api.stat(shared.value, { collection: shared.collection });
+        ? await api.stat(shared.value)
+        : await api.stat(shared.value, { collection: shared.collection });
       node = res?.node || null;
     } catch {
       node = null;
@@ -194,7 +196,7 @@ export class OpenInitialCollectionAction extends AppAction {
     if (!node?.id) {
       // A link by name breaks on rename, deliberately and visibly. Saying so beats
       // landing in the right collection with no explanation of what was expected.
-      platform.notifications.warn(
+      notifications.warn(
         shared.by === 'name'
           ? `“${shared.value}” is not in this collection any more — it may have been renamed or removed.`
           : 'That item no longer exists.',
@@ -240,46 +242,52 @@ export class ExecCommandAction extends Action {
   }
 }
 
-export class UninstallPluginAction extends AppAction {
+export class UninstallPluginAction extends Action {
+  static deps = ['notifications', 'plugins'];
+
   constructor(pluginId) {
     super();
     this.pluginId = pluginId;
   }
-  async execute({ app }) {
+  async execute(r) {
     try {
-      await app.platform.plugins.uninstall(this.pluginId);
+      await r.plugins.uninstall(this.pluginId);
     } catch (err) {
-      app.platform.notifications.error(`Couldn’t uninstall: ${err.message}`);
+      r.notifications.error(`Couldn’t uninstall: ${err.message}`);
     }
   }
 }
 
-export class CreateCollectionAction extends AppAction {
+export class CreateCollectionAction extends Action {
+  static deps = ['api', 'engine', 'notifications'];
+
   constructor(record) {
     super();
     this.record = record;
   }
-  async execute({ app }) {
+  async execute(r) {
     try {
-      const res = await app.platform.api.createCollection(this.record);
-      app.platform.notifications.success(`Created collection “${res.collection.name}”`);
-      await app.engine.dispatch(new LoadCollectionsAction());
-      app.engine.dispatch(new NavigateAction(res.collection.id));
+      const res = await r.api.createCollection(this.record);
+      r.notifications.success(`Created collection “${res.collection.name}”`);
+      await r.engine.dispatch(new LoadCollectionsAction());
+      r.engine.dispatch(new NavigateAction(res.collection.id));
     } catch (err) {
-      app.platform.notifications.error(`Couldn’t create collection: ${err.message}`);
+      r.notifications.error(`Couldn’t create collection: ${err.message}`);
     }
   }
 }
 
 /** Append the next page of a collection to what's already on screen. */
-export class LoadMoreAction extends AppAction {
-  async execute({ app }) {
-    const { explorer, platform } = app;
+export class LoadMoreAction extends Action {
+  static deps = ['api', 'explorer', 'notifications'];
+
+  async execute(r) {
+    const { api, explorer, notifications } = r;
     const cursor = explorer.state.nextCursor;
     if (!cursor || explorer.state.loadingMore) return;
     explorer.set({ loadingMore: true });
     try {
-      const res = await platform.api.list(explorer.state.collectionId, {
+      const res = await api.list(explorer.state.collectionId, {
         sort: explorer.state.sort, order: explorer.state.order, cursor,
       });
       explorer.set({
@@ -289,26 +297,30 @@ export class LoadMoreAction extends AppAction {
       });
     } catch (err) {
       explorer.set({ loadingMore: false });
-      platform.notifications.error(`Couldn't load more: ${err.message}`);
+      notifications.error(`Couldn't load more: ${err.message}`);
     }
   }
 }
 
-export class RefreshAction extends AppAction {
-  async execute({ app }) {
-    return app.engine.dispatch(new NavigateAction(app.explorer.state.collectionId));
+export class RefreshAction extends Action {
+  static deps = ['engine', 'explorer'];
+
+  async execute(r) {
+    return r.engine.dispatch(new NavigateAction(r.explorer.state.collectionId));
   }
 }
 
 /** Show what's been deleted but not destroyed, and act on it. */
-export class TrashAction extends AppAction {
+export class TrashAction extends Action {
+  static deps = ['api', 'engine', 'explorer', 'notifications'];
+
   constructor(op = 'list', id = null) {
     super();
     this.op = op;
     this.id = id;
   }
-  async execute({ app }) {
-    const { explorer, platform } = app;
+  async execute(r) {
+    const { api, explorer, notifications } = r;
     const collection = explorer.state.collectionId;
     // Putting it away is one of the things you can do to the trash. Without this the
     // section, once opened, stayed on screen until a page reload — there was no way
@@ -319,111 +331,119 @@ export class TrashAction extends AppAction {
     }
     try {
       if (this.op === 'restore') {
-        const { node } = await platform.api.restore(this.id);
-        platform.notifications.success(`Restored “${node.name}”`);
+        const { node } = await api.restore(this.id);
+        notifications.success(`Restored “${node.name}”`);
       } else if (this.op === 'purge') {
-        await platform.api.purgeTrash({ id: this.id });
+        await api.purgeTrash({ id: this.id });
       } else if (this.op === 'empty') {
-        const { purged } = await platform.api.purgeTrash({ collection });
-        platform.notifications.success(`Deleted ${purged} item${purged === 1 ? '' : 's'} for good`);
+        const { purged } = await api.purgeTrash({ collection });
+        notifications.success(`Deleted ${purged} item${purged === 1 ? '' : 's'} for good`);
       }
-      const { items } = await platform.api.trash(collection);
+      const { items } = await api.trash(collection);
       explorer.set({ trash: items });
       // Restoring puts something back in the drive, so the list on screen is now stale.
-      if (this.op !== 'list') await app.engine.dispatch(new NavigateAction(collection));
+      if (this.op !== 'list') await r.engine.dispatch(new NavigateAction(collection));
     } catch (err) {
-      platform.notifications.error(`Trash: ${err.message}`);
+      notifications.error(`Trash: ${err.message}`);
     }
   }
 }
 
-export class DeleteAction extends AppAction {
+export class DeleteAction extends Action {
+  static deps = ['api', 'engine', 'notifications', 'workbench'];
+
   constructor(ids) {
     super();
     this.ids = ids;
   }
-  async execute({ app }) {
+  async execute(r) {
     try {
-      for (const id of this.ids) await app.platform.api.remove(id);
-      app.platform.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
-      for (const id of this.ids) app.platform.workbench.closeTab(id);
+      for (const id of this.ids) await r.api.remove(id);
+      r.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
+      for (const id of this.ids) r.workbench.closeTab(id);
     } catch (err) {
-      app.platform.notifications.error(`Couldn’t delete: ${err.message}`);
+      r.notifications.error(`Couldn’t delete: ${err.message}`);
     }
-    app.engine.dispatch(new RefreshAction());
+    r.engine.dispatch(new RefreshAction());
   }
 }
 
-export class RenameAction extends AppAction {
+export class RenameAction extends Action {
+  static deps = ['api', 'engine', 'notifications', 'workbench'];
+
   constructor(id, newName) {
     super();
     this.id = id;
     this.newName = newName;
   }
-  async execute({ app }) {
+  async execute(r) {
     try {
-      const node = await app.platform.api.rename(this.id, this.newName);
-      app.platform.workbench.updateTabNode(node.node);
-      app.engine.dispatch(new RefreshAction());
+      const node = await r.api.rename(this.id, this.newName);
+      r.workbench.updateTabNode(node.node);
+      r.engine.dispatch(new RefreshAction());
     } catch (err) {
-      app.platform.notifications.error(`Couldn’t rename: ${err.message}`);
+      r.notifications.error(`Couldn’t rename: ${err.message}`);
     }
   }
 }
 
 
-export class OpenFileAction extends AppAction {
+export class OpenFileAction extends Action {
+  static deps = ['context', 'contributions', 'plugins', 'settings', 'workbench'];
+
   /** @param {object} node @param {{reset?:boolean}} [opts] reset → start a fresh stack (modal search) */
   constructor(node, opts = {}) {
     super();
     this.node = node;
     this.opts = opts;
   }
-  async execute({ app }) {
+  async execute(r) {
     // Guard against being invoked with no target (e.g. a command fired with an empty
     // selection) — dereferencing a null node would throw an unhandled rejection.
     if (!this.node) return;
-    const { platform } = app;
-    const open = (openerId) => platform.workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
+    const { workbench } = r;
+    const open = (openerId) => workbench.openFile(this.node, openerId, { reset: !!this.opts.reset });
 
     // An explicit opener (e.g. the switch-opener control) wins outright.
     if (this.opts.openerId) return open(this.opts.openerId);
 
     // Only openers available right now (a plugin previewer needing the network while
     // offline is skipped, so we fall back to a built-in one).
-    const avail = availableOpeners(platform, this.node);
+    const avail = availableOpeners(r, this.node);
 
     // A remembered choice for this file type, if that opener is still available.
-    const remembered = rememberedOpenerId(platform, this.node);
+    const remembered = rememberedOpenerId(r, this.node);
     if (remembered && avail.some((o) => o.id === remembered)) return open(remembered);
 
     // Several openers and no saved preference → let the user choose (with an option to
     // remember). One or none → just open the best (or the download fallback).
     if (avail.length > 1) {
-      return platform.workbench.showDialog({ kind: 'opener-chooser', node: this.node, openers: avail, reset: !!this.opts.reset });
+      return workbench.showDialog({ kind: 'opener-chooser', node: this.node, openers: avail, reset: !!this.opts.reset });
     }
     open(avail[0]?.id || 'core.fallback');
   }
 }
 
-export class UploadFilesAction extends AppAction {
+export class UploadFilesAction extends Action {
+  static deps = ['api', 'engine', 'explorer', 'notifications', 'settings', 'transfers'];
+
   constructor(files, collectionId) {
     super();
     this.files = files;
     this.collectionId = collectionId;
   }
-  async execute({ app }) {
-    const collection = this.collectionId || app.explorer.state.collectionId;
+  async execute(r) {
+    const collection = this.collectionId || r.explorer.state.collectionId;
     // Uploading with no collection open has nowhere to put the bytes. Refused visibly:
     // the old fallback sent them to whatever 'default' happened to be.
     if (!collection) {
-      app.platform.notifications.error('Open a collection before uploading');
+      r.notifications.error('Open a collection before uploading');
       return;
     }
-    const concurrency = app.platform.settings.get('uploads.concurrency');
-    const uploads = [...this.files].map((file) => this.#one(app, file, collection, concurrency));
+    const concurrency = r.settings.get('uploads.concurrency');
+    const uploads = [...this.files].map((file) => this.#one(r, file, collection, concurrency));
     await Promise.allSettled(uploads);
-    app.engine.dispatch(new NavigateAction(collection));
+    r.engine.dispatch(new NavigateAction(collection));
   }
   /**
    * One file, once — and again, on the same tray row, if the user asks.
@@ -433,20 +453,20 @@ export class UploadFilesAction extends AppAction {
    * it can run at all without asking the user to find the file again; it is also why the
    * offer does not survive a reload, since nothing here is persisted.
    */
-  async #one(app, file, collection, concurrency, existingTid = null) {
-    const { transfers, platform } = app;
+  async #one(r, file, collection, concurrency, existingTid = null) {
+    const { api, notifications, transfers } = r;
     const tid = existingTid || newId('xfer');
     const controller = new AbortController();
     if (existingTid) {
       transfers.restart(tid, controller);
     } else {
       transfers.start(tid, file.name, file.size, controller, {
-        retry: () => this.#one(app, file, collection, concurrency, tid),
+        retry: () => this.#one(r, file, collection, concurrency, tid),
       });
     }
     let uploadId = null;
     try {
-      const node = await platform.api.upload(file, {
+      const node = await api.upload(file, {
         collection, concurrency, signal: controller.signal,
         onStart: (id) => { uploadId = id; },
         onProgress: (p) => transfers.progress(tid, p),
@@ -455,18 +475,18 @@ export class UploadFilesAction extends AppAction {
       // The server disambiguates a same-name collision rather than overwriting — tell
       // the user when the saved name differs from what they dropped.
       if (node?.name && node.name !== file.name) {
-        platform.notifications.info(`"${file.name}" already existed — saved as "${node.name}".`);
+        notifications.info(`"${file.name}" already existed — saved as "${node.name}".`);
       }
     } catch (err) {
       // Release the server-side session so a cancelled/failed multipart upload doesn't
       // leak an open multipart object (best-effort; the server also sweeps stale ones).
-      if (uploadId) platform.api.abortUpload(uploadId).catch(() => {});
+      if (uploadId) api.abortUpload(uploadId).catch(() => {});
       if (err.code === 'aborted') transfers.finish(tid, 'cancelled');
       else {
         transfers.finish(tid, 'error', err.message);
         // The toast says what happened; the tray row is where it can be acted on, and
         // pointing at it is the difference between a dead end and an offer.
-        platform.notifications.error(`Upload failed: ${file.name} — ${err.message}. Retry it from the transfers tray.`);
+        notifications.error(`Upload failed: ${file.name} — ${err.message}. Retry it from the transfers tray.`);
       }
     }
   }
@@ -474,26 +494,28 @@ export class UploadFilesAction extends AppAction {
 
 /** Drive-wide tag/property filter (`#tag`, `#key:op:value`), optionally narrowed
  *  by free text. Falls back to filtering the loaded folder when offline. */
-export class FilterAction extends AppAction {
+export class FilterAction extends Action {
+  static deps = ['api', 'explorer', 'offline', 'search'];
+
   constructor(filters, text) {
     super();
     this.filters = filters || [];
     this.text = text || '';
   }
-  async execute({ app }) {
-    const { search, platform } = app;
+  async execute(r) {
+    const { api, search } = r;
     if (!this.filters.length) {
       search.set({ results: [], ran: false, filtered: false });
       return;
     }
     search.set({ query: this.text, loading: true, error: null, filtered: true });
-    if (app.offline && !app.offline.state.online) {
-      const items = (app.explorer.state.items || []).filter((n) => matchesTagFilters(n, this.filters));
+    if (r.offline && !r.offline.state.online) {
+      const items = (r.explorer.state.items || []).filter((n) => matchesTagFilters(n, this.filters));
       search.set({ results: items.map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: true });
       return;
     }
     try {
-      const res = await platform.api.tagSearch(this.filters, this.text.trim() || undefined, { limit: 100 });
+      const res = await api.tagSearch(this.filters, this.text.trim() || undefined, { limit: 100 });
       search.set({ results: (res.items || []).map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: false });
     } catch (err) {
       search.set({ loading: false, error: err.message, ran: true, filtered: true });
@@ -503,13 +525,15 @@ export class FilterAction extends AppAction {
 
 /** Command-palette quick-open: a keyword file search whose results live in the search
  *  service (state.se.paletteFiles) instead of ad-hoc state hung off the UI. */
-export class QuickOpenAction extends AppAction {
+export class QuickOpenAction extends Action {
+  static deps = ['api', 'search'];
+
   constructor(query) {
     super();
     this.query = query;
   }
-  async execute({ app }) {
-    const { search, platform } = app;
+  async execute(r) {
+    const { api, search } = r;
     const q = (this.query || '').trim();
     if (!q) { search.set({ paletteFiles: [], paletteQuery: '', paletteError: null, paletteLoading: false }); return; }
     // Keystrokes outrun the network: a slower request for an earlier query must not
@@ -517,7 +541,7 @@ export class QuickOpenAction extends AppAction {
     // whatever the palette input holds now is the only answer worth showing.
     search.set({ paletteQuery: q, paletteLoading: true, paletteError: null });
     try {
-      const res = await platform.api.search(q, { mode: 'keyword', limit: 30 });
+      const res = await api.search(q, { mode: 'keyword', limit: 30 });
       if (search.state.paletteQuery !== q) return; // superseded
       search.set({ paletteFiles: res.results || [], paletteLoading: false });
     } catch (err) {
@@ -529,22 +553,24 @@ export class QuickOpenAction extends AppAction {
   }
 }
 
-export class SearchAction extends AppAction {
+export class SearchAction extends Action {
+  static deps = ['api', 'contributions', 'offline', 'search', 'settings'];
+
   constructor(query, mode) {
     super();
     this.query = query;
     this.mode = mode;
   }
-  async execute({ app }) {
-    const { search, platform } = app;
+  async execute(r) {
+    const { api, contributions, search, settings } = r;
     const q = this.query.trim();
     if (!q) {
       search.set({ query: '', results: [], ran: false, error: null, resolved: null });
       return;
     }
-    const mode = this.mode || platform.settings.get('search.mode');
+    const mode = this.mode || settings.get('search.mode');
     search.set({ query: this.query, mode, loading: true, error: null, resolved: null });
-    const offline = app.offline;
+    const offline = r.offline;
     // Offline (or server unreachable) → search the pinned corpus locally.
     if (offline && !offline.state.online) {
       try {
@@ -563,8 +589,8 @@ export class SearchAction extends AppAction {
       // the stack that read the sentence: "photos from the trip last summer" asks for a
       // gallery, and by the time the results are back all anyone can do is guess from
       // content types. It can only name a view from this list.
-      const views = platform.contributions.ofType('view').map((v) => ({ id: v.id, title: v.title || v.id }));
-      const res = await platform.api.query(q, { mode, limit: 40, views });
+      const views = contributions.ofType('view').map((v) => ({ id: v.id, title: v.title || v.id }));
+      const res = await api.query(q, { mode, limit: 40, views });
       search.set({ results: res.results, resolved: res.resolved || null, loading: false, ran: true, offline: false });
     } catch (err) {
       if (offline) {
@@ -586,14 +612,16 @@ export class SearchAction extends AppAction {
  * opening Settings gets a 403 that is the correct answer, not an error worth a toast.
  * The section simply does not render.
  */
-export class LoadApiKeysAction extends AppAction {
-  async execute({ app }) {
-    app.apiKeys.set({ loading: true, error: null });
+export class LoadApiKeysAction extends Action {
+  static deps = ['api', 'apiKeys'];
+
+  async execute(r) {
+    r.apiKeys.set({ loading: true, error: null });
     try {
-      const res = await app.platform.api.apiKeys();
-      app.apiKeys.set({ keys: res.keys || [], loading: false, loaded: true, error: null });
+      const res = await r.api.apiKeys();
+      r.apiKeys.set({ keys: res.keys || [], loading: false, loaded: true, error: null });
     } catch (err) {
-      app.apiKeys.set({ loading: false, loaded: true, error: err?.message || 'Could not load API keys' });
+      r.apiKeys.set({ loading: false, loaded: true, error: err?.message || 'Could not load API keys' });
     }
   }
 }
@@ -605,42 +633,46 @@ export class LoadApiKeysAction extends AppAction {
  * put into state before anything else can fail. A refresh of the list afterwards is a
  * convenience; losing the secret because the refresh threw would not be.
  */
-export class MintApiKeyAction extends AppAction {
+export class MintApiKeyAction extends Action {
+  static deps = ['api', 'apiKeys', 'notifications'];
+
   constructor(spec) {
     super();
     this.spec = spec;
   }
-  async execute({ app }) {
-    app.apiKeys.set({ busy: 'mint', error: null });
+  async execute(r) {
+    r.apiKeys.set({ busy: 'mint', error: null });
     try {
-      const { key, secret } = await app.platform.api.mintApiKey(this.spec);
-      app.apiKeys.set({ minted: { key, secret }, busy: null });
-      const res = await app.platform.api.apiKeys().catch(() => null);
-      if (res) app.apiKeys.set({ keys: res.keys || [] });
+      const { key, secret } = await r.api.mintApiKey(this.spec);
+      r.apiKeys.set({ minted: { key, secret }, busy: null });
+      const res = await r.api.apiKeys().catch(() => null);
+      if (res) r.apiKeys.set({ keys: res.keys || [] });
       return key;
     } catch (err) {
-      app.apiKeys.set({ busy: null, error: err?.message || 'Could not create the key' });
-      app.platform.notifications.error(err?.message || 'Could not create the key');
+      r.apiKeys.set({ busy: null, error: err?.message || 'Could not create the key' });
+      r.notifications.error(err?.message || 'Could not create the key');
       return null;
     }
   }
 }
 
-export class RevokeApiKeyAction extends AppAction {
+export class RevokeApiKeyAction extends Action {
+  static deps = ['api', 'apiKeys', 'notifications'];
+
   constructor(id) {
     super();
     this.id = id;
   }
-  async execute({ app }) {
-    app.apiKeys.set({ busy: this.id, error: null });
+  async execute(r) {
+    r.apiKeys.set({ busy: this.id, error: null });
     try {
-      await app.platform.api.revokeApiKey(this.id);
-      const res = await app.platform.api.apiKeys().catch(() => null);
-      app.apiKeys.set({ busy: null, ...(res ? { keys: res.keys || [] } : {}) });
-      app.platform.notifications.success('Key revoked');
+      await r.api.revokeApiKey(this.id);
+      const res = await r.api.apiKeys().catch(() => null);
+      r.apiKeys.set({ busy: null, ...(res ? { keys: res.keys || [] } : {}) });
+      r.notifications.success('Key revoked');
     } catch (err) {
-      app.apiKeys.set({ busy: null });
-      app.platform.notifications.error(err?.message || 'Could not revoke the key');
+      r.apiKeys.set({ busy: null });
+      r.notifications.error(err?.message || 'Could not revoke the key');
     }
   }
 }
@@ -999,7 +1031,7 @@ export class SelectItemsAction extends Action {
  * display order — the component knows the running order, the store only knows the index.
  */
 export class MoveLaunchAction extends Action {
-  static deps = ['workbench', 'explorer'];
+  static deps = ['explorer', 'workbench'];
   constructor(delta, nodes) { super(); this.delta = delta; this.nodes = nodes; }
   async execute({ workbench, explorer }) {
     workbench.moveLaunch(this.delta, this.nodes.length);
@@ -1009,7 +1041,7 @@ export class MoveLaunchAction extends Action {
 
 /** Highlight a launcher row by position and select it — the pointer/Enter counterpart. */
 export class SelectLaunchAction extends Action {
-  static deps = ['workbench', 'explorer'];
+  static deps = ['explorer', 'workbench'];
   constructor(index, node) { super(); this.index = index; this.node = node; }
   async execute({ workbench, explorer }) {
     workbench.setLaunchIndex(this.index);

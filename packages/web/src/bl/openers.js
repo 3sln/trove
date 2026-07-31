@@ -28,18 +28,18 @@ export function typeLabelFor(node) {
 
 /** All openers that can handle this node right now (selector + when + availability),
  *  best (highest priority) first. */
-export function availableOpeners(platform, node) {
-  const evaluate = (w) => platform.context.evaluate(w);
-  const isAvailable = (o) => platform.plugins.isAvailable(o);
-  return platform.contributions
+export function availableOpeners(r, node) {
+  const evaluate = (w) => r.context.evaluate(w);
+  const isAvailable = (o) => r.plugins.isAvailable(o);
+  return r.contributions
     .openersFor(node)
     .filter((o) => (!o.when || evaluate(o.when)) && isAvailable(o))
     .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
 /** The remembered opener id for a node's type (ext → exact mime → type/* ), or null. */
-export function rememberedOpenerId(platform, node) {
-  const assoc = platform.settings.get(ASSOC_KEY) || {};
+export function rememberedOpenerId(r, node) {
+  const assoc = r.settings.get(ASSOC_KEY) || {};
   const ext = extOf(node);
   const mime = node?.contentType || '';
   const wild = mime.includes('/') ? `${mime.slice(0, mime.indexOf('/') + 1)}*` : '';
@@ -49,17 +49,17 @@ export function rememberedOpenerId(platform, node) {
 /** Remember (or, with a null openerId, forget) the opener for a type key. */
 export function rememberOpener(platform, typeKey, openerId) {
   if (!typeKey) return;
-  const assoc = { ...(platform.settings.get(ASSOC_KEY) || {}) };
+  const assoc = { ...(r.settings.get(ASSOC_KEY) || {}) };
   if (openerId) assoc[typeKey] = openerId;
   else delete assoc[typeKey];
-  platform.settings.set(ASSOC_KEY, assoc);
+  r.settings.set(ASSOC_KEY, assoc);
 }
 
 /** The saved associations as a list, for the Settings UI. */
 export function listAssociations(platform) {
-  const assoc = platform.settings.get(ASSOC_KEY) || {};
+  const assoc = r.settings.get(ASSOC_KEY) || {};
   return Object.entries(assoc).map(([typeKey, openerId]) => {
-    const opener = platform.contributions.get(openerId);
+    const opener = r.contributions.get(openerId);
     return { typeKey, openerId, openerTitle: opener?.title || openerId, missing: !opener };
   });
 }
@@ -67,5 +67,5 @@ export function listAssociations(platform) {
 /** A short source label for an opener ("Built-in" or the plugin's name). */
 export function openerSource(platform, opener) {
   if (!opener?.pluginId) return 'Built-in';
-  return platform.plugins.plugins.get(opener.pluginId)?.manifest?.displayName || opener.pluginId;
+  return r.plugins.plugins.get(opener.pluginId)?.manifest?.displayName || opener.pluginId;
 }
