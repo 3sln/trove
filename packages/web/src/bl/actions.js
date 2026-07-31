@@ -917,8 +917,55 @@ export class ToggleApiKeyCapAction extends ApiKeysAction {
   apply(s) { s.toggleCap(this.cap); }
 }
 
-/** Select items in the explorer. `additive` extends the selection rather than replacing it. */
+/**
+ * Select items in the explorer.
+ *
+ * `opts` is `{ additive, nodes }`, matching the service — NOT a boolean. It was written as
+ * `additive` first, which worked at the one call site only because the options object passed
+ * through positionally unchanged. `new SelectItemsAction(ids, true)` would have destructured
+ * a boolean into `{additive = false, nodes = null}` and quietly not been additive at all.
+ *
+ * `nodes` matters when the selection cannot be resolved from the loaded page: the launcher's
+ * rows come from search, which is scoped across collections, so the node has to travel with
+ * the id.
+ */
 export class SelectItemsAction extends AppAction {
-  constructor(ids, additive = false) { super(); this.ids = ids; this.additive = additive; }
-  async execute({ app }) { app.explorer.select(this.ids, this.additive); }
+  constructor(ids, opts = {}) { super(); this.ids = ids; this.opts = opts; }
+  async execute({ app }) { app.explorer.select(this.ids, this.opts); }
+}
+
+/**
+ * Move the launcher's highlight and sync the selection to whatever it landed on.
+ *
+ * ONE action because the two halves are not separable. Moving computes a new index — with
+ * wrapping, so it is not `index + delta` — and the selection has to follow the row that
+ * index now names. Written as two steps in the component it read the index back out of the
+ * store immediately after writing it, which only worked because a direct method call is
+ * synchronous. Dispatching is not: the highlight would move and the selection would sync to
+ * the previously highlighted row, one keystroke behind, forever, without anything throwing.
+ *
+ * Here the read-back is inside the action, where it IS sequenced. `nodes` is the results in
+ * display order — the component knows the running order, the store only knows the index.
+ */
+export class MoveLaunchAction extends AppAction {
+  constructor(delta, nodes) { super(); this.delta = delta; this.nodes = nodes; }
+  async execute({ app }) {
+    const wb = app.platform.workbench;
+    wb.moveLaunch(this.delta, this.nodes.length);
+    selectNode(app, this.nodes[wb.state.launch.index]);
+  }
+}
+
+/** Highlight a launcher row by position and select it — the pointer/Enter counterpart. */
+export class SelectLaunchAction extends AppAction {
+  constructor(index, node) { super(); this.index = index; this.node = node; }
+  async execute({ app }) {
+    app.platform.workbench.setLaunchIndex(this.index);
+    selectNode(app, this.node);
+  }
+}
+
+/** Select exactly one node, or nothing. Carries the node itself — see SelectItemsAction. */
+function selectNode(app, node) {
+  app.explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
 }

@@ -199,10 +199,16 @@ TO DISPATCH as the outcome (`confirmAction`, `item.action`) rather than a functi
 which makes the result of a confirmation visible on the feed too. That is a real change at
 each call site, not a swap, so it is its own piece of work.
 
-**`moveLaunch` is read-after-write.** The line following it reads the new index straight back
-out of the store, and dispatching is not synchronous — an action there would move the
-selection and then sync against where it used to be. Converting means making the move and
-the sync a single action, which needs the flattened result list on the engine side.
+**~~`moveLaunch` is read-after-write~~** — done. Navigation is one atomic action.
+`MoveLaunchAction(delta, nodes)` moves the index and syncs the selection inside a single
+`execute`, where the read-back IS sequenced. The component hands over the results in display
+order, because it knows the running order and the store only knows the index.
+
+Worth keeping the near-miss: the line two above it looked like the same pattern and was
+safe — `selectAt` also dispatched and then synced, but against a value it already held
+rather than one read back through the store. Same file, same shape; the difference is
+entirely whether the next line round-trips through the thing being mutated, and a sweep that
+converts by method name cannot see that.
 
 The three `observe*` calls in the composition are not in this category: they are the shell
 snapshot, and they go when the snapshot does.

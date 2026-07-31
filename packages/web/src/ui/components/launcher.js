@@ -6,7 +6,7 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseSearchModalAction, FilterAction, OpenFileAction, SearchAction, SelectItemsAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
+import { CloseSearchModalAction, FilterAction, MoveLaunchAction, OpenFileAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { activeView, renderView, viewSwitcher, viewMove } from './views/index.js';
 import { openRowMenu } from './views/parts.js';
@@ -48,7 +48,6 @@ function runFilter(ui, filters, text) {
 }
 
 export default function launcher(state, ui, opts = {}) {
-  const wb = ui.platform.workbench;
   const modal = !!opts.modal; // rendered as the double-shift overlay → picks reset the stack
   const q = state.wb.launch.query;
   const mode = q.startsWith('!') ? 'command' : q.includes('#') ? 'filter' : 'search';
@@ -76,16 +75,11 @@ export default function launcher(state, ui, opts = {}) {
   // mouseup never receives its click. A pointer user acts through the row's own menu,
   // which selects explicitly before it opens.
   const hoverAt = (at) => ui.go(new SetLaunchIndexAction(at));
-  const selectAt = (at) => { ui.go(new SetLaunchIndexAction(at)); syncSelection(ui, flat[at]); };
-  // Still a direct call, and deliberately. The line below reads the index BACK out
-  // immediately, and dispatching is not synchronous — an action here would move the
-  // selection and then sync against the position it was in beforehand. Converting this
-  // means making the move and the sync one action, which needs `flat` on the engine side.
-  // See docs/tickets/009.
-  const move = (delta) => {
-    wb.moveLaunch(delta, flat.length);
-    syncSelection(ui, flat[wb.state.launch.index]);
-  };
+  // Moving the highlight and selecting what it lands on are one action, not two. The index
+  // wraps, so only the store can say where a move ends up — and reading that back out here
+  // would read it before the dispatch had applied. See MoveLaunchAction.
+  const selectAt = (at) => ui.go(new SelectLaunchAction(at, flat[at]?.node));
+  const move = (delta) => ui.go(new MoveLaunchAction(delta, flat.map((i) => i.node)));
   // How the results are drawn right now. The view gets a say in what an arrow key
   // means — one row down is one tile down in a grid, not one tile across — but the
   // index, the selection and the wrapping stay here, so up and down mean the same
@@ -174,10 +168,6 @@ function resolvedBar(r) {
 // The NODE goes along with the id. A search result or a recent can be from a collection
 // that isn't loaded — or a page that isn't — so an id alone is something the explorer
 // cannot resolve, and the commands that act on "the selection" then do nothing at all.
-function syncSelection(ui, item) {
-  const node = item?.node;
-  ui.go(new SelectItemsAction(node?.id ? [node.id] : [], { nodes: node ? [node] : null }));
-}
 
 /**
  * How this search box works — shown when, and only when, a search came back empty.
@@ -196,7 +186,6 @@ function searchHelp(state, ui, mode) {
   if (!se.ran || se.loading || se.error || (se.results || []).length) return null;
   const p = state.caps?.searchPrompt;
   if (!p?.hint && !p?.examples?.length) return null;
-  const wb = ui.platform.workbench;
   const tryIt = (query) => () => {
     ui.go(new SetLaunchQueryAction(query));
     const { text, filters } = parseTagQuery(query);
