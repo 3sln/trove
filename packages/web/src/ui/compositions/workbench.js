@@ -87,8 +87,14 @@ export default function workbench({ engine, app, platform }) {
       // The launcher's `!` mode gets the list already RANKED against what has been typed,
       // rather than the raw list plus a scorer of its own. Nothing reads the unranked
       // `paletteCommands` any more — the palette has its own ranked query, in its region.
-      watchQuery(engine, q.launcherCommandMatches),
       watchQuery(engine, q.commandKeys),
+      // What the launcher shows, twice: the home screen and the double-shift overlay are
+      // both mounted when the overlay is up, and they differ in what picking a row does —
+      // the overlay resets the viewer stack and then dismisses itself. That is the only
+      // input that is about which INSTANCE is rendering, so it is the query's one
+      // parameter, and interning means at most two live realizations.
+      watchQuery(engine, q.launcherContent(false)),
+      watchQuery(engine, q.launcherContent(true)),
       // How results can be drawn, and every opener that could run. Both used to be worked
       // out mid-render from `platform` — three registry reads that nothing invalidated on,
       // so the launcher and the viewer nav only kept up because this snapshot is coarse
@@ -101,10 +107,10 @@ export default function workbench({ engine, app, platform }) {
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commandMatches,
-      commandKeys, views, openers) =>
-      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commandMatches,
-        commandKeys, views, openers }),
+    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commandKeys,
+      content, modalContent, views, openers) =>
+      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commandKeys,
+        content, modalContent, views, openers }),
   );
 
   // The chrome, subscribed to what it reads instead of to everything.

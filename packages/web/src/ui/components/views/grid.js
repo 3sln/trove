@@ -25,7 +25,7 @@ export function gridView({ groups, index, handlers, ui }) {
   let gi = -1;
   return div({ className: 'launch-view view-grid' },
     ...groups.map((group) => div({ className: 'launch-group' },
-      groupHeader(group),
+      groupHeader(group, ui),
       group.items.length
         ? div({ className: 'grid-list' }, ...group.items.map((it) => {
           const at = ++gi;

@@ -16,7 +16,7 @@ export function listView({ groups, index, handlers, ui }) {
   let gi = -1;
   return div({ className: 'launch-view view-list' },
     ...groups.map((group) => div({ className: 'launch-group' },
-      groupHeader(group),
+      groupHeader(group, ui),
       group.items.length
         ? div({ className: 'launch-list' }, ...group.items.map((it) => {
           const at = ++gi;

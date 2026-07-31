@@ -6,10 +6,10 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseSearchModalAction, ExecCommandAction, FilterAction, MoveLaunchAction, OpenFileAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
+import { ExecCommandAction, FilterAction, MoveLaunchAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { renderView, viewSwitcher, viewMove } from './views/index.js';
-import { pickView } from '../../bl/views.js';
+import { searchHelpOf } from '../../bl/launcher.js';
 import { openRowMenu } from './views/parts.js';
 import { activate } from '../activate.js';
 
@@ -52,9 +52,12 @@ function runFilter(ui, filters, text) {
 export default function launcher(state, ui, opts = {}) {
   const modal = !!opts.modal; // rendered as the double-shift overlay → picks reset the stack
   const q = state.wb.launch.query;
-  const mode = q.startsWith('!') ? 'command' : q.includes('#') ? 'filter' : 'search';
-
-  const groups = buildContent(state, ui, q, mode, modal);
+  // What is on screen, which view draws it, and whether a search-help offer applies — all
+  // decided by the `launcherContent` query. This used to be ~100 lines of derivation right
+  // here: which nodes, what each heading says, whether "All items" is a claim the drive
+  // cannot support. See bl/launcher.js.
+  const content = modal ? state.modalContent : state.content;
+  const { groups, mode, view } = content;
   const flat = groups.flatMap((g) => g.items);
   const idx = flat.length ? Math.min(state.wb.launch.index, flat.length - 1) : 0;
 
@@ -82,14 +85,9 @@ export default function launcher(state, ui, opts = {}) {
   // would read it before the dispatch had applied. See MoveLaunchAction.
   const selectAt = (at) => ui.engine.dispatch(new SelectLaunchAction(at, flat[at]?.node));
   const move = (delta) => ui.engine.dispatch(new MoveLaunchAction(delta, flat.map((i) => i.node)));
-  // How the results are drawn right now. The view gets a say in what an arrow key
-  // means — one row down is one tile down in a grid, not one tile across — but the
-  // index, the selection and the wrapping stay here, so up and down mean the same
-  // thing whichever view is showing.
-  //
-  // The search transformer may have suggested one. Only for an actual search: on the
-  // home list there is no sentence to have read.
-  const view = pickView(state.views, flat, mode === 'search' ? state.se.resolved?.view : null);
+  // The view gets a say in what an arrow key means — one row down is one tile down in a
+  // grid, not one tile across — but the index, the selection and the wrapping stay here, so
+  // up and down mean the same thing whichever view is showing.
   const onKey = (e) => {
     // `textual`: there is text in the box, so left/right are the caret's and no view
     // may claim them. Fixing a typo must not move the highlight.
@@ -148,7 +146,7 @@ export default function launcher(state, ui, opts = {}) {
     // split is why a gallery is a contribution rather than another branch in here.
     div({ className: 'launch-body' },
       renderView(view, { groups, index: idx, handlers: { hover: hoverAt, select: selectAt }, state, ui }),
-      searchHelp(state, ui, mode),
+      searchHelp(content.helpEligible, state.caps, ui),
     ),
   );
   return modal ? inner : div({ className: 'editor' }, inner);
@@ -182,203 +180,27 @@ function resolvedBar(r) {
  * The text comes from the server's transformer, so it describes the grammar this
  * deployment actually runs rather than the one this file was written against.
  */
-function searchHelp(state, ui, mode) {
-  if (mode === 'command') return null;
-  const se = state.se;
-  if (!se.ran || se.loading || se.error || (se.results || []).length) return null;
-  const p = state.caps?.searchPrompt;
-  if (!p?.hint && !p?.examples?.length) return null;
-  const tryIt = (query) => () => {
-    ui.engine.dispatch(new SetLaunchQueryAction(query));
-    const { text, filters } = parseTagQuery(query);
-    if (filters.length) ui.engine.dispatch(new FilterAction(filters, text));
-    else ui.engine.dispatch(new SearchAction(text));
-  };
+function searchHelp(eligible, caps, ui) {
+  const help = searchHelpOf({ eligible, caps });
+  if (!help) return null;
   return div({ className: 'launch-help' },
-    p.hint ? div({ className: 'lh-hint' }, icon('info', { size: 13 }), span(p.hint)) : null,
-    p.examples?.length
-      ? div({ className: 'lh-examples' }, ...p.examples.map((ex) =>
+    help.hint ? div({ className: 'lh-hint' }, icon('info', { size: 13 }), span(help.hint)) : null,
+    help.examples.length
+      ? div({ className: 'lh-examples' }, ...help.examples.map((ex) =>
         button({ className: 'lh-example', title: ex.label || 'Try this search' },
           span({ className: 'lh-q' }, ex.query),
           ex.label ? span({ className: 'lh-label' }, ex.label) : null,
-        ).on({ click: tryIt(ex.query) })))
+        ).on({ click: () => activate(ui, ex) })))
       : null,
   );
 }
 
-function buildContent(state, ui, q, mode, modal) {
-  // Picking anything from the modal search dismisses it; from the home screen there is
-  // nothing to dismiss.
-  const closeModal = modal ? [new CloseSearchModalAction()] : [];
-  if (mode === 'command') {
-    // Ranked by the `launcherCommandMatches` query, which also strips the `!`. This used
-    // to score and sort here with an algorithm that was not the palette's, so the same
-    // three letters ordered the same commands differently depending on how you got here.
-    const items = (state.commandMatches || []).map((c) => ({
-      icon: 'command', title: c.title, detail: c.category, badge: 'command',
-      actions: [new ExecCommandAction(c.id), ...closeModal],
-    }));
-    return [{ title: 'Commands', items, empty: 'No matching commands.' }];
-  }
 
-  const { text, filters } = parseTagQuery(q);
-  const nodes = (state.se.results || []).map((r) => r.node);
-  const err = state.se.error;
 
-  // A one-click retry so a transient search/filter failure isn't a dead end.
-  const retryBtn = (action) => button({ className: 'launch-up', title: 'Retry' }, icon('refresh', { size: 13 }), 'Retry').on({ click: () => ui.engine.dispatch(action) });
-
-  // Drive-wide tag/property filter (server-side), optionally narrowed by free text.
-  if (filters.length) {
-    const label = filters.map(filterLabel).join(' ') + (text.trim() ? ` · "${text.trim()}"` : '');
-    return [{
-      title: state.se.loading ? 'Filtering…' : err ? 'Filter failed' : 'Filtered',
-      // Shown as typed: a tag is a value, not a heading.
-      verbatim: state.se.loading || err ? null : label,
-      action: err ? retryBtn(new FilterAction(filters, text)) : null,
-      items: nodes.map((n) => fileItem(n, ui, modal, state)),
-      empty: state.se.loading ? 'Filtering…' : err ? `Couldn’t filter: ${err}` : 'No files match those filters.',
-    }];
-  }
-
-  // Free-text search.
-  if (text.trim()) {
-    return [{
-      title: state.se.loading ? 'Searching…' : err ? 'Search failed' : 'Results',
-      action: err ? retryBtn(new SearchAction(q)) : null,
-      items: nodes.map((n) => fileItem(n, ui, modal, state)),
-      empty: state.se.loading ? 'Searching…' : err ? `Couldn’t search: ${err}` : 'No files match.',
-    }];
-  }
-
-  // Home: recents, then everything in the collection. There is nothing to descend
-  // into — this is the "show me everything" fallback for when search isn't the answer.
-  const groups = [];
-  const recents = (state.nav.recents || []).map((r) => fileItem(r, ui, modal, state));
-  if (recents.length) groups.push({ title: 'Recent', items: recents });
-
-  const ex = state.ex;
-  const shown = (ex.items || []).length;
-  // `stats` is the collection; `items` is the page. When the server didn't report stats
-  // we only know the page — and saying "500" while a next page exists is a claim about
-  // the drive that is false, so say "500+" instead.
-  const knownTotal = ex.stats?.items ?? null;
-  const total = knownTotal ?? shown;
-  const totalLabel = knownTotal != null ? knownTotal.toLocaleString() : `${shown.toLocaleString()}+`;
-  const items = (ex.items || []).map((n) => fileItem(n, ui, modal, state));
-  // A partial list must not be titled "All items" — that is a claim about the drive,
-  // and on a collection bigger than one page it is false. Say what is on screen, and
-  // offer the rest rather than leaving it unreachable.
-  if (ex.nextCursor) {
-    items.push({
-      icon: 'refresh',
-      title: ex.loadingMore ? 'Loading…'
-        : knownTotal != null ? `Show more (${(knownTotal - shown).toLocaleString()} more)` : 'Show more',
-      detail: 'or search to jump straight to something',
-      actions: [new ExecCommandAction('explorer.loadMore')],
-    });
-  }
-  // The trash, when it has been opened. Not shown by default: it is a place you go to
-  // recover a mistake, not part of browsing the drive.
-  if (ex.trash) {
-    groups.push({
-      // One line, not two: a header reading "0 items" above a body reading "the trash is
-      // empty" is the same sentence twice, permanently parked above the drive.
-      title: ex.trash.length
-        ? `Trash · ${ex.trash.length} item${ex.trash.length === 1 ? '' : 's'}`
-        : 'Trash',
-      action: div({ className: 'lh-actions' },
-        ex.trash.length
-          ? button({ className: 'launch-up', title: 'Destroy everything in the trash' },
-            icon('trash', { size: 13 }), 'Empty trash').on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.emptyTrash')) })
-          : null,
-        // The way back out. Opening the trash used to be one-way until a page reload.
-        button({ className: 'launch-up', title: 'Hide the trash' },
-          icon('close', { size: 13 }), 'Close').on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.hideTrash')) }),
-      ),
-      items: ex.trash.length
-        ? ex.trash.map((n) => ({
-          icon: 'trash',
-          title: n.name,
-          detail: `deleted ${new Date(n.deletedAt).toLocaleString()} — restore`,
-          actions: [new ExecCommandAction('explorer.restore', n.id)],
-          menu: () => trashMenu(n, ui),
-        }))
-        : [],
-      empty: 'The trash is empty.',
-    });
-  }
-
-  groups.push({
-    title: ex.nextCursor ? `All items · showing ${shown.toLocaleString()} of ${totalLabel}` : 'All items',
-    // The empty state told people to upload a file, and on desktop and TV there was
-    // nothing anywhere that would let them. (Phone has the + in its bottom bar.)
-    action: modal ? null : button({ className: 'launch-up', title: 'Upload files to this collection' },
-      icon('upload', { size: 13 }), 'Upload').on({ click: () => ui.engine.dispatch(new ExecCommandAction('explorer.upload')) }),
-    items,
-    // Don't show a false "empty" when the load actually FAILED (e.g. server
-    // unreachable) — say so, so the user knows to retry rather than believing the
-    // collection is empty. (A toast also fires, but the persistent state must be honest.)
-    empty: ex.loading ? 'Loading…' : ex.error ? `Couldn’t load this collection: ${ex.error}` : 'Nothing here yet — upload a file to get started.',
-  });
-  return groups;
-}
-
-function fileItem(node, ui, modal, state) {
-  return {
-    icon: fileIcon(node),
-    title: node.name,
-    detail: node.contentType || '',
-    node,
-    // From the modal search, `reset` starts a fresh viewer stack; then close it.
-    actions: [
-      new OpenFileAction(node, { reset: !!modal }),
-      ...(modal ? [new CloseSearchModalAction()] : []),
-    ],
-    menu: () => fileMenu(node, ui, state),
-  };
-}
-
-function fileMenu(node, ui, state) {
-  const pinned = state.off?.pinnedIds?.has(node.id) ?? false;
-  // Ask what the shortcut actually IS. Hardcoding "⌘⇧L" told a Windows or Linux user
-  // about a key their machine does not have, and told everyone the default even after
-  // they had rebound it.
-  const kbd = (id) => state.commandKeys?.[id] || undefined;
-  return [
-    { label: 'Open', icon: 'file-text', actions: [new ExecCommandAction('explorer.open', node)] },
-    { label: 'Download', icon: 'download', actions: [new ExecCommandAction('explorer.download', node)] },
-    // Labelled by destination rather than by format: one goes in a document, the other
-    // goes to a person.
-    { label: 'Copy shareable link', icon: 'link', actions: [new ExecCommandAction('explorer.copyShareLink')] },
-    { label: 'Copy trove: link', icon: 'link', kbd: kbd('explorer.copyLink'), actions: [new ExecCommandAction('explorer.copyLink')] },
-    { sep: true },
-    { label: 'Rename…', actions: [new ExecCommandAction('explorer.rename')] },
-    pinned
-      ? { label: 'Remove from offline', icon: 'close', actions: [new ExecCommandAction('offline.unpin', node)] }
-      : { label: 'Make available offline', icon: 'download', actions: [new ExecCommandAction('offline.pin', node)] },
-    { sep: true },
-    { label: 'Move to trash', icon: 'trash', danger: true, kbd: kbd('explorer.delete'), actions: [new ExecCommandAction('explorer.delete')] },
-  ];
-}
 
 // The trash is the one place "delete" means destroy, so its two verbs live together:
 // put it back, or finish the job on this one item. Emptying the whole trash was
 // previously the only way to purge anything.
-function trashMenu(node, ui) {
-  return [
-    { label: 'Restore', icon: 'refresh', actions: [new ExecCommandAction('explorer.restore', node.id)] },
-    { sep: true },
-    { label: 'Delete forever', icon: 'trash', danger: true, actions: [new ExecCommandAction('explorer.purgeOne', node.id)] },
-  ];
-}
 
-function fileIcon(node) {
-  const t = node.contentType || '';
-  if (t.startsWith('image/')) return 'file-image';
-  if (t.startsWith('audio/')) return 'file-audio';
-  if (t.startsWith('video/')) return 'file-video';
-  return 'file-text';
-}
 
 // Substring-first, then subsequence fuzzy score (0 = no match).

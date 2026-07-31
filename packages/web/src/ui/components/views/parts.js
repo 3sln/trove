@@ -9,6 +9,7 @@
 import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { ShowContextMenuAction } from '../../../bl/actions.js';
+import { activate } from '../../activate.js';
 
 const { div, span, button } = dd;
 
@@ -19,14 +20,23 @@ const { div, span, button } = dd;
  * the user typed — it turns their `#draft` into `#DRAFT`, a tag that isn't what they
  * wrote. So a group can carry a verbatim half.
  */
-export function groupHeader(group) {
+export function groupHeader(group, ui) {
+  const controls = group.controls || [];
   return div({ className: 'launch-h' },
     // Label and value together on the left; `.launch-h` is space-between, so an
     // ungrouped value gets flung to the far edge away from the label it belongs to.
     div({ className: 'lh-title' },
       span(group.title),
       group.verbatim ? span({ className: 'lh-verbatim' }, group.verbatim) : null),
-    group.action || null,
+    // Descriptions, not a pre-rendered button. A group used to carry a vnode in `action`,
+    // which meant the thing deciding WHAT a header offers had to be able to draw one — the
+    // same reason menu items stopped carrying `run` closures. See ui/activate.js.
+    controls.length
+      ? div({ className: 'lh-actions' }, ...controls.map((c) =>
+        button({ className: 'launch-up', title: c.title || c.label },
+          c.icon ? icon(c.icon, { size: 13 }) : null, c.label)
+          .on({ click: () => activate(ui, c) })))
+      : null,
   );
 }
 
@@ -53,7 +63,7 @@ export function openRowMenu(anchor, it, ui, event, select) {
   const y = event?.clientY ?? (r ? r.bottom : 0);
   // Read the coordinates BEFORE selecting: selecting re-renders, and `anchor` is then
   // a detached node whose rect is all zeroes.
-  const items = it.menu(ui);
+  const items = it.menu();
   select?.();
   ui.engine.dispatch(new ShowContextMenuAction(x, y, items));
 }

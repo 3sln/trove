@@ -36,6 +36,8 @@ import { ExecCommandAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
 import { statusFactsOf, driveConditionOf } from './status.js';
+import { launcherGroupsOf, launcherMode } from './launcher.js';
+import { pickView } from './views.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
@@ -286,12 +288,13 @@ function paletteCommandsOf(r) {
   }));
 }
 
-// The same list, narrowed to what was typed — for the two places you can type at commands.
+// The same list, narrowed to what was typed.
 //
 // Ranking used to happen mid-render, in two components, with two different algorithms (see
-// bl/match.js). Both terms are engine state — the palette's lives in the overlay, the
-// launcher's in the workbench — so both of these are ordinary queries with no arguments,
-// and the ranking is settled before a component sees anything.
+// bl/match.js). The typed term is engine state — the palette's lives in the overlay — so
+// this is an ordinary query with no arguments, and the ranking is settled before a
+// component sees anything. The launcher's `!` mode ranks the same way inside
+// `launcherContent`, which already holds everything it needs.
 const OVERLAY_DEPS = [...REGISTRY_DEPS, 'workbench'];
 const withShell = (r) => [...registries(r), r.workbench.observe(), r.workbench.observeOverlay()];
 
@@ -299,16 +302,6 @@ const withShell = (r) => [...registries(r), r.workbench.observe(), r.workbench.o
 export const paletteMatches = new ViewQuery(OVERLAY_DEPS, withShell, (r) =>
   rankCommands(paletteCommandsOf(r), r.workbench.overlay.state.palette?.query || ''));
 
-/**
- * What the launcher should list in `!` mode.
- *
- * The leading `!` is stripped here rather than by the component: it is this query's own
- * syntax for "I mean commands, not files", so nothing outside should have to know it.
- */
-export const launcherCommandMatches = new ViewQuery(OVERLAY_DEPS, withShell, (r) => {
-  const q = r.workbench.state.launch.query || '';
-  return q.startsWith('!') ? rankCommands(paletteCommandsOf(r), q.slice(1)) : [];
-});
 
 /**
  * Plugin-contributed status bar slots, already filtered to the ones that should show.
@@ -358,6 +351,69 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
     clash: perKey.get(b.key) > 1,
   }));
 });
+
+/**
+ * What the launcher is showing: its groups, the view drawing them, and the help offered
+ * when a search found nothing. See bl/launcher.js.
+ *
+ * Parameterised by `modal` — the double-shift overlay and the home screen are BOTH on
+ * screen when the overlay is up, so which instance is rendering is the one input that
+ * genuinely is not engine state. Two values, so interning gives at most two realizations.
+ *
+ * `view` is folded in because choosing it needs the items, and the items are right here.
+ * That was the last thing keeping `pickView` outside the engine.
+ */
+export const launcherContent = (modal = false) => LauncherContent.of(!!modal);
+
+const LAUNCHER_DEPS = [...REGISTRY_DEPS, 'explorer', 'search', 'workbench', 'offline'];
+
+class LauncherContent extends ViewQuery {
+  static of = queryOf(LauncherContent);
+
+  constructor(modal) {
+    super(
+      LAUNCHER_DEPS,
+      (r) => [
+        ...registries(r),
+        r.explorer.observe(), r.search.observe(),
+        r.workbench.observe(), r.workbench.observeNav(), r.offline.observe(),
+      ],
+      (r) => {
+        const wb = r.workbench.state;
+        const off = r.offline.observe().getValue() || {};
+        const slices = {
+          ex: r.explorer.observe().getValue() || {},
+          se: r.search.observe().getValue() || {},
+          nav: r.workbench.observeNav().getValue() || {},
+          query: wb.launch.query || '',
+          commandMatches: rankCommands(paletteCommandsOf(r), (wb.launch.query || '').slice(1)),
+          pinnedIds: new Set((off.pins || []).map((p) => p.id)),
+          keys: commandKeysOf(r),
+        };
+        const groups = launcherGroupsOf(slices, this.modal);
+        const mode = launcherMode(slices.query);
+        return {
+          groups,
+          mode,
+          // Which view draws them. Needs the nodes on screen, which is exactly what this
+          // query has just worked out — see bl/views.js. This was the last thing keeping
+          // the choice outside the engine.
+          view: pickView(viewsOf(r), groups.flatMap((g) => g.items),
+            mode === 'search' ? slices.se.resolved?.view ?? null : null),
+          // Everything the search-help offer depends on EXCEPT what the server suggests:
+          // a search has run, it succeeded, and it found nothing. The prompt itself lives
+          // behind the `capabilities` query, which is fetched rather than held by a
+          // resource, so the last step happens where both are in hand — see searchHelpOf.
+          // It moves in here once capabilities is a resource (ticket F).
+          helpEligible: mode !== 'command'
+            && !!slices.se.ran && !slices.se.loading && !slices.se.error
+            && !(slices.se.results || []).length,
+        };
+      },
+    );
+    this.modal = modal;
+  }
+}
 
 /**
  * What the drive is doing and how full it is — see bl/status.js.
@@ -418,20 +474,24 @@ export const openers = new ViewQuery(REGISTRY_DEPS, registries, (r) =>
  * given, so passing it is passing data; making the component look it up by id would have
  * been the registry access this is trying to remove, relocated rather than deleted.
  */
-export const views = new ViewQuery(REGISTRY_DEPS, registries, (r) => ({
-  views: r.contributions.ofType('view')
-    .filter((v) => !v.when || r.context.evaluate(v.when))
-    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
-    .map((v) => ({
-      id: v.id,
-      title: v.title ?? v.name ?? v.id,
-      icon: v.icon ?? null,
-      match: v.match ?? null,
-      render: v.render,
-      move: v.move,
-    })),
-  saved: r.settings.get('explorer.view') || null,
-}));
+export const views = new ViewQuery(REGISTRY_DEPS, registries, viewsOf);
+
+function viewsOf(r) {
+  return {
+    views: r.contributions.ofType('view')
+      .filter((v) => !v.when || r.context.evaluate(v.when))
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+      .map((v) => ({
+        id: v.id,
+        title: v.title ?? v.name ?? v.id,
+        icon: v.icon ?? null,
+        match: v.match ?? null,
+        render: v.render,
+        move: v.move,
+      })),
+    saved: r.settings.get('explorer.view') || null,
+  };
+}
 
 /**
  * The saved "always open .pdf with…" choices, for the settings screen.
@@ -489,10 +549,13 @@ export class FileText extends Query {
  * and told everyone the default even after they had rebound it. A map rather than a list
  * because every caller is asking about one command it already knows the id of.
  */
-export const commandKeys = new ViewQuery(REGISTRY_DEPS, registries, (r) =>
-  Object.fromEntries(r.keybindings.resolved()
+export const commandKeys = new ViewQuery(REGISTRY_DEPS, registries, commandKeysOf);
+
+function commandKeysOf(r) {
+  return Object.fromEntries(r.keybindings.resolved()
     .map((b) => [b.command, r.keybindings.labelFor(b.command)])
-    .filter(([, label]) => label)));
+    .filter(([, label]) => label));
+}
 
 /**
  * What the server can do: which storage drivers it offers, whether it can suggest searches.
