@@ -37,9 +37,17 @@ export default function workbench({ engine, app, platform }) {
   // shorter name for the one door is how the door stops being obvious. Call sites say
   // `ui.engine.dispatch(new SomeAction(...))` now: longer, and it names what happens.
   //
-  // `app` and `platform` are still passed and are down to four uses between them — the
-  // plugin iframe mounts, the media URL machinery, and one registry lookup for a callable.
-  // See docs/tickets/009 for why those stay imperative.
+  // `platform` is still passed, for four uses that are genuinely imperative: two plugin
+  // iframe mounts, the media URL machinery, and the opener lookup in openers/index.js —
+  // which stays because an opener may resolve to a plugin iframe rather than to a render
+  // function, and mounting one is an effect, not a view.
+  //
+  // Note what is NOT a reason: carrying a function. A query hands over the view renderers
+  // (see the `views` query) because a renderer is pure — it builds a vnode from what it is
+  // given. The rule is about SIDE EFFECTS escaping through a callable, not about callables.
+  //
+  // `app` is passed and no longer read by anything in `ui/` — it goes when the last action
+  // stops leasing it. See docs/tickets/009.
   const ui = {
     engine, app, platform,
     // Rendering a cell is a UI concern, not a platform subsystem to reach through.
@@ -77,13 +85,22 @@ export default function workbench({ engine, app, platform }) {
       // Views the shell reads but no region owns yet.
       watchQuery(engine, q.paletteCommands),
       watchQuery(engine, q.commandKeys),
+      // How results can be drawn, and every opener that could run. Both used to be worked
+      // out mid-render from `platform` — three registry reads that nothing invalidated on,
+      // so the launcher and the viewer nav only kept up because this snapshot is coarse
+      // enough to redraw them anyway. As a query the dependency is declared, which is what
+      // makes it safe to give either of them a region later.
+      watchQuery(engine, q.views),
+      watchQuery(engine, q.openers),
     ],
     // No `_bump` any more. It existed to defeat `watch`'s shallow-equality check for a
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands, commandKeys) =>
-      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands, commandKeys }),
+    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands, commandKeys,
+      views, openers) =>
+      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands,
+        commandKeys, views, openers }),
   );
 
   // The chrome, subscribed to what it reads instead of to everything.
@@ -119,7 +136,7 @@ export default function workbench({ engine, app, platform }) {
     // list. Each reads a couple of slices, so each is a cheap region.
     settingsView: region(engine, {
       settings: q.settings, settingsGroups: q.settingsGroups, keys: q.apiKeys,
-      caps: q.capabilities, ex: q.explorer,
+      caps: q.capabilities, ex: q.explorer, assoc: q.openerAssociations,
     }, (s) => settingsView(s, ui)),
     pluginsView: region(engine, { plugins: q.plugins, settings: q.settings },
       (s) => pluginsView(s, ui)),

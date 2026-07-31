@@ -1,10 +1,9 @@
 import { dd } from '../../runtime.js';
 import { eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
-import { listAssociations, rememberOpener } from '../../bl/openers.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
-import { CopyTextAction, ExecCommandAction, PatchApiKeyDraftAction, RebindKeyAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
+import { CopyTextAction, ExecCommandAction, PatchApiKeyDraftAction, RebindKeyAction, RememberOpenerAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -18,7 +17,7 @@ export default function settingsView(state, ui) {
         ...groups.map((g) => group(g, ui)),
         mcpSection(ui, state.caps),
         apiKeysSection(state, ui),
-        openersSection(ui),
+        openersSection(state.assoc, ui),
         keybindingsSection(ui),
       ),
     ),
@@ -362,8 +361,7 @@ function metaLine(k) {
   return bits.join(' \u00b7 ');
 }
 
-function openersSection(ui) {
-  const rows = listAssociations(ui.platform);
+function openersSection(rows, ui) {
   return div({ className: 'group' },
     h3('Default Openers'),
     rows.length
@@ -376,7 +374,7 @@ function openersSection(ui) {
               ),
               div({ className: 'control' },
                 button({ className: 'iconbtn', title: 'Forget this default' }, icon('close', { size: 14 }))
-                  .on({ click: () => rememberOpener(ui.platform, r.typeKey, null) }),
+                  .on({ click: () => ui.engine.dispatch(new RememberOpenerAction(r.typeKey, null)) }),
               ),
             ),
           ),

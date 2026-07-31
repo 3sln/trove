@@ -20,6 +20,7 @@
 
 import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';
+import { SetSettingAction } from '../../../bl/actions.js';
 import { listView } from './list.js';
 import { gridView, gridMove } from './grid.js';
 
@@ -44,21 +45,7 @@ export function registerBuiltinViews(platform) {
   }
 }
 
-const SETTING = 'explorer.view';
-
-/**
- * Every view that could draw these results, best first.
- *
- * No availability check, unlike openers: a view is host code, so there is no "its
- * provider isn't answering" state to be in. A when-clause is the only gate, and it is
- * the same one every other contribution answers to.
- */
-export function availableViews(platform) {
-  return platform.contributions
-    .ofType('view')
-    .filter((v) => !v.when || platform.context.evaluate(v.when))
-    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-}
+export const SETTING = 'explorer.view';
 
 /**
  * The view to draw with, in order of how much someone meant it.
@@ -73,11 +60,20 @@ export function availableViews(platform) {
  *
  * A hint naming a view this build doesn't have is ignored, not an error: the transformer
  * is deployment configuration and may outlive the build it was written against.
+ *
+ * PURE. It used to take `platform` and read the contribution registry, the context keys and
+ * the settings mid-render — three reads that nothing invalidated on, so the launcher only
+ * kept up because the shell's snapshot was coarse enough to redraw it anyway. The reactive
+ * half is the `views` query now; what is left is arithmetic over the items already on
+ * screen, which is the one input that cannot be a query (there is no sensible key for "these
+ * forty search results").
+ *
+ * @param {{views: Array, saved: string|null}} slice from the `views` query
+ * @param {Array} items the rows being drawn, `{ node }`-shaped
+ * @param {string|null} hint the search transformer's suggestion, if this is a search
  */
-export function activeView(platform, items = [], hint = null) {
-  const views = availableViews(platform);
+export function pickView({ views = [], saved = null } = {}, items = [], hint = null) {
   if (!views.length) return null;
-  const saved = platform.settings.get(SETTING);
   const chosen = saved && views.find((v) => v.id === saved);
   if (chosen) return chosen;
   const suggested = hint && views.find((v) => v.id === hint);
@@ -100,20 +96,17 @@ function matchesView(view, node) {
   return (view.match.mime || []).some((m) => (m.endsWith('/*') ? ct.startsWith(m.slice(0, -1)) : ct === m));
 }
 
-export function chooseView(platform, viewId) {
-  platform.settings.set(SETTING, viewId || undefined);
-}
-
 /** The switcher, shown only when there is more than one way to look at this. */
-export function viewSwitcher(platform, current) {
-  const views = availableViews(platform);
+export function viewSwitcher(slice, current, ui) {
+  const views = slice?.views || [];
   if (views.length < 2) return null;
   return div({ className: 'view-switch' }, ...views.map((v) =>
     button({
       className: `vs-btn ${v.id === current?.id ? 'on' : ''}`,
-      title: `${v.title || v.name} view`,
+      title: `${v.title} view`,
       'aria-pressed': v.id === current?.id ? 'true' : 'false',
-    }, icon(v.icon || 'list', { size: 14 })).on({ click: () => chooseView(platform, v.id) })));
+    }, icon(v.icon || 'list', { size: 14 }))
+      .on({ click: () => ui.engine.dispatch(new SetSettingAction(SETTING, v.id)) })));
 }
 
 /**

@@ -7,11 +7,48 @@
 // Preferences live in settings under `openers.associations`: a map from a *type key*
 // (an extension like ".pdf", an exact mime, or a "type/*" wildcard) to an opener id.
 
+import { selectorMatches } from '@3sln/trove/core/util.js';
 import { extOf } from './fileType.js';
 
-const ASSOC_KEY = 'openers.associations';
+export const ASSOC_KEY = 'openers.associations';
 
 export { extOf };
+
+/**
+ * One opener as the chooser and the switcher need to see it: what it is called, what it
+ * claims, and where it came from.
+ *
+ * `source` is resolved here because it needs the plugin host to answer, which a component
+ * has no business holding. `match` stays so the selector can be applied later, by
+ * `openersFor`, against a node the caller already has.
+ *
+ * No `component`, only because nothing on this path renders — both callers are picking
+ * between openers, not drawing with one. (A renderer would be fine to pass: it is a pure
+ * vnode builder. See the `views` query, which does exactly that.)
+ */
+export function describeOpener(opener, plugins) {
+  return {
+    id: opener.id,
+    title: opener.title ?? opener.name ?? opener.id,
+    match: opener.match ?? null,
+    priority: opener.priority ?? 0,
+    pluginId: opener.pluginId ?? null,
+    source: opener.pluginId
+      ? (plugins?.plugins?.get(opener.pluginId)?.manifest?.displayName || opener.pluginId)
+      : 'Built-in',
+  };
+}
+
+/**
+ * Which of these openers claim this node, best first.
+ *
+ * Pure, and deliberately so — see the `openers` query. Every reactive decision (when-clause,
+ * plugin health, priority order) has already been made; all that is left is running a
+ * selector over a file, which needs nothing but its two arguments.
+ */
+export function openersFor(openers, node) {
+  return (openers || []).filter((o) => selectorMatches(o.match, node));
+}
 
 /** The canonical type key we remember a choice under: prefer extension, else mime. */
 export function typeKeyFor(node) {
@@ -26,15 +63,20 @@ export function typeLabelFor(node) {
   return mime ? `${mime} files` : 'this file type';
 }
 
-/** All openers that can handle this node right now (selector + when + availability),
- *  best (highest priority) first. */
+/**
+ * All openers that can handle this node right now (selector + when + availability),
+ * best (highest priority) first — for an ACTION, which holds the resources to ask.
+ *
+ * The render layer gets the same answer the other way round: the `openers` query resolves
+ * when/availability, `openersFor` applies the selector. Both end at `describeOpener`, so
+ * the opener-chooser dialog looks the same whichever side opened it.
+ */
 export function availableOpeners(r, node) {
-  const evaluate = (w) => r.context.evaluate(w);
-  const isAvailable = (o) => r.plugins.isAvailable(o);
   return r.contributions
     .openersFor(node)
-    .filter((o) => (!o.when || evaluate(o.when)) && isAvailable(o))
-    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    .filter((o) => (!o.when || r.context.evaluate(o.when)) && r.plugins.isAvailable(o))
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+    .map((o) => describeOpener(o, r.plugins));
 }
 
 /** The remembered opener id for a node's type (ext → exact mime → type/* ), or null. */
@@ -46,26 +88,16 @@ export function rememberedOpenerId(r, node) {
   return (ext && assoc[ext]) || (mime && assoc[mime]) || (wild && assoc[wild]) || null;
 }
 
-/** Remember (or, with a null openerId, forget) the opener for a type key. */
-export function rememberOpener(r, typeKey, openerId) {
-  if (!typeKey) return;
-  const assoc = { ...(r.settings.get(ASSOC_KEY) || {}) };
-  if (openerId) assoc[typeKey] = openerId;
-  else delete assoc[typeKey];
-  r.settings.set(ASSOC_KEY, assoc);
-}
-
-/** The saved associations as a list, for the Settings UI. */
-export function listAssociations(r) {
-  const assoc = r.settings.get(ASSOC_KEY) || {};
-  return Object.entries(assoc).map(([typeKey, openerId]) => {
-    const opener = r.contributions.get(openerId);
-    return { typeKey, openerId, openerTitle: opener?.title || openerId, missing: !opener };
-  });
-}
-
-/** A short source label for an opener ("Built-in" or the plugin's name). */
-export function openerSource(r, opener) {
-  if (!opener?.pluginId) return 'Built-in';
-  return r.plugins.plugins.get(opener.pluginId)?.manifest?.displayName || opener.pluginId;
+/**
+ * The associations with one type key changed, or removed with a null openerId.
+ *
+ * Returns the next map rather than writing it: the write is `RememberOpenerAction`'s, and
+ * keeping the arithmetic separate from the effect is what lets both the settings screen and
+ * the opener chooser reach it without either touching `settings`.
+ */
+export function withAssociation(assoc, typeKey, openerId) {
+  const next = { ...(assoc || {}) };
+  if (openerId) next[typeKey] = openerId;
+  else delete next[typeKey];
+  return next;
 }

@@ -4,111 +4,150 @@
 // a view whose `match` suits what is actually on screen, then priority. Getting that
 // order wrong is not a crash — it is a drive that quietly stops honouring the button
 // the user pressed, which is the kind of thing only a test notices.
+//
+// The decision is split in two, and the seam is worth stating: WHICH views exist and which
+// one was pinned is engine state, and lives in the `views` query (tested through the engine,
+// below). Choosing between them also needs the items on screen — which are not something a
+// query can be keyed by — so `pickView` is a pure function over the query's output plus
+// those items. It used to be one function taking `platform` and reading the contribution
+// registry, the context keys and the settings mid-render.
 
 import { test, expect } from './testkit.js';
+import { Engine, Provider } from '@3sln/ngin';
 import { ContributionRegistry } from '../src/platform/contributions.js';
+import { cell } from '../src/runtime.js';
+import * as q from '../src/bl/queries.js';
 import {
-  activeView, availableViews, chooseView, viewMove, renderView, registerBuiltinViews,
+  pickView, viewMove, renderView, registerBuiltinViews,
 } from '../src/ui/components/views/index.js';
 
-function platform({ when = () => true } = {}) {
-  const values = {};
-  return {
-    contributions: new ContributionRegistry(),
-    settings: {
-      get: (k) => values[k],
-      set: (k, v) => { if (v === undefined) delete values[k]; else values[k] = v; },
+const settle = () => new Promise((r) => setTimeout(r, 5));
+
+/**
+ * The `views` query over a registry, as the app would run it.
+ *
+ * Read through the engine rather than by calling the projection: the point of moving this
+ * out of the render was that the dependency is declared, and a test that reached past the
+ * engine would not notice if it stopped being.
+ */
+async function slice({ when = () => true, saved } = {}) {
+  const contributions = new ContributionRegistry();
+  registerBuiltinViews({ contributions });
+  const values = saved === undefined ? {} : { 'explorer.view': saved };
+  const engine = new Engine({
+    providers: {
+      contributions: Provider.fromSingleton(contributions),
+      context: Provider.fromSingleton({ observe: () => cell({}), evaluate: when }),
+      settings: Provider.fromSingleton({ observe: () => cell({}), get: (k) => values[k] }),
+      plugins: Provider.fromSingleton({}),
+      commands: Provider.fromSingleton({}),
+      keybindings: Provider.fromSingleton({}),
     },
-    context: { evaluate: when },
-  };
+  });
+  let value = null;
+  const sub = engine.query(q.views).subscribe((v) => { value = v; });
+  await settle();
+  sub.unsubscribe?.();
+  return { value, contributions, engine };
 }
 
 const img = (name) => ({ node: { id: name, name, contentType: 'image/jpeg' } });
 const txt = (name) => ({ node: { id: name, name, contentType: 'text/plain' } });
 
-test('the built-ins register as views, list first', () => {
-  const p = platform();
-  registerBuiltinViews(p);
-  const views = availableViews(p);
-  expect(views.map((v) => v.id)).toEqual(['core.view.list', 'core.view.grid']);
-  expect(views.every((v) => v.type === 'view')).toBe(true);
-  // A view is a render function in the host — that is what makes it drawable at all.
-  expect(typeof views[0].render).toBe('function');
+test('the built-ins reach the view as drawable descriptors, list first', async () => {
+  const { value } = await slice();
+  expect(value.views.map((v) => v.id)).toEqual(['core.view.list', 'core.view.grid']);
+  // A view is a render function in the host — that is what makes it drawable at all, and
+  // it travels with the query. A renderer is a pure vnode builder, so handing one over is
+  // handing over data; the rule a query answers to is about side effects, not callables.
+  expect(typeof value.views[0].render).toBe('function');
+  expect(value.saved).toBe(null);
 });
 
+test('a when-clause gates a view the same way it gates every other contribution', async () => {
+  const only = (yes) => ({ when: (w) => w === yes });
+  const { value: hidden, contributions, engine } = await slice(only('yes'));
+  contributions.register('core.view.map', {
+    type: 'view', title: 'Map', priority: 90, when: 'no', render: () => null,
+  });
+  // Re-read: registering is a change the query is subscribed to.
+  let seen = null;
+  const sub = engine.query(q.views).subscribe((v) => { seen = v; });
+  await settle();
+  expect(seen.views.some((v) => v.title === 'Map')).toBe(false);
+  expect(hidden.views.some((v) => v.title === 'Map')).toBe(false);
+
+  contributions.register('core.view.map', {
+    type: 'view', title: 'Map', priority: 90, when: 'yes', render: () => null,
+  });
+  await settle();
+  expect(seen.views[0].title).toBe('Map');
+  sub.unsubscribe?.();
+});
+
+test('the pinned view travels with the list, so choosing needs only one read', async () => {
+  const { value } = await slice({ saved: 'core.view.grid' });
+  expect(value.saved).toBe('core.view.grid');
+});
+
+// --- pickView, which is pure -----------------------------------------------------
+
+const VIEWS = [
+  { id: 'core.view.list', title: 'List', match: null },
+  { id: 'core.view.grid', title: 'Grid', match: { mime: ['image/*', 'video/*'] } },
+];
+const withSaved = (saved) => ({ views: VIEWS, saved });
+
 test('with nothing chosen and nothing pictorial, the list draws', () => {
-  const p = platform();
-  registerBuiltinViews(p);
-  expect(activeView(p, [txt('a.txt'), txt('b.txt'), txt('c.txt')]).id).toBe('core.view.list');
+  expect(pickView(withSaved(null), [txt('a.txt'), txt('b.txt'), txt('c.txt')]).id).toBe('core.view.list');
   // And an empty drive is not an excuse to return nothing to draw with.
-  expect(activeView(p, []).id).toBe('core.view.list');
+  expect(pickView(withSaved(null), []).id).toBe('core.view.list');
+  // Neither is being handed nothing at all — the query is PENDING for a frame or two.
+  expect(pickView(undefined, [])).toBe(null);
+  expect(pickView({ views: [], saved: null }, [])).toBe(null);
 });
 
 test('a collection full of photographs opens as a grid without being asked', () => {
-  const p = platform();
-  registerBuiltinViews(p);
-  expect(activeView(p, [img('1.jpg'), img('2.jpg'), img('3.jpg'), img('4.jpg')]).id).toBe('core.view.grid');
+  const p = withSaved(null);
+  expect(pickView(p, [img('1.jpg'), img('2.jpg'), img('3.jpg'), img('4.jpg')]).id).toBe('core.view.grid');
   // A couple of pictures among the documents is not a gallery.
-  expect(activeView(p, [img('1.jpg'), txt('a.txt'), txt('b.txt'), txt('c.txt')]).id).toBe('core.view.list');
+  expect(pickView(p, [img('1.jpg'), txt('a.txt'), txt('b.txt'), txt('c.txt')]).id).toBe('core.view.list');
   // Neither is a two-item drive: too small a sample to change the whole layout on.
-  expect(activeView(p, [img('1.jpg'), img('2.jpg')]).id).toBe('core.view.list');
+  expect(pickView(p, [img('1.jpg'), img('2.jpg')]).id).toBe('core.view.list');
 });
 
 test('a chosen view wins over what the contents suggest, and can be un-chosen', () => {
-  const p = platform();
-  registerBuiltinViews(p);
   const photos = [img('1.jpg'), img('2.jpg'), img('3.jpg')];
-  chooseView(p, 'core.view.list');
-  expect(activeView(p, photos).id).toBe('core.view.list');
-  chooseView(p, null);
+  expect(pickView(withSaved('core.view.list'), photos).id).toBe('core.view.list');
   // Back to being decided by the contents.
-  expect(activeView(p, photos).id).toBe('core.view.grid');
+  expect(pickView(withSaved(null), photos).id).toBe('core.view.grid');
 });
 
 // The search transformer read the sentence. "photos from the trip last summer" is a
 // request for a gallery as much as it is a query, and nothing downstream can recover
 // that — by then all there is to go on is a list of content types.
 test('the transformer\'s hint decides the view, under the user\'s own choice', () => {
-  const p = platform();
-  registerBuiltinViews(p);
   const docs = [txt('a.txt'), txt('b.txt'), txt('c.txt')];
 
   // Without a hint these are documents and draw as a list.
-  expect(activeView(p, docs).id).toBe('core.view.list');
+  expect(pickView(withSaved(null), docs).id).toBe('core.view.list');
   // With one, the sentence wins over what the content types suggest.
-  expect(activeView(p, docs, 'core.view.grid').id).toBe('core.view.grid');
+  expect(pickView(withSaved(null), docs, 'core.view.grid').id).toBe('core.view.grid');
 
   // But never over a view the user pressed a button for.
-  chooseView(p, 'core.view.list');
-  expect(activeView(p, docs, 'core.view.grid').id).toBe('core.view.list');
-  chooseView(p, null);
+  expect(pickView(withSaved('core.view.list'), docs, 'core.view.grid').id).toBe('core.view.list');
 
   // A hint for a view this build doesn't have is ignored, not an error — a transformer
   // is deployment config and may outlive the build it was written against.
-  expect(activeView(p, docs, 'acme.gallery').id).toBe('core.view.list');
-  expect(activeView(p, [img('1.jpg'), img('2.jpg'), img('3.jpg')], 'acme.gallery').id).toBe('core.view.grid');
+  expect(pickView(withSaved(null), docs, 'acme.gallery').id).toBe('core.view.list');
+  expect(pickView(withSaved(null), [img('1.jpg'), img('2.jpg'), img('3.jpg')], 'acme.gallery').id)
+    .toBe('core.view.grid');
 });
 
 test('a saved view that is no longer installed does not leave the drive blank', () => {
-  const p = platform();
-  registerBuiltinViews(p);
-  chooseView(p, 'trove+contrib:acme.com/docs/gallery'); // uninstalled since
-  expect(activeView(p, [txt('a.txt')]).id).toBe('core.view.list');
+  expect(pickView(withSaved('trove+contrib:acme.com/docs/gallery'), [txt('a.txt')]).id)
+    .toBe('core.view.list');
 });
-
-test('a when-clause gates a view the same way it gates every other contribution', () => {
-  const p = platform({ when: (w) => w === 'yes' });
-  registerBuiltinViews(p);
-  p.contributions.register('core.view.map', {
-    type: 'view', title: 'Map', priority: 90, when: 'no', render: () => null,
-  });
-  expect(availableViews(p).some((v) => v.title === 'Map')).toBe(false);
-  p.contributions.register('core.view.map', {
-    type: 'view', title: 'Map', priority: 90, when: 'yes', render: () => null,
-  });
-  expect(availableViews(p)[0].title).toBe('Map');
-});
-
 
 // A view is the WHOLE results area, so one that cannot draw takes the drive's contents
 // off the screen with it. Views are host code with no sandbox around them, which is

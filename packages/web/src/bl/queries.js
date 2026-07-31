@@ -33,6 +33,7 @@ import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
 import { ExecCommandAction } from './actions.js';
+import { ASSOC_KEY, describeOpener } from './openers.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
@@ -331,6 +332,70 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
 });
 
 /**
+ * Every opener that could run right now — `when` and plugin availability already decided,
+ * and the plugin's display name resolved into `source`.
+ *
+ * The SELECTOR is left on, which is the whole trick: which openers exist is a question
+ * about engine state and belongs here, but which of them suits the file a component is
+ * drawing is pure matching against data that component already holds. So the query answers
+ * the reactive half and `openersFor` (a pure function, below) answers the rest — rather
+ * than the query being parameterised by a node, which would need one live realization per
+ * file on screen.
+ *
+ * Descriptors, not contributions: no `component`, no `entry`. Rendering resolves the
+ * callable by id — see ui/components/openers.
+ */
+export const openers = new ViewQuery(REGISTRY_DEPS, registries, (r) =>
+  r.contributions.ofType('opener')
+    .filter((o) => !o.when || r.context.evaluate(o.when))
+    .filter((o) => r.plugins?.isAvailable?.(o) ?? true)
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+    .map((o) => describeOpener(o, r.plugins)));
+
+/**
+ * How results can be drawn, and which one the user pinned.
+ *
+ * `saved` travels with the list because choosing between them needs both, and a component
+ * that had to fetch the setting separately would be reaching for `settings` mid-render —
+ * which is what this replaces. The CHOICE itself is `pickView`, a pure function, because it
+ * also depends on the items on screen, and items are not something to key a query by.
+ *
+ * `render` and `move` come along. The rule about a query emitting a view rather than a
+ * handle is about SIDE EFFECTS — a `run()` that mutates the drive is a back door around
+ * actions and the feed. A view's renderer is a pure vnode builder over the arguments it is
+ * given, so passing it is passing data; making the component look it up by id would have
+ * been the registry access this is trying to remove, relocated rather than deleted.
+ */
+export const views = new ViewQuery(REGISTRY_DEPS, registries, (r) => ({
+  views: r.contributions.ofType('view')
+    .filter((v) => !v.when || r.context.evaluate(v.when))
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+    .map((v) => ({
+      id: v.id,
+      title: v.title ?? v.name ?? v.id,
+      icon: v.icon ?? null,
+      match: v.match ?? null,
+      render: v.render,
+      move: v.move,
+    })),
+  saved: r.settings.get('explorer.view') || null,
+}));
+
+/**
+ * The saved "always open .pdf with…" choices, for the settings screen.
+ *
+ * `missing` is decided here: an association can name an opener that has since been
+ * uninstalled, and the row has to say so rather than showing a bare id.
+ */
+export const openerAssociations = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
+  const assoc = r.settings.get(ASSOC_KEY) || {};
+  return Object.entries(assoc).map(([typeKey, openerId]) => {
+    const opener = r.contributions.get(openerId);
+    return { typeKey, openerId, openerTitle: opener?.title || openerId, missing: !opener };
+  });
+});
+
+/**
  * A file's text, capped.
  *
  * The first query keyed by something unbounded, which is what `queryOf` interning and the
@@ -366,22 +431,6 @@ export class FileText extends Query {
 }
 
 /**
- * What the server can do: which storage drivers it offers, whether it can suggest searches.
- *
- * This one FETCHES rather than watching a cell, and it is the reason the last `rerender`-
- * shaped hack can go. The answer used to be assigned onto `platform` at boot and followed by
- * `workbench.touch()` — a poke at an unrelated store purely to make the shell redraw,
- * because nothing invalidated when a plain field was written. A query has somewhere for the
- * value to arrive, so nothing has to be told about it.
- *
- * The promise is kept, not just the value. ngin re-boots a query when it is observed again
- * after going idle, and this must not become a second HTTP call: what the server can do does
- * not change under a running page. (A one-shot `fetch()` query would be the obvious fit and
- * is wrong here for the same reason — ngin evicts after one, deliberately, so that the next
- * subscriber gets a fresh answer rather than a stale one that can never refresh. That is the
- * right default and the opposite of what this wants.)
- */
-/**
  * Command id → its keybinding label, for anything that shows a shortcut next to an action.
  *
  * Hardcoding "⌘⇧L" told a Windows or Linux user about a key their machine does not have,
@@ -393,6 +442,23 @@ export const commandKeys = new ViewQuery(REGISTRY_DEPS, registries, (r) =>
     .map((b) => [b.command, r.keybindings.labelFor(b.command)])
     .filter(([, label]) => label)));
 
+/**
+ * What the server can do: which storage drivers it offers, whether it can suggest searches.
+ *
+ * This one FETCHES rather than watching a cell, and it is what retired the last
+ * `rerender`-shaped hack. The answer used to be assigned onto `platform` at boot and
+ * followed by `workbench.touch()` — a poke at an unrelated store purely to make the shell
+ * redraw, because nothing invalidated when a plain field was written. A query has somewhere
+ * for the value to arrive, so nothing has to be told about it. Both the field and `touch()`
+ * are gone.
+ *
+ * The promise is kept, not just the value. ngin re-boots a query when it is observed again
+ * after going idle, and this must not become a second HTTP call: what the server can do does
+ * not change under a running page. (A one-shot `fetch()` query would be the obvious fit and
+ * is wrong here for the same reason — ngin evicts after one, deliberately, so that the next
+ * subscriber gets a fresh answer rather than a stale one that can never refresh. That is the
+ * right default and the opposite of what this wants.)
+ */
 class Capabilities extends Query {
   static deps = ['api'];
 

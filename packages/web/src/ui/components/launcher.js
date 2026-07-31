@@ -8,7 +8,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { CloseSearchModalAction, ExecCommandAction, FilterAction, MoveLaunchAction, OpenFileAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
-import { activeView, renderView, viewSwitcher, viewMove } from './views/index.js';
+import { pickView, renderView, viewSwitcher, viewMove } from './views/index.js';
 import { openRowMenu } from './views/parts.js';
 import { activate } from '../activate.js';
 
@@ -88,7 +88,7 @@ export default function launcher(state, ui, opts = {}) {
   //
   // The search transformer may have suggested one. Only for an actual search: on the
   // home list there is no sentence to have read.
-  const view = activeView(ui.platform, flat, mode === 'search' ? state.se.resolved?.view : null);
+  const view = pickView(state.views, flat, mode === 'search' ? state.se.resolved?.view : null);
   const onKey = (e) => {
     // `textual`: there is text in the box, so left/right are the caret's and no view
     // may claim them. Fixing a typo must not move the highlight.
@@ -139,7 +139,7 @@ export default function launcher(state, ui, opts = {}) {
         : null,
       // Which way to look at the drive. Not in the modal search, where the answer is
       // always "the one thing I am about to press Enter on".
-      modal ? null : viewSwitcher(ui.platform, view),
+      modal ? null : viewSwitcher(state.views, view, ui),
     ),
     showResolved ? resolvedBar(resolved) : null,
     // The results belong to the active view — see ui/components/views. The launcher says

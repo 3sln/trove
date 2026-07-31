@@ -44,18 +44,6 @@ export class WorkbenchService {
     this.cell.setValue(this.state);
   }
 
-  /**
-   * Say that something the shell renders from changed without going through here.
-   *
-   * There is exactly one such thing — `platform.capabilities`, which arrives from the
-   * server after boot and is read straight off the platform by the status bar. A cell
-   * drops a write of the value it already holds, so re-pushing `state` is not a nudge;
-   * a fresh object is.
-   */
-  touch() {
-    this.#set({});
-  }
-
   // --- overlay delegations (state lives in OverlayService) -------------------
   openPalette(mode, query) { this.overlay.openPalette(mode, query); }
   setPaletteQuery(query) { this.overlay.setPaletteQuery(query); }

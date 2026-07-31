@@ -8,7 +8,7 @@
 import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { renderOpener } from './openers/index.js';
-import { availableOpeners } from '../../bl/openers.js';
+import { openersFor } from '../../bl/openers.js';
 import { NavigateBackAction, OpenInPanelAction, ShowDialogAction, ShowHomeAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 
 const { div, span, button } = dd;
@@ -22,12 +22,12 @@ export default function editorArea(state, ui) {
   const active = files[files.length - 1];
   if (!active) return div({ className: 'editor' });
   return div({ className: 'editor' },
-    navBar(files, active, ui),
+    navBar(files, active, state, ui),
     div({ className: 'stage' }, openerHost(active, ui)),
   );
 }
 
-function navBar(files, active, ui) {
+function navBar(files, active, state, ui) {
   return div({ className: 'viewer-nav' },
     button({ className: 'vn-back', title: 'Back (Esc)' }, icon('chevron-left', { size: 16 }))
       .on({ click: () => ui.engine.dispatch(new NavigateBackAction()) }),
@@ -40,7 +40,7 @@ function navBar(files, active, ui) {
           .on({ click: () => ui.engine.dispatch(new OpenInPanelAction(p.node, p.openerId)) })),
     ),
     div({ className: 'vn-actions' },
-      openerSwitch(active, ui),
+      openerSwitch(active, state, ui),
       button({ className: 'iconbtn', title: 'Details & comments' }, icon('info', { size: 15 }))
         .on({ click: () => ui.engine.dispatch(new ToggleInfoPanelAction()) }),
       button({ className: 'iconbtn', title: 'Close (Esc)' }, icon('close', { size: 15 }))
@@ -52,8 +52,11 @@ function navBar(files, active, ui) {
 // "Open with…" — shown only when more than one opener can handle this file. Opens
 // the chooser (pre-selected to the current opener) so the user can switch viewers,
 // and optionally make the choice their default for this file type.
-function openerSwitch(active, ui) {
-  const openers = availableOpeners(ui.platform, active.node);
+function openerSwitch(active, state, ui) {
+  // `state.openers` has already had its when-clauses and plugin health resolved by the
+  // query; matching them against THIS file is pure. That split is why this no longer
+  // reaches for the contribution registry mid-render.
+  const openers = openersFor(state.openers, active.node);
   if (openers.length <= 1) return null;
   return button({ className: 'iconbtn', title: 'Open with…' }, icon('dots', { size: 15 }))
     .on({ click: () => ui.engine.dispatch(new ShowDialogAction({ kind: 'opener-chooser', node: active.node, openers, current: active.openerId })) });

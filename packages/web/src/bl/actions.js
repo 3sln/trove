@@ -9,7 +9,7 @@ import { PROMPT } from './viewState.js';
 import { beginInstallFromUrl } from './pluginInstall.js';
 import { newId } from '@3sln/trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
-import { availableOpeners, rememberedOpenerId } from './openers.js';
+import { availableOpeners, rememberedOpenerId, withAssociation, ASSOC_KEY } from './openers.js';
 // A share link and a `trove:` URI are the same address in two spellings — see core/links.js.
 import { parseShareUrl } from '@3sln/trove/core/links.js';
 
@@ -1113,6 +1113,23 @@ export class SetSettingAction extends Action {
   static deps = ['settings'];
   constructor(key, value) { super(); this.key = key; this.value = value; }
   async execute({ settings }) { settings.set(this.key, this.value); }
+}
+
+/**
+ * Remember which opener a file type should use, or forget it with a null openerId.
+ *
+ * Not `SetSettingAction` with a pre-merged map, because building that map means reading the
+ * current one — and a component that reads settings to compute what to write is the same
+ * stale-base race as the drafts had (see PatchDraftAction). The merge happens here, against
+ * what is stored.
+ */
+export class RememberOpenerAction extends Action {
+  static deps = ['settings'];
+  constructor(typeKey, openerId) { super(); this.typeKey = typeKey; this.openerId = openerId; }
+  async execute({ settings }) {
+    if (!this.typeKey) return;
+    settings.set(ASSOC_KEY, withAssociation(settings.get(ASSOC_KEY), this.typeKey, this.openerId));
+  }
 }
 
 /** Back through the panel stack. */

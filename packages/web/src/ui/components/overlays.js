@@ -6,9 +6,9 @@ import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
-import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
+import { typeKeyFor, typeLabelFor } from '../../bl/openers.js';
 import { draftFor, promptValueOf, PROMPT } from '../../bl/viewState.js';
-import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, CreateCollectionFromFormAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, PatchDraftAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
+import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, CreateCollectionFromFormAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, PatchDraftAction, RememberOpenerAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
 import { activate } from '../activate.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
@@ -59,11 +59,12 @@ export function dialog(state, ui) {
 // workbench dialog state (updateDialog), so radio/checkbox selection survives
 // re-renders. "Remember" persists a per-file-type association in settings.
 function openerChooserDialog(d, ui) {
-  const platform = ui.platform;
   const selected = d.openerId || d.current || d.openers[0]?.id;
   const remember = !!d.remember;
   const confirm = () => {
-    if (remember && selected) rememberOpener(platform, typeKeyFor(d.node), selected);
+    if (remember && selected) {
+      ui.engine.dispatch(new RememberOpenerAction(typeKeyFor(d.node), selected));
+    }
     ui.engine.dispatch(new CloseDialogAction());
     ui.engine.dispatch(new OpenInPanelAction(d.node, selected, { reset: !!d.reset }));
   };
@@ -79,7 +80,10 @@ function openerChooserDialog(d, ui) {
             icon(o.icon || iconForNode(d.node), { size: 18 }),
             div({ className: 'oo-main' },
               span({ className: 'oo-title' }, o.title || o.id),
-              span({ className: 'oo-src' }, openerSource(platform, o)),
+              // Resolved by whoever assembled the list — see describeOpener. Asking the
+              // plugin host for a display name mid-render was the last thing keeping
+              // `platform` in this dialog.
+              span({ className: 'oo-src' }, o.source),
             ),
           ).on({ click: () => ui.engine.dispatch(new UpdateDialogAction({ openerId: o.id })) }),
         ),
