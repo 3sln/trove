@@ -39,17 +39,6 @@ scale; this endpoint reintroduced exactly that problem one layer down.
 Roughly, for a hundred thumbnails: ~300 requests today against ~101 with the key cached and
 the header folded in.
 
-## The thread question, unmeasured
-
-Decryption happens on the service worker's single thread, shared with every other fetch the
-app makes. Worth separating two costs before restructuring anything: the AES itself is
-`crypto.subtle.decrypt`, AES-NI accelerated and executed off the JS thread in Chrome and
-Safari, while what actually runs on the worker thread is stream plumbing — a TransformStream
-hop and a promise per 1 MiB chunk. At 25 Mbps that is about three chunks a second.
-
-The suspicion is that request count dominates and CPU does not, but that is a guess, and the
-change it would justify is large enough to deserve a measurement first.
-
 ## The work, in the order it pays
 
 1. ~~**One GET for a full read.**~~ Done. The header is peeled off the front of the single
@@ -62,9 +51,8 @@ change it would justify is large enough to deserve a measurement first.
 3. **Persist `noncePrefix`** (8 bytes) on the item record at upload, so a ranged read is one
    GET too. Objects without it fall back to reading the header, and a scan can backfill —
    this is a metadata migration and wants its own change.
-4. **Instrument the worker** before touching the threading model. If it is hot,
-   `ReadableStream` is transferable (Chrome 89+, Safari 16.4+), so ciphertext can go to a
-   dedicated worker pool with in-worker decryption as the fallback.
+4. **Retire the plan endpoint** in favour of a collection key plus the URL batching that
+   already exists — see below. This supersedes what 2 did for the cold case.
 
 Cheap and independent of all four: cache decrypted bytes in the existing `trove-files` cache
 for recently read objects. Not a new privacy posture — offline pinning already stores
@@ -76,12 +64,35 @@ Read direct only above a size threshold. The overhead is fixed, so it is irrelev
 2 GB video and dominant against a 4 KB thumbnail, and proxying the small ones costs little.
 Worth knowing about; not the plan, because 1–3 make the threshold unnecessary.
 
+## The plan endpoint is the wrong shape, and should go
+
+Caching the plan fixed the REPEAT read and does nothing for the first one: a hundred cold
+tiles are still a hundred plan requests, because a plan is per-object and cannot be batched.
+
+The original instinct — fetch the key separately — was the right one, and the reason it looked
+like it saved nothing was wrong. Per-object URL minting is ALREADY batched (`POST
+/api/items/urls`, many ids in one request); a plan is not. So:
+
+- **the key** — one fetch per collection, cached. Fetch the whole live ring while there, and
+  the mid-rotation re-ask disappears with it.
+- **the URL** — the batched mint that already exists.
+
+Two things that need doing for that to work:
+
+- The worker holds a NODE id and cannot ask for "this collection's key" without first knowing
+  the collection. So the mint response has to carry `collectionId` and `fingerprint` beside
+  each URL.
+- `mintUrl` needs a `ciphertext` opt-in, the same shape `getDownload` already has: a bucket
+  URL for a caller that can decrypt, a trove URL for everything else. The default stays as it
+  is now — bare consumers must never be handed ciphertext.
+
+A hundred cold tiles then cost one key, one mint, and a hundred bucket GETs, and
+`/api/items/download/plan` can be deleted.
+
 ## What is left
 
-3 and 4 above, plus the batching that 2 turned out not to need for the repeat case but which
-still applies to the FIRST read of each object in a large gallery: a hundred cold tiles are
-still a hundred plan requests. Coalescing them the way `mediaUrls` coalesces minting is the
-remaining win, and it is only worth doing if a real library shows it matters.
+3 and 4 above. 4 supersedes the plan-caching in 2 for the cold case; the cache stays useful
+either way, since it is the URL and key that are being held.
 
 ## Done when
 
