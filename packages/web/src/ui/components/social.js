@@ -7,6 +7,7 @@ import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
 import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, ExecCommandAction, LoadSidecarAction, OpenFileAction, OpenNotificationTargetAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
+import { parseMentions } from '../../bl/mentions.js';
 
 const { div, span, button, textarea, input, p } = dd;
 
@@ -256,17 +257,9 @@ function composer(state, ui) {
   );
 }
 
-// Render @[Name](id) tokens and bare @handles as highlighted mentions.
+// WHERE the mentions are is parsed in bl/mentions.js, beside the `#tag` parser it is a
+// sibling of. All that is left here is the decision to draw one as a chip.
 function renderBody(text) {
-  const out = [];
-  const re = /@\[([^\]]+)\]\(([^)]+)\)|(?:^|\s)@([a-zA-Z0-9._@-]{2,})/g;
-  let last = 0;
-  let m;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index + (m[3] ? (m[0].startsWith(' ') ? 1 : 0) : 0)));
-    out.push(span({ className: 'mention' }, '@' + (m[1] || m[3])));
-    last = re.lastIndex;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+  return parseMentions(text).map((part) =>
+    (part.type === 'mention' ? span({ className: 'mention' }, `@${part.name}`) : part.value));
 }

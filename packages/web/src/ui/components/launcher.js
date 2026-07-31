@@ -8,7 +8,8 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { CloseSearchModalAction, ExecCommandAction, FilterAction, MoveLaunchAction, OpenFileAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
-import { pickView, renderView, viewSwitcher, viewMove } from './views/index.js';
+import { renderView, viewSwitcher, viewMove } from './views/index.js';
+import { pickView } from '../../bl/views.js';
 import { openRowMenu } from './views/parts.js';
 import { activate } from '../activate.js';
 
@@ -210,15 +211,13 @@ function buildContent(state, ui, q, mode, modal) {
   // nothing to dismiss.
   const closeModal = modal ? [new CloseSearchModalAction()] : [];
   if (mode === 'command') {
-    const term = q.slice(1).trim().toLowerCase();
-    const items = (state.commands || [])
-      .map((c) => ({ hay: `${c.category || ''} ${c.title}`.toLowerCase(), c }))
-      .map(({ hay, c }) => ({ s: score(hay, term), c }))
-      .filter((x) => term === '' || x.s > 0)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, 40)
-      .map(({ c }) => ({ icon: 'command', title: c.title, detail: c.category, badge: 'command',
-        actions: [new ExecCommandAction(c.id), ...closeModal] }));
+    // Ranked by the `launcherCommandMatches` query, which also strips the `!`. This used
+    // to score and sort here with an algorithm that was not the palette's, so the same
+    // three letters ordered the same commands differently depending on how you got here.
+    const items = (state.commandMatches || []).map((c) => ({
+      icon: 'command', title: c.title, detail: c.category, badge: 'command',
+      actions: [new ExecCommandAction(c.id), ...closeModal],
+    }));
     return [{ title: 'Commands', items, empty: 'No matching commands.' }];
   }
 
@@ -383,11 +382,3 @@ function fileIcon(node) {
 }
 
 // Substring-first, then subsequence fuzzy score (0 = no match).
-function score(hay, term) {
-  if (!term) return 1;
-  const i = hay.indexOf(term);
-  if (i >= 0) return 1000 - i;
-  let ti = 0;
-  for (let hi = 0; hi < hay.length && ti < term.length; hi++) if (hay[hi] === term[ti]) ti++;
-  return ti === term.length ? 1 : 0;
-}

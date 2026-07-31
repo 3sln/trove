@@ -14,7 +14,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
-import { statusFacts, usageChip } from './statusBar.js';
+import { usageChip } from './statusBar.js';
 import { CloseSheetAction, ExecCommandAction, OpenSheetAction, ToggleActivityPanelAction, ToggleInboxAction } from '../../bl/actions.js';
 
 const { div, button, span, img } = dd;
@@ -27,18 +27,22 @@ const TABS = [
   { id: 'plugins', icon: 'plug', label: 'Plugins', command: 'workbench.view.plugins' },
 ];
 
-/** Which single glyph best describes the drive's state right now. */
-function statusGlyph(f) {
-  if (!f.off.online) return { icon: 'info', tone: 'warn', label: 'Offline' };
-  if (f.issues.length) return { icon: 'warn', tone: 'danger', label: `${f.issues.length} need attention`, badge: f.issues.length };
-  if (f.running.length || f.uploading.length || f.off.syncing) return { spinner: true, tone: '', label: 'Working…' };
-  if (f.usage?.total && f.usage.available / f.usage.total < 0.1) return { icon: 'info', tone: 'warn', label: 'Low on space' };
-  return { icon: 'info', tone: '', label: 'Status' };
-}
+// How to DRAW each condition. Which condition is the one worth showing — offline over a
+// standing problem, a standing problem over work in progress — is decided by the
+// `statusFacts` query, because that ordering is a claim about what a person most needs to
+// know rather than a question about glyphs. See bl/status.js.
+const GLYPHS = {
+  offline: { icon: 'info', tone: 'warn' },
+  issues: { icon: 'warn', tone: 'danger' },
+  working: { spinner: true, tone: '' },
+  lowSpace: { icon: 'info', tone: 'warn' },
+  idle: { icon: 'info', tone: '' },
+};
 
 export function phoneTopBar(state, ui) {
-  const f = statusFacts(state, ui);
-  const g = statusGlyph(f);
+  const f = state.facts;
+  const c = f.condition;
+  const g = { ...(GLYPHS[c.kind] || GLYPHS.idle), label: c.label, badge: c.kind === 'issues' ? c.count : 0 };
   // Where you are, at the coarsest level. Deliberately NOT the open file's name: the
   // viewer's own breadcrumb sits directly beneath this bar and already says that, and two
   // rows of chrome repeating "notes.txt" costs a fifth of the screen to say it twice.
@@ -108,7 +112,7 @@ export function phoneSheet(state, ui) {
 }
 
 function statusSheet(state, ui) {
-  const f = statusFacts(state, ui);
+  const f = state.facts;
   const go = (cmd) => () => { ui.engine.dispatch(new CloseSheetAction()); ui.engine.dispatch(new ExecCommandAction(cmd)); };
   return div({ className: 'sheet-body' },
     div({ className: 'sheet-title' }, f.collectionLabel),
@@ -145,14 +149,14 @@ function statusSheet(state, ui) {
       ? div({ className: 'sheet-row static usage' },
         icon('download', { size: 18 }),
         span({ className: 'sr-label' }, 'Free space'),
-        usageChip({ usage: f.usage }))
+        usageChip(f))
       : null,
-    f.caps ? sheetRow({
-      icon: f.caps.storage?.presignDownload ? 'download' : 'files',
+    state.caps ? sheetRow({
+      icon: state.caps.storage?.presignDownload ? 'download' : 'files',
       label: 'Transfers',
-      value: f.caps.storage?.presignDownload ? 'Direct to storage' : 'Through the server',
+      value: state.caps.storage?.presignDownload ? 'Direct to storage' : 'Through the server',
     }) : null,
-    f.caps?.features?.semanticSearch ? sheetRow({ icon: 'star', label: 'Search', value: 'Semantic + keyword' }) : null,
+    state.caps?.features?.semanticSearch ? sheetRow({ icon: 'star', label: 'Search', value: 'Semantic + keyword' }) : null,
 
     div({ className: 'sheet-actions' },
       button({ className: 'btn small ghost' }, icon('refresh', { size: 13 }), span('Scan for changes')).on({ click: go('workbench.scanCollection') }),

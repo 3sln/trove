@@ -13,9 +13,11 @@ export default function commandPalette(state, ui) {
   if (!pal) return null;
   // With no query there is nothing to show — and showing the PREVIOUS session's hits
   // would be worse than nothing, since they don't match what the field now says.
+  // Already ranked — see the `paletteMatches` query. The palette used to score and sort
+  // here, with its own fuzzy algorithm that disagreed with the launcher's.
   const items = pal.mode === 'files'
     ? (pal.query.trim() ? state.se.paletteFiles || [] : [])
-    : filterCommands(state.commands || [], pal.query);
+    : state.matches || [];
   const index = Math.min(pal.index, Math.max(0, items.length - 1));
 
   const run = (item) => {
@@ -91,30 +93,7 @@ function fileOpt(item, active, run, hover) {
   ).on({ click: () => run(item), mouseenter: hover });
 }
 
-function filterCommands(all, query) {
-  const q = query.trim().toLowerCase();
-  if (!q) return all.slice(0, 60);
-  const scored = [];
-  for (const c of all) {
-    const hay = `${c.category || ''} ${c.title}`.toLowerCase();
-    const s = fuzzyScore(hay, q);
-    if (s > 0) scored.push([s, c]);
-  }
-  return scored.sort((a, b) => b[0] - a[0]).slice(0, 60).map((x) => x[1]);
-}
 
-function fuzzyScore(hay, q) {
-  let score = 0;
-  let hi = 0;
-  for (const ch of q) {
-    const idx = hay.indexOf(ch, hi);
-    if (idx < 0) return 0;
-    score += idx === hi ? 3 : 1;
-    hi = idx + 1;
-  }
-  if (hay.includes(q)) score += 10;
-  return score;
-}
 
 function onKey(e, ui, items, index, run) {
   if (e.key === 'ArrowDown') {

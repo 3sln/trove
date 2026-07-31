@@ -83,7 +83,11 @@ export default function workbench({ engine, app, platform }) {
       // blanking the shell.
       watchQuery(engine, q.capabilities),
       // Views the shell reads but no region owns yet.
-      watchQuery(engine, q.paletteCommands),
+      //
+      // The launcher's `!` mode gets the list already RANKED against what has been typed,
+      // rather than the raw list plus a scorer of its own. Nothing reads the unranked
+      // `paletteCommands` any more — the palette has its own ranked query, in its region.
+      watchQuery(engine, q.launcherCommandMatches),
       watchQuery(engine, q.commandKeys),
       // How results can be drawn, and every opener that could run. Both used to be worked
       // out mid-render from `platform` — three registry reads that nothing invalidated on,
@@ -97,9 +101,9 @@ export default function workbench({ engine, app, platform }) {
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands, commandKeys,
-      views, openers) =>
-      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands,
+    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commandMatches,
+      commandKeys, views, openers) =>
+      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commandMatches,
         commandKeys, views, openers }),
   );
 
@@ -113,6 +117,10 @@ export default function workbench({ engine, app, platform }) {
   const chrome = {
     ex: q.explorer, tr: q.transfers, act: q.activity, off: q.offline,
     so: q.social, wb: q.workbench, statusItems: q.statusItems, caps: q.capabilities,
+    // The numbers and the one-line verdict both shells report. Derived by the query rather
+    // than by the status bar and imported from there by the phone chrome, which is what it
+    // was — a business-layer derivation living in a component. See bl/status.js.
+    facts: q.statusFacts,
   };
   // A query boots asynchronously — it awaits a container lease first — so a region is
   // PENDING for the first frame or two and `watch` renders its placeholder. For a bar with
@@ -151,7 +159,9 @@ export default function workbench({ engine, app, platform }) {
     // The palette is the first thing to read a composed view rather than a service's state:
     // `commands` arrives with keybinding labels resolved and availability decided, so the
     // component stopped asking the keybinding and command services anything mid-render.
-    commandPalette: region(engine, { overlay: q.overlay, se: q.search, commands: q.paletteCommands },
+    // `matches` is the list already ranked against what has been typed — the palette does
+    // no scoring of its own any more. See bl/match.js for why there was more than one.
+    commandPalette: region(engine, { overlay: q.overlay, se: q.search, matches: q.paletteMatches },
       (s) => commandPalette(s, ui)),
   };
 

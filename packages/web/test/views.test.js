@@ -5,21 +5,24 @@
 // order wrong is not a crash — it is a drive that quietly stops honouring the button
 // the user pressed, which is the kind of thing only a test notices.
 //
-// The decision is split in two, and the seam is worth stating: WHICH views exist and which
-// one was pinned is engine state, and lives in the `views` query (tested through the engine,
-// below). Choosing between them also needs the items on screen — which are not something a
-// query can be keyed by — so `pickView` is a pure function over the query's output plus
-// those items. It used to be one function taking `platform` and reading the contribution
-// registry, the context keys and the settings mid-render.
+// The decision is split in two: WHICH views exist and which one was pinned is engine state
+// and lives in the `views` query (tested through the engine, below); choosing between them
+// also needs the items on screen, so `pickView` is a pure function over the query's output
+// plus those items. It used to be one function taking `platform` and reading the
+// contribution registry, the context keys and the settings mid-render.
+//
+// The split is provisional, NOT a constraint. The items are themselves derived from the
+// explorer and search queries — the launcher just happens to assemble them first — so both
+// halves belong in the engine, and `pickView` becomes internal to a query once the
+// launcher's group assembly moves there too.
 
 import { test, expect } from './testkit.js';
 import { Engine, Provider } from '@3sln/ngin';
 import { ContributionRegistry } from '../src/platform/contributions.js';
 import { cell } from '../src/runtime.js';
 import * as q from '../src/bl/queries.js';
-import {
-  pickView, viewMove, renderView, registerBuiltinViews,
-} from '../src/ui/components/views/index.js';
+import { viewMove, renderView, registerBuiltinViews } from '../src/ui/components/views/index.js';
+import { pickView } from '../src/bl/views.js';
 
 const settle = () => new Promise((r) => setTimeout(r, 5));
 

@@ -1,6 +1,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { CloseDialogAction, ExecCommandAction, OpenPluginPanelAction, RefreshPluginAction, SetPluginSecretAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
+import { describeTrust } from '../../bl/trust.js';
 
 const { div, span, p, button, h2, input, label } = dd;
 
@@ -94,19 +95,19 @@ function settingRow(pl, s, ui, state) {
   );
 }
 
-function trustBadge(t) {
-  if (!t) return null;
-  if (t.status === 'verified') return span({ className: 'trust verified', title: 'Signed by ' + t.domain }, icon('check', { size: 12 }), t.domain);
-  if (t.status === 'signed') return span({ className: 'trust signed' }, icon('info', { size: 12 }), 'signed');
-  // A BROKEN signature is not the same as no signature. The install dialog says so in
-  // red; this list used to fall through to the same amber "unverified" an ordinary
-  // unsigned plugin gets, so a package whose signature failed to verify — the one case
-  // that means someone tampered with it — looked like the common, benign one.
-  if (t.status === 'invalid') {
-    return span({ className: 'trust invalid', title: t.reason || 'The signature did not verify — this package may have been altered' },
-      icon('warn', { size: 12 }), 'invalid signature');
-  }
-  return span({ className: 'trust unverified' }, icon('warn', { size: 12 }), 'unverified');
+// The compact badge. WHAT the signature means is decided in bl/trust.js — this only
+// chooses how few characters to say it in, which is the part that is genuinely a question
+// about a crowded row. The two badges used to be two `if` ladders maintained separately,
+// and this one was missing the branch that distinguishes a tampered package from an
+// unsigned one.
+function trustBadge(trust) {
+  if (!trust) return null;
+  const t = describeTrust(trust);
+  const label = t.status === 'verified' ? t.domain
+    : t.status === 'invalid' ? 'invalid signature'
+      : t.status;
+  return span({ className: `trust ${t.tone}`, title: t.explanation },
+    icon(t.icon, { size: 12 }), label);
 }
 
 const KIND_ICON = { command: 'command', opener: 'file', indexer: 'search', statusItem: 'info' };

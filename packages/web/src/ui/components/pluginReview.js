@@ -9,6 +9,7 @@ import { icon } from '../icon.js';
 import { bytes as fmtBytes } from '../format.js';
 import { draftFor } from '../../bl/viewState.js';
 import { CloseDialogAction, SetViewStateAction } from '../../bl/actions.js';
+import { describeTrust } from '../../bl/trust.js';
 
 const { div, span, button, h3, p, label, input } = dd;
 
@@ -69,17 +70,16 @@ function header(s) {
   );
 }
 
-function trustBadge(t) {
-  if (t.status === 'verified') {
-    return span({ className: 'trust verified', title: `Signed by a key published at ${t.domain}` }, icon('check', { size: 13 }), 'Verified · ' + t.domain);
-  }
-  if (t.status === 'signed') {
-    return span({ className: 'trust signed', title: t.reason || 'Signed, but the domain does not vouch for the key' }, icon('info', { size: 13 }), 'Signed');
-  }
-  if (t.status === 'invalid') {
-    return span({ className: 'trust invalid', title: t.reason || 'Invalid signature — the package may have been tampered with' }, icon('warn', { size: 13 }), 'Invalid signature');
-  }
-  return span({ className: 'trust unverified', title: t.reason || 'This plugin is not signed' }, icon('warn', { size: 13 }), 'Unverified');
+// The full badge, for the dialog that asks whether to install at all. Same classification
+// as the list's — see bl/trust.js — with room to spell it out.
+function trustBadge(trust) {
+  const t = describeTrust(trust);
+  const label = t.status === 'verified' && t.domain ? `Verified · ${t.domain}`
+    : t.status === 'invalid' ? 'Invalid signature'
+      : t.status === 'signed' ? 'Signed'
+        : 'Unverified';
+  return span({ className: `trust ${t.tone}`, title: t.explanation },
+    icon(t.icon, { size: 13 }), label);
 }
 
 function capRow(cap, isAdmin, checked, onToggle) {

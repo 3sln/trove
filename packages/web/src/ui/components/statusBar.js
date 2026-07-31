@@ -74,12 +74,9 @@ export function activityChips(state, ui) {
  * meter that means nothing. The bar turns amber under 10% free and red under 5%, which
  * is early enough to act on.
  */
-export function usageChip(ex) {
-  const u = ex.usage;
+export function usageChip({ usage: u, usageLevel: level = '' }) {
   if (!u?.total) return null;
-  const freeRatio = u.available / u.total;
   const pct = Math.min(100, Math.round((u.used / u.total) * 100));
-  const level = freeRatio < 0.05 ? 'critical' : freeRatio < 0.1 ? 'low' : '';
   return span({
     className: `seg sb-usage ${level}`,
     title: `${bytes(u.used)} used of ${bytes(u.total)} — ${bytes(u.available)} free on this volume`,
@@ -88,58 +85,15 @@ export function usageChip(ex) {
   span(`${bytes(u.available)} free`));
 }
 
-/**
- * Everything the status bar reports, derived once.
- *
- * Two shells render these: the desktop as a row of segments along the bottom, the phone
- * as rows in a sheet behind a single icon. Deriving them in one place is what stops the
- * two from quietly telling the user different things about the same drive.
- */
-export function statusFacts(state, ui) {
-  const ex = state.ex;
-  const items = ex.items || [];
-  const act = state.act || { tasks: [], issues: [] };
-  return {
-    // `null` with nothing open — `collectionLabel` renders that as "no collection". The
-    // old fallback made the bar name a collection that may not exist, on a drive where
-    // the user had not yet chosen one.
-    collectionId: ex.collectionId ?? null,
-    // What to CALL it, so the phone shell and the desktop bar cannot end up saying
-    // different things — which is the entire reason these facts are derived once. The
-    // phone rendered `collectionId` raw, which showed an opaque `col_…` id where the
-    // desktop showed the name.
-    collectionLabel: collectionLabel(ex),
-    // The COLLECTION's totals when the server could give them, not the page's. Summing
-    // what happens to be loaded reports a 3,000-file drive as 500 files — a wrong number,
-    // not a rounded one. Falls back to the page only when the server didn't say.
-    totalItems: ex.stats?.items ?? items.length,
-    // Whether that total is the COLLECTION's or just the page we happen to hold. With
-    // more pages waiting, the page length is a floor, not a total, and must read as one.
-    totalKnown: ex.stats?.items != null,
-    totalBytes: ex.stats?.bytes ?? items.reduce((n, i) => n + (i.size || 0), 0),
-    shown: items.length,
-    partial: !!ex.nextCursor,
-    usage: ex.usage,
-    uploading: state.tr.items.filter((t) => t.status === 'active'),
-    running: act.tasks.filter((t) => t.status === 'running'),
-    issues: act.issues,
-    off: state.off || { online: true, pins: [], queued: 0, syncing: false },
-    caps: state.caps,
-  };
-}
-
-/** What to call the current collection: its name, its id, or an honest nothing. */
-function collectionLabel(ex) {
-  if (!ex?.collectionId) return 'no collection';
-  const match = (ex.collections || []).find((c) => c.id === ex.collectionId);
-  return match?.name || ex.collectionId;
-}
-
 export default function statusBar(state, ui) {
   const ex = state.ex;
   const items = ex.items || [];
-  const f = statusFacts(state, ui);
-  const { totalItems, totalBytes, caps } = f;
+  // Derived by the `statusFacts` query — see bl/status.js. These used to be worked out
+  // here and imported INTO the phone chrome from this module, which is a business-layer
+  // derivation living in a component and being shared out of it.
+  const f = state.facts;
+  const { totalItems, totalBytes } = f;
+  const caps = state.caps;
   const active = f.uploading;
 
   // Plugin-contributed status slots. Already filtered and ordered by the query.
@@ -175,7 +129,7 @@ export default function statusBar(state, ui) {
     button({ className: 'seg', title: 'Switch collection' },
       // The NAME, and nothing invented. `|| 'default'` used to sit here, which meant the
       // status bar cheerfully named a collection on a drive that had none.
-      icon('files', { size: 13 }), span(collectionLabel(ex)),
+      icon('files', { size: 13 }), span(f.collectionLabel),
       (ex.collections || []).length > 1 || ex.canCreateCollection ? icon('chevron-down', { size: 11 }) : null)
       .on({ click: (e) => {
         const items = ex.collectionMenu || [];
@@ -206,7 +160,7 @@ export default function statusBar(state, ui) {
         ? 'Total size of this collection'
         : `Size of the ${f.shown.toLocaleString()} items loaded so far — this server doesn’t report a collection total`,
     }, `${bytes(totalBytes)}${f.totalKnown || !f.partial ? '' : '+'}`),
-    usageChip(ex),
+    usageChip(f),
     caps ? span({ className: 'seg', title: 'Storage backend capabilities' },
       icon(caps.storage?.presignDownload ? 'download' : 'files', { size: 12 }),
       span(caps.storage?.presignDownload ? 'S3 direct' : 'proxied'),

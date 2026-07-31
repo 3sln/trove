@@ -34,6 +34,8 @@ import { queryOf } from './intern.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
 import { ExecCommandAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
+import { rankCommands } from './match.js';
+import { statusFactsOf, driveConditionOf } from './status.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
@@ -266,7 +268,9 @@ const registries = (r) => [
  * No `when` expression and no handler. A component shows the title, greys out what is
  * disabled, and dispatches `ExecCommandAction(id)`.
  */
-export const paletteCommands = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
+export const paletteCommands = new ViewQuery(REGISTRY_DEPS, registries, paletteCommandsOf);
+
+function paletteCommandsOf(r) {
   return r.commands.paletteCommands().map((c) => ({
     id: c.id,
     title: c.title ?? c.id,
@@ -280,6 +284,30 @@ export const paletteCommands = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
     available: r.commands.isAvailable(c),
     enabled: r.commands.isEnabled(c.id),
   }));
+}
+
+// The same list, narrowed to what was typed — for the two places you can type at commands.
+//
+// Ranking used to happen mid-render, in two components, with two different algorithms (see
+// bl/match.js). Both terms are engine state — the palette's lives in the overlay, the
+// launcher's in the workbench — so both of these are ordinary queries with no arguments,
+// and the ranking is settled before a component sees anything.
+const OVERLAY_DEPS = [...REGISTRY_DEPS, 'workbench'];
+const withShell = (r) => [...registries(r), r.workbench.observe(), r.workbench.observeOverlay()];
+
+/** What the command palette should list right now. */
+export const paletteMatches = new ViewQuery(OVERLAY_DEPS, withShell, (r) =>
+  rankCommands(paletteCommandsOf(r), r.workbench.overlay.state.palette?.query || ''));
+
+/**
+ * What the launcher should list in `!` mode.
+ *
+ * The leading `!` is stripped here rather than by the component: it is this query's own
+ * syntax for "I mean commands, not files", so nothing outside should have to know it.
+ */
+export const launcherCommandMatches = new ViewQuery(OVERLAY_DEPS, withShell, (r) => {
+  const q = r.workbench.state.launch.query || '';
+  return q.startsWith('!') ? rankCommands(paletteCommandsOf(r), q.slice(1)) : [];
 });
 
 /**
@@ -330,6 +358,30 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
     clash: perKey.get(b.key) > 1,
   }));
 });
+
+/**
+ * What the drive is doing and how full it is — see bl/status.js.
+ *
+ * Both shells render these, in different shapes. Derived once, here, because the last time
+ * each worked them out for itself the phone bar showed a raw `col_…` id where the desktop
+ * bar showed the collection's name.
+ */
+export const statusFacts = new ViewQuery(
+  ['explorer', 'transfers', 'activity', 'offline'],
+  (r) => [r.explorer.observe(), r.transfers.observe(), r.activity.observe(), r.offline.observe()],
+  (r) => {
+    const facts = statusFactsOf({
+      ex: r.explorer.observe().getValue(),
+      tr: r.transfers.observe().getValue(),
+      act: r.activity.observe().getValue(),
+      off: r.offline.observe().getValue(),
+    });
+    // The single most urgent thing, for a shell with room for one glyph. Folded in rather
+    // than left to the phone, because deciding that offline outranks a standing problem is
+    // a claim about what someone needs to know.
+    return { ...facts, condition: driveConditionOf(facts) };
+  },
+);
 
 /**
  * Every opener that could run right now — `when` and plugin availability already decided,
