@@ -27,6 +27,7 @@ import { pluginId, contribUri } from '@3sln/trove/core/plugins/identity.js';
 import { endpointSummary } from './pluginNet.js';
 import { MediaController } from './pluginMedia.js';
 import { FrameDock } from './pluginDock.js';
+import { InvokePluginCommandAction } from '../bl/actions.js';
 import { FrameManager } from './pluginFrames.js';
 import { PluginRpcRouter } from './pluginRpc.js';
 // The canonical capability list lives in core (the server's authority); import it so
@@ -107,15 +108,19 @@ export class PluginHost {
           if (runtime.grants.includes('opener')) keep(reg.register(c.uri, base));
           break;
 
-        // Declared, implemented by the plugin's primary frame. The handler proxies
-        // over RPC using the contribution's short name — inside its own frame a
-        // plugin addresses its commands by name, not by URI.
+        // Declared, implemented by the plugin's primary frame. Addressed over RPC by the
+        // contribution's short NAME — inside its own frame a plugin addresses its commands
+        // by name, not by URI.
         case 'command':
           keep(this.platform.commands.register({
             id: c.uri, title: c.title || `${label}: ${c.name}`,
             category: c.category || label, icon: c.icon,
             when: c.when, offline: c.offline, palette: c.palette, pluginId: pid,
-            handler: (...args) => runtime.channel?.call('command:execute', { id: c.name, args }),
+            // A description, like every other command. It used to be a closure over
+            // `runtime` proxying straight to the channel, which left a plugin command
+            // running invisible to the engine — the same hole ExecCommandAction closed for
+            // the host's own commands, still open for everyone else's.
+            actions: (...args) => new InvokePluginCommandAction(pid, c.name, args),
           }));
           break;
 
@@ -445,6 +450,21 @@ export class PluginHost {
       this._probing = false;
     }
   }
+  /**
+   * Run one of a plugin's own commands, in its frame.
+   *
+   * Public because `InvokePluginCommandAction` is what reaches it now, rather than a closure
+   * captured at registration. Addressed by short NAME: the URI is the host's way of keeping
+   * two plugins' `status` commands apart and means nothing on the other side.
+   *
+   * A plugin that is not running answers undefined rather than throwing. Its commands are
+   * already filtered out of the palette by `isAvailable`, so getting here at all means a
+   * stale reference, which is not worth an error.
+   */
+  invokeCommand(pluginId, name, args = []) {
+    return this.plugins.get(pluginId)?.channel?.call('command:execute', { id: name, args });
+  }
+
   setHeartbeat(ms) {
     this.heartbeatMs = ms;
     this.#stopHeartbeat();

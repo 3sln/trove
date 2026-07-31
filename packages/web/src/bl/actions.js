@@ -11,7 +11,10 @@ import { newId } from '@3sln/trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
 import { availableOpeners, rememberedOpenerId, withAssociation, ASSOC_KEY } from './openers.js';
 // A share link and a `trove:` URI are the same address in two spellings — see core/links.js.
-import { parseShareUrl } from '@3sln/trove/core/links.js';
+import { parseShareUrl, troveUri, shareUrl } from '@3sln/trove/core/links.js';
+import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
+import { beginInstallFromFile } from './pluginInstall.js';
+import { pickFiles, pickZip, triggerDownload } from '../platform/pickers.js';
 
 /**
  * Load a collection's items. There is nothing to navigate INTO any more — a drive is
@@ -1219,8 +1222,8 @@ export class RenamePromptAction extends PromptAction {
 
 /** Fetch and review a plugin package from the URL that was typed. */
 export class InstallPluginFromUrlPromptAction extends PromptAction {
-  static deps = ['viewState', 'workbench', 'app'];
-  async withValue(url, { app }) { await beginInstallFromUrl(app, url); }
+  static deps = ['viewState', 'workbench', 'notifications', 'plugins', 'social'];
+  async withValue(url, r) { await beginInstallFromUrl(r, url); }
 }
 
 /**
@@ -1273,5 +1276,343 @@ export class PatchDraftAction extends Action {
     const held = viewState.observe().getValue()[this.key];
     const base = held && held.ref === this.ref ? held.form : this.fallback;
     viewState.set(this.key, { ref: this.ref, form: { ...base, ...this.patch } });
+  }
+}
+
+// --- what commands used to do inline ---------------------------------------------
+//
+// bl/commands.js registered 40 commands and 36 of them were CLOSURES over `app` — the whole
+// world — doing effects outside the engine. That mattered more than the line count suggests,
+// because commands are the entry point for everything a person actually does: the palette,
+// every keybinding, every menu item, every row button. `ExecCommandAction` routed the intent
+// in and the handler walked straight back out, so the engine saw a command being run and
+// then nothing of what it did.
+//
+// A command is a DESCRIPTION now — `{ id, title, actions(...args) }`, where `actions` is a
+// pure factory. Everything below is where those handler bodies went.
+
+/**
+ * The file a command acts on: the one it was handed, else the selection, else what is open.
+ *
+ * Three commands resolved this identically and a fourth got it slightly wrong. "Nothing is
+ * selected" is a real answer and has to be said out loud — returning silently is
+ * indistinguishable from a broken command.
+ */
+function subjectOf({ explorer, workbench, notifications }, node = null) {
+  const found = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
+  if (!found) notifications.info('Pick a file first — highlight one in the list, or open it.');
+  return found;
+}
+
+/** Open the command palette, or quick-open, depending on the mode. */
+export class OpenPaletteAction extends ShellAction {
+  constructor(mode = 'commands', query = '') { super(); this.mode = mode; this.query = query; }
+  apply(wb) { wb.openPalette(this.mode, this.query); }
+}
+
+/** Switch the main area between the drive, plugins and settings. */
+export class SetActivityAction extends ShellAction {
+  constructor(activity) { super(); this.activity = activity; }
+  apply(wb) { wb.setActivity(this.activity); }
+}
+
+/** Close the topmost transient overlay — the Escape key's command. */
+export class CloseOverlaysAction extends ShellAction {
+  apply(wb) { wb.closeOverlays(); }
+}
+
+/**
+ * Speak to search.
+ *
+ * On a TV this is mostly NOT about recognising anything: a remote's mic dictates into
+ * whatever text field the platform keyboard is attached to, and is swallowed by the system
+ * assistant when there isn't one. So the first job is to put the search field on screen and
+ * focused, which is a feature on every TV whether or not the browser can transcribe. Where
+ * it can — on-device only, see platform/voice.js — it also starts listening and types what
+ * it hears.
+ */
+export class VoiceSearchAction extends Action {
+  static deps = ['engine', 'voice', 'workbench'];
+  async execute({ engine, voice, workbench }) {
+    await voice.run({
+      onText: (text, { final }) => {
+        if (!text) return;
+        workbench.setLaunchQuery(text);
+        // Interim results keep the box in step with the speaker; only the settled
+        // transcript is worth a round trip to the server.
+        if (final) engine.dispatch(new SearchAction(text));
+      },
+    });
+  }
+}
+
+/** Reindex the whole drive. Reports as a task rather than blocking — it takes minutes. */
+export class RebuildIndexAction extends Action {
+  static deps = ['activity'];
+  async execute({ activity }) { return activity.rebuildIndex().catch(() => {}); }
+}
+
+/**
+ * Pick up files added, replaced or removed in the bucket by something other than Trove.
+ *
+ * No collection means no scan. This used to fall back to one called 'default', which on a
+ * drive that has none scanned a collection that does not exist and reported the failure as
+ * a scan error.
+ */
+export class ScanCollectionAction extends Action {
+  static deps = ['activity', 'explorer', 'notifications'];
+  async execute({ activity, explorer, notifications }) {
+    const id = explorer.state.collectionId;
+    if (!id) return notifications.info('Open a collection first — a scan is per collection.');
+    return activity.scanCollection(id).catch(() => {});
+  }
+}
+
+/**
+ * Whether the backing stores are reachable from a browser at all.
+ *
+ * Separate from a scan: a scan asks what the store HOLDS, this asks whether it can be READ
+ * from here — the failure that makes every file open to a spinner.
+ */
+export class CheckStorageAction extends Action {
+  static deps = ['activity'];
+  async execute({ activity }) { return activity.checkStorage().catch(() => {}); }
+}
+
+/** Ask for files, then upload them into the open collection. */
+export class PickAndUploadAction extends Action {
+  static deps = ['engine', 'explorer'];
+  async execute({ engine, explorer }) {
+    const collection = explorer.state.collectionId;
+    pickFiles((files) => files.length && engine.dispatch(new UploadFilesAction(files, collection)));
+  }
+}
+
+/**
+ * Copy a link to the subject, in one of its two spellings.
+ *
+ * `trove:` is what one document writes to link another; it means nothing to a browser. A
+ * share link is a URL you can paste into a message. Both end at CopyTextAction, which is
+ * the thing that knows a failed copy must still leave the text somewhere selectable.
+ */
+export class CopyLinkAction extends Action {
+  static deps = ['engine', 'explorer', 'notifications', 'workbench'];
+  /** @param {'trove'|'share'} kind */
+  constructor(kind = 'trove', node = null) { super(); this.kind = kind; this.node = node; }
+  async execute(r) {
+    const node = subjectOf(r, this.node);
+    if (!node) return;
+    return r.engine.dispatch(this.kind === 'share'
+      ? new CopyTextAction(shareUrl(node, location.origin),
+        'Link copied — anyone with access to this collection can open it')
+      : new CopyTextAction(troveUri(node), `Copied ${troveUri(node)}`));
+  }
+}
+
+/** Ask for a new name for the subject. The prompt's value is read by RenamePromptAction. */
+export class RenameSubjectAction extends Action {
+  static deps = ['explorer', 'notifications', 'workbench'];
+  constructor(node = null) { super(); this.node = node; }
+  async execute(r) {
+    const node = subjectOf(r, this.node);
+    if (!node) return;
+    r.workbench.showDialog({
+      kind: 'prompt', title: 'Rename', label: 'New name', value: node.name, confirmLabel: 'Rename',
+      confirmActions: [new RenamePromptAction(node)],
+    });
+  }
+}
+
+/**
+ * Move the selection to the trash, confirming first unless that was turned off.
+ *
+ * Deleting the file you have OPEN is the obvious intent when nothing is selected, so it
+ * counts as the subject. The confirmation says what actually happens: telling someone a
+ * file will be "permanently deleted" when it goes to the trash trains them to fear a safe
+ * action, and the reverse — promising recovery that doesn't exist — is worse.
+ */
+export class DeleteSubjectAction extends Action {
+  static deps = ['engine', 'explorer', 'notifications', 'settings', 'workbench'];
+  async execute(r) {
+    const nodes = selectedNodesOf(r.explorer.state);
+    const open = nodes.length ? null : r.workbench.activeTab()?.node;
+    if (open) nodes.push(open);
+    if (!nodes.length) {
+      r.notifications.info('Pick a file first — highlight one in the list, or open it.');
+      return;
+    }
+    const deleteThem = new DeleteAction(nodes.map((n) => n.id));
+    if (!r.settings.get('explorer.confirmDelete')) return r.engine.dispatch(deleteThem);
+    r.workbench.showDialog({
+      kind: 'confirm',
+      title: `Move ${nodes.length} item${nodes.length > 1 ? 's' : ''} to the trash?`,
+      body: nodes.length === 1
+        ? `"${nodes[0].name}" leaves the drive but is kept, and can be restored from the trash.`
+        : 'They leave the drive but are kept, and can be restored from the trash.',
+      confirmLabel: 'Move to trash',
+      confirmActions: [deleteThem],
+    });
+  }
+}
+
+/** Show the trash, and get back to the drive to see it. */
+export class ShowTrashAction extends Action {
+  static deps = ['engine', 'workbench'];
+  async execute({ engine, workbench }) {
+    engine.dispatch(new TrashAction('list'));
+    workbench.showHome();
+  }
+}
+
+/** Open the subject in a viewer. */
+export class OpenSubjectAction extends Action {
+  static deps = ['engine', 'explorer', 'notifications', 'workbench'];
+  constructor(node = null) { super(); this.node = node; }
+  async execute(r) {
+    const node = subjectOf(r, this.node);
+    if (node) return r.engine.dispatch(new OpenFileAction(node));
+  }
+}
+
+/** Save the subject to the machine. */
+export class DownloadSubjectAction extends Action {
+  static deps = ['api', 'explorer', 'notifications', 'workbench'];
+  constructor(node = null) { super(); this.node = node; }
+  async execute(r) {
+    const target = subjectOf(r, this.node);
+    if (!target?.id) return;
+    try {
+      const { url, revoke } = await r.api.download(target.id, target.name);
+      triggerDownload(url, target.name);
+      // A blob URL pins the bytes until it is released; the click has already happened by
+      // the time this runs.
+      if (revoke) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      r.notifications.error(`Couldn't download ${target.name}: ${err.message}`);
+    }
+  }
+}
+
+/** Keep a copy of the subject for offline use, or stop keeping one. */
+export class PinAction extends Action {
+  static deps = ['explorer', 'notifications', 'offline', 'workbench'];
+  constructor(node = null, pinned = true) { super(); this.node = node; this.pinned = pinned; }
+  async execute(r) {
+    const target = subjectOf(r, this.node);
+    if (!target?.id) return;
+    return this.pinned ? r.offline.pin(target) : r.offline.unpin(target.id);
+  }
+}
+
+// --- API keys (admin) ------------------------------------------------------------
+
+class ApiKeyDraftAction extends Action {
+  static deps = ['apiKeys'];
+  async execute({ apiKeys }) { this.apply(apiKeys); }
+}
+export class StartApiKeyDraftAction extends ApiKeyDraftAction {
+  apply(s) { s.startDraft(); }
+}
+export class CancelApiKeyDraftAction extends ApiKeyDraftAction {
+  apply(s) { s.cancelDraft(); }
+}
+export class ClearMintedApiKeyAction extends ApiKeyDraftAction {
+  apply(s) { s.clearMinted(); }
+}
+
+/**
+ * Mint the key the draft describes.
+ *
+ * The days-to-instant conversion is here rather than in the form because the server compares
+ * against its own clock: "30 days from whenever this arrives" is not what was chosen. The
+ * draft is cleared BEFORE the mint so the form cannot be submitted twice while it is in
+ * flight.
+ */
+export class MintApiKeyFromDraftAction extends Action {
+  static deps = ['apiKeys', 'engine'];
+  async execute({ apiKeys, engine }) {
+    const draft = apiKeys.state.draft;
+    const scopes = draftScopesOf(apiKeys.state);
+    if (!draft?.name?.trim() || !scopes) return;
+    const days = Number(draft.expiresInDays);
+    const expiresAt = draft.expiresInDays !== '' && Number.isFinite(days) && days > 0
+      ? Date.now() + days * 86400_000
+      : null;
+    apiKeys.cancelDraft();
+    return engine.dispatch(new MintApiKeyAction({ name: draft.name.trim(), scopes, expiresAt }));
+  }
+}
+
+// --- collections -----------------------------------------------------------------
+
+/**
+ * Switch to a collection, or offer the choice when none was named.
+ *
+ * From the palette or a keybinding there is no pointer to anchor a menu to, so it opens
+ * centred near the top.
+ */
+export class SwitchCollectionAction extends Action {
+  static deps = ['engine', 'explorer', 'notifications', 'workbench'];
+  constructor(collectionId = null) { super(); this.collectionId = collectionId; }
+  async execute({ engine, explorer, notifications, workbench }) {
+    if (this.collectionId) {
+      engine.dispatch(new NavigateAction(this.collectionId));
+      workbench.showHome();
+      return;
+    }
+    const items = collectionMenuOf(explorer.state,
+      (id) => new ExecCommandAction('collections.switch', id),
+      () => new ExecCommandAction('collections.create'));
+    if (!items.length) return notifications.info('This drive has one collection.');
+    const w = typeof window === 'undefined' ? 800 : window.innerWidth;
+    workbench.showContextMenu(Math.max(12, Math.round(w / 2) - 110), 120, items);
+  }
+}
+
+/**
+ * Show the details panel — but only when there is a file for it to be about.
+ *
+ * With nothing open there is nothing to show, and flipping the flag silently was
+ * indistinguishable from a broken command.
+ */
+export class ToggleDetailsAction extends Action {
+  static deps = ['notifications', 'workbench'];
+  async execute({ notifications, workbench }) {
+    if (!workbench.activeTab()) {
+      notifications.info('Open a file to see its details and conversation.');
+      return;
+    }
+    workbench.toggleInfoPanel();
+  }
+}
+
+// --- plugins ---------------------------------------------------------------------
+
+/** Ask for a .zip and take it through the install review. */
+export class PickAndInstallPluginAction extends Action {
+  static deps = ['notifications', 'plugins', 'social', 'workbench'];
+  async execute(r) {
+    pickZip((file) => file && beginInstallFromFile(r, file));
+  }
+}
+
+/**
+ * Run a command a PLUGIN registered.
+ *
+ * Plugin commands used to be handlers proxying straight over RPC, which left the same hole
+ * for them that `ExecCommandAction` closed for the host's own: the engine could see a plugin
+ * command being invoked only as whatever state changed afterwards. Now every command in the
+ * registry — host or plugin — resolves to actions.
+ */
+export class InvokePluginCommandAction extends Action {
+  static deps = ['plugins'];
+  constructor(pluginId, name, args = []) {
+    super();
+    this.pluginId = pluginId;
+    this.name = name;
+    this.args = args;
+  }
+  async execute({ plugins }) {
+    return plugins.invokeCommand(this.pluginId, this.name, this.args);
   }
 }

@@ -1,309 +1,120 @@
-// Register the workbench's built-in commands. Commands are the single entry
-// point for every action — palette, keybindings, buttons, and menus all call
-// `commands.execute(id)`. Handlers here dispatch ngin Actions for anything that
-// touches data, and poke the reactive shell services for pure-UI toggles.
+// The workbench's built-in commands.
+//
+// A command is a DESCRIPTION: an id, a title, and `actions(...args)` — a pure factory
+// saying what should be dispatched. It does not do anything itself.
+//
+// That is the whole change here, and it matters more than it looks. Commands are the entry
+// point for everything a person actually does: the palette, every keybinding, every menu
+// item, every row button. These were closures over `app` — the whole world — calling
+// services directly, so `ExecCommandAction` routed the intent into the engine and the
+// handler walked straight back out. The engine saw a command being run and nothing of what
+// it did: no feed entry for the delete, the upload, or the collection switch, and nothing
+// able to intercept or observe one.
+//
+// The bodies moved into actions (bl/actions.js, "what commands used to do inline"). What is
+// left is a table, which is what a command registry should have been.
+//
+// `palette: false` where a command is a button on a screen rather than a verb someone would
+// go looking for. Revoking a credential by fuzzy-searching for it is not a thing to make
+// easy.
 
 import {
-  NavigateAction, RefreshAction, DeleteAction, RenameAction,
-  UploadFilesAction, OpenFileAction, CreateCollectionAction, LoadMoreAction, TrashAction,
-  SearchAction,
-  LoadApiKeysAction, MintApiKeyAction, RevokeApiKeyAction,
-  ExecCommandAction,
-  RenamePromptAction, InstallPluginFromUrlPromptAction,
+  NavigateAction, RefreshAction, LoadMoreAction, TrashAction, ShowTrashAction,
+  UploadFilesAction, PickAndUploadAction, OpenSubjectAction, DownloadSubjectAction,
+  CopyLinkAction, RenameSubjectAction, DeleteSubjectAction, PinAction,
+  SearchAction, VoiceSearchAction,
+  RebuildIndexAction, ScanCollectionAction, CheckStorageAction, ToggleActivityPanelAction,
+  LoadApiKeysAction, RevokeApiKeyAction, MintApiKeyFromDraftAction,
+  StartApiKeyDraftAction, CancelApiKeyDraftAction, ClearMintedApiKeyAction,
+  OpenPaletteAction, SetActivityAction, CloseOverlaysAction, ShowHomeAction,
+  ShowDialogAction, SwitchCollectionAction, ToggleDetailsAction,
+  ToggleInboxAction, EnablePushAction,
+  InstallPluginFromUrlPromptAction, PickAndInstallPluginAction,
 } from './actions.js';
-import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
-import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
-import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
 
 export function registerCommands(app) {
-  const { platform, engine, explorer } = app;
-  const { commands, workbench } = platform;
-  const go = (a) => engine.dispatch(a);
-
-  const cmd = (id, title, handler, extra = {}) => commands.register({ id, title, handler, ...extra });
+  const cmd = (id, title, actions, extra = {}) =>
+    app.platform.commands.register({ id, title, actions, ...extra });
 
   // --- navigation / views ----------------------------------------------------
-  cmd('workbench.showCommandPalette', 'Show All Commands', () => workbench.openPalette('commands'), { category: 'View', icon: 'command' });
-  cmd('workbench.quickOpen', 'Go to File…', () => workbench.openPalette('files'), { category: 'File', icon: 'search' });
-  cmd('workbench.view.home', 'Go Home (search & browse)', () => workbench.showHome(), { category: 'View', icon: 'search' });
-  cmd('workbench.view.plugins', 'Show Plugins', () => workbench.setActivity('plugins'), { category: 'View' });
-  cmd('workbench.openSettings', 'Open Settings', () => workbench.setActivity('settings'), { category: 'Preferences', icon: 'gear' });
-  cmd('workbench.closeOverlays', 'Close', () => workbench.closeOverlays(), { palette: false });
-
-  // Speak to search.
-  //
-  // On a TV this is mostly NOT about recognising anything: a remote's mic dictates into
-  // whatever text field the platform keyboard is attached to, and is swallowed by the
-  // system assistant when there isn't one. So the command's first job is to put the
-  // search field on screen and focused, which is a feature on every TV whether or not
-  // the browser can transcribe. Where it can — on-device only, see platform/voice.js —
-  // it also starts listening and types what it hears.
-  cmd('search.voice', 'Search by Voice', async () => {
-    await platform.voice.run({
-      onText: (text, { final }) => {
-        if (!text) return;
-        workbench.setLaunchQuery(text);
-        // Interim results keep the box in step with the speaker; only the settled
-        // transcript is worth a round trip to the server.
-        if (final) go(new SearchAction(text));
-      },
-    });
-  }, { category: 'View', icon: 'search' });
+  cmd('workbench.showCommandPalette', 'Show All Commands', () => new OpenPaletteAction('commands'), { category: 'View', icon: 'command' });
+  cmd('workbench.quickOpen', 'Go to File…', () => new OpenPaletteAction('files'), { category: 'File', icon: 'search' });
+  cmd('workbench.view.home', 'Go Home (search & browse)', () => new ShowHomeAction(), { category: 'View', icon: 'search' });
+  cmd('workbench.view.plugins', 'Show Plugins', () => new SetActivityAction('plugins'), { category: 'View' });
+  cmd('workbench.openSettings', 'Open Settings', () => new SetActivityAction('settings'), { category: 'Preferences', icon: 'gear' });
+  cmd('workbench.closeOverlays', 'Close', () => new CloseOverlaysAction(), { palette: false });
+  cmd('search.voice', 'Search by Voice', () => new VoiceSearchAction(), { category: 'View', icon: 'search' });
 
   // --- background work + standing problems -----------------------------------
   cmd('workbench.showActivity', 'Show Activity (running work & problems)',
-    () => app.activity.togglePanel(true), { category: 'View', icon: 'refresh' });
-  // The manual scan the drive had no way to ask for. Reports as a task rather than
-  // blocking, because on a large drive it takes minutes.
+    () => new ToggleActivityPanelAction(true), { category: 'View', icon: 'refresh' });
   cmd('workbench.rebuildIndex', 'Rebuild Search Index',
-    () => app.activity.rebuildIndex().catch(() => {}), { category: 'View', icon: 'refresh' });
+    () => new RebuildIndexAction(), { category: 'View', icon: 'refresh' });
   // Trove is not the only thing that can write to the bucket. This is how files added,
   // replaced, or removed by something else get picked up.
   cmd('workbench.scanCollection', 'Scan Collection for Outside Changes',
-    () => {
-      // No collection means no scan. This used to fall back to one called 'default',
-      // which on a drive that has none scanned a collection that does not exist and
-      // reported the failure as a scan error.
-      const id = explorer.state.collectionId;
-      if (!id) return platform.notifications.info('Open a collection first — a scan is per collection.');
-      return app.activity.scanCollection(id).catch(() => {});
-    },
-    { category: 'Explorer', icon: 'refresh' });
-  // Whether the backing stores are usable from a browser at all. Separate from a scan:
-  // a scan asks what the store HOLDS, this asks whether the store can be READ from here,
-  // which is the failure that makes every file open to a spinner.
+    () => new ScanCollectionAction(), { category: 'Explorer', icon: 'refresh' });
   cmd('workbench.checkStorage', 'Check Storage Configuration',
-    () => app.activity.checkStorage().catch(() => {}), { category: 'View', icon: 'plug' });
+    () => new CheckStorageAction(), { category: 'View', icon: 'plug' });
 
   // --- explorer --------------------------------------------------------------
-  cmd('explorer.refresh', 'Refresh', () => go(new RefreshAction()), { category: 'Explorer', icon: 'refresh' });
-  cmd('explorer.loadMore', 'Show More Items', () => go(new LoadMoreAction()), { palette: false });
-  cmd('explorer.upload', 'Upload Files…', () => {
-    pickFiles((files) => files.length && go(new UploadFilesAction(files, explorer.state.collectionId)));
-  }, { category: 'Explorer', icon: 'upload' });
-
-  // Copy the item's trove: link, which is how one item references another in markdown.
-  // "Nothing is selected" is a real answer, and it has to be said out loud: these used
-  // to return silently, which is indistinguishable from a broken command.
-  const subject = (fallbackNode) => {
-    const node = fallbackNode || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
-    if (!node) platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
-    return node;
-  };
-
+  cmd('explorer.refresh', 'Refresh', () => new RefreshAction(), { category: 'Explorer', icon: 'refresh' });
+  cmd('explorer.loadMore', 'Show More Items', () => new LoadMoreAction(), { palette: false });
+  cmd('explorer.upload', 'Upload Files…', () => new PickAndUploadAction(), { category: 'Explorer', icon: 'upload' });
   // Two spellings of one address, and which you want depends on where it is going.
-  //
-  // `trove:` is what one document writes to link another; it means nothing to a browser.
-  // A share link is a URL you can paste into a message. Offering both, labelled for the
-  // destination rather than for the format, is the difference between a choice and a
-  // riddle.
-  cmd('explorer.copyShareLink', 'Copy Shareable Link', async () => {
-    const node = subject();
-    if (!node) return;
-    const url = shareUrl(node, location.origin);
-    try {
-      await navigator.clipboard.writeText(url);
-      platform.notifications.success('Link copied — anyone with access to this collection can open it');
-    } catch {
-      platform.notifications.info(url, { sticky: true });
-    }
-  }, { category: 'Explorer', icon: 'link' });
+  // `trove:` is what one document writes to link another; a share link is a URL you can
+  // paste into a message. Offered under both names, labelled for the destination rather
+  // than for the format, which is the difference between a choice and a riddle.
+  cmd('explorer.copyShareLink', 'Copy Shareable Link', (node) => new CopyLinkAction('share', node), { category: 'Explorer', icon: 'link' });
+  cmd('explorer.copyLink', 'Copy Link to Item', (node) => new CopyLinkAction('trove', node), { category: 'Explorer', icon: 'link' });
+  cmd('explorer.rename', 'Rename', (node) => new RenameSubjectAction(node), { category: 'Explorer' });
+  cmd('explorer.delete', 'Delete', () => new DeleteSubjectAction(), { category: 'Explorer', icon: 'trash' });
+  cmd('explorer.open', 'Open', (node) => new OpenSubjectAction(node), { palette: false });
+  cmd('explorer.download', 'Download', (node) => new DownloadSubjectAction(node), { category: 'Explorer', icon: 'download' });
 
-  cmd('explorer.copyLink', 'Copy Link to Item', async () => {
-    const node = subject();
-    if (!node) return;
-    const uri = troveUri(node);
-    try {
-      await navigator.clipboard.writeText(uri);
-      platform.notifications.success(`Copied ${uri}`);
-    } catch {
-      // Clipboard access can be denied; showing the link is still useful.
-      platform.notifications.info(uri, { sticky: true });
-    }
-  }, { category: 'Explorer', icon: 'link' });
+  // --- trash -----------------------------------------------------------------
+  cmd('explorer.showTrash', 'Show Trash', () => new ShowTrashAction(), { category: 'Explorer', icon: 'trash' });
+  cmd('explorer.hideTrash', 'Hide Trash', () => new TrashAction('hide'), { palette: false });
+  cmd('explorer.restore', 'Restore from Trash', (id) => (id ? new TrashAction('restore', id) : null), { palette: false });
+  cmd('explorer.purgeOne', 'Delete Forever', (id) => (id ? new TrashAction('purge', id) : null), { palette: false });
+  // Wholly declarative: the confirmation is data, and what it confirms is an action.
+  cmd('explorer.emptyTrash', 'Empty Trash', () => new ShowDialogAction({
+    kind: 'confirm', title: 'Empty the trash?',
+    body: 'Everything in the trash will be destroyed. This cannot be undone.',
+    danger: true, confirmLabel: 'Delete forever',
+    confirmActions: [new TrashAction('empty')],
+  }), { category: 'Explorer', icon: 'trash' });
 
-  cmd('explorer.rename', 'Rename', () => {
-    const node = subject();
-    if (!node) return;
-    workbench.showDialog({
-      kind: 'prompt', title: 'Rename', label: 'New name', value: node.name, confirmLabel: 'Rename',
-      confirmActions: [new RenamePromptAction(node)],
-    });
-  }, { category: 'Explorer' });
-
-  cmd('explorer.delete', 'Delete', () => {
-    const nodes = selectedNodesOf(explorer.state);
-    const fallback = nodes.length ? null : workbench.activeTab()?.node;
-    if (fallback) nodes.push(fallback); // deleting the file you have open is the obvious intent
-    if (!nodes.length) {
-      platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
-      return;
-    }
-    const deleteThem = new DeleteAction(nodes.map((n) => n.id));
-    if (platform.settings.get('explorer.confirmDelete')) {
-      workbench.showDialog({
-        kind: 'confirm', title: `Move ${nodes.length} item${nodes.length > 1 ? 's' : ''} to the trash?`,
-        // Say what actually happens. Telling someone a file will be "permanently
-        // deleted" when it goes to the trash trains them to fear a safe action; the
-        // reverse — promising recovery that doesn't exist — is worse.
-        body: nodes.length === 1
-          ? `"${nodes[0].name}" leaves the drive but is kept, and can be restored from the trash.`
-          : 'They leave the drive but are kept, and can be restored from the trash.',
-        confirmLabel: 'Move to trash',
-        confirmActions: [deleteThem],
-      });
-    } else go(deleteThem);
-  }, { category: 'Explorer', icon: 'trash' });
-
-  cmd('explorer.showTrash', 'Show Trash', () => {
-    go(new TrashAction('list'));
-    workbench.showHome();
-  }, { category: 'Explorer', icon: 'trash' });
   // --- API keys (admin) ---------------------------------------------------------
-  // All `palette: false`: these are the settings screen's own buttons, not verbs anyone
-  // would go looking for in the palette. Revoking a credential by fuzzy-searching for it
-  // is not a thing to make easy.
-  cmd('keys.load', 'Load API Keys', () => go(new LoadApiKeysAction()), { palette: false });
-  cmd('keys.new', 'New API Key', () => app.apiKeys.startDraft(), { palette: false });
-  cmd('keys.cancel', 'Cancel API Key', () => app.apiKeys.cancelDraft(), { palette: false });
-  cmd('keys.dismissMinted', 'Dismiss API Key', () => app.apiKeys.clearMinted(), { palette: false });
-  cmd('keys.revoke', 'Revoke API Key', (id) => id && go(new RevokeApiKeyAction(id)), { palette: false });
-  cmd('keys.mint', 'Create API Key', () => {
-    const draft = app.apiKeys.state.draft;
-    const scopes = draftScopesOf(app.apiKeys.state);
-    if (!draft?.name?.trim() || !scopes) return;
-    // Days in the form, an absolute instant on the wire: the server compares against its
-    // own clock, and "30 days from whenever this arrives" is not what was chosen.
-    const days = Number(draft.expiresInDays);
-    const expiresAt = draft.expiresInDays !== '' && Number.isFinite(days) && days > 0
-      ? Date.now() + days * 86400_000
-      : null;
-    app.apiKeys.cancelDraft();
-    return go(new MintApiKeyAction({ name: draft.name.trim(), scopes, expiresAt }));
-  }, { palette: false });
-
-  cmd('explorer.hideTrash', 'Hide Trash', () => go(new TrashAction('hide')), { palette: false });
-  cmd('explorer.restore', 'Restore from Trash', (id) => id && go(new TrashAction('restore', id)), { palette: false });
-  cmd('explorer.purgeOne', 'Delete Forever', (id) => id && go(new TrashAction('purge', id)), { palette: false });
-  cmd('explorer.emptyTrash', 'Empty Trash', () => {
-    workbench.showDialog({
-      kind: 'confirm', title: 'Empty the trash?',
-      body: 'Everything in the trash will be destroyed. This cannot be undone.',
-      danger: true, confirmLabel: 'Delete forever',
-      confirmActions: [new TrashAction('empty')],
-    });
-  }, { category: 'Explorer', icon: 'trash' });
-
-  cmd('explorer.open', 'Open', (node) => go(new OpenFileAction(node || selectedNodesOf(explorer.state)[0])), { palette: false });
-  cmd('explorer.download', 'Download', async (node) => {
-    const target = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
-    if (!target?.id) return;
-    try {
-      const { url, revoke } = await platform.api.download(target.id, target.name);
-      triggerDownload(url, target.name);
-      // A blob URL pins the bytes until it is released; the click has already happened
-      // by the time this runs.
-      if (revoke) setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (err) {
-      platform.notifications.error(`Couldn't download ${target.name}: ${err.message}`);
-    }
-  }, { category: 'Explorer', icon: 'download' });
+  cmd('keys.load', 'Load API Keys', () => new LoadApiKeysAction(), { palette: false });
+  cmd('keys.new', 'New API Key', () => new StartApiKeyDraftAction(), { palette: false });
+  cmd('keys.cancel', 'Cancel API Key', () => new CancelApiKeyDraftAction(), { palette: false });
+  cmd('keys.dismissMinted', 'Dismiss API Key', () => new ClearMintedApiKeyAction(), { palette: false });
+  cmd('keys.revoke', 'Revoke API Key', (id) => (id ? new RevokeApiKeyAction(id) : null), { palette: false });
+  cmd('keys.mint', 'Create API Key', () => new MintApiKeyFromDraftAction(), { palette: false });
 
   // --- offline ---------------------------------------------------------------
-  cmd('offline.pin', 'Make Available Offline', (node) => {
-    const target = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
-    if (target?.id) app.offline.pin(target);
-  }, { category: 'Offline', icon: 'download' });
-  cmd('offline.unpin', 'Remove from Offline', (node) => {
-    const target = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
-    if (target) app.offline.unpin(target.id);
-  }, { palette: false });
+  cmd('offline.pin', 'Make Available Offline', (node) => new PinAction(node, true), { category: 'Offline', icon: 'download' });
+  cmd('offline.unpin', 'Remove from Offline', (node) => new PinAction(node, false), { palette: false });
 
   // --- collections -----------------------------------------------------------
-  // The menu of "where else could I be". Shared by the palette command and the status
-  // bar's collection segment, so both offer the same list.
-
-  // `NavigateAction` takes a single collectionId. This passed ('/', cid) — a leftover
-  // from a path+collection signature — so every switch navigated to a collection
-  // literally named "/" and failed to load. It was also unreachable: no caller, and
-  // hidden from the palette.
-  cmd('collections.switch', 'Switch Collection…', (cid) => {
-    if (cid) {
-      go(new NavigateAction(cid));
-      workbench.showHome();
-      return;
-    }
-    // From the palette or a keybinding there is no pointer to anchor a menu to.
-    const items = collectionMenuOf(explorer.state,
-      (id) => new ExecCommandAction('collections.switch', id),
-      () => new ExecCommandAction('collections.create'));
-    if (!items.length) return platform.notifications.info('This drive has one collection.');
-    const w = typeof window === 'undefined' ? 800 : window.innerWidth;
-    workbench.showContextMenu(Math.max(12, Math.round(w / 2) - 110), 120, items);
-  }, { category: 'Collections', icon: 'files' });
-  cmd('collections.create', 'New Collection…', () => {
-    workbench.showDialog({
-      kind: 'collection', title: 'New collection',
-    });
-  }, { category: 'Collections', icon: 'files' });
+  cmd('collections.switch', 'Switch Collection…', (cid) => new SwitchCollectionAction(cid), { category: 'Collections', icon: 'files' });
+  cmd('collections.create', 'New Collection…', () => new ShowDialogAction({ kind: 'collection', title: 'New collection' }), { category: 'Collections', icon: 'files' });
 
   // --- conversations & notifications -----------------------------------------
-  // The details panel is a view OF a file. With nothing open there is nothing for it to
-  // show, and flipping the flag silently was indistinguishable from a broken command.
-  cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => {
-    if (!workbench.activeTab()) {
-      platform.notifications.info('Open a file to see its details and conversation.');
-      return;
-    }
-    workbench.toggleInfoPanel();
-  }, { category: 'View', icon: 'info' });
-  cmd('notifications.show', 'Show Notifications', () => app.social.toggleInbox(true), { category: 'View' });
-  cmd('notifications.enablePush', 'Enable Push Notifications', () => app.social.enablePush(), { category: 'Notifications' });
+  cmd('workbench.toggleInfoPanel', 'Toggle Details & Conversation', () => new ToggleDetailsAction(), { category: 'View', icon: 'info' });
+  cmd('notifications.show', 'Show Notifications', () => new ToggleInboxAction(true), { category: 'View' });
+  cmd('notifications.enablePush', 'Enable Push Notifications', () => new EnablePushAction(), { category: 'Notifications' });
 
   // --- plugins ---------------------------------------------------------------
-  cmd('plugins.installFromUrl', 'Install Plugin from URL…', () => {
-    workbench.showDialog({
-      kind: 'prompt', title: 'Install plugin from URL', label: 'Plugin package (.zip) URL',
-      placeholder: 'https://example.com/plugin.zip', confirmLabel: 'Fetch',
-      confirmActions: [new InstallPluginFromUrlPromptAction()],
-    });
-  }, { category: 'Plugins', icon: 'plug' });
-  cmd('plugins.installFromFile', 'Install Plugin from File…', () => {
-    pickZip((file) => file && beginInstallFromFile(app, file));
-  }, { category: 'Plugins', icon: 'plug' });
+  cmd('plugins.installFromUrl', 'Install Plugin from URL…', () => new ShowDialogAction({
+    kind: 'prompt', title: 'Install plugin from URL', label: 'Plugin package (.zip) URL',
+    placeholder: 'https://example.com/plugin.zip', confirmLabel: 'Fetch',
+    confirmActions: [new InstallPluginFromUrlPromptAction()],
+  }), { category: 'Plugins', icon: 'plug' });
+  cmd('plugins.installFromFile', 'Install Plugin from File…', () => new PickAndInstallPluginAction(), { category: 'Plugins', icon: 'plug' });
 }
 
-// --- helpers ----------------------------------------------------------------
-
-// Open a native file picker. The hidden <input> is removed on selection AND on
-// cancel — cancelling fires no `change`, so we also clean up on the next window
-// focus (which the OS dialog returns) to avoid leaking a growing pile of inputs.
-function pick(cb, configure) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  configure(input);
-  input.style.display = 'none';
-  document.body.appendChild(input);
-  const cleanup = () => { input.remove(); window.removeEventListener('focus', onFocus); };
-  const onFocus = () => setTimeout(() => { if (!input.files.length) cleanup(); }, 300);
-  input.addEventListener('change', () => { cb(input.files); cleanup(); }, { once: true });
-  window.addEventListener('focus', onFocus);
-  input.click();
-}
-function pickFiles(cb) {
-  pick((files) => cb(files), (input) => { input.multiple = true; });
-}
-function pickZip(cb) {
-  pick((files) => cb(files[0]), (input) => { input.accept = '.zip,application/zip'; });
-}
-
-function triggerDownload(url, name) {
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name || '';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
-export { pickFiles, triggerDownload };
+// Kept for the one caller that still hands a File list straight to an upload — the drop
+// target, which already has the files and has nothing to pick.
+export { UploadFilesAction, NavigateAction, SearchAction };

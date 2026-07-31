@@ -31,17 +31,16 @@ export function createApp(platform) {
   const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, engine: null };
 
   // Every resource the engine has, named. The engine's STATE is the state of its
-  // resources, so a single `app` provider made that state one opaque blob: every query and
-  // every action leased the whole world, and a lease that always covers everything tells
-  // you nothing about what a piece of work touches or how long it needs it.
+  // resources, so the single `app` provider this started with made that state one opaque
+  // blob: every query and every action leased the whole world, and a lease that always
+  // covers everything tells you nothing about what a piece of work touches or how long it
+  // needs it.
   //
-  // Named individually, `static deps = ['explorer']` means what it says. `app` is still
-  // here because the older actions reach across several of these at once and are converted
-  // as they are touched, not in one sweep — but nothing NEW should ask for it.
+  // `app` is gone. It survived longest as the thing command handlers closed over, and went
+  // when they stopped being closures — see bl/commands.js. Every lease now names what it
+  // touches, and `static deps = ['explorer']` means what it says.
   const engine = new Engine({
     providers: {
-      app: Provider.fromSingleton(app),
-
       // The drive.
       explorer: Provider.fromSingleton(explorer),
       search: Provider.fromSingleton(search),
@@ -114,6 +113,15 @@ export function createApp(platform) {
     },
   });
   app.engine = engine;
+
+  // How a command reaches the engine. A command resolves to actions and the CommandService
+  // dispatches them; it is built with the platform, before the engine exists, so the
+  // dispatcher is handed over here.
+  //
+  // This is the boundary, not a shortcut: a keystroke and a plugin's RPC both originate
+  // outside the engine, and one of them has to carry the intent in. Everything past this
+  // point is an action on the feed.
+  platform.commands.dispatch = (action) => engine.dispatch(action);
 
   registerCommands(app);
 
