@@ -322,3 +322,22 @@ first fix seemed finished.
 
 `draftFor` removes the write: it answers with the default when the held draft belongs to a
 different dialog instance, so the first write happens when the user does something.
+
+## What stays imperative, and why
+
+Four `ui.platform` reaches are left and they are not oversights.
+
+`plugins.mountPanel` and `plugins.mountViewer` attach a sandboxed iframe to a specific DOM
+element and hand back a detach function. That is not state to view or a mutation to describe;
+it is DOM plumbing whose result is an element, and routing it through a dispatch would put a
+node and a teardown callback on the feed to no benefit.
+
+`mediaUrls`, used by `attachMedia`, is the same shape: it keeps a media element pointed at a
+URL that expires, swapping the source under a playing video without losing its place. There
+is a query in here waiting to be written — mint while a viewer is looking, release when it
+stops, which is exactly what `FileText` does — but the imperative half (seek position,
+`load()`, autoplay policy) stays either way.
+
+`contributions.get(openerId)` returns a contribution whose `component` is a FUNCTION. A view
+cannot carry it, by the rule this ticket is built on. It is a registry lookup for a callable,
+which is what a registry is for.

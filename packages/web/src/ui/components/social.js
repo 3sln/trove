@@ -5,7 +5,7 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { relativeDate } from '../format.js';
-import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, LoadSidecarAction, NotifyAction, OpenFileAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
+import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, LoadSidecarAction, OpenFileAction, OpenNotificationTargetAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 
 const { div, span, button, textarea, input, p } = dd;
@@ -63,20 +63,9 @@ function inboxItem(note, ui) {
     div({ className: 'ii-time' }, relativeDate(note.createdAt)),
   ).on({
     click: () => {
-      if (first?.nodeId) {
-        ui.platform.api.stat(first.nodeId).then((r) => {
-          ui.go(new OpenFileAction(r.node));
-          ui.go(new ToggleInfoPanelAction(true));
-        }).catch((err) => {
-          // The item a notification points at can be deleted, or live somewhere the
-          // reader lost access to. Either way the click must not just do nothing.
-          ui.go(new NotifyAction('warn',
-            err?.status === 403 || err?.code === 'forbidden'
-              ? 'You no longer have access to that item.'
-              : 'That item no longer exists.',
-          ));
-        });
-      }
+      // One intent, one action — including what to say when the item a notification
+      // points at is gone. See OpenNotificationTargetAction.
+      if (first?.nodeId) ui.go(new OpenNotificationTargetAction(first.nodeId));
       ui.go(new ToggleInboxAction(false));
     },
   });

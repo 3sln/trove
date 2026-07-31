@@ -1117,3 +1117,51 @@ export class NavigateBackAction extends ShellAction {
 export class ShowHomeAction extends ShellAction {
   apply(wb) { wb.showHome(); }
 }
+
+/** Reload one plugin — re-read its manifest and restart its worker. */
+export class RefreshPluginAction extends Action {
+  static deps = ['plugins'];
+  constructor(pluginId) { super(); this.pluginId = pluginId; }
+  async execute({ plugins }) { return plugins.refresh(this.pluginId); }
+}
+
+/**
+ * Store a plugin secret.
+ *
+ * Not a setting: secrets go somewhere settings do not, which is why this is its own action
+ * rather than SetSettingAction with a different key.
+ */
+export class SetPluginSecretAction extends Action {
+  static deps = ['plugins'];
+  constructor(pluginId, key, value) { super(); this.pluginId = pluginId; this.key = key; this.value = value; }
+  async execute({ plugins }) { return plugins.setSecret(this.pluginId, this.key, this.value); }
+}
+
+/**
+ * Open whatever a notification points at.
+ *
+ * The stat, the open, the panel and the failure message are one action because they are one
+ * intent. Spread across a component they were a `.then` chain that had to know the API
+ * answers `{ node }` rather than a node, and had to remember that a notification can
+ * outlive its target — the item may be deleted, or live somewhere the reader has since
+ * lost access to. Either way the click must say so rather than do nothing.
+ */
+export class OpenNotificationTargetAction extends Action {
+  static deps = ['api', 'explorer', 'notifications', 'workbench', 'context', 'contributions', 'plugins', 'settings'];
+
+  constructor(nodeId) { super(); this.nodeId = nodeId; }
+
+  async execute(r) {
+    let node;
+    try {
+      ({ node } = await r.api.stat(this.nodeId));
+    } catch (err) {
+      r.notifications.warn(err?.status === 403 || err?.code === 'forbidden'
+        ? 'You no longer have access to that item.'
+        : 'That item no longer exists.');
+      return;
+    }
+    await new OpenFileAction(node).execute(r);
+    r.workbench.toggleInfoPanel(true);
+  }
+}

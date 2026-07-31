@@ -1,6 +1,6 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseDialogAction, OpenPluginPanelAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
+import { CloseDialogAction, OpenPluginPanelAction, RefreshPluginAction, SetPluginSecretAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
 
 const { div, span, p, button, h2, input, label } = dd;
 
@@ -53,10 +53,10 @@ function installedCard(pl, state, ui) {
             : div({ className: 'muted', $styling: { 'font-size': '12px' } }, pl.responsive ? 'No contributions announced.' : 'No manifest received — the plugin may not be running.'),
         )
       : null,
-    (pl.settingsSchema || []).length ? settingsSection(pl, ui) : null,
+    (pl.settingsSchema || []).length ? settingsSection(pl, ui, state) : null,
     div({ className: 'actions' },
       pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.go(new OpenPluginPanelAction(pl.id)) }) : null,
-      button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.platform.plugins.refresh(pl.id) }),
+      button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.go(new RefreshPluginAction(pl.id)) }),
       button({ className: 'btn danger' }, 'Uninstall').on({
         click: () => ui.go(new ShowDialogAction({
           kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
@@ -68,24 +68,24 @@ function installedCard(pl, state, ui) {
   );
 }
 
-function settingsSection(pl, ui) {
+function settingsSection(pl, ui, state) {
   return div({ className: 'plugin-features' },
     div({ className: 'pf-head' }, span('Settings')),
     div({ $styling: { display: 'flex', 'flex-direction': 'column', gap: '8px' } },
-      ...pl.settingsSchema.map((s) => settingRow(pl, s, ui)),
+      ...pl.settingsSchema.map((s) => settingRow(pl, s, ui, state)),
     ),
   );
 }
 
-function settingRow(pl, s, ui) {
+function settingRow(pl, s, ui, state) {
   const key = `${pl.id}.${s.key}`;
-  const value = s.secret ? '' : (ui.platform.settings.get(key) ?? s.default ?? '');
+  const value = s.secret ? '' : (state.settings?.[key] ?? s.default ?? '');
   return div({ className: 'setting', $styling: { padding: '6px 0' } },
     div({ className: 'info' }, div({ className: 't' }, s.title || s.key), s.description ? div({ className: 'd' }, s.description) : null),
     div({ className: 'control' },
       s.secret
         ? input({ className: 'input', type: 'password', placeholder: 'Set secret…' }).on({
-            change: (e) => { if (e.target.value) { ui.platform.plugins.setSecret(pl.id, s.key, e.target.value); e.target.value = ''; e.target.placeholder = 'Saved ✓'; } },
+            change: (e) => { if (e.target.value) { ui.go(new SetPluginSecretAction(pl.id, s.key, e.target.value)); e.target.value = ''; e.target.placeholder = 'Saved ✓'; } },
           })
         : s.type === 'boolean'
           ? label({ className: 'switch' }, input({ type: 'checkbox', checked: !!value }).on({ change: (e) => ui.go(new SetSettingAction(key, e.target.checked)) }), span({ className: 'track' }))
