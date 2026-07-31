@@ -198,12 +198,11 @@ statusItem view already used. A LIST because a few genuinely do two things: open
 from the search modal opens it and then closes the modal. `ui/activate.js` is the one place
 that runs them, shared by the context menu, the launcher's Enter key, and both row views.
 
-**A confirm dialog carries `confirmActions`** now — what happens if you say yes — and closes
-itself, which two of the three callers were doing in different places. A PROMPT still carries
-`onSubmit`, because it has to hand back what was typed and the typed value is not in the
-engine: `overlays.js` keeps it in a `let` closed over by the render, mutated by the input
-handler. Moving it into `viewState` is the prerequisite, and after that a prompt can name an
-action the same way.
+**Dialog specs are data.** A confirm carries `confirmActions`; so does a prompt. The prompt's
+typed value lives in `viewState`, so its actions READ what was typed rather than being handed
+it — `PromptAction` does the reading, closes the dialog, and hands the value to `withValue`.
+That matters because a dialog spec lives in workbench state, so an `onSubmit` callback meant
+a function sitting in engine state.
 
 **~~`moveLaunch` is read-after-write~~** — done. Navigation is one atomic action.
 `MoveLaunchAction(delta, nodes)` moves the index and syncs the selection inside a single

@@ -7,8 +7,8 @@ import { icon, iconForNode } from '../icon.js';
 import { bytes } from '../format.js';
 import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
-import { draftFor } from '../../bl/viewState.js';
-import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
+import { draftFor, promptValueOf, PROMPT } from '../../bl/viewState.js';
+import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, CreateCollectionFromFormAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
 import { activate } from '../activate.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
@@ -20,16 +20,15 @@ export function dialog(state, ui) {
   if (d.kind === 'collection') return collectionDialog(d, ui, state.caps, state.view);
   if (d.kind === 'plugin-review') return pluginReview(d, ui, state.view);
   if (d.kind === 'opener-chooser') return openerChooserDialog(d, ui);
-  let value = d.value ?? '';
-  // A confirm carries ACTIONS — what happens if you say yes — rather than a callback, the
-  // same as a menu item. Closing is this dialog's own business, so callers no longer have
-  // to remember to do it (and two of the three did it in different places).
+  // Both kinds carry ACTIONS — what happens if you say yes — rather than a callback. A
+  // prompt's typed value is engine state (see bl/viewState.js), so its actions read what
+  // was typed instead of being handed it, and the dialog spec holds no functions.
   //
-  // A prompt still carries `onSubmit`, because it has to hand back what was typed, and the
-  // typed value is not in the engine yet — see docs/tickets/009.
+  // A confirm closes itself here; a prompt's action closes first and then acts, because it
+  // has to read the value before the dialog goes.
+  const value = promptValueOf(state.view, d);
   const submit = () => {
-    if (d.kind !== 'confirm') return d.onSubmit?.(value);
-    ui.engine.dispatch(new CloseDialogAction());
+    if (d.kind === 'confirm') ui.engine.dispatch(new CloseDialogAction());
     activate(ui, { actions: d.confirmActions });
   };
   return div({},
@@ -40,9 +39,9 @@ export function dialog(state, ui) {
       d.kind === 'prompt'
         ? div({ className: 'field' },
             d.label ? span({ $styling: { 'font-size': '12px', color: 'var(--text-dim)' } }, d.label) : null,
-            input({ className: 'input', value: d.value ?? '', placeholder: d.placeholder || '', autofocus: true })
+            input({ className: 'input', value, placeholder: d.placeholder || '', autofocus: true })
               .on({
-                input: (e) => { value = e.target.value; },
+                input: (e) => ui.engine.dispatch(new SetViewStateAction(PROMPT, { ref: d, value: e.target.value })),
                 keydown: (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') ui.engine.dispatch(new CloseDialogAction()); },
                 $attach: (el) => queueMicrotask(() => { el.focus(); el.select(); }),
               }),
@@ -138,7 +137,7 @@ function collectionDialog(d, ui, caps, view) {
       const v = form[f.name];
       if (v !== undefined && v !== '') store[f.name] = f.type === 'number' ? Number(v) : v;
     }
-    d.onSubmit?.({ name: form.name, description: form.description, store });
+    ui.engine.dispatch(new CreateCollectionFromFormAction({ name: form.name, description: form.description, store }));
   };
 
   const field = (lbl, k, ph = '') => div({ className: 'field', $styling: { 'margin-bottom': '10px' } },

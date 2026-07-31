@@ -9,6 +9,7 @@ import {
   SearchAction,
   LoadApiKeysAction, MintApiKeyAction, RevokeApiKeyAction,
   ExecCommandAction,
+  RenamePromptAction, InstallPluginFromUrlPromptAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
@@ -126,10 +127,7 @@ export function registerCommands(app) {
     if (!node) return;
     workbench.showDialog({
       kind: 'prompt', title: 'Rename', label: 'New name', value: node.name, confirmLabel: 'Rename',
-      onSubmit: (name) => {
-        workbench.closeDialog();
-        if (name?.trim() && name !== node.name) go(new RenameAction(node.id, name.trim()));
-      },
+      confirmActions: [new RenamePromptAction(node)],
     });
   }, { category: 'Explorer' });
 
@@ -246,10 +244,6 @@ export function registerCommands(app) {
   cmd('collections.create', 'New Collection…', () => {
     workbench.showDialog({
       kind: 'collection', title: 'New collection',
-      onSubmit: (record) => {
-        workbench.closeDialog();
-        if (record) go(new CreateCollectionAction(record));
-      },
     });
   }, { category: 'Collections', icon: 'files' });
 
@@ -271,7 +265,7 @@ export function registerCommands(app) {
     workbench.showDialog({
       kind: 'prompt', title: 'Install plugin from URL', label: 'Plugin package (.zip) URL',
       placeholder: 'https://example.com/plugin.zip', confirmLabel: 'Fetch',
-      onSubmit: (url) => { workbench.closeDialog(); if (url?.trim()) beginInstallFromUrl(app, url.trim()); },
+      confirmActions: [new InstallPluginFromUrlPromptAction()],
     });
   }, { category: 'Plugins', icon: 'plug' });
   cmd('plugins.installFromFile', 'Install Plugin from File…', () => {

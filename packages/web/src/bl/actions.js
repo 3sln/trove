@@ -5,6 +5,8 @@
 // they update flow straight back into the UI via `watch`.
 
 import { Action } from '@3sln/ngin';
+import { PROMPT } from './viewState.js';
+import { beginInstallFromUrl } from './pluginInstall.js';
 import { newId } from '@3sln/trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
 import { availableOpeners, rememberedOpenerId } from './openers.js';
@@ -1091,10 +1093,9 @@ export class ShowContextMenuAction extends ShellAction {
 /**
  * Show a dialog.
  *
- * A confirm carries `confirmActions` and is fully data. A PROMPT still carries `onSubmit`,
- * because it has to hand back what was typed and the typed value is not in the engine yet —
- * so a prompt posted this way still puts a closure on the feed. Recorded in the ticket
- * rather than pretended away.
+ * The spec is data. A confirm carries `confirmActions`; so does a prompt, whose actions read
+ * what was typed out of view state rather than being handed it — see PromptAction. Nothing
+ * in a dialog spec is callable, which matters because the spec lives in workbench state.
  */
 export class ShowDialogAction extends ShellAction {
   constructor(dialog) { super(); this.dialog = dialog; }
@@ -1163,5 +1164,55 @@ export class OpenNotificationTargetAction extends Action {
     }
     await new OpenFileAction(node).execute(r);
     r.workbench.toggleInfoPanel(true);
+  }
+}
+
+/**
+ * The base for anything a prompt dialog submits.
+ *
+ * The typed value is engine state (see viewState.js), so the action READS it rather than
+ * being handed it by a callback. Subclasses implement `withValue`; the dialog closes first,
+ * because every one of these used to do that by hand and two forgot to do it consistently.
+ */
+export class PromptAction extends Action {
+  static deps = ['viewState', 'workbench'];
+
+  async execute(r) {
+    const held = r.viewState.observe().getValue()[PROMPT];
+    const value = (held?.value ?? '').trim();
+    r.workbench.closeDialog();
+    if (value) await this.withValue(value, r);
+  }
+}
+
+/** Rename the node this prompt was opened for. */
+export class RenamePromptAction extends PromptAction {
+  static deps = ['viewState', 'workbench', 'engine'];
+  constructor(node) { super(); this.node = node; }
+  async withValue(name, { engine }) {
+    if (name !== this.node.name) await engine.dispatch(new RenameAction(this.node.id, name));
+  }
+}
+
+/** Fetch and review a plugin package from the URL that was typed. */
+export class InstallPluginFromUrlPromptAction extends PromptAction {
+  static deps = ['viewState', 'workbench', 'app'];
+  async withValue(url, { app }) { await beginInstallFromUrl(app, url); }
+}
+
+/**
+ * Create the collection the dialog's form describes.
+ *
+ * The form is already engine state — the dialog puts it in viewState as it is typed — so
+ * this reads it rather than being handed a record through a callback. The form-to-record
+ * shaping stays in the dialog, which is the thing that knows which fields the chosen
+ * driver declared.
+ */
+export class CreateCollectionFromFormAction extends Action {
+  static deps = ['engine', 'workbench'];
+  constructor(record) { super(); this.record = record; }
+  async execute({ engine, workbench }) {
+    workbench.closeDialog();
+    if (this.record) await engine.dispatch(new CreateCollectionAction(this.record));
   }
 }

@@ -59,3 +59,23 @@ export function draftFor(slice, key, ref, fallback) {
   const held = slice?.[key];
   return held && held.ref === ref ? held : { ref, ...fallback };
 }
+
+/** Where a prompt dialog's typed value lives while it is being typed. */
+export const PROMPT = 'promptValue';
+
+/**
+ * What has been typed into the open prompt, or its initial value.
+ *
+ * The prompt kept this in a `let` closed over by the render and mutated by the input
+ * handler, and handed it back through an `onSubmit` callback — which meant a FUNCTION was
+ * living in the dialog spec, and the dialog spec is engine state. Keeping the value here
+ * instead lets a prompt carry actions like everything else, and each action reads what was
+ * typed rather than being handed it.
+ *
+ * `ref` ties it to the dialog instance, so reopening starts from the new initial value
+ * rather than whatever the last prompt left behind.
+ */
+export function promptValueOf(slice, dialog) {
+  const held = slice?.[PROMPT];
+  return held && held.ref === dialog ? held.value : (dialog?.value ?? '');
+}
