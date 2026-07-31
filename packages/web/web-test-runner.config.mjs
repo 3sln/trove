@@ -18,7 +18,11 @@ export default {
   rootDir,
   // sanitize.browser.js is browser-ONLY (it parses into a real inert <template>),
   // which is why it isn't named *.test.js — `bun test` must not pick it up.
-  files: ['test/plugins.test.js', 'test/contributions.test.js', 'test/views.test.js', 'test/sanitize.browser.js', 'test/markdown.browser.js'],
+  // boot.browser.js is the breadth check: it assembles the real platform, builds the real
+  // engine and renders the real shell. Every other suite here tests something in isolation,
+  // which is exactly how four ReferenceErrors reached a browser past a green `bun test` and
+  // a clean build.
+  files: ['test/plugins.test.js', 'test/contributions.test.js', 'test/views.test.js', 'test/sanitize.browser.js', 'test/markdown.browser.js', 'test/boot.browser.js'],
   nodeResolve: true,
   middleware: [sqlWasmMiddleware()],
   plugins: [textModulePlugin({ rootDir })],
