@@ -825,8 +825,11 @@ export class SetPaletteIndexAction extends ShellAction {
 }
 
 export class MovePaletteAction extends ShellAction {
-  constructor(delta) { super(); this.delta = delta; }
-  apply(wb) { wb.movePalette(this.delta); }
+  // `count` is not optional: `movePalette` wraps the index, so without it the service
+  // cannot know where the end is and returns early — arrow keys in the palette silently
+  // did nothing.
+  constructor(delta, count) { super(); this.delta = delta; this.count = count; }
+  apply(wb) { wb.movePalette(this.delta, this.count); }
 }
 
 export class CloseSearchModalAction extends ShellAction {
@@ -989,8 +992,11 @@ export class PatchApiKeyDraftAction extends ApiKeysAction {
   apply(s) { s.patchDraft(this.patch); }
 }
 export class ToggleApiKeyCapAction extends ApiKeysAction {
-  constructor(cap) { super(); this.cap = cap; }
-  apply(s) { s.toggleCap(this.cap); }
+  // Per COLLECTION and capability — a key is scoped, so a capability without the
+  // collection it applies to is meaningless. Dropping the second argument sent the
+  // collection id as the capability and the server refused the mint.
+  constructor(collectionId, capability) { super(); this.collectionId = collectionId; this.capability = capability; }
+  apply(s) { s.toggleCap(this.collectionId, this.capability); }
 }
 
 /**
