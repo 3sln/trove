@@ -84,6 +84,9 @@ export class RotationService {
     if (running && running.status === 'running') {
       throw TroveError.invalid('A key rotation is already running on this collection');
     }
+    // A finished-but-abandoned rotation can still be holding an open multipart. Starting a
+    // new one is the last moment anything knows it exists.
+    if (running?.inflight) await this.#discard(collectionId, running.inflight);
     const { fingerprint: to, previous } = await this.collections.beginRotation(collectionId, principal);
     const state = {
       collectionId,
@@ -95,6 +98,9 @@ export class RotationService {
         .map((k) => k.fingerprint)
         .filter((fp) => fp !== to),
       cursor: null,
+      // The object part-way through, when a slice ran out of budget inside one. See
+      // #moveSlice — this is what lets an object larger than a slice be rotated at all.
+      inflight: null,
       moved: 0,
       failed: 0,
       startedAt: Date.now(),
@@ -145,6 +151,36 @@ export class RotationService {
     let moved = state.moved;
     let failed = state.failed;
     let sawStragglers = false;
+    let inflight = state.inflight || null;
+
+    // Finish what the last slice started before looking for more. An object part-way
+    // through is the one thing that MUST be dealt with first: its multipart is open and
+    // billed, and the walk would otherwise pick it up again from the beginning.
+    if (inflight) {
+      const node = await this.vfs.metadata.getById(inflight.nodeId).catch(() => null);
+      // Deleted, or already moved by something else, while we were away. Spend the upload
+      // rather than leaving it open forever.
+      if (!node || !node.encryption || node.encryption.fingerprint === state.to) {
+        await this.#discard(collectionId, inflight);
+        inflight = null;
+      } else {
+        sawStragglers = true;
+        try {
+          const r = await this.#moveSlice(node, key, fp, inflight, { deadline, now });
+          inflight = r.inflight;
+          if (r.done) moved++;
+        } catch (err) {
+          failed++;
+          await this.#discard(collectionId, inflight);
+          inflight = null;
+          console.error(`[trove] resuming ${node.name} failed:`, err?.message || err);
+        }
+        // Still not finished, or out of time: persist and let the next slice continue.
+        if (inflight || now() >= deadline) {
+          return this.#save(collectionId, { ...state, cursor, moved, failed, inflight });
+        }
+      }
+    }
 
     for (;;) {
       const page = await this.vfs.metadata.listItems(collectionId, { cursor, limit: 50 });
@@ -155,8 +191,15 @@ export class RotationService {
         if (!node.encryption || node.encryption.fingerprint === state.to) continue;
         sawStragglers = true;
         try {
-          await this.#move(node, key, fp);
-          moved++;
+          const r = await this.#moveSlice(node, key, fp, null, { deadline, now });
+          if (r.done) moved++;
+          else {
+            // Bigger than the remaining budget. Its parts and its place in the envelope are
+            // recorded, and the next slice picks it up where this one stopped instead of
+            // starting the object again — which is what used to make a large object
+            // unrotatable at all rather than merely slow.
+            return this.#save(collectionId, { ...state, cursor, moved, failed, inflight: r.inflight });
+          }
         } catch (err) {
           // One unreadable object must not stop the rotation: the rest of the collection
           // still needs to move, and the old key cannot be retired while anything is left
@@ -173,6 +216,7 @@ export class RotationService {
     const finished = !cursor && !sawStragglers;
     const next = {
       ...state,
+      inflight: null,
       // A finished pass starts the next one from the beginning, because items added during
       // it may still be behind. Two clean passes in a row is what actually ends the job.
       cursor: finished ? null : cursor,
@@ -199,45 +243,103 @@ export class RotationService {
   }
 
   /**
-   * Read one object under whichever key it names, and write it back under the new one.
+   * Move one object onto the new key, in as many slices as it takes.
    *
-   * Written to a NEW storage key rather than over the old one. AES-GCM cannot survive a
-   * nonce being reused with a key, and rewriting in place invites exactly that on a retry;
-   * a new object also means a failure halfway leaves the original intact and readable
-   * rather than a half-written file that is neither.
+   * A rotation slice is bounded by wall-clock time, and until now an object could only be
+   * moved whole: one larger than the budget failed its slice, restarted from the beginning
+   * on the next, and failed again — forever, with the rotation never completing and the old
+   * key never retiring. A collection containing one big video could not be rotated at all.
+   *
+   * The checkpoint is the multipart part list, which the store is already keeping for us.
+   * What has to travel with it is the ENVELOPE's position: a nonce is derived from the
+   * chunk index, so a resumed encryption must continue the same sequence under the same
+   * prefix. Starting a fresh envelope halfway would reuse nonce/key pairs from the first
+   * half — the one thing AES-GCM cannot survive — so the prefix and the next chunk index
+   * are persisted alongside the parts.
+   *
+   * @returns {Promise<{done: boolean, inflight: object|null}>}
    */
-  async #move(node, newKey, newFingerprint) {
+  async #moveSlice(node, newKey, newFingerprint, inflight, { deadline, now }) {
     const storage = await this.vfs.storageFor(node.collectionId);
     const chunkSize = node.encryption.chunkSize;
+    const plaintextSize = node.size;
+
+    // A store without multipart is a local one — filesystem, memory — where the whole
+    // object is already within reach. There is nothing to check point against, and nothing
+    // that needs it: the budget that makes this necessary is a network one.
+    if (!storage.capabilities?.multipart) {
+      await this.#moveWhole(node, newKey, newFingerprint, storage, chunkSize);
+      return { done: true, inflight: null };
+    }
+
     // Written to a NEW storage key rather than over the old one. AES-GCM cannot survive a
     // nonce being reused with a key, and rewriting in place invites exactly that on a
     // retry; a new object also means a failure halfway leaves the original intact and
     // readable rather than a half-written file that is neither.
-    const nextKey = `${node.storageKey}.rot${Date.now().toString(36)}`;
+    const nextKey = inflight?.storageKey ?? `${node.storageKey}.rot${Date.now().toString(36)}`;
+    const uploadId = inflight?.uploadId ?? await storage.createMultipart(nextKey, { contentType: node.contentType });
+    const parts = inflight?.parts ? [...inflight.parts] : [];
+    let chunkIndex = inflight?.chunkIndex ?? 0;
+    let noncePrefix = inflight?.noncePrefix ? fromHex(inflight.noncePrefix) : null;
 
-    const read = await this.vfs.readStream(node.id);
-    const sealed = await encryptStream(newKey, read.stream, {
-      fingerprint: newFingerprint,
-      plaintextSize: read.size ?? node.size,
-      chunkSize,
-    });
+    // One part per pass, so the checkpoint lands on a part boundary — which is also a chunk
+    // boundary, since a part is a whole number of sealed chunks. Sized to clear S3's 5 MiB
+    // floor for every part but the last.
+    const chunksPerPart = Math.max(1, Math.ceil(PART_TARGET_BYTES / chunkSize));
 
-    // Streamed into multipart parts rather than collected.
-    //
-    // Buffering meant holding the file twice — once decrypted and once sealed — so a
-    // rotation was capped at whatever fits in an isolate. On Workers that is 128 MB for
-    // everything, which put the ceiling somewhere around a 50 MB file and made rotation
-    // simply unavailable for the collections most likely to want it. Peak memory is now one
-    // part, whatever the object weighs.
-    //
-    // A backend that cannot do multipart is a local one — filesystem, memory — where the
-    // whole object is already in reach and a single put is both simpler and fine.
-    if (storage.capabilities?.multipart) {
-      await this.#putStreamed(storage, nextKey, sealed, node.contentType);
-    } else {
-      await storage.put(nextKey, new Uint8Array(await new Response(sealed).arrayBuffer()), {
-        contentType: node.contentType,
-      });
+    try {
+      while (chunkIndex * chunkSize < plaintextSize) {
+        const start = chunkIndex * chunkSize;
+        const end = Math.min(start + chunksPerPart * chunkSize, plaintextSize) - 1;
+        const last = end + 1 >= plaintextSize;
+
+        const read = await this.vfs.readStream(node.id, { range: { start, end } });
+        const sealed = await encryptStream(newKey, read.stream, {
+          fingerprint: newFingerprint,
+          plaintextSize,
+          chunkSize,
+          // The first pass mints the prefix and writes the header; every later one continues
+          // the same envelope, which is what `resume` means.
+          resume: noncePrefix ? { noncePrefix, index: chunkIndex } : null,
+          // `partial` says another call will continue this object. Without it a mid-object
+          // pass would be sealed as a complete envelope and every later chunk index would be
+          // wrong.
+          partial: !last,
+        });
+
+        const body = new Uint8Array(await new Response(sealed).arrayBuffer());
+        // The prefix the first pass generated, read back out of the header it wrote. It is
+        // the only place it exists, and every later pass needs it.
+        if (!noncePrefix) noncePrefix = decodeHeader(body).noncePrefix;
+
+        const partNumber = parts.length + 1;
+        const etag = await storage.putPart(nextKey, uploadId, partNumber, body);
+        parts.push({ partNumber, etag: etag?.etag ?? etag });
+        chunkIndex += Math.ceil((end + 1 - start) / chunkSize);
+
+        // Out of time, but on a boundary: hand back what has been done so the next slice
+        // continues rather than starting over.
+        if (!last && now() >= deadline) {
+          return {
+            done: false,
+            inflight: {
+              nodeId: node.id,
+              storageKey: nextKey,
+              uploadId,
+              parts,
+              chunkIndex,
+              noncePrefix: toHex(noncePrefix),
+            },
+          };
+        }
+      }
+
+      await storage.completeMultipart(nextKey, uploadId, parts);
+    } catch (err) {
+      // The parts already sent stay in the bucket, billed, with nothing left able to
+      // reclaim them — so a failure aborts rather than leaving them.
+      await storage.abortMultipart(nextKey, uploadId).catch(() => {});
+      throw err;
     }
 
     // The item points at the new object before the old one is removed. In the window
@@ -249,57 +351,60 @@ export class RotationService {
       encryption: { fingerprint: toHex(newFingerprint), chunkSize },
     });
     await storage.delete(oldKey).catch(() => {});
+    return { done: true, inflight: null };
+  }
+
+  /** The whole object in one put, for a store that cannot do multipart. */
+  async #moveWhole(node, newKey, newFingerprint, storage, chunkSize) {
+    const nextKey = `${node.storageKey}.rot${Date.now().toString(36)}`;
+    const read = await this.vfs.readStream(node.id);
+    const sealed = await encryptStream(newKey, read.stream, {
+      fingerprint: newFingerprint,
+      plaintextSize: read.size ?? node.size,
+      chunkSize,
+    });
+    await storage.put(nextKey, new Uint8Array(await new Response(sealed).arrayBuffer()), {
+      contentType: node.contentType,
+    });
+    const oldKey = node.storageKey;
+    await this.vfs.metadata.update(node.id, {
+      storageKey: nextKey,
+      encryption: { fingerprint: toHex(newFingerprint), chunkSize },
+    });
+    await storage.delete(oldKey).catch(() => {});
   }
 
   /**
-   * Upload a stream as a multipart object, holding one part at a time.
+   * Abandon a half-written object.
    *
-   * Parts are accumulated to a target size because S3 requires every part except the last
-   * to clear a 5 MiB floor — an envelope chunk is far smaller than that, so one chunk per
-   * part would be rejected.
-   *
-   * A failure aborts the multipart. Without that the parts already sent stay in the bucket,
-   * billed, with nothing left able to reclaim them.
+   * A multipart left open is billed until it is completed or aborted, and nothing else can
+   * find it: the storage contract has no way to list them, deliberately, so the only record
+   * that it exists is the one we wrote. Cancelling or restarting a rotation has to spend it.
    */
-  async #putStreamed(storage, key, stream, contentType) {
-    const uploadId = await storage.createMultipart(key, { contentType });
+  async #discard(collectionId, inflight) {
+    if (!inflight?.uploadId) return;
     try {
-      const reader = stream.getReader();
-      const parts = [];
-      let held = [];
-      let size = 0;
-      let n = 1;
-      const flush = async () => {
-        const part = new Uint8Array(size);
-        let at = 0;
-        for (const p of held) { part.set(p, at); at += p.length; }
-        held = [];
-        size = 0;
-        const etag = await storage.putPart(key, uploadId, n, part);
-        parts.push({ partNumber: n, etag: etag?.etag ?? etag });
-        n++;
-      };
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        held.push(value);
-        size += value.length;
-        if (size >= PART_TARGET_BYTES) await flush();
-      }
-      // The final part may be under the floor, and only the final part may be.
-      if (size || parts.length === 0) await flush();
-      await storage.completeMultipart(key, uploadId, parts);
+      const storage = await this.vfs.storageFor(collectionId);
+      await storage.abortMultipart(inflight.storageKey, inflight.uploadId);
     } catch (err) {
-      await storage.abortMultipart(key, uploadId).catch(() => {});
-      throw err;
+      console.error(`[trove] abandoning a rotation upload failed:`, err?.message || err);
     }
+  }
+
+  /** Persist progress mid-pass, so the next slice continues from here. */
+  async #save(collectionId, next) {
+    await this.kv.set(NS, collectionId, next);
+    return next;
   }
 
   /** Abandon a rotation. The new key stays current; what has moved stays moved. */
   async cancel(collectionId) {
     const state = await this.state(collectionId);
     if (!state) return null;
-    const next = { ...state, status: 'done', cancelled: true };
+    // The half-written object goes with it. Nothing else can find that multipart — the
+    // storage contract cannot list them — so if this does not spend it, nothing will.
+    await this.#discard(collectionId, state.inflight);
+    const next = { ...state, status: 'done', cancelled: true, inflight: null };
     await this.kv.set(NS, collectionId, next);
     return next;
   }

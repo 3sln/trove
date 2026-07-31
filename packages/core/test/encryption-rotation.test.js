@@ -282,3 +282,115 @@ test('a multipart that fails partway is aborted, not left in the bucket', async 
   // The original is untouched, so the file is still there and still readable.
   expect(await new Response((await vfs.readStream(node.id)).stream).text()).toBe('hello');
 });
+
+// --- resuming inside one object ------------------------------------------------
+//
+// A slice is bounded by wall-clock time. Until this worked, an object bigger than the
+// budget failed its slice, restarted from the beginning on the next, and failed again —
+// forever. A collection with one large video could not be rotated at all, and the old key
+// could never retire.
+
+/** A drive holding one object of `size`, already sealed under the collection's first key. */
+async function bigDrive(size, { chunkSize = 64 * 1024 } = {}) {
+  const kv = new MemoryKV();
+  const storage = new MultipartStore();
+  const collections = new CollectionService({ kv, storageFactory: () => storage, admins: ['boss'] });
+  const c = await collections.create({
+    name: 'Big', store: { driver: 'memory' }, encryption: { enabled: true, rules: { all: true } },
+  }, BOSS);
+  const vfs = await createVfs({ storage, collections });
+  const rotation = new RotationService({ kv, vfs, collections });
+
+  const body = new Uint8Array(size);
+  for (let i = 0; i < size; i++) body[i] = (i * 7) % 251;
+  const key = await collections.dataKeyFor(c.id);
+  const sealed = await encrypt(key, body, { fingerprint: fromHex(c.encryption.fingerprint), chunkSize });
+  await storage.put('obj_big', sealed, { contentType: 'application/octet-stream' });
+  const node = await vfs.metadata.create({
+    collectionId: c.id, name: 'big.bin', storageKey: 'obj_big', size,
+    contentType: 'application/octet-stream',
+    encryption: { fingerprint: c.encryption.fingerprint, chunkSize },
+  });
+  return { kv, storage, collections, vfs, rotation, c, node, body };
+}
+
+test('an object bigger than a slice is resumed, not restarted', async () => {
+  // Past PART_TARGET_BYTES (8 MiB), so the object spans parts and a slice can stop
+  // inside it. Below that there is nothing to resume — one part is the whole file.
+  const d = await bigDrive(20 * 1024 * 1024, { chunkSize: 1024 * 1024 });
+  await d.rotation.begin(d.c.id, BOSS);
+
+  // A budget that expires the moment the first part is written, so every slice makes
+  // exactly one part of progress and has to hand the rest on.
+  let slices = 0;
+  let state;
+  const expired = () => { slices++; return { now: () => (slices > 1 ? 1e12 : 0), budgetMs: 0 }; };
+  for (let i = 0; i < 40; i++) {
+    slices = 0;
+    state = await d.rotation.step(d.c.id, expired());
+    if (state.status !== 'running' || (!state.inflight && state.moved)) break;
+  }
+
+  expect(state.moved).toBe(1);
+  expect(state.failed).toBe(0);
+  expect(state.inflight).toBe(null);
+
+  // The point of the exercise: it took more than one slice, and the object survived it.
+  const out = new Uint8Array(await new Response((await d.vfs.readStream(d.node.id)).stream).arrayBuffer());
+  expect(out.length).toBe(d.body.length);
+  expect(Array.from(out.slice(0, 64))).toEqual(Array.from(d.body.slice(0, 64)));
+  expect(Array.from(out.slice(-64))).toEqual(Array.from(d.body.slice(-64)));
+  // Every byte, because a nonce sequence that restarted mid-object would decrypt to
+  // garbage from the resume point onward rather than fail outright.
+  expect(Array.from(out)).toEqual(Array.from(d.body));
+});
+
+test('a resumed object carries its envelope position, not a fresh one', async () => {
+  // The failure this guards against is silent: a resumed encryption that started a new
+  // envelope would reuse nonce/key pairs from the first half — the one thing AES-GCM
+  // cannot survive — and the file would still "rotate" successfully.
+  const d = await bigDrive(20 * 1024 * 1024, { chunkSize: 1024 * 1024 });
+  await d.rotation.begin(d.c.id, BOSS);
+
+  let n = 0;
+  const state1 = await d.rotation.step(d.c.id, { budgetMs: 0, now: () => (n++ ? 1e12 : 0) });
+  expect(state1.inflight).toBeTruthy();
+  expect(state1.inflight.chunkIndex).toBeGreaterThan(0);
+  // The prefix travels with the checkpoint — it exists nowhere else once the header is
+  // written, and every later slice needs it to continue the sequence.
+  expect(typeof state1.inflight.noncePrefix).toBe('string');
+  expect(state1.inflight.parts.length).toBeGreaterThan(0);
+
+  let state = state1;
+  while (state.status === 'running' && state.inflight) state = await d.rotation.step(d.c.id);
+  const out = new Uint8Array(await new Response((await d.vfs.readStream(d.node.id)).stream).arrayBuffer());
+  expect(Array.from(out)).toEqual(Array.from(d.body));
+});
+
+test('cancelling mid-object spends the half-written upload', async () => {
+  // Nothing else can find it: the storage contract has no way to list multiparts, so the
+  // checkpoint is the only record that it exists. Left open, S3 bills for it forever.
+  const d = await bigDrive(20 * 1024 * 1024, { chunkSize: 1024 * 1024 });
+  await d.rotation.begin(d.c.id, BOSS);
+  let n = 0;
+  const paused = await d.rotation.step(d.c.id, { budgetMs: 0, now: () => (n++ ? 1e12 : 0) });
+  expect(paused.inflight).toBeTruthy();
+  const orphan = paused.inflight.uploadId;
+
+  await d.rotation.cancel(d.c.id);
+  expect(d.storage.aborted).toContain(orphan);
+  expect((await d.rotation.state(d.c.id)).inflight).toBe(null);
+});
+
+test('an object deleted while a slice was away does not strand its upload', async () => {
+  const d = await bigDrive(20 * 1024 * 1024, { chunkSize: 1024 * 1024 });
+  await d.rotation.begin(d.c.id, BOSS);
+  let n = 0;
+  const paused = await d.rotation.step(d.c.id, { budgetMs: 0, now: () => (n++ ? 1e12 : 0) });
+  const orphan = paused.inflight.uploadId;
+
+  await d.vfs.metadata.remove(d.node.id);
+  const after = await d.rotation.step(d.c.id);
+  expect(d.storage.aborted).toContain(orphan);
+  expect(after.inflight).toBe(null);
+});
