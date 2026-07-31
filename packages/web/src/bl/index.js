@@ -5,7 +5,7 @@
 // dispatch follow-up Actions (the choreographer pattern).
 
 import { Engine, Provider } from '@3sln/ngin';
-import { effect } from '../runtime.js';
+import { cell, effect } from '../runtime.js';
 import { ExplorerService, SearchClientService, TransfersService, ApiKeysService } from './services.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
@@ -72,6 +72,43 @@ export function createApp(platform) {
 
       // The outside world.
       api: Provider.fromSingleton(platform.api),
+
+      // What this deployment can do: which storage drivers it offers, whether it can
+      // suggest searches, how transfers reach the bucket.
+      //
+      // A PROVIDER, not an action and not a query holding a promise. Nobody asks for
+      // capabilities — they are ambient facts other things consult in order to decide, so
+      // there is no intent to dispatch and nothing to put on the feed. It was a query that
+      // memoised `api.capabilities()` on its own instance to avoid re-fetching, which is a
+      // cache with no invalidation living inside a view.
+      //
+      // It provides a CELL rather than the value, and the fetch is deliberately not
+      // awaited. Awaiting would make every lease of this block until the server answered,
+      // so a query that merely consults capabilities would be PENDING and the shell would
+      // render nothing until the round trip finished. The cell starts null — "not known
+      // yet", which every reader already treats correctly — and fills in, so anything
+      // watching simply re-projects when the answer lands.
+      //
+      // One fetch for the life of the page, because `fromLazySingleton` memoises on the
+      // creation promise. That is the provider's job, which is where it belongs.
+      // Closes over `platform.api` rather than declaring `{ deps: ['api'] }`: a provider's
+      // deps arrive as the PROVIDER INSTANCES, not as resources, so the dependency form
+      // would hand over something you must `obtain()` and release. Every other provider
+      // here closes over what it needs, and this is the same client either way.
+      capabilities: Provider.fromLazySingleton(
+        async () => {
+          const held = cell(null);
+          platform.api.capabilities().then(
+            (caps) => held.setValue(caps),
+            // A drive whose capabilities cannot be read still works; every reader treats
+            // null as "not known" and falls back. Failing the provider would take the
+            // whole shell down over an optional answer.
+            () => {},
+          );
+          return held;
+        },
+        () => {},
+      ),
       mediaUrls: Provider.fromSingleton(platform.mediaUrls),
       plugins: Provider.fromSingleton(platform.plugins),
     },

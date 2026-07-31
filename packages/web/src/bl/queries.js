@@ -36,7 +36,7 @@ import { ExecCommandAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
 import { statusFactsOf, driveConditionOf } from './status.js';
-import { launcherGroupsOf, launcherMode } from './launcher.js';
+import { launcherGroupsOf, launcherMode, searchHelpOf } from './launcher.js';
 import { pickView } from './views.js';
 import { prettyKey } from '../platform/keybindings.js';
 
@@ -365,7 +365,7 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
  */
 export const launcherContent = (modal = false) => LauncherContent.of(!!modal);
 
-const LAUNCHER_DEPS = [...REGISTRY_DEPS, 'explorer', 'search', 'workbench', 'offline'];
+const LAUNCHER_DEPS = [...REGISTRY_DEPS, 'explorer', 'search', 'workbench', 'offline', 'capabilities'];
 
 class LauncherContent extends ViewQuery {
   static of = queryOf(LauncherContent);
@@ -377,6 +377,10 @@ class LauncherContent extends ViewQuery {
         ...registries(r),
         r.explorer.observe(), r.search.observe(),
         r.workbench.observe(), r.workbench.observeNav(), r.offline.observe(),
+        // Capabilities arrive after the first render — the provider hands out a cell that
+        // fills in — so this has to be watched, not merely read, or the search help would
+        // never appear on a drive whose prompt the server supplies.
+        r.capabilities,
       ],
       (r) => {
         const wb = r.workbench.state;
@@ -400,14 +404,15 @@ class LauncherContent extends ViewQuery {
           // the choice outside the engine.
           view: pickView(viewsOf(r), groups.flatMap((g) => g.items),
             mode === 'search' ? slices.se.resolved?.view ?? null : null),
-          // Everything the search-help offer depends on EXCEPT what the server suggests:
-          // a search has run, it succeeded, and it found nothing. The prompt itself lives
-          // behind the `capabilities` query, which is fetched rather than held by a
-          // resource, so the last step happens where both are in hand — see searchHelpOf.
-          // It moves in here once capabilities is a resource (ticket F).
-          helpEligible: mode !== 'command'
-            && !!slices.se.ran && !slices.se.loading && !slices.se.error
-            && !(slices.se.results || []).length,
+          // What to offer when a search found nothing. Both halves are here now: whether
+          // an offer applies at all (a search ran, it succeeded, it found nothing) and
+          // what to suggest, which the server decides — see the `capabilities` resource.
+          help: searchHelpOf({
+            eligible: mode !== 'command'
+              && !!slices.se.ran && !slices.se.loading && !slices.se.error
+              && !(slices.se.results || []).length,
+            caps: r.capabilities.getValue(),
+          }),
         };
       },
     );
@@ -558,34 +563,13 @@ function commandKeysOf(r) {
 }
 
 /**
- * What the server can do: which storage drivers it offers, whether it can suggest searches.
+ * What this deployment can do.
  *
- * This one FETCHES rather than watching a cell, and it is what retired the last
- * `rerender`-shaped hack. The answer used to be assigned onto `platform` at boot and
- * followed by `workbench.touch()` — a poke at an unrelated store purely to make the shell
- * redraw, because nothing invalidated when a plain field was written. A query has somewhere
- * for the value to arrive, so nothing has to be told about it. Both the field and `touch()`
- * are gone.
- *
- * The promise is kept, not just the value. ngin re-boots a query when it is observed again
- * after going idle, and this must not become a second HTTP call: what the server can do does
- * not change under a running page. (A one-shot `fetch()` query would be the obvious fit and
- * is wrong here for the same reason — ngin evicts after one, deliberately, so that the next
- * subscriber gets a fresh answer rather than a stale one that can never refresh. That is the
- * right default and the opposite of what this wants.)
+ * A plain view over the `capabilities` resource — see bl/index.js, where the provider hands
+ * out a cell that fills in once the server answers. This used to be a query that kept the
+ * PROMISE on its own instance so a re-boot would not re-fetch, which is a cache with no
+ * invalidation living inside a view; and it needed `initial = null` to stop the shell going
+ * PENDING while the request was in flight. Both go away when the fetch belongs to the
+ * provider: the cell already holds null, and reading a cell is all this does.
  */
-class Capabilities extends Query {
-  static deps = ['api'];
-
-  /** Not yet known, as against "knows there are none" — every reader already treats it so. */
-  initial = null;
-
-  async boot({ api }, { notify }) {
-    this.promise ??= api.capabilities();
-    notify(await this.promise);
-  }
-
-  kill() {}
-}
-
-export const capabilities = new Capabilities();
+export const capabilities = new ServiceQuery('capabilities', (r) => r);

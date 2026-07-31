@@ -223,10 +223,10 @@ export function launcherGroupsOf(s, modal = false) {
 /**
  * The suggestions shown when a search came back with nothing.
  *
- * The three facts that decide WHETHER to offer help — a search ran, it succeeded, it found
- * nothing — are settled by the `launcherContent` query and arrive as `eligible`. What to
- * suggest comes from the server, behind the `capabilities` query, so this is called where
- * both are in hand. Each example carries the actions that run it.
+ * Two halves, both settled by the `launcherContent` query: whether an offer applies at all
+ * — a search ran, it succeeded, it found nothing — and what to suggest, which the server
+ * decides and reaches the engine through the `capabilities` resource. Each example carries
+ * the actions that run it, so the component only draws them.
  */
 export function searchHelpOf({ eligible = false, caps = null } = {}) {
   if (!eligible) return null;

@@ -59,6 +59,17 @@ function engineWith(app) {
       viewport: singleton(p.viewport),
       voice: singleton(p.voice),
       api: singleton(p.api),
+      // Mirrors bl/index.js: a lazy singleton handing out a CELL that fills in, so leasing
+      // it never blocks on the round trip. The one-fetch guarantee is the provider's
+      // memoised creation promise, not something a query arranges for itself.
+      capabilities: Provider.fromLazySingleton(
+        async () => {
+          const held = cell(null);
+          Promise.resolve(p.api?.capabilities?.()).then((v) => { if (v) held.setValue(v); }, () => {});
+          return held;
+        },
+        () => {},
+      ),
       mediaUrls: singleton(p.mediaUrls),
       plugins: singleton(p.plugins),
     },
@@ -313,12 +324,13 @@ test('the keybinding view says which bindings the user changed', async () => {
 });
 
 test('capabilities are fetched once, however many regions read them', async () => {
-  // It used to be assigned onto `platform` at boot followed by `workbench.touch()` — a poke
-  // at an unrelated store to force a redraw, because writing a plain field invalidates
-  // nothing. The query has somewhere for the value to arrive.
+  // Capabilities are ambient facts other things consult, not something anyone asks for, so
+  // they are a PROVIDER — see bl/index.js. It hands out a cell that fills in when the
+  // server answers, which is what lets a lease of it not block on the round trip.
   //
-  // The promise is kept rather than the value because ngin re-boots a query observed again
-  // after going idle, and what the server can do does not change under a running page.
+  // The single fetch is the provider memoising its creation promise. It used to be a query
+  // keeping `api.capabilities()` on its own instance, because ngin re-boots a query that is
+  // observed again after going idle — a cache with no invalidation living inside a view.
   let calls = 0;
   const app = platformStub();
   app.platform.api = { capabilities: async () => { calls++; return { storageDrivers: ['s3'] }; } };

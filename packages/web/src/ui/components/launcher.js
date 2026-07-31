@@ -9,7 +9,6 @@ import { icon } from '../icon.js';
 import { ExecCommandAction, FilterAction, MoveLaunchAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { renderView, viewSwitcher, viewMove } from './views/index.js';
-import { searchHelpOf } from '../../bl/launcher.js';
 import { openRowMenu } from './views/parts.js';
 import { activate } from '../activate.js';
 
@@ -146,7 +145,7 @@ export default function launcher(state, ui, opts = {}) {
     // split is why a gallery is a contribution rather than another branch in here.
     div({ className: 'launch-body' },
       renderView(view, { groups, index: idx, handlers: { hover: hoverAt, select: selectAt }, state, ui }),
-      searchHelp(content.helpEligible, state.caps, ui),
+      searchHelp(content.help, ui),
     ),
   );
   return modal ? inner : div({ className: 'editor' }, inner);
@@ -180,8 +179,9 @@ function resolvedBar(r) {
  * The text comes from the server's transformer, so it describes the grammar this
  * deployment actually runs rather than the one this file was written against.
  */
-function searchHelp(eligible, caps, ui) {
-  const help = searchHelpOf({ eligible, caps });
+// Decided by the `launcherContent` query — whether an offer applies, and what the server
+// suggests. This only draws it.
+function searchHelp(help, ui) {
   if (!help) return null;
   return div({ className: 'launch-help' },
     help.hint ? div({ className: 'lh-hint' }, icon('info', { size: 13 }), span(help.hint)) : null,
