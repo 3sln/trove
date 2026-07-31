@@ -56,11 +56,8 @@ export default function workbench({ engine, app, platform }) {
       platform.workbench.observeNav(),
       app.explorer.observe(),
       app.search.observe(),
-      app.apiKeys.observe(),
       platform.context.observe(),
       platform.settings.observe(),
-      platform.plugins.observe() ?? constant([]),
-      app.social.observe(),
       app.offline.observe(),
       platform.viewport.observe(),
       platform.voice.observe(),
@@ -74,17 +71,14 @@ export default function workbench({ engine, app, platform }) {
       // Views the shell reads but no region owns yet: the palette's command list, the
       // settings schema, and command id -> keybinding label.
       watchQuery(engine, q.paletteCommands),
-      watchQuery(engine, q.settingsGroups),
       watchQuery(engine, q.commandKeys),
     ],
     // No `_bump` any more. It existed to defeat `watch`'s shallow-equality check for a
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, keys, ctx, settings, pluginList, so, off, vp, voice, view, caps,
-     commands, settingsGroups, commandKeys) =>
-      ({ wb, overlay, nav, ex, se, keys, ctx, settings, plugins: pluginList, so, off, vp, voice, view, caps,
-        commands, settingsGroups, commandKeys }),
+    (wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands, commandKeys) =>
+      ({ wb, overlay, nav, ex, se, ctx, settings, off, vp, voice, view, caps, commands, commandKeys }),
   );
 
   // The chrome, subscribed to what it reads instead of to everything.
@@ -115,6 +109,23 @@ export default function workbench({ engine, app, platform }) {
     // file list — to add a line in the corner.
     toasts: region(engine, { notif: q.notifications }, (s) => toasts(s, ui)),
     activityPanel: region(engine, { act: q.activity }, (s) => activityPanel(s, ui)),
+    // Screens that are usually NOT on screen. Their state still invalidated the shell from
+    // wherever they were: minting an API key or a plugin reporting in rebuilt the file
+    // list. Each reads a couple of slices, so each is a cheap region.
+    settingsView: region(engine, {
+      settings: q.settings, settingsGroups: q.settingsGroups, keys: q.apiKeys,
+      caps: q.capabilities, ex: q.explorer,
+    }, (s) => settingsView(s, ui)),
+    pluginsView: region(engine, { plugins: q.plugins, settings: q.settings },
+      (s) => pluginsView(s, ui)),
+    infoPanel: region(engine, { so: q.social, off: q.offline, nav: q.navigation },
+      (s) => infoPanel(s, ui)),
+    // The rail. It renders the notification bell and the identity chip, both of which read
+    // the social slice — which is how `so` was still reaching the shell after infoPanel
+    // moved out. Missed by looking at infoPanel alone; the bell is imported INTO the bar
+    // from social.js, so a grep for the component name does not find it.
+    activityBar: region(engine, { wb: q.workbench, plugins: q.plugins, so: q.social },
+      (s) => activityBar(s, ui)),
     // The palette is the first thing to read a composed view rather than a service's state:
     // `commands` arrives with keybinding labels resolved and availability decided, so the
     // component stopped asking the keybinding and command services anything mid-render.
@@ -134,8 +145,8 @@ function view(state, ui, regions) {
     // point: only the chrome changes shape, not the app.
     phone ? regions.phoneTopBar() : null,
     div({ className: 'body' },
-      phone ? null : activityBar(state, ui),
-      mainArea(state, ui),
+      phone ? null : regions.activityBar(),
+      mainArea(state, ui, regions),
     ),
     phone ? regions.phoneBottomBar() : regions.statusBar(),
     phone ? regions.phoneSheet() : null,
@@ -151,15 +162,15 @@ function view(state, ui, regions) {
   );
 }
 
-function mainArea(state, ui) {
+function mainArea(state, ui, regions) {
   // Before a collection is known there is nothing to draw: every scoped request names one
   // in its path, so a file list, a search box and an Upload button would all be lying.
   // Settings stays reachable — an admin with no collections still needs to get at it.
   if (state.ex?.gate && state.wb.activity !== 'settings') return collectionGate(state, ui);
 
   switch (state.wb.activity) {
-    case 'settings': return settingsView(state, ui);
-    case 'plugins': return pluginsView(state, ui);
+    case 'settings': return regions.settingsView();
+    case 'plugins': return regions.pluginsView();
     default: {
       // Home: the top of the panel stack — the launcher (base search) or, once a
       // file is open, its opener full-width (optionally split with the info panel).
@@ -169,8 +180,8 @@ function mainArea(state, ui) {
       // details panel takes the whole panel instead — it has its own close button, so
       // there is still a way back to the file.
       return state.vp?.mode === 'phone'
-        ? infoPanel(state, ui)
-        : div({ className: 'editor-split' }, editorArea(state, ui), infoPanel(state, ui));
+        ? regions.infoPanel()
+        : div({ className: 'editor-split' }, editorArea(state, ui), regions.infoPanel());
     }
   }
 }
