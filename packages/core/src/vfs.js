@@ -502,7 +502,19 @@ export class Vfs {
     const node = await this.resolve(id);
     if (!node.storageKey) throw TroveError.notFound('File content');
     const storage = await this.storageFor(node.collectionId);
-    if (storage.capabilities.presignDownload) {
+    // An ENCRYPTED object is never presigned to the store — the same rule `getDownload`
+    // already follows, and the one place it was missing. A bucket URL serves CIPHERTEXT,
+    // and everything a minted URL exists for (an <img src>, a <video src>, cache.add(), a
+    // URL handed to an external service) fetches bytes with nowhere to run decryption. So
+    // every thumbnail and preview in an encrypted collection on a presigning store pointed
+    // at ciphertext and rendered nothing.
+    //
+    // Worse than proxying would have been: a bucket URL is a DIFFERENT ORIGIN, so the
+    // service worker never saw it either — the one place that could have decrypted was
+    // routed around. Sending these through our own address is what lets the worker read
+    // straight from the store and decrypt (platform/directRead.js), and lets the server
+    // decrypt for anything without a worker.
+    if (storage.capabilities.presignDownload && !node.encryption) {
       const seconds = clampAge(op, expiresIn);
       const url = await storage.presignGet(node.storageKey, {
         expiresIn: seconds, responseContentType: node.contentType,

@@ -147,3 +147,30 @@ test('a store that cannot presign reports direct:false rather than inventing a U
   expect(plan.url).toBeUndefined();
   await server.close?.();
 });
+
+test('a minted media URL for an encrypted object goes through us, not the bucket', async () => {
+  // `mintUrl` presigned to the store whenever the store could, without asking whether the
+  // object was sealed — so every thumbnail and preview in an encrypted collection pointed
+  // at ciphertext and rendered nothing. And a bucket URL is a different origin, so the
+  // service worker never saw it: the one thing that could have decrypted was routed around.
+  const d = await drive();
+  const id = await putSealed(d, 'pic.png', [1, 2, 3, 4]);
+  const minted = await d.vfs.mintUrl(id, { op: 'media' });
+  expect(minted.signed).toBe('trove');
+  expect(minted.url).toContain('/api/items/download');
+  expect(minted.url).not.toContain('bucket.example');
+  await d.close?.();
+});
+
+test('an unencrypted object on the same store still gets the bucket URL', async () => {
+  // The direct path is the point everywhere it is safe — this narrows it, it does not
+  // remove it.
+  const d = await drive({ encrypted: false });
+  const id = (await d.vfs.writeFile('plain.png', new Uint8Array([1, 2, 3]), {
+    collectionId: d.c.id, contentType: 'image/png',
+  })).id;
+  const minted = await d.vfs.mintUrl(id, { op: 'media' });
+  expect(minted.signed).toBe('storage');
+  expect(minted.url).toContain('bucket.example');
+  await d.close?.();
+});

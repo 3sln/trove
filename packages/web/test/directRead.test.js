@@ -60,12 +60,16 @@ const PLAN = {
 test('a whole encrypted object round-trips through the direct path', async () => {
   const plain = body(200 * 1024); // spans four chunks
   const sealed = await encrypt(KEY, plain, { fingerprint: FP, chunkSize: CHUNK });
-  const { apiFetch } = harness(sealed, PLAN);
+  const { apiFetch, calls } = harness(sealed, PLAN);
 
   const res = await directRead('itm_1', null, apiFetch);
   expect(res.status).toBe(200);
   expect(res.headers.get('x-trove-direct')).toBe('1');
   expect(new Uint8Array(await res.arrayBuffer())).toEqual(plain);
+
+  // ONE request to the store: the header is the first 44 bytes of the body, so fetching it
+  // separately and then re-fetching from 44 bought nothing.
+  expect(calls.filter((c) => c.startsWith('https://')).length).toBe(1);
 });
 
 test('a ranged read fetches chunks, not the film', async () => {

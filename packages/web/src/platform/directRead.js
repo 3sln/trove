@@ -66,7 +66,46 @@ export function trimStream(stream, start, end) {
 }
 
 /**
+ * Split the first `n` bytes off a stream and hand back the rest, unread.
+ *
+ * The envelope header sits at offset 0, so a whole-object read already fetches it — asking
+ * for `bytes=0-43` and then re-fetching from 44 was a round trip that bought nothing.
+ */
+async function peel(stream, n) {
+  const reader = stream.getReader();
+  const parts = [];
+  let have = 0;
+  while (have < n) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error('object ended inside its own header');
+    parts.push(value);
+    have += value.length;
+  }
+  const buf = new Uint8Array(have);
+  let at = 0;
+  for (const p of parts) { buf.set(p, at); at += p.length; }
+  const leftover = buf.subarray(n);
+  return {
+    head: buf.subarray(0, n),
+    rest: new ReadableStream({
+      start(c) { if (leftover.length) c.enqueue(leftover); },
+      async pull(c) {
+        const { value, done } = await reader.read();
+        if (done) c.close();
+        else c.enqueue(value);
+      },
+      cancel(reason) { return reader.cancel(reason); },
+    }),
+  };
+}
+
+/**
  * Fetch and decrypt one object directly from the store.
+ *
+ * A WHOLE-object read costs one request: the header is the first 44 bytes of the body, so
+ * it is peeled off the same stream. A RANGED read still costs two, because the nonce prefix
+ * lives only in the header and nothing can compute where to start without it — see ticket
+ * 010, which persists those eight bytes so this becomes one request as well.
  *
  * @param {string} id node id
  * @param {string|null} rangeHeader the caller's Range header, if any
@@ -85,12 +124,24 @@ export async function directRead(id, rangeHeader, apiFetch) {
   // version). Deriving ranges from the record and decrypting with the object's real
   // geometry is how chunk indices get computed against one layout and nonces against
   // another, which surfaces as "the data has been altered" on data nobody altered.
-  const headRes = await fetch(plan.url, { headers: { Range: `bytes=0-${HEADER_BYTES - 1}` } });
-  if (!headRes.ok) return null;
-  const header = decodeHeader(new Uint8Array(await headRes.arrayBuffer()));
+  const wantsRange = !!parseRange(rangeHeader, Number.MAX_SAFE_INTEGER);
+  let header;
+  let whole = null; // the body stream, when the same request already carried it
+  if (wantsRange) {
+    const headRes = await fetch(plan.url, { headers: { Range: `bytes=0-${HEADER_BYTES - 1}` } });
+    if (!headRes.ok) return null;
+    header = decodeHeader(new Uint8Array(await headRes.arrayBuffer()));
+  } else {
+    const res = await fetch(plan.url);
+    if (!res.ok || !res.body) return null;
+    const split = await peel(res.body, HEADER_BYTES);
+    header = decodeHeader(split.head);
+    whole = split.rest;
+  }
 
   // Mid-rotation the collection has more than one live key and this object may still be on
-  // the retired one. The header says which; ask again for that exact key.
+  // the retired one. The header says which; ask again for that exact key. The body stream
+  // is already open and stays valid — only the key was wrong.
   const sealedBy = toHex(header.fingerprint);
   if (sealedBy !== plan.encryption.fingerprint) {
     plan = await getPlan(id, sealedBy, apiFetch);
@@ -109,12 +160,16 @@ export async function directRead(id, rangeHeader, apiFetch) {
       trimEnd: plaintextSize,
     };
 
-  const body = await fetch(plan.url, {
-    headers: { Range: `bytes=${Math.max(want.cipherStart, HEADER_BYTES)}-${want.cipherEnd}` },
-  });
-  if (!body.ok || !body.body) return null;
+  let cipher = whole;
+  if (!cipher) {
+    const body = await fetch(plan.url, {
+      headers: { Range: `bytes=${Math.max(want.cipherStart, HEADER_BYTES)}-${want.cipherEnd}` },
+    });
+    if (!body.ok || !body.body) return null;
+    cipher = body.body;
+  }
 
-  const plain = await decryptStream(fromHex(plan.encryption.key), header, body.body, want.firstChunk);
+  const plain = await decryptStream(fromHex(plan.encryption.key), header, cipher, want.firstChunk);
   const size = want.trimEnd - want.trimStart;
   const headers = {
     'content-type': plan.contentType || 'application/octet-stream',
