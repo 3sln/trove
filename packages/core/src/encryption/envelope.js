@@ -375,22 +375,48 @@ export async function decryptStream(rawKey, header, cipherStream, firstChunk = 0
  * @param {ReadableStream<Uint8Array>} plaintext
  * @param {{fingerprint: Uint8Array, plaintextSize: number, chunkSize?: number}} opts
  */
-export async function encryptStream(rawKey, plaintext, { fingerprint, plaintextSize, chunkSize = DEFAULT_CHUNK_SIZE } = {}) {
+export async function encryptStream(rawKey, plaintext, { fingerprint, plaintextSize, chunkSize = DEFAULT_CHUNK_SIZE, resume = null, partial = false } = {}) {
   assertChunkSize(chunkSize);
   if (!fingerprint || fingerprint.length !== FINGERPRINT_BYTES) {
     throw TroveError.invalid(`A fingerprint must be ${FINGERPRINT_BYTES} bytes`);
   }
   const key = await importKey(rawKey);
-  const noncePrefix = crypto.getRandomValues(new Uint8Array(NONCE_PREFIX_BYTES));
+  // Resuming continues ONE envelope across calls: same nonce prefix, next chunk index, no
+  // second header. It exists so a rotation can be interrupted part-way through a large
+  // object and carry on rather than start again — see encryption/rotation.js.
+  //
+  // The nonce is prefix + index, so continuing the sequence is what keeps every nonce used
+  // exactly once under this key. Restarting the index (or minting a fresh prefix and
+  // stitching the output together) would reuse nonces, and AES-GCM does not survive that:
+  // two chunks encrypted with the same key and nonce leak their XOR and forge each other's
+  // tags. That is the whole reason this takes the prefix rather than generating one.
+  if (resume && (!(resume.noncePrefix instanceof Uint8Array) || resume.noncePrefix.length !== NONCE_PREFIX_BYTES)) {
+    throw TroveError.invalid(`Resuming needs the original ${NONCE_PREFIX_BYTES}-byte nonce prefix`);
+  }
+  if (resume && !Number.isInteger(resume.index)) {
+    throw TroveError.invalid('Resuming needs the chunk index to continue from');
+  }
+  const noncePrefix = resume ? resume.noncePrefix : crypto.getRandomValues(new Uint8Array(NONCE_PREFIX_BYTES));
   const header = encodeHeader({
     version: VERSION, algorithm: ALG_AES_256_GCM, chunkSize, plaintextSize, noncePrefix, fingerprint,
   });
 
   const reader = plaintext.getReader();
   let held = new Uint8Array(0);
-  let index = 0;
-  let wroteHeader = false;
+  let index = resume ? resume.index : 0;
+  // A resumed stream is the MIDDLE of an object; the header went out with the first slice.
+  let wroteHeader = !!resume;
   let seen = 0;
+  // What THIS call is expected to consume. The header still names the whole object — it
+  // describes the object, not the call — so the guard below has to compare against the
+  // remainder or a legitimate resume looks like a truncated encrypt.
+  const expected = resume ? plaintextSize - resume.index * chunkSize : plaintextSize;
+  if (expected < 0) throw TroveError.invalid('Resuming past the end of the object');
+  // `partial` says this call does NOT finish the object — another will continue it. Such a
+  // call must be fed a whole number of chunks, because a short chunk is how the envelope
+  // marks the end: seal a partial one mid-object and every later chunk index is wrong and
+  // the plaintext length is a lie. The completeness check is skipped for the same reason —
+  // stopping early is the point, not a truncated encrypt.
 
   const seal = async (piece) => new Uint8Array(await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonceFor(noncePrefix, index++) }, key, piece,
@@ -415,17 +441,30 @@ export async function encryptStream(rawKey, plaintext, { fingerprint, plaintextS
         if (done) {
           // The trailing partial chunk — and, for an empty file, the one empty chunk that
           // makes "is this encrypted" answerable the same way at any size.
-          if (held.length || seen === 0) {
+          // The trailing partial chunk — and, for an empty file, the one empty chunk that
+          // makes "is this encrypted" answerable the same way at any size. A RESUMED stream
+          // never wants that empty chunk: the object already has its chunks, and adding one
+          // would append a stray sealed block past the end.
+          if (partial) {
+            if (held.length) {
+              throw TroveError.invalid(
+                `A partial encrypt must stop on a chunk boundary; ${held.length} bytes left over`,
+              );
+            }
+            controller.close();
+            return;
+          }
+          if (held.length || (seen === 0 && !resume)) {
             seen += held.length;
             controller.enqueue(await seal(held));
             held = new Uint8Array(0);
           }
-          if (seen !== plaintextSize) {
+          if (seen !== expected) {
             // Refused rather than written: an envelope whose header disagrees with its body
             // decrypts to the wrong length forever, and the header cannot be fixed later
             // without re-encrypting.
             throw TroveError.invalid(
-              `Expected ${plaintextSize} bytes to encrypt and received ${seen}`,
+              `Expected ${expected} bytes to encrypt and received ${seen}`,
             );
           }
           controller.close();
