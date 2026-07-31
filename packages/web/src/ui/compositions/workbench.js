@@ -16,6 +16,7 @@ import launcher from '../components/launcher.js';
 import settingsView from '../components/settingsView.js';
 import collectionGate from '../components/collectionGate.js';
 import pluginsView from '../components/pluginsView.js';
+import adminView from '../components/adminView.js';
 import editorArea from '../components/editorArea.js';
 import commandPalette from '../components/commandPalette.js';
 import { dialog, contextMenu, toasts, transferTray, pluginPanel } from '../components/overlays.js';
@@ -151,6 +152,10 @@ export default function workbench({ engine, platform }) {
     }, (s) => settingsView(s, ui)),
     pluginsView: region(engine, { plugins: q.plugins, settings: q.settings },
       (s) => pluginsView(s, ui)),
+    // Gathers what already exists rather than fetching anything new — see adminView.js.
+    adminView: region(engine, {
+      caps: q.capabilities, ex: q.explorer, plugins: q.plugins, act: q.activity, so: q.social,
+    }, (s) => adminView(s, ui)),
     infoPanel: region(engine, { so: q.social, off: q.offline, nav: q.navigation },
       (s) => infoPanel(s, ui)),
     // The rail. It renders the notification bell and the identity chip, both of which read
@@ -206,6 +211,7 @@ function mainArea(state, ui, regions) {
   switch (state.wb.activity) {
     case 'settings': return regions.settingsView();
     case 'plugins': return regions.pluginsView();
+    case 'admin': return regions.adminView();
     default: {
       // Home: the top of the panel stack — the launcher (base search) or, once a
       // file is open, its opener full-width (optionally split with the info panel).

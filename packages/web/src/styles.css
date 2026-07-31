@@ -679,6 +679,12 @@ kbd {
 .review-meta { color: var(--text-faint); font-size: 11px; margin-top: 6px; }
 .dialog.review .row-actions { padding: 14px 18px; border-top: 1px solid var(--border); margin: 0; }
 
+/* The admin console's action rows: several small buttons side by side, which the settings
+   `.control` column is not otherwise shaped for. */
+.admin .control.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.admin .control.admin-actions .btn { white-space: nowrap; }
+.admin .control .mono.muted { color: var(--text-faint); }
+
 /* The rotation bill, itemised. Only where a provider actually charges for the traffic. */
 .rot-bill { margin: 8px 0 10px; padding: 8px 10px; border-radius: 8px;
   background: color-mix(in srgb, var(--text) 4%, transparent); }

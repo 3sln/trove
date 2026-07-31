@@ -13,6 +13,9 @@ const { div, button, span, img } = dd;
 const ITEMS = [
   { id: 'home', icon: 'search', title: 'Search & files', command: 'workbench.view.home' },
   { id: 'plugins', icon: 'plug', title: 'Plugins', command: 'workbench.view.plugins' },
+  // Where an administrator goes. A destination rather than a route because this app does
+  // not put its state in the address bar — see adminView.js.
+  { id: 'admin', icon: 'book', title: 'Administration', command: 'workbench.view.admin' },
 ];
 
 export default function activityBar(state, ui) {

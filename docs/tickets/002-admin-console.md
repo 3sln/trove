@@ -28,6 +28,34 @@ someone who has just been made an administrator.
 - Worth deciding early whether this is an activity-bar destination or a full-page route,
   because 006 introduces routes and the two decisions interact.
 
+## Where this stands
+
+The destination exists, beside Plugins and Settings, with Access, Storage, Extensions and
+Work. The routing question is settled and settled by precedent rather than by preference:
+006 established that this app does not put its state in the address bar — it consumes a
+share path at boot and replaces it with `/` — so there is no router to hang a route on and
+a destination is the consistent answer.
+
+What it gathers today is the part that was only reachable through `curl`: the identity
+provider and whether auth is required, the storage driver registry as this deployment has
+it, the capability flags that explain why a download is proxied or a usage figure missing,
+the indexers (which read file contents in the clear, including from an encrypted
+collection), the installed plugins with what each may do, and the running/standing work
+counts. The storage check and the maintenance actions are reachable from it.
+
+## Still to move
+
+- **Collections** — create, ACLs, backing store, scan and rotate. Creation and encryption
+  are on the collection dialog and rotation is in Settings (001); neither is *wrong*, but
+  neither is where an administrator would look.
+- **API keys** — built, and still a section of Settings. Linked from here rather than
+  duplicated, because two places to revoke a credential is worse than one place in the
+  wrong screen. Moving it should keep `requireHumanAdmin` refusing API-key credentials.
+- **Per-plugin egress** — the endpoints a plugin may reach are in its manifest and shown at
+  install; this lists what each may DO but not where it may talk to.
+- **Cron health** — nothing currently reports whether the scheduled sweep is firing, so
+  there is nothing to gather yet.
+
 ## Done when
 
 There is one place an administrator goes, and the things that are currently only reachable

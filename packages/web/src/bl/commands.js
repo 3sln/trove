@@ -52,6 +52,7 @@ export function registerCommands(app) {
   cmd('workbench.quickOpen', 'Go to File…', () => new OpenPaletteAction('files'), { category: 'File', icon: 'search' });
   cmd('workbench.view.home', 'Go Home (search & browse)', () => new ShowHomeAction(), { category: 'View', icon: 'search' });
   cmd('workbench.view.plugins', 'Show Plugins', () => new SetActivityAction('plugins'), { category: 'View' });
+  cmd('workbench.view.admin', 'Show Administration', () => new SetActivityAction('admin'), { category: 'View', icon: 'gear' });
   cmd('workbench.openSettings', 'Open Settings', () => new SetActivityAction('settings'), { category: 'Preferences', icon: 'gear' });
   cmd('workbench.closeOverlays', 'Close', () => new CloseOverlaysAction(), { palette: false });
   cmd('search.voice', 'Search by Voice', () => new VoiceSearchAction(), { category: 'View', icon: 'search' });
