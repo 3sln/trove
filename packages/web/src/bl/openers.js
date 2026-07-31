@@ -47,7 +47,7 @@ export function rememberedOpenerId(r, node) {
 }
 
 /** Remember (or, with a null openerId, forget) the opener for a type key. */
-export function rememberOpener(platform, typeKey, openerId) {
+export function rememberOpener(r, typeKey, openerId) {
   if (!typeKey) return;
   const assoc = { ...(r.settings.get(ASSOC_KEY) || {}) };
   if (openerId) assoc[typeKey] = openerId;
@@ -56,7 +56,7 @@ export function rememberOpener(platform, typeKey, openerId) {
 }
 
 /** The saved associations as a list, for the Settings UI. */
-export function listAssociations(platform) {
+export function listAssociations(r) {
   const assoc = r.settings.get(ASSOC_KEY) || {};
   return Object.entries(assoc).map(([typeKey, openerId]) => {
     const opener = r.contributions.get(openerId);
@@ -65,7 +65,7 @@ export function listAssociations(platform) {
 }
 
 /** A short source label for an opener ("Built-in" or the plugin's name). */
-export function openerSource(platform, opener) {
+export function openerSource(r, opener) {
   if (!opener?.pluginId) return 'Built-in';
   return r.plugins.plugins.get(opener.pluginId)?.manifest?.displayName || opener.pluginId;
 }

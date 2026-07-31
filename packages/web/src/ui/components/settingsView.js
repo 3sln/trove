@@ -4,7 +4,7 @@ import { icon } from '../icon.js';
 import { listAssociations, rememberOpener } from '../../bl/openers.js';
 import { region } from '../region.js';
 import * as q from '../../bl/queries.js';
-import { CopyTextAction, PatchApiKeyDraftAction, RebindKeyAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
+import { CopyTextAction, PatchApiKeyDraftAction, RebindKeyAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
@@ -43,7 +43,7 @@ function setting(s, ui) {
 }
 
 function control(s, ui) {
-  const set = (v) => ui.platform.settings.set(s.key, v);
+  const set = (v) => ui.go(new SetSettingAction(s.key, v));
   if (s.type === 'boolean') {
     return label({ className: 'switch' },
       input({ type: 'checkbox', checked: !!s.value }).on({ change: (e) => set(e.target.checked) }),

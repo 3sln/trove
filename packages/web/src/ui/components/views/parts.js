@@ -8,6 +8,7 @@
 
 import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';
+import { ShowContextMenuAction } from '../../../bl/actions.js';
 
 const { div, span, button } = dd;
 
@@ -54,5 +55,5 @@ export function openRowMenu(anchor, it, ui, event, select) {
   // a detached node whose rect is all zeroes.
   const items = it.menu(ui);
   select?.();
-  ui.platform.workbench.showContextMenu(x, y, items);
+  ui.go(new ShowContextMenuAction(x, y, items));
 }

@@ -9,6 +9,7 @@ import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { renderOpener } from './openers/index.js';
 import { availableOpeners } from '../../bl/openers.js';
+import { ShowDialogAction } from '../../bl/actions.js';
 
 const { div, span, button } = dd;
 
@@ -56,7 +57,7 @@ function openerSwitch(active, ui) {
   const openers = availableOpeners(ui.platform, active.node);
   if (openers.length <= 1) return null;
   return button({ className: 'iconbtn', title: 'Open with…' }, icon('dots', { size: 15 }))
-    .on({ click: () => ui.platform.workbench.showDialog({ kind: 'opener-chooser', node: active.node, openers, current: active.openerId }) });
+    .on({ click: () => ui.go(new ShowDialogAction({ kind: 'opener-chooser', node: active.node, openers, current: active.openerId })) });
 }
 
 function openerHost(panel, ui) {

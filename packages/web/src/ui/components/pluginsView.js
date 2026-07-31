@@ -1,6 +1,6 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseDialogAction, OpenPluginPanelAction, UninstallPluginAction } from '../../bl/actions.js';
+import { CloseDialogAction, OpenPluginPanelAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
 
 const { div, span, p, button, h2, input, label } = dd;
 
@@ -58,11 +58,11 @@ function installedCard(pl, state, ui) {
       pl.hasUi ? button({ className: 'btn' }, icon('command', { size: 14 }), 'Open panel').on({ click: () => ui.go(new OpenPluginPanelAction(pl.id)) }) : null,
       button({ className: 'btn' }, icon('refresh', { size: 14 }), 'Refresh').on({ click: () => ui.platform.plugins.refresh(pl.id) }),
       button({ className: 'btn danger' }, 'Uninstall').on({
-        click: () => ui.platform.workbench.showDialog({
+        click: () => ui.go(new ShowDialogAction({
           kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
           body: 'The plugin and all data it stored will be removed.',
           confirmActions: [new UninstallPluginAction(pl.id)],
-        }),
+        })),
       }),
     ),
   );
@@ -88,8 +88,8 @@ function settingRow(pl, s, ui) {
             change: (e) => { if (e.target.value) { ui.platform.plugins.setSecret(pl.id, s.key, e.target.value); e.target.value = ''; e.target.placeholder = 'Saved ✓'; } },
           })
         : s.type === 'boolean'
-          ? label({ className: 'switch' }, input({ type: 'checkbox', checked: !!value }).on({ change: (e) => ui.platform.settings.set(key, e.target.checked) }), span({ className: 'track' }))
-          : input({ className: 'input', value }).on({ change: (e) => ui.platform.settings.set(key, e.target.value) }),
+          ? label({ className: 'switch' }, input({ type: 'checkbox', checked: !!value }).on({ change: (e) => ui.go(new SetSettingAction(key, e.target.checked)) }), span({ className: 'track' }))
+          : input({ className: 'input', value }).on({ change: (e) => ui.go(new SetSettingAction(key, e.target.value)) }),
     ),
   );
 }

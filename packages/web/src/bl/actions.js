@@ -1069,3 +1069,36 @@ export class SetViewStateAction extends Action {
   constructor(key, value) { super(); this.key = key; this.value = value; }
   async execute({ viewState }) { viewState.set(this.key, this.value); }
 }
+
+
+/**
+ * Show a context menu at a point.
+ *
+ * Only possible now that items carry `actions` rather than `run` closures — this used to be
+ * a direct call precisely because dispatching a menu would have meant putting functions on
+ * the feed. See ui/activate.js.
+ */
+export class ShowContextMenuAction extends ShellAction {
+  constructor(x, y, items) { super(); this.x = x; this.y = y; this.items = items; }
+  apply(wb) { wb.showContextMenu(this.x, this.y, this.items); }
+}
+
+/**
+ * Show a dialog.
+ *
+ * A confirm carries `confirmActions` and is fully data. A PROMPT still carries `onSubmit`,
+ * because it has to hand back what was typed and the typed value is not in the engine yet —
+ * so a prompt posted this way still puts a closure on the feed. Recorded in the ticket
+ * rather than pretended away.
+ */
+export class ShowDialogAction extends ShellAction {
+  constructor(dialog) { super(); this.dialog = dialog; }
+  apply(wb) { wb.showDialog(this.dialog); }
+}
+
+/** Change one setting. */
+export class SetSettingAction extends Action {
+  static deps = ['settings'];
+  constructor(key, value) { super(); this.key = key; this.value = value; }
+  async execute({ settings }) { settings.set(this.key, this.value); }
+}
