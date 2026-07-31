@@ -11,6 +11,7 @@ import {
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
+import { selectedNodesOf } from './services.js';
 
 export function registerCommands(app) {
   const { platform, engine, explorer } = app;
@@ -83,7 +84,7 @@ export function registerCommands(app) {
   // "Nothing is selected" is a real answer, and it has to be said out loud: these used
   // to return silently, which is indistinguishable from a broken command.
   const subject = (fallbackNode) => {
-    const node = fallbackNode || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    const node = fallbackNode || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
     if (!node) platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
     return node;
   };
@@ -132,7 +133,7 @@ export function registerCommands(app) {
   }, { category: 'Explorer' });
 
   cmd('explorer.delete', 'Delete', () => {
-    const nodes = explorer.selectedNodes();
+    const nodes = selectedNodesOf(explorer.state);
     const fallback = nodes.length ? null : workbench.activeTab()?.node;
     if (fallback) nodes.push(fallback); // deleting the file you have open is the obvious intent
     if (!nodes.length) {
@@ -197,9 +198,9 @@ export function registerCommands(app) {
     });
   }, { category: 'Explorer', icon: 'trash' });
 
-  cmd('explorer.open', 'Open', (node) => go(new OpenFileAction(node || explorer.selectedNodes()[0])), { palette: false });
+  cmd('explorer.open', 'Open', (node) => go(new OpenFileAction(node || selectedNodesOf(explorer.state)[0])), { palette: false });
   cmd('explorer.download', 'Download', async (node) => {
-    const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    const target = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
     if (!target?.id) return;
     try {
       const { url, revoke } = await platform.api.download(target.id, target.name);
@@ -214,11 +215,11 @@ export function registerCommands(app) {
 
   // --- offline ---------------------------------------------------------------
   cmd('offline.pin', 'Make Available Offline', (node) => {
-    const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    const target = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
     if (target?.id) app.offline.pin(target);
   }, { category: 'Offline', icon: 'download' });
   cmd('offline.unpin', 'Remove from Offline', (node) => {
-    const target = node || explorer.selectedNodes()[0] || workbench.activeTab()?.node;
+    const target = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
     if (target) app.offline.unpin(target.id);
   }, { palette: false });
 

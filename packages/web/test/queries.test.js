@@ -66,13 +66,15 @@ function engineWith(app) {
 }
 
 test('a query is live: a change reaches every observer', async () => {
-  const explorer = service({ items: [] });
-  const engine = engineWith({ explorer });
+  // `search` rather than `explorer`: explorer is a projected VIEW now, so it would be
+  // testing the projection as much as the liveness.
+  const search = service({ items: [] });
+  const engine = engineWith({ search });
   const seen = [];
-  const sub = engine.query(q.explorer).subscribe((v) => seen.push(v));
+  const sub = engine.query(q.search).subscribe((v) => seen.push(v));
   await settle();
 
-  explorer.set({ items: ['a.txt'] });
+  search.set({ items: ['a.txt'] });
   await settle();
   expect(seen.length).toBeGreaterThanOrEqual(2);
   expect(seen[0]).toEqual({ items: [] });      // the value that was already true
@@ -83,10 +85,10 @@ test('a query is live: a change reaches every observer', async () => {
 test('the current value arrives without waiting for the next change', async () => {
   // A subscriber that turns up after the last change should not sit blank until something
   // else happens.
-  const explorer = service({ items: ['already here'] });
-  const engine = engineWith({ explorer });
+  const search = service({ items: ['already here'] });
+  const engine = engineWith({ search });
   const seen = [];
-  const sub = engine.query(q.explorer).subscribe((v) => seen.push(v));
+  const sub = engine.query(q.search).subscribe((v) => seen.push(v));
   await settle();
   expect(seen[0]).toEqual({ items: ['already here'] });
   sub.unsubscribe();
@@ -161,9 +163,9 @@ test('it tears down when the last observer leaves, and releases what it held', a
 // --- the bridge into the render layer ------------------------------------------
 
 test('a query reaches the render layer as a cell', async () => {
-  const explorer = service({ items: [] });
-  const engine = engineWith({ explorer });
-  const c = watchQuery(engine, q.explorer);
+  const search = service({ items: [] });
+  const engine = engineWith({ search });
+  const c = watchQuery(engine, q.search);
 
   // dodo's Cell protocol, which is what `watch` takes.
   expect(typeof c.onDirty).toBe('function');
@@ -174,7 +176,7 @@ test('a query reaches the render layer as a cell', async () => {
   await settle();
   expect(c.getValue()).toEqual({ items: [] });
 
-  explorer.set({ items: ['a.txt'] });
+  search.set({ items: ['a.txt'] });
   await settle();
   expect(dirty).toBeGreaterThan(0);
   expect(c.getValue()).toEqual({ items: ['a.txt'] });
@@ -184,8 +186,8 @@ test('a query reaches the render layer as a cell', async () => {
 test('two components watching one query land on one cell', async () => {
   // Otherwise each gets its own subscription and dodo connects the query twice, undoing
   // the sharing ngin just gave us.
-  const engine = engineWith({ explorer: service({}) });
-  expect(watchQuery(engine, q.explorer)).toBe(watchQuery(engine, q.explorer));
+  const engine = engineWith({ search: service({}) });
+  expect(watchQuery(engine, q.search)).toBe(watchQuery(engine, q.search));
 });
 
 test('a parameterised query memoises, so it is not a new realization per render', async () => {
@@ -506,4 +508,24 @@ test('a detached factory still works, since passing it around is ordinary', () =
   const of = Loose.of;
   expect(of('x')).toBe(Loose.of('x'));
   expect(['a', 'b'].map(Loose.of).length).toBe(2);
+});
+
+
+test('the explorer view resolves the selection, so nothing has to ask how', async () => {
+  // Ids alone only match the loaded page of the current collection. The launcher selects
+  // rows that came from search across every readable collection, so it hands the nodes over
+  // with the ids — and everything downstream reads `selectedNodes` rather than knowing that.
+  const onPage = { id: 'a', name: 'a.txt' };
+  const fromSearch = { id: 'z', name: 'z.txt' };
+
+  const explorer = service({ items: [onPage], selection: ['a'], selectionNodes: null });
+  expect((await readOnce(q.explorer, { explorer })).selectedNodes).toEqual([onPage]);
+
+  // Selected from search: not on the page, so only the carried node can resolve it.
+  const viaSearch = service({ items: [onPage], selection: ['z'], selectionNodes: [fromSearch] });
+  expect((await readOnce(q.explorer, { explorer: viaSearch })).selectedNodes).toEqual([fromSearch]);
+
+  // And a partial state must not take the whole query down with it.
+  const bare = service({ items: [] });
+  expect((await readOnce(q.explorer, { explorer: bare })).selectedNodes).toEqual([]);
 });

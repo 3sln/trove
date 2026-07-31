@@ -31,6 +31,7 @@
 
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
+import { selectedNodesOf } from './services.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
@@ -55,10 +56,16 @@ class ServiceQuery extends Query {
   /** Empty at the class level; the lease is per instance — see `deps` below. */
   static deps = [];
 
-  constructor(dep, cellOf) {
+  /**
+   * @param {string} dep the engine resource this views
+   * @param {(resource: object) => {onDirty: Function, getValue: Function}} cellOf
+   * @param {(value: any, resource: object) => any} [project] shape the value into a view
+   */
+  constructor(dep, cellOf, project) {
     super();
     this.dep = dep;
     this.cellOf = cellOf;
+    this.project = project;
   }
 
   /**
@@ -78,10 +85,12 @@ class ServiceQuery extends Query {
       notify(null);
       return;
     }
+    const resource = resources[this.dep];
+    const read = () => (this.project ? this.project(cell.getValue(), resource) : cell.getValue());
     // The current value first: a subscriber that arrives after the last change should not
     // wait for the next one to find out what is true now.
-    notify(cell.getValue());
-    this.off = cell.onDirty(() => notify(cell.getValue()));
+    notify(read());
+    this.off = cell.onDirty(() => notify(read()));
   }
 
   kill() {
@@ -92,8 +101,18 @@ class ServiceQuery extends Query {
 
 // --- the drive -----------------------------------------------------------------
 
-/** Items, selection, the open collection, and the gate. */
-export const explorer = new ServiceQuery('explorer', (r) => r.observe());
+/**
+ * Items, selection, the open collection, and the gate — plus the nodes the selection
+ * actually refers to.
+ *
+ * `selectedNodes` is folded in rather than left as something to call, because resolving it
+ * is not trivial: ids alone only match the loaded page of the current collection, and the
+ * launcher's rows come from search across every readable one. A view that hands over the
+ * answer is the difference between a component knowing what is selected and a component
+ * knowing how selection resolution works.
+ */
+export const explorer = new ServiceQuery('explorer', (r) => r.observe(),
+  (v) => ({ ...v, selectedNodes: selectedNodesOf(v) }));
 /** Query text, results, and the palette's file list. */
 export const search = new ServiceQuery('search', (r) => r.observe());
 /** Uploads and downloads in flight. */

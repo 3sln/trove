@@ -938,8 +938,21 @@ export class ToggleApiKeyCapAction extends ApiKeysAction {
  */
 export class SelectItemsAction extends Action {
   static deps = ['explorer'];
+
   constructor(ids, opts = {}) { super(); this.ids = ids; this.opts = opts; }
-  async execute({ explorer }) { explorer.select(this.ids, this.opts); }
+
+  async execute({ explorer }) {
+    const { additive = false, nodes = null } = this.opts;
+    const current = explorer.state.selection;
+    const next = additive ? Array.from(new Set([...current, ...this.ids])) : this.ids;
+    // Selecting what is already selected must not emit. The launcher syncs the highlighted
+    // row into here on every mouseenter, and a state push per mouse move would re-render
+    // the list under the pointer. The rule lives with the mutation now rather than inside
+    // the resource, so the resource only holds and only `set` writes.
+    const same = next.length === current.length && next.every((id, i) => id === current[i]);
+    if (same) return;
+    explorer.set({ selection: next, selectionNodes: nodes && !additive ? nodes : null });
+  }
 }
 
 /**
@@ -976,7 +989,10 @@ export class SelectLaunchAction extends Action {
 
 /** Select exactly one node, or nothing. Carries the node itself — see SelectItemsAction. */
 function selectNode(explorer, node) {
-  explorer.select(node?.id ? [node.id] : [], { nodes: node ? [node] : null });
+  const ids = node?.id ? [node.id] : [];
+  const current = explorer.state.selection;
+  if (ids.length === current.length && ids.every((id, i) => id === current[i])) return;
+  explorer.set({ selection: ids, selectionNodes: node ? [node] : null });
 }
 
 /**

@@ -269,6 +269,20 @@ imperative API is doing both jobs — actions should be the only thing that writ
 query the only thing that reads it. Dissolving each service into a plain state holder, plus
 actions that mutate it, is the rest of the conversion.
 
+`explorer` is done as the exemplar, and it split into three kinds of thing:
+
+- `set(patch)` stays. It is the resource's one writer, and only actions call it.
+- `select()` was a mutation carrying a RULE — do not emit when the selection is unchanged,
+  because the launcher syncs on every `mouseenter` and a push per mouse move re-renders the
+  list under the pointer. The rule belongs with the mutation, so it moved into
+  `SelectItemsAction`.
+- `selectedNodes()` was a derived READ, and every caller reached for the service to ask a
+  question about data it could already see. It is a pure function of the state now, folded
+  into the explorer view, so the UI is handed the answer rather than the method.
+
+That last one is the general shape: a method on a resource is usually either a rule that
+belongs to an action or a derivation that belongs to a view.
+
 ~~`localState.js` deserves the same look~~ — done. It is `bl/viewState.js`, an engine
 resource, read through a query and written through `SetViewStateAction`. Component state that
 drives rendered STRUCTURE is engine state whatever it is called and wherever it lives. What
