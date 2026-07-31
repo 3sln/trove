@@ -7,23 +7,25 @@
 import { Engine, Provider } from '@3sln/ngin';
 import { cell } from '../runtime.js';
 import { registerCoreContext, registerViewportContext } from './context.js';
-import { ExplorerService, SearchClientService, TransfersService, ApiKeysService } from './services.js';
+import { TransfersService } from './services.js';
+import { explorerState, searchState, apiKeysState, viewState as viewStateSlice } from './state.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { ActivityService } from './activity.js';
-import { ViewStateService } from './viewState.js';
 import { registerCommands } from './commands.js';
 import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction } from './actions.js';
 
 export function createApp(platform) {
-  const explorer = new ExplorerService(platform.settings);
-  const search = new SearchClientService();
-  const apiKeys = new ApiKeysService();
+  // Named slices, not services — see bl/state.js. Each is still its own provider, so a
+  // lease naming `explorer` still says what it touches.
+  const explorer = explorerState(platform.settings);
+  const search = searchState();
+  const apiKeys = apiKeysState();
   // One place for "what's running" and "what's stuck", covering both sides of the wire.
   const activity = new ActivityService(platform);
-  // What the UI is in the middle of doing — see viewState.js. A resource, because it
+  // What the UI is in the middle of doing — see bl/state.js. A resource, because it
   // decides what is on screen.
-  const viewState = new ViewStateService();
+  const viewState = viewStateSlice();
   const transfers = new TransfersService(activity);
   // Offline first: social queues comment and tag writes through it while disconnected, so
   // it is a dependency rather than something bolted on afterwards. It used to be assigned

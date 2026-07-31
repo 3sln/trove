@@ -197,6 +197,9 @@ function installDragAndDrop(engine, app) {
     e.preventDefault();
     dragDepth = 0;
     document.body.classList.remove('dragging-file');
-    engine.dispatch(new UploadFilesAction(e.dataTransfer.files, app.explorer.state.collectionId));
+    // No collection named: UploadFilesAction resolves the open one itself and refuses
+    // visibly when there isn't one. Reading it here only to hand it straight back was the
+    // drop target knowing where files go, which is the action's business.
+    engine.dispatch(new UploadFilesAction(e.dataTransfer.files));
   });
 }

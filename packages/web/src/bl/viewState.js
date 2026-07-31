@@ -18,29 +18,8 @@
 // to write a default on first render, it now computes one and writes nothing until the user
 // does something. `ref` is what makes that possible — it records which dialog instance the
 // value belongs to, so a stale entry is simply ignored rather than needing to be cleared.
-
-import { cell } from '../runtime.js';
-
-export class ViewStateService {
-  constructor() {
-    this.cell = cell({});
-  }
-
-  observe() {
-    return this.cell;
-  }
-
-  /**
-   * Replace one component's slice.
-   *
-   * A new object every time: a cell compares with `Object.is` and correctly drops a write
-   * of what it already holds, so mutating in place and writing the same reference back is
-   * exactly the "nothing changed" the old `rerender` existed to work around.
-   */
-  set(key, value) {
-    this.cell.setValue({ ...this.cell.getValue(), [key]: value });
-  }
-}
+//
+// The holder itself is a slice in bl/state.js; what stays here is how to read one.
 
 /**
  * The slice for `key`, or `fallback` when it belongs to a different dialog instance.

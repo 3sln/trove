@@ -1,35 +1,15 @@
-// Reactive data services the workbench renders from. These hold *data* state
-// (the current collection's items, search results, in-flight transfers) as
-// opposed to the shell's UI state (WorkbenchService). ngin Actions mutate them;
-// the UI `watch`es them. Each is a plain cell wrapper so the render layer stays
-// declarative.
+// What is left of the data services, plus the derivations that were methods on them.
+//
+// The explorer, search and API-key services were state bags — a `state`, a `cell`, and a
+// `set` that wrote both — and are slices now (bl/state.js). TransfersService stays,
+// because it holds things a state snapshot cannot: AbortControllers, per-file retry
+// thunks closing over the File itself, and a projection into the activity list.
+//
+// The functions below were METHODS on those bags. They are derivations, so they belong to
+// whoever is asking rather than to whatever happens to hold the data.
 
 import { cell } from '../runtime.js';
 
-export class ExplorerService {
-  constructor(settings) {
-    this.settings = settings;
-    this.state = {
-      items: [], loading: false, error: null,
-      selection: [], sort: settings.get('explorer.sort'), order: settings.get('explorer.sortOrder'),
-      // No collection until one is chosen or created. `gate` is 'create' | 'choose' | null
-      // — when set, it is the ONLY thing the workbench shows, because every request needs
-      // a collection and there is nothing sensible to render without one.
-      collectionId: null, collections: [], canCreateCollection: false, gate: null,
-      // `stats` is the whole collection; `items` is the page on screen. Keeping both
-      // is what lets the UI say "500 of 3,006" instead of quietly claiming 500.
-      stats: null, usage: null, nextCursor: null, loadingMore: false, trash: null,
-    };
-    this.cell = cell(this.state);
-  }
-  observe() {
-    return this.cell;
-  }
-  set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
-  }
-}
 
 /**
  * The nodes the selection refers to — a pure function of explorer state.
@@ -56,85 +36,7 @@ export function selectedNodesOf(state) {
   return (state?.items || []).filter((i) => selection.includes(i.id));
 }
 
-/**
- * API keys, for the admin screen that manages them.
- *
- * Its own service rather than a corner of ExplorerService because it is a different
- * lifetime: keys are read when someone opens Settings and never again, so they should not
- * be part of the state every render of the file list walks over.
- *
- * `minted` holds the one secret a mint returns. It lives here, in memory, and is dropped
- * the moment the admin dismisses it — the server cannot show it again, so the UI is the
- * only place it ever exists, and it should not persist anywhere that outlives the tab.
- */
-export class ApiKeysService {
-  constructor() {
-    this.state = {
-      keys: [], loading: false, loaded: false, error: null, minted: null, busy: null,
-      // The mint form. Held here rather than in the DOM so the section stays a pure
-      // function of state — and so a half-filled form survives a re-render caused by
-      // something else on the settings screen.
-      draft: null,
-    };
-    this.cell = cell(this.state);
-  }
 
-  /** Open the mint form, empty. */
-  startDraft() {
-    this.set({ draft: { name: '', expiresInDays: '', caps: {} }, error: null });
-  }
-  cancelDraft() {
-    this.set({ draft: null });
-  }
-  patchDraft(patch) {
-    if (!this.state.draft) return;
-    this.set({ draft: { ...this.state.draft, ...patch } });
-  }
-
-  /**
-   * Toggle one capability on one collection in the draft.
-   *
-   * `admin` is not treated specially here — it is offered as itself and the server
-   * expands it. Pre-ticking read/write/delete when admin is chosen would suggest they
-   * are separable afterwards, and they are not.
-   */
-  toggleCap(collectionId, capability) {
-    if (!this.state.draft) return;
-    const caps = { ...this.state.draft.caps };
-    const held = new Set(caps[collectionId] || []);
-    if (held.has(capability)) held.delete(capability);
-    else held.add(capability);
-    if (held.size) caps[collectionId] = [...held];
-    else delete caps[collectionId];
-    this.patchDraft({ caps });
-  }
-
-  observe() {
-    return this.cell;
-  }
-  set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
-  }
-  /** Forget the freshly minted secret. Called on dismiss, and after a copy. */
-  clearMinted() {
-    if (this.state.minted) this.set({ minted: null });
-  }
-}
-
-export class SearchClientService {
-  constructor() {
-    this.state = { query: '', mode: 'hybrid', results: [], loading: false, error: null, ran: false, paletteFiles: [], paletteQuery: '', paletteLoading: false, paletteError: null };
-    this.cell = cell(this.state);
-  }
-  observe() {
-    return this.cell;
-  }
-  set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
-  }
-}
 
 /**
  * Uploads in flight.

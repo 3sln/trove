@@ -33,12 +33,12 @@ export class NavigateAction extends Action {
     // No `|| 'default'`. Navigating nowhere in particular used to land on a collection
     // that may not exist and may not be readable; now it is a bug in the caller, said out
     // loud rather than papered over with a guess.
-    const collectionId = this.collectionId || explorer.state.collectionId;
+    const collectionId = this.collectionId || explorer.get().collectionId;
     if (!collectionId) {
       explorer.set({ loading: false, gate: 'choose' });
       return;
     }
-    const switching = collectionId !== explorer.state.collectionId;
+    const switching = collectionId !== explorer.get().collectionId;
     // A collection's trash belongs to that collection. Carrying it across a switch
     // listed the OLD collection's deleted files under the new one — above an "Empty
     // trash" button that purges the new one, so the rows and the button disagreed
@@ -288,15 +288,15 @@ export class LoadMoreAction extends Action {
 
   async execute(r) {
     const { api, explorer, notifications } = r;
-    const cursor = explorer.state.nextCursor;
-    if (!cursor || explorer.state.loadingMore) return;
+    const cursor = explorer.get().nextCursor;
+    if (!cursor || explorer.get().loadingMore) return;
     explorer.set({ loadingMore: true });
     try {
-      const res = await api.list(explorer.state.collectionId, {
-        sort: explorer.state.sort, order: explorer.state.order, cursor,
+      const res = await api.list(explorer.get().collectionId, {
+        sort: explorer.get().sort, order: explorer.get().order, cursor,
       });
       explorer.set({
-        items: [...explorer.state.items, ...res.items],
+        items: [...explorer.get().items, ...res.items],
         nextCursor: res.nextCursor || null,
         loadingMore: false,
       });
@@ -311,7 +311,7 @@ export class RefreshAction extends Action {
   static deps = ['engine', 'explorer'];
 
   async execute(r) {
-    return r.engine.dispatch(new NavigateAction(r.explorer.state.collectionId));
+    return r.engine.dispatch(new NavigateAction(r.explorer.get().collectionId));
   }
 }
 
@@ -326,7 +326,7 @@ export class TrashAction extends Action {
   }
   async execute(r) {
     const { api, explorer, notifications } = r;
-    const collection = explorer.state.collectionId;
+    const collection = explorer.get().collectionId;
     // Putting it away is one of the things you can do to the trash. Without this the
     // section, once opened, stayed on screen until a page reload — there was no way
     // back to a plain list of files.
@@ -438,7 +438,7 @@ export class UploadFilesAction extends Action {
     this.collectionId = collectionId;
   }
   async execute(r) {
-    const collection = this.collectionId || r.explorer.state.collectionId;
+    const collection = this.collectionId || r.explorer.get().collectionId;
     // Uploading with no collection open has nowhere to put the bytes. Refused visibly:
     // the old fallback sent them to whatever 'default' happened to be.
     if (!collection) {
@@ -515,7 +515,7 @@ export class FilterAction extends Action {
     }
     search.set({ query: this.text, loading: true, error: null, filtered: true });
     if (r.offline && !r.offline.state.online) {
-      const items = (r.explorer.state.items || []).filter((n) => matchesTagFilters(n, this.filters));
+      const items = (r.explorer.get().items || []).filter((n) => matchesTagFilters(n, this.filters));
       search.set({ results: items.map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: true });
       return;
     }
@@ -552,10 +552,10 @@ export class QuickOpenAction extends Action {
     search.set({ paletteQuery: q, paletteLoading: true, paletteError: null });
     try {
       const res = await api.search(q, { mode: 'keyword', limit: 30 });
-      if (search.state.paletteQuery !== q) return; // superseded
+      if (search.get().paletteQuery !== q) return; // superseded
       search.set({ paletteFiles: res.results || [], paletteLoading: false });
     } catch (err) {
-      if (search.state.paletteQuery !== q) return;
+      if (search.get().paletteQuery !== q) return;
       // A failed search must not look like "no files matched" — that reads as a fact
       // about the drive when it's actually a fact about the request.
       search.set({ paletteFiles: [], paletteLoading: false, paletteError: err?.message || 'Search failed' });
@@ -990,16 +990,42 @@ class ApiKeysAction extends Action {
   static deps = ['apiKeys'];
   async execute(r) { this.apply(r.apiKeys); }
 }
+
+/** Change one field of the mint form. Does nothing when there is no form open. */
 export class PatchApiKeyDraftAction extends ApiKeysAction {
   constructor(patch) { super(); this.patch = patch; }
-  apply(s) { s.patchDraft(this.patch); }
+  apply(s) {
+    const draft = s.get().draft;
+    if (draft) s.set({ draft: { ...draft, ...this.patch } });
+  }
 }
+
+/**
+ * Toggle one capability on one collection in the draft.
+ *
+ * Per COLLECTION and capability: a key is scoped, so a capability without the collection
+ * it applies to is meaningless. This used to be arithmetic inside the service with an
+ * action in front of it forwarding two arguments — and it forwarded one, so the collection
+ * id arrived as the capability and the server refused every mint. Deciding and writing are
+ * one step now, with nothing in between to drop.
+ *
+ * `admin` is not treated specially. It is offered as itself and the server expands it;
+ * pre-ticking read/write/delete alongside it would suggest they are separable afterwards,
+ * and they are not.
+ */
 export class ToggleApiKeyCapAction extends ApiKeysAction {
-  // Per COLLECTION and capability — a key is scoped, so a capability without the
-  // collection it applies to is meaningless. Dropping the second argument sent the
-  // collection id as the capability and the server refused the mint.
   constructor(collectionId, capability) { super(); this.collectionId = collectionId; this.capability = capability; }
-  apply(s) { s.toggleCap(this.collectionId, this.capability); }
+  apply(s) {
+    const draft = s.get().draft;
+    if (!draft) return;
+    const caps = { ...draft.caps };
+    const held = new Set(caps[this.collectionId] || []);
+    if (held.has(this.capability)) held.delete(this.capability);
+    else held.add(this.capability);
+    if (held.size) caps[this.collectionId] = [...held];
+    else delete caps[this.collectionId];
+    s.set({ draft: { ...draft, caps } });
+  }
 }
 
 /**
@@ -1021,7 +1047,7 @@ export class SelectItemsAction extends Action {
 
   async execute({ explorer }) {
     const { additive = false, nodes = null } = this.opts;
-    const current = explorer.state.selection;
+    const current = explorer.get().selection;
     const next = additive ? Array.from(new Set([...current, ...this.ids])) : this.ids;
     // Selecting what is already selected must not emit. The launcher syncs the highlighted
     // row into here on every mouseenter, and a state push per mouse move would re-render
@@ -1068,7 +1094,7 @@ export class SelectLaunchAction extends Action {
 /** Select exactly one node, or nothing. Carries the node itself — see SelectItemsAction. */
 function selectNode(explorer, node) {
   const ids = node?.id ? [node.id] : [];
-  const current = explorer.state.selection;
+  const current = explorer.get().selection;
   if (ids.length === current.length && ids.every((id, i) => id === current[i])) return;
   explorer.set({ selection: ids, selectionNodes: node ? [node] : null });
 }
@@ -1083,7 +1109,7 @@ function selectNode(explorer, node) {
 export class SetViewStateAction extends Action {
   static deps = ['viewState'];
   constructor(key, value) { super(); this.key = key; this.value = value; }
-  async execute({ viewState }) { viewState.set(this.key, this.value); }
+  async execute({ viewState }) { viewState.set({ [this.key]: this.value }); }
 }
 
 
@@ -1204,7 +1230,7 @@ export class PromptAction extends Action {
   static deps = ['viewState', 'workbench'];
 
   async execute(r) {
-    const held = r.viewState.observe().getValue()[PROMPT];
+    const held = r.viewState.get()[PROMPT];
     const value = (held?.value ?? '').trim();
     r.workbench.closeDialog();
     if (value) await this.withValue(value, r);
@@ -1273,9 +1299,9 @@ export class PatchDraftAction extends Action {
   }
 
   async execute({ viewState }) {
-    const held = viewState.observe().getValue()[this.key];
+    const held = viewState.get()[this.key];
     const base = held && held.ref === this.ref ? held.form : this.fallback;
-    viewState.set(this.key, { ref: this.ref, form: { ...base, ...this.patch } });
+    viewState.set({ [this.key]: { ref: this.ref, form: { ...base, ...this.patch } } });
   }
 }
 
@@ -1299,7 +1325,7 @@ export class PatchDraftAction extends Action {
  * indistinguishable from a broken command.
  */
 function subjectOf({ explorer, workbench, notifications }, node = null) {
-  const found = node || selectedNodesOf(explorer.state)[0] || workbench.activeTab()?.node;
+  const found = node || selectedNodesOf(explorer.get())[0] || workbench.activeTab()?.node;
   if (!found) notifications.info('Pick a file first — highlight one in the list, or open it.');
   return found;
 }
@@ -1362,7 +1388,7 @@ export class RebuildIndexAction extends Action {
 export class ScanCollectionAction extends Action {
   static deps = ['activity', 'explorer', 'notifications'];
   async execute({ activity, explorer, notifications }) {
-    const id = explorer.state.collectionId;
+    const id = explorer.get().collectionId;
     if (!id) return notifications.info('Open a collection first — a scan is per collection.');
     return activity.scanCollection(id).catch(() => {});
   }
@@ -1383,7 +1409,7 @@ export class CheckStorageAction extends Action {
 export class PickAndUploadAction extends Action {
   static deps = ['engine', 'explorer'];
   async execute({ engine, explorer }) {
-    const collection = explorer.state.collectionId;
+    const collection = explorer.get().collectionId;
     pickFiles((files) => files.length && engine.dispatch(new UploadFilesAction(files, collection)));
   }
 }
@@ -1434,7 +1460,7 @@ export class RenameSubjectAction extends Action {
 export class DeleteSubjectAction extends Action {
   static deps = ['engine', 'explorer', 'notifications', 'settings', 'workbench'];
   async execute(r) {
-    const nodes = selectedNodesOf(r.explorer.state);
+    const nodes = selectedNodesOf(r.explorer.get());
     const open = nodes.length ? null : r.workbench.activeTab()?.node;
     if (open) nodes.push(open);
     if (!nodes.length) {
@@ -1511,13 +1537,14 @@ class ApiKeyDraftAction extends Action {
   async execute({ apiKeys }) { this.apply(apiKeys); }
 }
 export class StartApiKeyDraftAction extends ApiKeyDraftAction {
-  apply(s) { s.startDraft(); }
+  apply(s) { s.set({ draft: { name: '', expiresInDays: '', caps: {} }, error: null }); }
 }
 export class CancelApiKeyDraftAction extends ApiKeyDraftAction {
-  apply(s) { s.cancelDraft(); }
+  apply(s) { s.set({ draft: null }); }
 }
+/** Forget the freshly minted secret. On dismiss, and after a copy. */
 export class ClearMintedApiKeyAction extends ApiKeyDraftAction {
-  apply(s) { s.clearMinted(); }
+  apply(s) { if (s.get().minted) s.set({ minted: null }); }
 }
 
 /**
@@ -1531,14 +1558,14 @@ export class ClearMintedApiKeyAction extends ApiKeyDraftAction {
 export class MintApiKeyFromDraftAction extends Action {
   static deps = ['apiKeys', 'engine'];
   async execute({ apiKeys, engine }) {
-    const draft = apiKeys.state.draft;
-    const scopes = draftScopesOf(apiKeys.state);
+    const draft = apiKeys.get().draft;
+    const scopes = draftScopesOf(apiKeys.get());
     if (!draft?.name?.trim() || !scopes) return;
     const days = Number(draft.expiresInDays);
     const expiresAt = draft.expiresInDays !== '' && Number.isFinite(days) && days > 0
       ? Date.now() + days * 86400_000
       : null;
-    apiKeys.cancelDraft();
+    apiKeys.set({ draft: null });
     return engine.dispatch(new MintApiKeyAction({ name: draft.name.trim(), scopes, expiresAt }));
   }
 }
@@ -1560,7 +1587,7 @@ export class SwitchCollectionAction extends Action {
       workbench.showHome();
       return;
     }
-    const items = collectionMenuOf(explorer.state,
+    const items = collectionMenuOf(explorer.get(),
       (id) => new ExecCommandAction('collections.switch', id),
       () => new ExecCommandAction('collections.create'));
     if (!items.length) return notifications.info('This drive has one collection.');
