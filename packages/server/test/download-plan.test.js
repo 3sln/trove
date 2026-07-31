@@ -91,10 +91,11 @@ test('the plan hands over a direct URL and the key that opens it', async () => {
   await d.close?.();
 });
 
-test('a signed URL does not yield the collection key', async () => {
-  // A signature grants `read` on exactly ONE node; the data key opens everything beside
-  // it. Honouring one here would turn a link to a single file into a key to the whole
-  // collection. Such callers keep the proxy path — which is all they could do before.
+test('the plan is session-only, so a signature cannot reach the collection key', async () => {
+  // Not a defence against anything that happens today: nothing fetches a JSON plan with a
+  // signed URL, because signatures exist for callers that cannot send a header and want
+  // BYTES. This pins the asymmetry for whoever later extends signatures across the API —
+  // one grants `read` on a single node, the other returns a key that opens the collection.
   const d = await drive();
   const id = await putSealed(d, 'a.bin', [1, 2, 3, 4]);
   const g = await d.vfs.signedUrls.grant(id, { op: 'download' });

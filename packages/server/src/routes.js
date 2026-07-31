@@ -388,10 +388,12 @@ export function createRouter() {
    * redirect to ciphertext unless asked, nothing asked, and so every read of an encrypted
    * collection proxied — the collections that most wanted direct transfer got the least.
    *
-   * NO SIGNATURE GRANTS. A signed URL grants `read` on exactly one node, and the data key
-   * opens the whole collection; honouring one here would turn a link to a single file into
-   * a key to everything beside it. Callers holding only a signature keep the proxy path,
-   * which is what they could already do.
+   * Session auth only, which is simply what a JSON endpoint gets by not asking for more.
+   * Signed URLs are for callers that cannot send a header and want BYTES — an <img src>, a
+   * <video src>, cache.add(); a plan is read by code, and code has a session. Worth one
+   * line only as a note to whoever might later extend signatures across the API: leave
+   * this endpoint out, because a signature grants `read` on one node and the key this
+   * returns opens the whole collection.
    *
    * `fingerprint` selects which key, because mid-rotation the object's own header is the
    * authority on what sealed it and some objects are still on the retired key. The caller
