@@ -57,13 +57,11 @@ export default function workbench({ engine, app, platform }) {
       app.explorer.observe(),
       app.search.observe(),
       app.apiKeys.observe(),
-      platform.notifications.observe(),
       platform.context.observe(),
       platform.settings.observe(),
       platform.plugins.observe() ?? constant([]),
       app.social.observe(),
       app.offline.observe(),
-      app.activity.observe(),
       platform.viewport.observe(),
       platform.voice.observe(),
       // What the UI is in the middle of doing — see bl/viewState.js. Through the engine
@@ -83,9 +81,9 @@ export default function workbench({ engine, app, platform }) {
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, view, caps,
+    (wb, overlay, nav, ex, se, keys, ctx, settings, pluginList, so, off, vp, voice, view, caps,
      commands, settingsGroups, commandKeys) =>
-      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, view, caps,
+      ({ wb, overlay, nav, ex, se, keys, ctx, settings, plugins: pluginList, so, off, vp, voice, view, caps,
         commands, settingsGroups, commandKeys }),
   );
 
@@ -112,6 +110,11 @@ export default function workbench({ engine, app, platform }) {
     // they would have drawn anyway.
     phoneSheet: region(engine, chrome, (s) => phoneSheet(s, ui)),
     transferTray: region(engine, { tr: q.transfers }, (s) => transferTray(s, ui)),
+    // Both read one slice each, and both change often enough to matter: a toast arriving
+    // or auto-dismissing used to rebuild the entire shell — including every row of the
+    // file list — to add a line in the corner.
+    toasts: region(engine, { notif: q.notifications }, (s) => toasts(s, ui)),
+    activityPanel: region(engine, { act: q.activity }, (s) => activityPanel(s, ui)),
     // The palette is the first thing to read a composed view rather than a service's state:
     // `commands` arrives with keybinding labels resolved and availability decided, so the
     // component stopped asking the keybinding and command services anything mid-render.
@@ -142,9 +145,9 @@ function view(state, ui, regions) {
     dialog(state, ui),
     contextMenu(state, ui),
     pluginPanel(state, ui),
-    toasts(state, ui),
+    regions.toasts(),
     regions.transferTray(),
-    activityPanel(state, ui),
+    regions.activityPanel(),
   );
 }
 
