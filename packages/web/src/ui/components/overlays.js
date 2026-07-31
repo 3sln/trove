@@ -9,6 +9,7 @@ import { pluginReview } from './pluginReview.js';
 import { typeKeyFor, typeLabelFor, rememberOpener, openerSource } from '../../bl/openers.js';
 import { draftFor } from '../../bl/viewState.js';
 import { CancelTransferAction, ClearFinishedTransfersAction, CloseContextMenuAction, CloseDialogAction, ClosePluginPanelAction, DismissNotificationAction, DismissTransferAction, OpenInPanelAction, RetryTransferAction, SetViewStateAction, UpdateDialogAction } from '../../bl/actions.js';
+import { activate } from '../activate.js';
 
 const { div, span, button, input, h3, p, select, option, label, textarea } = dd;
 
@@ -216,7 +217,7 @@ export function contextMenu(state, ui) {
               span(it.label),
               it.kbd ? span({ className: 'kbd' }, it.kbd) : null,
             ).on({
-              click: () => { ui.go(new CloseContextMenuAction()); it.run?.(); },
+              click: () => { ui.go(new CloseContextMenuAction()); activate(ui, it); },
               // The first item is focused on open, so Escape has to get you back out.
               keydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); ui.go(new CloseContextMenuAction()); } },
               $attach: (el) => { if (i === 0) queueMicrotask(() => el.focus()); },

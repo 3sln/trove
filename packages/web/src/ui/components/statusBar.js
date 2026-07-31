@@ -2,7 +2,7 @@ import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
 import { sanitizedVNodes, htmlToText } from '../sanitize.js';
-import { CancelTransferAction, ToggleActivityPanelAction } from '../../bl/actions.js';
+import { CancelTransferAction, ExecCommandAction, ToggleActivityPanelAction } from '../../bl/actions.js';
 
 const { div, button, span } = dd;
 
@@ -163,11 +163,11 @@ export default function statusBar(state, ui) {
         icon('download', { size: 12 }), span(`${off.pins.length} offline`), icon('chevron-down', { size: 11 }))
         .on({ click: (e) => {
           const items = off.pins.slice(0, 12).flatMap((p) => [
-            { label: p.name, icon: 'file-text', run: () => ui.exec('explorer.open', p) },
-            { label: `Remove “${p.name}” from offline`, icon: 'close', run: () => ui.exec('offline.unpin', p) },
+            { label: p.name, icon: 'file-text', actions: [new ExecCommandAction('explorer.open', p)] },
+            { label: `Remove “${p.name}” from offline`, icon: 'close', actions: [new ExecCommandAction('offline.unpin', p)] },
             { sep: true },
           ]);
-          if (off.pins.length > 12) items.push({ label: `…and ${off.pins.length - 12} more`, run: () => {} });
+          if (off.pins.length > 12) items.push({ label: `…and ${off.pins.length - 12} more`, actions: [] });
           const r = e.currentTarget.getBoundingClientRect();
           ui.platform.workbench.showContextMenu(r.left, r.top - 8 - items.length * 34, items);
         } })
@@ -189,7 +189,7 @@ export default function statusBar(state, ui) {
       ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
         .on({ click: (e) => ui.platform.workbench.showContextMenu(e.clientX, e.clientY, active.map((t) => ({
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
-          run: () => ui.go(new CancelTransferAction(t.id)),
+          actions: [new CancelTransferAction(t.id)],
         }))) })
       : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${f.totalKnown ? totalItems : 'more'}` : '' },
         `${totalItems.toLocaleString()}${f.totalKnown || !f.partial ? '' : '+'} item${totalItems === 1 ? '' : 's'}`),

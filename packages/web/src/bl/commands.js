@@ -8,6 +8,7 @@ import {
   UploadFilesAction, OpenFileAction, CreateCollectionAction, LoadMoreAction, TrashAction,
   SearchAction,
   LoadApiKeysAction, MintApiKeyAction, RevokeApiKeyAction,
+  ExecCommandAction,
 } from './actions.js';
 import { beginInstallFromFile, beginInstallFromUrl } from './pluginInstall.js';
 import { troveUri, shareUrl } from '@3sln/trove/core/links.js';
@@ -234,11 +235,11 @@ export function registerCommands(app) {
     const items = (explorer.state.collections || []).map((c) => ({
       label: c.name || c.id,
       icon: c.id === current ? 'check' : 'files',
-      run: () => commands.execute('collections.switch', c.id),
+      actions: [new ExecCommandAction('collections.switch', c.id)],
     }));
     if (explorer.state.canCreateCollection) {
       if (items.length) items.push({ sep: true });
-      items.push({ label: 'New collection…', icon: 'plus', run: () => commands.execute('collections.create') });
+      items.push({ label: 'New collection…', icon: 'plus', actions: [new ExecCommandAction('collections.create')] });
     }
     return items;
   };

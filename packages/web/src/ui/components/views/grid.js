@@ -17,6 +17,7 @@ import { dd } from '../../../runtime.js';
 import { icon, iconForNode } from '../../icon.js';
 import { groupHeader, menuButton, openRowMenu } from './parts.js';
 import { attachMedia } from '../../media.js';
+import { activate } from '../../activate.js';
 
 const { div, span, img } = dd;
 
@@ -108,7 +109,7 @@ function tile(it, active, { hover, select }, ui) {
     ),
     div({ className: 'gt-name' }, it.title),
   ).on({
-    click: it.run,
+    click: () => activate(ui, it),
     mouseenter: hover,
     ...(it.menu ? { contextmenu: (e) => { e.preventDefault(); openRowMenu(e.currentTarget, it, ui, e, select); } } : {}),
   });

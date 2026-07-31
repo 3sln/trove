@@ -8,6 +8,7 @@
 import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { groupHeader, menuButton, openRowMenu } from './parts.js';
+import { activate } from '../../activate.js';
 
 const { div, span } = dd;
 
@@ -43,7 +44,7 @@ function itemRow(it, active, { hover, select }, ui) {
   // which is how adding `contextmenu` silently removed `click` and stopped every file
   // in the drive from opening.
   ).on({
-    click: it.run,
+    click: () => activate(ui, it),
     mouseenter: hover,
     ...(it.menu ? { contextmenu: (e) => { e.preventDefault(); openRowMenu(e.currentTarget, it, ui, e, select); } } : {}),
   });

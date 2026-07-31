@@ -191,7 +191,14 @@ Strangler-fig, because a single change here is not reviewable and not revertible
 Three things still reach `platform.workbench` rather than dispatching, each for a reason
 worth keeping written down.
 
-**`showDialog` and `showContextMenu` carry callbacks.** A dialog is posted with an
+**~~Menu items and list rows carry callbacks~~** — done. They carry `actions`: a list of
+Action instances, which is what an item IS — a label, an icon, and what happens if you pick
+it. Almost every one turned out to be exactly one `ExecCommandAction`, the shape the
+statusItem view already used. A LIST because a few genuinely do two things: opening a file
+from the search modal opens it and then closes the modal. `ui/activate.js` is the one place
+that runs them, shared by the context menu, the launcher's Enter key, and both row views.
+
+**`showDialog` still carries a callback.** A dialog is posted with an
 `onConfirm` closure; a context menu with items each holding a `run`. Converting them
 mechanically would post a function through the engine and call it an action — the same
 mistake as a query handing out a handle, in the other direction. What they want is an ACTION

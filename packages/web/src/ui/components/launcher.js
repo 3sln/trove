@@ -6,10 +6,11 @@
 
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseSearchModalAction, FilterAction, MoveLaunchAction, OpenFileAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
+import { CloseSearchModalAction, ExecCommandAction, FilterAction, MoveLaunchAction, OpenFileAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { activeView, renderView, viewSwitcher, viewMove } from './views/index.js';
 import { openRowMenu } from './views/parts.js';
+import { activate } from '../activate.js';
 
 const { div, span, input, button } = dd;
 
@@ -97,7 +98,7 @@ export default function launcher(state, ui, opts = {}) {
     if (claimed !== null) { e.preventDefault(); move(claimed); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-    else if (e.key === 'Enter') { e.preventDefault(); flat[idx]?.run(); }
+    else if (e.key === 'Enter') { e.preventDefault(); activate(ui, flat[idx]); }
     else if (e.key === 'Escape' && q) { e.preventDefault(); clearSearch(ui); }
     // The row under the highlight is the subject of the row menu, so the key that opens
     // one on every other list opens this one too — without making the user leave the
@@ -205,7 +206,9 @@ function searchHelp(state, ui, mode) {
 }
 
 function buildContent(state, ui, q, mode, modal) {
-  const done = () => { if (modal) ui.go(new CloseSearchModalAction()); };
+  // Picking anything from the modal search dismisses it; from the home screen there is
+  // nothing to dismiss.
+  const closeModal = modal ? [new CloseSearchModalAction()] : [];
   if (mode === 'command') {
     const term = q.slice(1).trim().toLowerCase();
     const items = ui.platform.commands.paletteCommands()
@@ -214,7 +217,8 @@ function buildContent(state, ui, q, mode, modal) {
       .filter((x) => term === '' || x.s > 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, 40)
-      .map(({ c }) => ({ icon: 'command', title: c.title, detail: c.category, badge: 'command', run: () => { ui.exec(c.id); done(); } }));
+      .map(({ c }) => ({ icon: 'command', title: c.title, detail: c.category, badge: 'command',
+        actions: [new ExecCommandAction(c.id), ...closeModal] }));
     return [{ title: 'Commands', items, empty: 'No matching commands.' }];
   }
 
@@ -272,7 +276,7 @@ function buildContent(state, ui, q, mode, modal) {
       title: ex.loadingMore ? 'Loading…'
         : knownTotal != null ? `Show more (${(knownTotal - shown).toLocaleString()} more)` : 'Show more',
       detail: 'or search to jump straight to something',
-      run: () => ui.exec('explorer.loadMore'),
+      actions: [new ExecCommandAction('explorer.loadMore')],
     });
   }
   // The trash, when it has been opened. Not shown by default: it is a place you go to
@@ -298,7 +302,7 @@ function buildContent(state, ui, q, mode, modal) {
           icon: 'trash',
           title: n.name,
           detail: `deleted ${new Date(n.deletedAt).toLocaleString()} — restore`,
-          run: () => ui.exec('explorer.restore', n.id),
+          actions: [new ExecCommandAction('explorer.restore', n.id)],
           menu: () => trashMenu(n, ui),
         }))
         : [],
@@ -328,10 +332,10 @@ function fileItem(node, ui, modal, state) {
     detail: node.contentType || '',
     node,
     // From the modal search, `reset` starts a fresh viewer stack; then close it.
-    run: () => {
-      ui.go(new OpenFileAction(node, { reset: !!modal }));
-      if (modal) ui.go(new CloseSearchModalAction());
-    },
+    actions: [
+      new OpenFileAction(node, { reset: !!modal }),
+      ...(modal ? [new CloseSearchModalAction()] : []),
+    ],
     menu: () => fileMenu(node, ui, state),
   };
 }
@@ -343,19 +347,19 @@ function fileMenu(node, ui, state) {
   // they had rebound it.
   const kbd = (id) => ui.platform.keybindings.labelFor(id) || undefined;
   return [
-    { label: 'Open', icon: 'file-text', run: () => ui.exec('explorer.open', node) },
-    { label: 'Download', icon: 'download', run: () => ui.exec('explorer.download', node) },
+    { label: 'Open', icon: 'file-text', actions: [new ExecCommandAction('explorer.open', node)] },
+    { label: 'Download', icon: 'download', actions: [new ExecCommandAction('explorer.download', node)] },
     // Labelled by destination rather than by format: one goes in a document, the other
     // goes to a person.
-    { label: 'Copy shareable link', icon: 'link', run: () => ui.exec('explorer.copyShareLink') },
-    { label: 'Copy trove: link', icon: 'link', kbd: kbd('explorer.copyLink'), run: () => ui.exec('explorer.copyLink') },
+    { label: 'Copy shareable link', icon: 'link', actions: [new ExecCommandAction('explorer.copyShareLink')] },
+    { label: 'Copy trove: link', icon: 'link', kbd: kbd('explorer.copyLink'), actions: [new ExecCommandAction('explorer.copyLink')] },
     { sep: true },
-    { label: 'Rename…', run: () => ui.exec('explorer.rename') },
+    { label: 'Rename…', actions: [new ExecCommandAction('explorer.rename')] },
     pinned
-      ? { label: 'Remove from offline', icon: 'close', run: () => ui.exec('offline.unpin', node) }
-      : { label: 'Make available offline', icon: 'download', run: () => ui.exec('offline.pin', node) },
+      ? { label: 'Remove from offline', icon: 'close', actions: [new ExecCommandAction('offline.unpin', node)] }
+      : { label: 'Make available offline', icon: 'download', actions: [new ExecCommandAction('offline.pin', node)] },
     { sep: true },
-    { label: 'Move to trash', icon: 'trash', danger: true, kbd: kbd('explorer.delete'), run: () => ui.exec('explorer.delete') },
+    { label: 'Move to trash', icon: 'trash', danger: true, kbd: kbd('explorer.delete'), actions: [new ExecCommandAction('explorer.delete')] },
   ];
 }
 
@@ -364,9 +368,9 @@ function fileMenu(node, ui, state) {
 // previously the only way to purge anything.
 function trashMenu(node, ui) {
   return [
-    { label: 'Restore', icon: 'refresh', run: () => ui.exec('explorer.restore', node.id) },
+    { label: 'Restore', icon: 'refresh', actions: [new ExecCommandAction('explorer.restore', node.id)] },
     { sep: true },
-    { label: 'Delete forever', icon: 'trash', danger: true, run: () => ui.exec('explorer.purgeOne', node.id) },
+    { label: 'Delete forever', icon: 'trash', danger: true, actions: [new ExecCommandAction('explorer.purgeOne', node.id)] },
   ];
 }
 
