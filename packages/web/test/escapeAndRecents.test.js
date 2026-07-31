@@ -75,3 +75,35 @@ test('renaming a file that is not in recents leaves them alone', async () => {
   nav.updateTabNode({ id: 'other', name: 'x.png', contentType: 'image/png', collectionId: 'c1' });
   expect(nav.state.recents).toBe(before); // same array — no write, no save
 });
+
+test('a deleted file leaves recents, not just the open panel', async () => {
+  // It was `closeTab`, so it closed the panel and left the tile — and the tile opened
+  // nothing, because the file was in the trash. Worse than a wrong name: a dead end.
+  const nav = new NavigationService();
+  const gone = { id: 'n1', name: 'gone.png', contentType: 'image/png', collectionId: 'c1' };
+  const kept = { id: 'n2', name: 'kept.png', contentType: 'image/png', collectionId: 'c1' };
+  nav.openFile(gone, 'image');
+  nav.openFile(kept, 'image');
+  expect(nav.state.recents.map((r) => r.id)).toEqual(['n2', 'n1']);
+
+  nav.forget('n1');
+  expect(nav.state.recents.map((r) => r.id)).toEqual(['n2']);
+  // and the panel is gone from the stack with it
+  expect(nav.state.stack.some((p) => p.id === 'n1')).toBe(false);
+});
+
+test('forgetting the last open file falls back to the launcher', async () => {
+  const nav = new NavigationService();
+  nav.openFile({ id: 'n1', name: 'only.png', contentType: 'image/png', collectionId: 'c1' }, 'image');
+  nav.forget('n1');
+  expect(nav.state.stack).toEqual([{ kind: 'search' }]);
+  expect(nav.state.activeFile).toBe(null);
+});
+
+test('forgetting a file that was never opened changes nothing', async () => {
+  const nav = new NavigationService();
+  nav.openFile({ id: 'n1', name: 'a.png', contentType: 'image/png', collectionId: 'c1' }, 'image');
+  const before = nav.state.recents;
+  nav.forget('never-opened');
+  expect(nav.state.recents).toBe(before); // same array — no write, no save
+});

@@ -356,8 +356,8 @@ export class TrashAction extends Action {
 }
 
 export class DeleteAction extends Action {
-  // `navigation`, not `workbench`: the panel stack is navigation's, and a deleted file must
-  // not stay open in it.
+  // `navigation`, not `workbench`: the panel stack and the recents list are both its, and a
+  // deleted file must not survive in either.
   static deps = ['api', 'engine', 'navigation', 'notifications'];
 
   constructor(ids) {
@@ -368,7 +368,7 @@ export class DeleteAction extends Action {
     try {
       for (const id of this.ids) await r.api.remove(id);
       r.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
-      for (const id of this.ids) r.navigation.closeTab(id);
+      for (const id of this.ids) r.navigation.forget(id);
     } catch (err) {
       r.notifications.error(`Couldn’t delete: ${err.message}`);
     }

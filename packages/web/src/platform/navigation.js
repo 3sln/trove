@@ -81,7 +81,24 @@ export class NavigationService {
   pop() {
     if (this.state.stack.length > 1) this.#applyStack(this.state.stack.slice(0, -1), { history: false });
   }
-  closeTab(id) {
+  /**
+   * The node is GONE — drop it from everywhere this service holds a copy.
+   *
+   * Named for what happened rather than for the stack, because it was `closeTab` and so
+   * only closed the panel: a deleted file kept its recent tile, and clicking that tile
+   * opened nothing. Recents are a snapshot, not a reference, so nothing else was ever
+   * going to notice.
+   *
+   * Trashing is reversible and this is not, quite: restoring a file does not put it back
+   * in recents, it just stops being listed until opened again. That is the right way
+   * round — a tile that leads nowhere is worse than one that is missing.
+   */
+  forget(id) {
+    const recents = this.state.recents.filter((r) => r.id !== id);
+    if (recents.length !== this.state.recents.length) {
+      this.#set({ recents });
+      saveRecents(recents);
+    }
     const stack = this.state.stack.filter((p) => !(p.kind === 'file' && p.id === id));
     this.#applyStack(stack.length ? stack : [{ kind: 'search' }], { history: false });
   }

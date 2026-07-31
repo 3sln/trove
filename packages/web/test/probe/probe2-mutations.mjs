@@ -61,7 +61,10 @@ if (opened) {
   await run(async (id) => {
     const app = window.__trove.app;
     await app.platform.api.remove(id, true);
-    app.platform.workbench.closeTab?.(id);
+    // `platform.workbench.closeTab?.()` until now — a name that has not existed since the
+    // workbench facade was dissolved, so the `?.` turned the half of this probe that
+    // matters into a no-op. It is navigation's, and it is called `forget`.
+    app.platform.navigation.forget(id);
   }, opened);
   await page.waitForTimeout(300);
 }
