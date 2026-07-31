@@ -45,6 +45,12 @@ export function createApp(platform) {
   // touches, and `static deps = ['explorer']` means what it says.
   const engine = new Engine({
     providers: {
+      // Where a live query keeps its subscription — see bl/queries.js. A provider, so it
+      // is per engine; keyed by the query instance, so an entry belongs to exactly one
+      // realization. A query instance is shared (it is interned), so it is the wrong place
+      // to put anything that is true only while it is being watched.
+      appState: Provider.fromSingleton(new Map()),
+
       // The drive.
       explorer: Provider.fromSingleton(explorer),
       search: Provider.fromSingleton(search),

@@ -43,6 +43,10 @@ function engineWith(app) {
   return new Engine({
     providers: {
       app: Provider.fromSingleton(app),
+      // Per-engine, keyed by query instance: where a live query keeps its subscription,
+      // rather than on the shared instance itself. See bl/queries.js.
+      appState: Provider.fromSingleton(app.appState ?? new Map()),
+
       explorer: singleton(app.explorer),
       search: singleton(app.search),
       transfers: singleton(app.transfers),
@@ -587,4 +591,54 @@ test('asking for the same node twice gives the same query instance', () => {
   // LoadSidecarAction dispatches for the same conversation.
   expect(q.sidecarFor('n1')).toBe(q.sidecarFor('n1'));
   expect(q.sidecarFor('n1')).not.toBe(q.sidecarFor('n2'));
+});
+
+test('two engines can observe one query instance without clobbering each other', async () => {
+  // Query instances are module-level singletons, interned so the same arguments give back
+  // the same object — which is what makes ngin share one realization PER ENGINE. Keeping
+  // the subscription on the instance (`this.off`) therefore put per-realization state on
+  // something that outlives any one of them: the second boot overwrote the first's
+  // unsubscribe, and killing either released the wrong one while the other leaked.
+  //
+  // It lives in `appState` now, which is a provider — so per engine — keyed by the
+  // instance. One entry per realization.
+  const searchA = service({ items: ['a'] });
+  const searchB = service({ items: ['b'] });
+  const engineA = engineWith({ search: searchA });
+  const engineB = engineWith({ search: searchB });
+
+  const seenA = []; const seenB = [];
+  const subA = engineA.query(q.search).subscribe((v) => seenA.push(v));
+  const subB = engineB.query(q.search).subscribe((v) => seenB.push(v));
+  await settle();
+
+  // Both are live, each on its own resource.
+  searchA.set({ items: ['a', 'a2'] });
+  searchB.set({ items: ['b', 'b2'] });
+  await settle();
+  expect(seenA.at(-1)).toEqual({ items: ['a', 'a2'] });
+  expect(seenB.at(-1)).toEqual({ items: ['b', 'b2'] });
+
+  // Killing one must not deafen the other — the bug this shape prevents.
+  subA.unsubscribe();
+  await settle();
+  const beforeB = seenB.length;
+  searchB.set({ items: ['b', 'b2', 'b3'] });
+  await settle();
+  expect(seenB.length).toBeGreaterThan(beforeB);
+  expect(seenB.at(-1)).toEqual({ items: ['b', 'b2', 'b3'] });
+  subB.unsubscribe();
+});
+
+test('a killed query leaves nothing behind in appState', async () => {
+  const search = service({ items: [] });
+  const state = new Map();
+  const engine = engineWith({ search, appState: state });
+  const sub = engine.query(q.search).subscribe(() => {});
+  await settle();
+  expect(state.size).toBe(1);
+  sub.unsubscribe();
+  await settle();
+  // Otherwise every file ever looked at would keep an entry for the life of the page.
+  expect(state.size).toBe(0);
 });

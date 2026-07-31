@@ -40,6 +40,10 @@ async function slice({ when = () => true, saved } = {}) {
   const engine = new Engine({
     providers: {
       contributions: Provider.fromSingleton(contributions),
+      // Per-engine, keyed by query instance: where a live query keeps its subscription,
+      // rather than on the shared instance itself. See bl/queries.js.
+      appState: Provider.fromSingleton(new Map()),
+
       context: Provider.fromSingleton({ observe: () => cell({}), evaluate: when }),
       settings: Provider.fromSingleton({ observe: () => cell({}), get: (k) => values[k] }),
       plugins: Provider.fromSingleton({}),

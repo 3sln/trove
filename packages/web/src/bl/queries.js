@@ -80,7 +80,7 @@ class ServiceQuery extends Query {
    * instance can name its own.
    */
   get deps() {
-    return [this.dep];
+    return [this.dep, 'appState'];
   }
 
   boot(resources, { notify }) {
@@ -96,13 +96,37 @@ class ServiceQuery extends Query {
     // The current value first: a subscriber that arrives after the last change should not
     // wait for the next one to find out what is true now.
     notify(read());
-    this.off = cell.onDirty(() => notify(read()));
+    hold(resources, this, cell.onDirty(() => notify(read())));
   }
 
-  kill() {
-    this.off?.();
-    this.off = null;
+  kill(resources) {
+    release(resources, this);
   }
+}
+
+/**
+ * Where a live query keeps its subscription.
+ *
+ * NOT on the query. These instances are module-level singletons, interned so that the same
+ * arguments give back the same object — which is what makes ngin share one realization per
+ * engine. Writing `this.off` on a shared instance is therefore writing per-REALIZATION
+ * state onto something that outlives any one of them: two engines observing the same
+ * instance boot it twice, the second overwrites the first's unsubscribe, and killing either
+ * releases the wrong one while the other leaks.
+ *
+ * `appState` is a provider, so it is per engine; keyed by the instance, an entry is per
+ * (engine, instance) — which is exactly one realization. The query stays a description of
+ * what to watch, and nothing about it changes when it is being watched.
+ */
+function hold(resources, query, off) {
+  resources.appState.set(query, off);
+}
+
+function release(resources, query) {
+  const off = resources.appState?.get(query);
+  if (Array.isArray(off)) off.forEach((fn) => fn());
+  else off?.();
+  resources.appState?.delete(query);
 }
 
 // --- the drive -----------------------------------------------------------------
@@ -237,7 +261,7 @@ class ViewQuery extends Query {
    */
   constructor(deps, sources, project) {
     super();
-    this.deps = deps;
+    this.deps = [...deps, 'appState'];
     this.sources = sources;
     this.project = project;
   }
@@ -245,12 +269,11 @@ class ViewQuery extends Query {
   boot(r, { notify }) {
     const emit = () => notify(this.project(r));
     emit();
-    this.offs = this.sources(r).filter(Boolean).map((c) => c.onDirty(emit));
+    hold(r, this, this.sources(r).filter(Boolean).map((c) => c.onDirty(emit)));
   }
 
-  kill() {
-    this.offs?.forEach((off) => off());
-    this.offs = null;
+  kill(r) {
+    release(r, this);
   }
 }
 
