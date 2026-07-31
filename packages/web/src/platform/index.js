@@ -7,7 +7,7 @@
 
 import { reactive } from '../runtime.js';
 import { ContributionRegistry } from './contributions.js';
-import { ContextKeyService } from './context.js';
+import { ContextRegistry } from './context.js';
 import { CommandService } from './commands.js';
 import { KeybindingService } from './keybindings.js';
 import { SettingsService } from './settings.js';
@@ -42,12 +42,18 @@ export function writeToken(token) {
 
 export function createPlatform({ baseUrl = '' } = {}) {
   const contributions = new ContributionRegistry();
-  // 'home' is where the app actually starts (WorkbenchService's initial `activity`), and
-  // nothing writes this key until the user navigates. Seeding it with a view that no
-  // longer exists left every `when: view.active == 'home'` binding — the Delete
-  // shortcut among them — dead from boot until the first click on the rail, while the
-  // row menu cheerfully advertised "Del" as the way to delete.
-  const context = new ContextKeyService({ 'view.active': 'home', 'sidebar.visible': true });
+  // Only the fixed facts are seeded. Everything else is registered by whoever owns it —
+  // the built-in keys are derived from the shell and the drive (see bl/context.js), so
+  // there is nothing sensible to pre-fill them with and nothing that would go stale if
+  // there were.
+  //
+  // It used to be seeded with `view.active: 'home'` for a reason worth remembering: nothing
+  // wrote that key until the user navigated, so every `when: view.active == 'home'`
+  // binding — the Delete shortcut among them — was dead from boot until the first click on
+  // the rail, while the row menu cheerfully advertised "Del" as the way to delete. A
+  // derived key is never unwritten, so the seed is not needed and cannot drift from the
+  // state it was standing in for.
+  const context = new ContextRegistry();
   const notifications = new NotificationService();
   const commands = new CommandService(contributions, context, notifications);
   const settings = new SettingsService();
@@ -57,10 +63,10 @@ export function createPlatform({ baseUrl = '' } = {}) {
   // But a deployment where the user HOLDS a token has no other way to present it, and
   // reading it here — once, from one place — keeps that out of every call site.
   const api = new TroveApiClient({ baseUrl, token: () => readToken() });
-  const workbench = new WorkbenchService(context);
+  const workbench = new WorkbenchService();
   // Which shell to render — phone, desktop, or TV. Constructed before the defaults are
   // registered, so it reads the setting through `settings.get` once that exists.
-  const viewport = new ViewportService({ settings, context });
+  const viewport = new ViewportService({ settings });
   // Arrow keys → geometry, but only on a TV. Inert everywhere else.
   const spatialNav = new SpatialNavigationService({ workbench, viewport });
   // Speak to search. Mostly this just puts the search field under the remote's mic —

@@ -6,6 +6,7 @@
 
 import { Engine, Provider } from '@3sln/ngin';
 import { cell, effect } from '../runtime.js';
+import { registerCoreContext, registerViewportContext } from './context.js';
 import { ExplorerService, SearchClientService, TransfersService, ApiKeysService } from './services.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
@@ -128,21 +129,11 @@ export function createApp(platform) {
   // Wire the plugin panel opener hook to the workbench.
   platform.openPluginPanel = (pluginId) => platform.workbench.openPluginPanel(pluginId);
 
-  // Project explorer state → context keys in ONE place. These drive when-clauses
-  // (e.g. the Delete keybinding needs `explorer.hasSelection`), and previously only
-  // NavigateAction set them — so selecting a file never flipped hasSelection true and
-  // Delete silently did nothing. Deriving them from the observable keeps them honest.
-  //
-  // `null` when no collection is open, never the string 'default'. A when-clause reading
-  // this is asking which collection is open, and answering with the name of one that may
-  // not exist made every such clause true before the user had chosen anything.
-  platform.context.setMany({ 'explorer.collectionId': null, 'explorer.hasSelection': false });
-  effect(explorer.observe(), (ex) => {
-    platform.context.setMany({
-      'explorer.collectionId': ex.collectionId ?? null,
-      'explorer.hasSelection': (ex.selection?.length || 0) > 0,
-    });
-  });
+  // Every built-in when-clause key, derived from the resource it summarises. Registered
+  // here because this is where those resources exist; see bl/context.js for the list and
+  // for why deriving them is not the same as moving the writes.
+  registerCoreContext(platform.context, { workbench: platform.workbench, explorer });
+  registerViewportContext(platform.context, platform.viewport);
 
   // Load a file's conversation/tags whenever the active viewer panel changes (the
   // panel stack lives in the navigation sub-service now).

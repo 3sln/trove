@@ -138,13 +138,20 @@ export class PluginHost {
           break;
         }
 
-        // A context value slot. Seed the context with its declared default so
-        // when-clauses referencing it evaluate sensibly before the plugin runs.
-        case 'register':
+        // A context value slot — the one kind of key that genuinely is PUSHED rather than
+        // derived, because only the plugin knows what it means. Owned here, on the
+        // plugin's behalf: the registry hands back a writer, which goes on the runtime
+        // record so `context:setRegister` can reach it and nothing else can.
+        //
+        // Seeded with its declared default so when-clauses referencing it evaluate
+        // sensibly before the plugin has run at all.
+        case 'register': {
           keep(reg.register(c.uri, base));
-          this.platform.context.set(c.uri, c.default);
-          keep(() => this.platform.context.remove(c.uri));
+          const owned = this.platform.context.own(c.uri, c.default);
+          runtime.registers.set(c.uri, owned.set);
+          keep(() => { runtime.registers.delete(c.uri); owned.dispose(); });
           break;
+        }
 
         // A keymap JSON file inside the package. Read + validated here, at register
         // time, so a malformed keymap is a visible install-time problem rather than a
@@ -378,6 +385,10 @@ export class PluginHost {
     if (this.plugins.get(record.id)?.status === 'active') return;
     const runtime = {
       ...record, iframe: null, status: 'loading', error: null, disposers: [], channel: null,
+      // Writers for the context registers this plugin DECLARED, keyed by contribution URI.
+      // Holding them here is what makes "a plugin may only set its own registers" structural
+      // rather than a check: there is no setter for a key it did not declare.
+      registers: new Map(),
       hasUi: false, responsive: false, frame: null, frames: new Set(),
       // Storage scopes (defaulted for records saved before this field existed).
       storage: record.storage || (record.grants?.includes('storage') ? grantedStorageScopes(record.manifest, record.trust) : { plugin: false, domain: false }),

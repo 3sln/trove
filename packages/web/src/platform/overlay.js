@@ -7,8 +7,7 @@
 import { cell } from '../runtime.js';
 
 export class OverlayService {
-  constructor(context) {
-    this.context = context;
+  constructor() {
     this.state = {
       palette: null, // { mode: 'commands'|'files', query, index } when open
       dialog: null,
@@ -29,7 +28,6 @@ export class OverlayService {
   // --- command palette -------------------------------------------------------
   openPalette(mode = 'commands', query = '') {
     this.#set({ palette: { mode, query, index: 0 } });
-    this.context.set('palette.open', true);
   }
   setPaletteQuery(query) {
     if (this.state.palette) this.#set({ palette: { ...this.state.palette, query, index: 0 } });
@@ -43,7 +41,6 @@ export class OverlayService {
   }
   closePalette() {
     this.#set({ palette: null });
-    this.context.set('palette.open', false);
   }
 
   // --- dialog ----------------------------------------------------------------

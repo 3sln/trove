@@ -9,6 +9,8 @@
 import { test, expect } from 'bun:test';
 import { ViewportService, looksLikeTv } from '../src/platform/viewport.js';
 import { cell, effect } from '../src/runtime.js';
+import { ContextRegistry } from '../src/platform/context.js';
+import { registerViewportContext } from '../src/bl/context.js';
 
 // A window stand-in: the four things the service actually reads.
 function fakeWindow({ width = 1280, height = 800, coarse = false, ua = '', url = 'http://x/' } = {}) {
@@ -94,14 +96,47 @@ test('resizing across the boundary republishes; jiggling inside it does not', as
 test('the mode reaches CSS and when-clauses, not just the components', () => {
   // Two consumers can't each re-derive this: a media query that disagrees with the JS
   // branch above it produces a shell that is half one layout and half the other.
+  //
+  // The service no longer PUSHES the keys — it holds what it measured and the keys are
+  // derived from that (bl/context.js). Same guarantee, and one it cannot forget to honour
+  // from a code path that changes the mode without saying so.
   const win = fakeWindow({ width: 400 });
-  const keys = {};
-  const vp = new ViewportService({
-    window: win, settings: settingsStub(), context: { set: (k, v) => { keys[k] = v; } },
-  });
+  const vp = new ViewportService({ window: win, settings: settingsStub() });
   vp.install();
+  const registry = new ContextRegistry();
+  registerViewportContext(registry, vp);
+
   expect(win.document.documentElement.dataset.layout).toBe('phone');
-  expect(keys['viewport.mode']).toBe('phone');
-  expect(keys['viewport.phone']).toBe(true);
-  expect(keys['viewport.tv']).toBe(false);
+  expect(registry.get('viewport.mode')).toBe('phone');
+  expect(registry.get('viewport.phone')).toBe(true);
+  expect(registry.get('viewport.tv')).toBe(false);
+  // And it FOLLOWS: a resize the service notices changes the answer without anything
+  // being told to write it.
+  win.innerWidth = 1400;
+  vp.refresh();
+  expect(registry.get('viewport.mode')).toBe('desktop');
+  expect(registry.get('viewport.phone')).toBe(false);
+});
+
+test('unregistering a key takes it out of the snapshot', () => {
+  // A contributor registers while it exists. That is what stops the set of keys being a
+  // pile that only grows — a plugin's register has to disappear when it is uninstalled, or
+  // every when-clause naming it keeps evaluating against a value nobody maintains.
+  const registry = new ContextRegistry();
+  const off = registerViewportContext(registry, new ViewportService({ window: fakeWindow(), settings: settingsStub() }));
+  expect('viewport.mode' in registry.snapshot()).toBe(true);
+  off();
+  expect('viewport.mode' in registry.snapshot()).toBe(false);
+});
+
+test('two owners for one key is refused rather than silently taken over', () => {
+  const registry = new ContextRegistry();
+  const owned = registry.own('demo.key', 1);
+  expect(registry.get('demo.key')).toBe(1);
+  expect(() => registry.own('demo.key', 2)).toThrow(/already has an owner/);
+  // The writer is the capability: holding the registry is not enough to change anything.
+  owned.set(7);
+  expect(registry.get('demo.key')).toBe(7);
+  owned.dispose();
+  expect(registry.has('demo.key')).toBe(false);
 });

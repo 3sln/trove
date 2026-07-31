@@ -33,12 +33,10 @@ export class ViewportService {
    * @param {object} [deps]
    * @param {Window} [deps.window] the window to measure and listen to
    * @param {import('./settings.js').SettingsService} [deps.settings]
-   * @param {import('./context.js').ContextKeyService} [deps.context]
    */
-  constructor({ window: win = globalThis, settings = null, context = null } = {}) {
+  constructor({ window: win = globalThis, settings = null } = {}) {
     this.window = win;
     this.settings = settings;
-    this.context = context;
     // A URL override outranks the setting: it is how someone checks the phone layout on
     // a laptop, and how the e2e suite drives each shell without a device farm.
     this.urlOverride = readUrlOverride(win);
@@ -82,9 +80,6 @@ export class ViewportService {
   #publish(vp) {
     // Context keys so plugin `when` clauses and keybindings can target a form factor
     // the same way they target a view.
-    this.context?.set('viewport.mode', vp.mode);
-    this.context?.set('viewport.phone', vp.mode === 'phone');
-    this.context?.set('viewport.tv', vp.mode === 'tv');
     // The root element carries it too, so CSS can respond without every rule needing a
     // media query that would disagree with the JS branch above it.
     const el = this.window.document?.documentElement;

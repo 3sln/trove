@@ -112,7 +112,11 @@ export class PluginRpcRouter {
       // can read, addressed by its contribution URI.
       case 'context:setRegister': {
         const slot = this.#ownContribution(record, params.name, 'register');
-        this.platform.context.set(slot.uri, params.value);
+        // The writer for a register the plugin declared. There is no path to a key it did
+        // not declare, because it was never handed a setter for one.
+        const write = record.registers?.get(slot.uri);
+        if (!write) throw new Error(`Register "${params.name}" is not available`);
+        write(params.value);
         return { ok: true };
       }
       // Package resources — opaque byte handles (transferred, no host URLs). Code

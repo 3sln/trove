@@ -3,19 +3,23 @@
 // (launcher); opening a file pushes a viewer panel; back pops. The stack is mirrored
 // into the browser history (pushState/popState) so back/forward navigate it. A
 // double-shift opens a modal search overlay; picking from it resets the stack.
-// It also mirrors key bits into the ContextKeyService for when-clauses.
+//
+// It holds state and nothing else. The when-clause keys it used to mirror into the context
+// service are derived from these cells now — see bl/context.js.
 
 import { cell } from '../runtime.js';
 import { OverlayService, wrapIndex } from './overlay.js';
 import { NavigationService } from './navigation.js';
 
 export class WorkbenchService {
-  constructor(context) {
-    this.context = context;
+  constructor() {
     // Two focused sub-services own their own state + subject; the workbench delegates
     // and coordinates the couplings across them (Esc close-order, opening a file).
-    this.overlay = new OverlayService(context);
-    this.nav = new NavigationService(context);
+    //
+    // None of the three writes context keys any more. Those are DERIVED from these cells —
+    // see bl/context.js — so opening a sheet cannot forget to say that a sheet is open.
+    this.overlay = new OverlayService();
+    this.nav = new NavigationService();
     this.state = {
       activity: 'home', // home (stack) | plugins | settings
       sidebarVisible: true,
@@ -67,13 +71,11 @@ export class WorkbenchService {
 
   setActivity(activity) {
     this.#set({ activity, sidebarVisible: true });
-    this.context.set('view.active', activity);
   }
   /** Return to the launcher home (reset the panel stack to the base search). */
   showHome() {
     this.#set({ activity: 'home', searchModal: false });
     this.nav.reset();
-    this.context.set('view.active', 'home');
   }
 
   // --- launcher --------------------------------------------------------------
@@ -97,11 +99,9 @@ export class WorkbenchService {
   // --- modal search (double-shift) ------------------------------------------
   openSearchModal() {
     this.#set({ searchModal: true, launch: { query: '', index: 0 } });
-    this.context.set('searchModal.open', true);
   }
   closeSearchModal() {
     this.#set({ searchModal: false });
-    this.context.set('searchModal.open', false);
   }
 
   /**
@@ -116,16 +116,13 @@ export class WorkbenchService {
   /** Raise (or swap, or drop) the phone bottom sheet. Tapping the open one closes it. */
   openSheet(name) {
     this.#set({ sheet: this.state.sheet === name ? null : name });
-    this.context.set('sheet.open', this.state.sheet || '');
   }
   closeSheet() {
     if (!this.state.sheet) return;
     this.#set({ sheet: null });
-    this.context.set('sheet.open', '');
   }
   toggleInfoPanel(force) {
     this.#set({ infoPanel: force ?? !this.state.infoPanel });
-    this.context.set('infoPanel.open', this.state.infoPanel);
   }
 
   /** Close any transient overlay (Esc), in priority order across overlay + stack.

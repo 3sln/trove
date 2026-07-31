@@ -11,8 +11,7 @@ const RECENTS_KEY = 'trove.recents';
 const RECENTS_MAX = 12;
 
 export class NavigationService {
-  constructor(context) {
-    this.context = context;
+  constructor() {
     this.state = {
       stack: [{ kind: 'search' }], // [{kind:'search'}, {kind:'file', id, node, openerId}, …]
       activeTabId: null, // top file panel id (or null)
@@ -43,7 +42,6 @@ export class NavigationService {
     const top = stack[stack.length - 1];
     const file = top && top.kind === 'file' ? top : null;
     this.#set({ stack, activeTabId: file ? file.id : null, activeFile: file ? file.node : null });
-    this.context.setMany({ 'editor.open': !!file, 'editor.openerId': file?.openerId || '', 'editor.contentType': file?.node.contentType || '' });
     if (history) this.#pushHistory();
   }
 
