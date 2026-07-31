@@ -22,7 +22,17 @@ export function dialog(state, ui) {
   if (d.kind === 'opener-chooser') return openerChooserDialog(d, ui);
   const wb = ui.platform.workbench;
   let value = d.value ?? '';
-  const submit = () => (d.kind === 'confirm' ? d.onConfirm?.() : d.onSubmit?.(value));
+  // A confirm carries ACTIONS — what happens if you say yes — rather than a callback, the
+  // same as a menu item. Closing is this dialog's own business, so callers no longer have
+  // to remember to do it (and two of the three did it in different places).
+  //
+  // A prompt still carries `onSubmit`, because it has to hand back what was typed, and the
+  // typed value is not in the engine yet — see docs/tickets/009.
+  const submit = () => {
+    if (d.kind !== 'confirm') return d.onSubmit?.(value);
+    ui.go(new CloseDialogAction());
+    activate(ui, { actions: d.confirmActions });
+  };
   return div({},
     div({ className: 'scrim' }).on({ click: () => ui.go(new CloseDialogAction()) }),
     div({ className: 'dialog' },

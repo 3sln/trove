@@ -61,7 +61,7 @@ function installedCard(pl, state, ui) {
         click: () => ui.platform.workbench.showDialog({
           kind: 'confirm', title: `Uninstall ${pl.name}?`, danger: true, confirmLabel: 'Uninstall',
           body: 'The plugin and all data it stored will be removed.',
-          onConfirm: () => { ui.go(new CloseDialogAction()); ui.go(new UninstallPluginAction(pl.id)); },
+          confirmActions: [new UninstallPluginAction(pl.id)],
         }),
       }),
     ),

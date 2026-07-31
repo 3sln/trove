@@ -141,7 +141,7 @@ export function registerCommands(app) {
       platform.notifications.info('Pick a file first — highlight one in the list, or open it.');
       return;
     }
-    const doDelete = () => go(new DeleteAction(nodes.map((n) => n.id)));
+    const deleteThem = new DeleteAction(nodes.map((n) => n.id));
     if (platform.settings.get('explorer.confirmDelete')) {
       workbench.showDialog({
         kind: 'confirm', title: `Move ${nodes.length} item${nodes.length > 1 ? 's' : ''} to the trash?`,
@@ -152,12 +152,9 @@ export function registerCommands(app) {
           ? `"${nodes[0].name}" leaves the drive but is kept, and can be restored from the trash.`
           : 'They leave the drive but are kept, and can be restored from the trash.',
         confirmLabel: 'Move to trash',
-        onConfirm: () => {
-          workbench.closeDialog();
-          doDelete();
-        },
+        confirmActions: [deleteThem],
       });
-    } else doDelete();
+    } else go(deleteThem);
   }, { category: 'Explorer', icon: 'trash' });
 
   cmd('explorer.showTrash', 'Show Trash', () => {
@@ -195,7 +192,7 @@ export function registerCommands(app) {
       kind: 'confirm', title: 'Empty the trash?',
       body: 'Everything in the trash will be destroyed. This cannot be undone.',
       danger: true, confirmLabel: 'Delete forever',
-      onConfirm: () => { workbench.closeDialog(); go(new TrashAction('empty')); },
+      confirmActions: [new TrashAction('empty')],
     });
   }, { category: 'Explorer', icon: 'trash' });
 
