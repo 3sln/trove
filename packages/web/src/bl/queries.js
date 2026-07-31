@@ -32,7 +32,7 @@
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
-import { ExecCommandAction } from './actions.js';
+import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
 import { statusFactsOf, driveConditionOf } from './status.js';
@@ -511,6 +511,38 @@ export const openerAssociations = new ViewQuery(REGISTRY_DEPS, registries, (r) =
     return { typeKey, openerId, openerTitle: opener?.title || openerId, missing: !opener };
   });
 });
+
+/**
+ * The conversation, tags and backlinks for one file.
+ *
+ * Keyed by node, and the KEY is what replaces a reaction. This used to be an `effect` in
+ * bl/index.js watching the nav stack with a module-scoped `let lastTab` for change
+ * detection, calling `social.loadSidecar` directly — a subscription outside the engine
+ * doing effect work, and the last place that still worked that way.
+ *
+ * ngin already brackets this. `bootAction` is dispatched when the first observer arrives
+ * and `killAction` when the last one leaves, so opening a file loads its conversation and
+ * closing it clears it, because the query is alive for exactly as long as something is
+ * looking. Switching files is not a change to detect: it is one instance dying and another
+ * booting.
+ *
+ * The clear is SCOPED to this node. Kill and boot are not ordered against each other, so
+ * switching from A to B can kill A after B has booted — an unscoped clear would then wipe
+ * the sidecar B just asked for. It is the same race the loading path already guards, and
+ * naming the node is what makes it impossible rather than unlikely.
+ */
+export const sidecarFor = (nodeId) => Sidecar.of(nodeId);
+
+class Sidecar extends ServiceQuery {
+  static of = queryOf(Sidecar);
+
+  constructor(nodeId) {
+    super('social', (r) => r.observe(), (v) => v?.sidecar ?? null);
+    this.nodeId = nodeId;
+    this.bootAction = new LoadSidecarAction(nodeId);
+    this.killAction = new ClearSidecarAction(nodeId);
+  }
+}
 
 /**
  * A file's text, capped.

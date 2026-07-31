@@ -1616,3 +1616,18 @@ export class InvokePluginCommandAction extends Action {
     return plugins.invokeCommand(this.pluginId, this.name, this.args);
   }
 }
+
+/**
+ * Forget the open item's conversation — but only if it is still the one named.
+ *
+ * Dispatched when the last observer of a `sidecarFor` query goes away. Scoped to the node
+ * because kill and boot are not ordered against each other: switching from A to B can kill
+ * A's query after B's has booted, and an unscoped clear would wipe what B just loaded.
+ */
+export class ClearSidecarAction extends Action {
+  static deps = ['social'];
+  constructor(nodeId) { super(); this.nodeId = nodeId; }
+  async execute({ social }) {
+    if (social.state.sidecar?.nodeId === this.nodeId) social.loadSidecar(null);
+  }
+}

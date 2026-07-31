@@ -8,7 +8,9 @@
 import { cell } from '../runtime.js';
 
 export class SocialService {
-  constructor(platform) {
+  constructor(platform, offline = null) {
+    // How a comment or tag written while disconnected reaches the server later.
+    this.offline = offline;
     this.platform = platform;
     this.api = platform.api;
     this.state = {

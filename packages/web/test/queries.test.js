@@ -11,6 +11,7 @@ import { cell } from '../src/runtime.js';
 import * as q from '../src/bl/queries.js';
 import { queryOf, keyOfArgs } from '../src/bl/intern.js';
 import { watchQuery } from '../src/bl/watchQuery.js';
+import { ClearSidecarAction } from '../src/bl/actions.js';
 
 /**
  * Booting a query is asynchronous — it awaits a container lease before `boot` runs — so a
@@ -540,4 +541,50 @@ test('the explorer view resolves the selection, so nothing has to ask how', asyn
   // And a partial state must not take the whole query down with it.
   const bare = service({ items: [] });
   expect((await readOnce(q.explorer, { explorer: bare })).selectedNodes).toEqual([]);
+});
+
+// --- the sidecar's lifecycle ----------------------------------------------------------
+//
+// Opening a file used to load its conversation through an `effect` in bl/index.js watching
+// the nav stack, with a module-scoped `let` for change detection. It is a query keyed by
+// node now: ngin dispatches `bootAction` when the first observer arrives and `killAction`
+// when the last leaves, so the load and the clear are the query's lifetime rather than a
+// change somebody has to notice.
+
+test('the clear is scoped to its node, because kill and boot are not ordered', async () => {
+  // Switching from A to B can kill A's query AFTER B's has booted. An unscoped clear would
+  // then wipe the sidecar B just asked for — the same race the loading path already guards.
+  const social = { state: { sidecar: { nodeId: 'B' } }, loadSidecar(id) { this.cleared = id; } };
+  const engine = engineWith({ social });
+
+  // A's query dies while B is on screen: nothing is cleared.
+  await engine.dispatch(new ClearSidecarAction('A')).next(['complete', 'error']);
+  expect(social.cleared).toBe(undefined);
+  expect(social.state.sidecar.nodeId).toBe('B');
+
+  // B's own query dying does clear it.
+  await engine.dispatch(new ClearSidecarAction('B')).next(['complete', 'error']);
+  expect(social.cleared).toBe(null);
+});
+
+test('the sidecar query views the social slice for its node', async () => {
+  const social = service({ sidecar: null });
+  social.loadSidecar = () => {};
+  const engine = engineWith({ social });
+  const seen = [];
+  const sub = engine.query(q.sidecarFor('n1')).subscribe((v) => seen.push(v));
+  await settle();
+  // Whatever the load put there reaches the observer — mutations (a new comment, a tag)
+  // flow the same way, because this is a view over the resource rather than a copy.
+  social.set({ sidecar: { nodeId: 'n1', comments: [{ id: 'c1' }] } });
+  await settle();
+  expect(seen.at(-1)?.comments).toEqual([{ id: 'c1' }]);
+  sub.unsubscribe();
+});
+
+test('asking for the same node twice gives the same query instance', () => {
+  // Otherwise two observers of one file would be two realizations, two boots, and two
+  // LoadSidecarAction dispatches for the same conversation.
+  expect(q.sidecarFor('n1')).toBe(q.sidecarFor('n1'));
+  expect(q.sidecarFor('n1')).not.toBe(q.sidecarFor('n2'));
 });

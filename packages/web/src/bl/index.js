@@ -5,7 +5,7 @@
 // dispatch follow-up Actions (the choreographer pattern).
 
 import { Engine, Provider } from '@3sln/ngin';
-import { cell, effect } from '../runtime.js';
+import { cell } from '../runtime.js';
 import { registerCoreContext, registerViewportContext } from './context.js';
 import { ExplorerService, SearchClientService, TransfersService, ApiKeysService } from './services.js';
 import { SocialService } from './social.js';
@@ -25,9 +25,12 @@ export function createApp(platform) {
   // decides what is on screen.
   const viewState = new ViewStateService();
   const transfers = new TransfersService(activity);
-  const social = new SocialService(platform);
+  // Offline first: social queues comment and tag writes through it while disconnected, so
+  // it is a dependency rather than something bolted on afterwards. It used to be assigned
+  // onto `social` after both existed, which reads as optional and is not — a social service
+  // built without it silently drops every offline write.
   const offline = new OfflineService(platform);
-  social.offline = offline; // social queues sidecar ops through offline when disconnected
+  const social = new SocialService(platform, offline);
 
   const app = { platform, explorer, search, transfers, social, offline, activity, apiKeys, engine: null };
 
@@ -126,26 +129,11 @@ export function createApp(platform) {
 
   registerCommands(app);
 
-  // Wire the plugin panel opener hook to the workbench.
-  platform.openPluginPanel = (pluginId) => platform.workbench.openPluginPanel(pluginId);
-
   // Every built-in when-clause key, derived from the resource it summarises. Registered
   // here because this is where those resources exist; see bl/context.js for the list and
   // for why deriving them is not the same as moving the writes.
   registerCoreContext(platform.context, { workbench: platform.workbench, explorer });
   registerViewportContext(platform.context, platform.viewport);
-
-  // Load a file's conversation/tags whenever the active viewer panel changes (the
-  // panel stack lives in the navigation sub-service now).
-  let lastTab = null;
-  effect(platform.workbench.observeNav(), (nav) => {
-    if (nav.activeTabId !== lastTab) {
-      lastTab = nav.activeTabId;
-      // Clear the sidecar when no file is active (last tab closed) so a stale
-      // conversation from the previous file doesn't linger.
-      social.loadSidecar(nav.activeFile ? nav.activeFile.id : null);
-    }
-  });
 
   social.init();
   offline.init();

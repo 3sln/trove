@@ -77,7 +77,6 @@ export function createPlatform({ baseUrl = '' } = {}) {
     reactive,
     contributions, context, commands, keybindings, settings, notifications, api, workbench,
     viewport, spatialNav, voice,
-    openPluginPanel: null, // set by the workbench UI
   };
   platform.mediaUrls = new MediaUrlService({ api: platform.api, settings });
   platform.plugins = new PluginHost(platform);

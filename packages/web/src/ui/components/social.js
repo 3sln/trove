@@ -8,6 +8,8 @@ import { relativeDate } from '../format.js';
 import { AddTagAction, CopyTextAction, DeleteCommentAction, EnablePushAction, ExecCommandAction, LoadSidecarAction, OpenFileAction, OpenNotificationTargetAction, PostCommentAction, ReactToCommentAction, RemoveTagAction, SetReplyToAction, ToggleInboxAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 import { troveUri } from '@3sln/trove/core/links.js';
 import { parseMentions } from '../../bl/mentions.js';
+import { sidecarFor } from '../../bl/queries.js';
+import { watchQuery } from '../../bl/watchQuery.js';
 
 const { div, span, button, textarea, input, p } = dd;
 
@@ -77,7 +79,6 @@ function inboxItem(note, ui) {
 export function infoPanel(state, ui) {
   const nav = state.nav;
   const active = nav.activeFile ? { id: nav.activeTabId, node: nav.activeFile } : null;
-  const sc = state.so.sidecar;
   return div({ className: 'infopanel' },
     div({ className: 'ip-head' },
       icon('info', { size: 15 }),
@@ -86,12 +87,16 @@ export function infoPanel(state, ui) {
     ),
     !active
       ? div({ className: 'ip-empty' }, span('Open a file to see its tags and conversation.'))
-      : div({ className: 'ip-body' },
-          fileHeader(active.node, state, ui),
-          linkSection(active.node, state, ui),
-          tagSection(sc, ui),
-          conversationSection(state, sc, ui),
-        ),
+      // Watching `sidecarFor(id)` is what LOADS it: the query's bootAction fetches when the
+      // first observer arrives and its killAction clears when the last one leaves. Nothing
+      // watches the nav stack to notice a file changed — a different file is a different
+      // query. See bl/queries.js.
+      : ui.watch(watchQuery(ui.engine, sidecarFor(active.node.id)), (sc) => div({ className: 'ip-body' },
+        fileHeader(active.node, state, ui),
+        linkSection(active.node, state, ui),
+        tagSection(sc, ui),
+        conversationSection(state, sc, ui),
+      )),
   );
 }
 
