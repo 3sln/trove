@@ -2,11 +2,13 @@
 // Each declares a selector (extensions / mime) and a component(node, ui) → vnode.
 // The editor area picks the highest-priority opener whose selector matches.
 
-import { dd, cell, fromAsync, watch } from '../../../runtime.js';
+import { cell, dd, watch } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { bytes } from '../../format.js';
 import { markdownOpener } from './markdown.js';
 import { attachMedia } from '../../media.js';
+import { FileText } from '../../../bl/queries.js';
+import { watchQuery } from '../../../bl/watchQuery.js';
 
 const { div, pre, img, span, button, video, audio } = dd;
 
@@ -77,7 +79,7 @@ export function renderOpener(node, openerId, ui) {
 const TEXT_VIEW_BYTES = 512 * 1024;
 
 function textOpener(node, ui) {
-  const src = fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: TEXT_VIEW_BYTES, size: node.size }));
+  const src = watchQuery(ui.engine, FileText.of(node.id, TEXT_VIEW_BYTES, node.size));
   return dd.alias(() =>
     ui.watch(
       src,

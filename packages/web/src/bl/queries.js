@@ -331,6 +331,41 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
 });
 
 /**
+ * A file's text, capped.
+ *
+ * The first query keyed by something unbounded, which is what `queryOf` interning and the
+ * weak eviction were built for: one instance per (node, cap), shared by every viewer
+ * looking at that file, and collected once nothing is. A viewer that scrolls out of the
+ * tree stops observing, ngin kills the realization, and the text goes with it — no cache
+ * to invalidate and nothing to remember to release.
+ *
+ * `size` is a hint the API uses to decide whether a range request is worth it. It is part
+ * of the key because it is part of the request, and it is derived from the node id anyway,
+ * so it cannot split one file into two entries.
+ *
+ * Capped at the TRANSFER, not just the render: a character limit in a viewer stops us
+ * laying out a huge document, but the whole file still crosses the wire without this.
+ */
+export class FileText extends Query {
+  static deps = ['api'];
+
+  static of = queryOf(FileText);
+
+  constructor(nodeId, maxBytes, size) {
+    super();
+    this.nodeId = nodeId;
+    this.maxBytes = maxBytes;
+    this.size = size;
+  }
+
+  async boot({ api }, { notify }) {
+    notify(await api.readTextCapped(this.nodeId, { maxBytes: this.maxBytes, size: this.size }));
+  }
+
+  kill() {}
+}
+
+/**
  * What the server can do: which storage drivers it offers, whether it can suggest searches.
  *
  * This one FETCHES rather than watching a cell, and it is the reason the last `rerender`-
