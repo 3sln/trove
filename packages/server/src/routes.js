@@ -375,6 +375,10 @@ export function createRouter() {
     return (await ctx.access.node(b.id, 'delete')).remove();
   });
 
+  // How long a download plan's URL is good for. Twelve hours, matching the `media`
+  // signed-URL purpose and for the same reason stated there.
+  const PLAN_TTL_SECONDS = 12 * 60 * 60;
+
   // --- download (presign redirect or range-aware proxy) ----------------------
 
   /**
@@ -403,16 +407,22 @@ export function createRouter() {
     const { query } = ctx;
     if (!query.id) throw TroveError.invalid('id is required');
     const node = await ctx.access.node(query.id, 'read');
-    const d = await node.download({ ciphertext: true });
+    // Long-lived on purpose, and `expiresAt` travels with it so a caller can hold the plan
+    // rather than re-ask per request. Same reasoning as the `media` signed-URL purpose: a
+    // <video> re-requests on every seek, so this has to outlive the SITTING, not the
+    // request — an evening of episodes, not one GET.
+    const expiresIn = PLAN_TTL_SECONDS;
+    const d = await node.download({ ciphertext: true, expiresIn });
     // Not presign-capable, or nothing to redirect to: say so plainly rather than inventing
     // a URL, and the caller keeps proxying.
     if (d.mode !== 'redirect') return { direct: false };
+    const expiresAt = Date.now() + expiresIn * 1000;
     const enc = d.encryption || null;
     // The content type travels with the plan: the caller is building the Response the
     // browser will see, and a decrypted <img>/<video> body served as octet-stream does not
     // render.
     const contentType = node.contentType || 'application/octet-stream';
-    if (!enc) return { direct: true, url: d.url, contentType, encryption: null };
+    if (!enc) return { direct: true, url: d.url, contentType, expiresAt, encryption: null };
     const key = ctx.collections?.dataKeyFor
       ? await ctx.collections.dataKeyFor(node.collectionId, query.fingerprint || undefined)
       : null;
@@ -423,6 +433,7 @@ export function createRouter() {
       direct: true,
       url: d.url,
       contentType,
+      expiresAt,
       encryption: {
         algorithm: 'AES-256-GCM',
         chunkSize: enc.chunkSize,

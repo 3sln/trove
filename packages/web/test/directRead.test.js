@@ -13,7 +13,7 @@
 import { test, expect } from 'bun:test';
 import { encrypt, DEFAULT_CHUNK_SIZE } from '@3sln/trove/core/encryption/envelope.js';
 import { fromHex, toHex } from '@3sln/trove/core/encryption/keys.js';
-import { directRead, parseRange, trimStream } from '../src/platform/directRead.js';
+import { directRead, forgetPlans, parseRange, trimStream } from '../src/platform/directRead.js';
 
 const KEY = new Uint8Array(32).fill(7);
 const FP = new Uint8Array(16).fill(3);
@@ -34,6 +34,7 @@ function body(n) {
  * a bare URL to the bucket, honouring Range.
  */
 function harness(sealed, plan) {
+  forgetPlans(); // a module-level cache would otherwise leak between tests
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push(String(url));
@@ -144,4 +145,40 @@ test('trimStream drops whole-chunk padding around the wanted bytes', async () =>
   });
   const out = new Uint8Array(await new Response(trimStream(src, 3, 8)).arrayBuffer());
   expect(out).toEqual(new Uint8Array([3, 4, 5, 6, 7]));
+});
+
+test('a second read of the same object does not re-ask for the plan', async () => {
+  // The caller that generates the most requests is a <video>: it re-asks on every seek, and
+  // without this each seek cost a round trip to the drive for a URL and a key it was
+  // already holding.
+  const plain = body(300 * 1024);
+  const sealed = await encrypt(KEY, plain, { fingerprint: FP, chunkSize: CHUNK });
+  const { apiFetch, calls } = harness(sealed, { ...PLAN, expiresAt: Date.now() + 3600_000 });
+
+  await (await directRead('itm_1', 'bytes=0-99', apiFetch)).arrayBuffer();
+  await (await directRead('itm_1', 'bytes=200000-200099', apiFetch)).arrayBuffer();
+  const third = await directRead('itm_1', 'bytes=100-199', apiFetch);
+  expect(new Uint8Array(await third.arrayBuffer())).toEqual(plain.subarray(100, 200));
+
+  // One plan for three reads; the store is still asked each time, which is the point.
+  expect(calls.filter((c) => c.startsWith('/api/'))).toHaveLength(1);
+  expect(calls.filter((c) => c.startsWith('https://')).length).toBe(6); // header+body per read
+});
+
+test('an expired plan is fetched again rather than used', async () => {
+  const sealed = await encrypt(KEY, body(1024), { fingerprint: FP, chunkSize: CHUNK });
+  const { apiFetch, calls } = harness(sealed, { ...PLAN, expiresAt: Date.now() - 1 });
+  await (await directRead('itm_1', null, apiFetch)).arrayBuffer();
+  await (await directRead('itm_1', null, apiFetch)).arrayBuffer();
+  expect(calls.filter((c) => c.startsWith('/api/'))).toHaveLength(2);
+});
+
+test('a plan with no expiry is never held', async () => {
+  // `direct:false` and older servers that do not send `expiresAt`: re-ask rather than hold
+  // a URL with no idea when it dies.
+  const sealed = await encrypt(KEY, body(1024), { fingerprint: FP, chunkSize: CHUNK });
+  const { apiFetch, calls } = harness(sealed, PLAN); // PLAN has no expiresAt
+  await (await directRead('itm_1', null, apiFetch)).arrayBuffer();
+  await (await directRead('itm_1', null, apiFetch)).arrayBuffer();
+  expect(calls.filter((c) => c.startsWith('/api/'))).toHaveLength(2);
 });

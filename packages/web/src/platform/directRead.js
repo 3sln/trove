@@ -187,12 +187,62 @@ export async function directRead(id, rangeHeader, apiFetch) {
   });
 }
 
+/**
+ * Plans already fetched, by node id (and by fingerprint where a retired key was asked for).
+ *
+ * A plan is a presigned URL and a key, and BOTH outlive the request that fetched them —
+ * which matters most for the caller that generates the most requests. A <video> re-asks on
+ * every seek, so without this a scrub costs a round trip to the drive per seek for a URL
+ * and a key it was already holding; the same reasoning the `media` signed-URL purpose gives
+ * for its twelve-hour life. A gallery gets it too: the second tile onward is free.
+ *
+ * Capped, because a worker outlives any one page and an unbounded map in it is a leak that
+ * nothing ever clears. Oldest out first — insertion order is what a Map iterates.
+ */
+const PLANS = new Map();
+const PLAN_CACHE_MAX = 256;
+/** Re-fetch at 80% of the remaining life, so a plan is never used at the edge of expiry. */
+const REFRESH_AT = 0.8;
+
+const planKey = (id, fingerprint) => (fingerprint ? `${id} ${fingerprint}` : id);
+
+function cached(key) {
+  const hit = PLANS.get(key);
+  if (!hit) return null;
+  if (Date.now() >= hit.usableUntil) {
+    PLANS.delete(key);
+    return null;
+  }
+  return hit.plan;
+}
+
+function remember(key, plan) {
+  if (!plan?.direct) return; // nothing worth holding; a refusal is cheap to re-ask
+  // No expiry — an older server, or one that could not presign — means no idea when this
+  // URL dies, and a URL that fails at an unpredictable moment is worse than asking again.
+  // Held only for a life we were actually told about.
+  const life = plan.expiresAt ? plan.expiresAt - Date.now() : 0;
+  if (life <= 0) return;
+  PLANS.set(key, { plan, usableUntil: Date.now() + life * REFRESH_AT });
+  if (PLANS.size > PLAN_CACHE_MAX) PLANS.delete(PLANS.keys().next().value);
+}
+
+/** Forget everything — the app calls this when a rotation lands and old keys retire. */
+export function forgetPlans() {
+  PLANS.clear();
+}
+
 async function getPlan(id, fingerprint, apiFetch) {
+  const key = planKey(id, fingerprint);
+  const hit = cached(key);
+  if (hit) return hit;
   const q = `id=${encodeURIComponent(id)}${fingerprint ? `&fingerprint=${fingerprint}` : ''}`;
   try {
     const res = await apiFetch(`/api/items/download/plan?${q}`);
     if (!res.ok) return null; // 401/403 on a token-auth deployment: proxy, as before
-    return await res.json();
+    const plan = await res.json();
+    remember(key, plan);
+    return plan;
   } catch {
     return null;
   }
