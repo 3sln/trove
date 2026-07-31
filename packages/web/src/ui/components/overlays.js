@@ -119,7 +119,13 @@ function collectionDialog(d, ui, caps, view) {
   // noticed the dialog had changed — a render with a side effect. `draftFor` answers with
   // the default when the held draft belongs to a different dialog instance, so nothing is
   // written until the user types something.
-  const blankForm = { name: '', description: '', driver: drivers[0]?.key || '' };
+  const blankForm = {
+    name: '', description: '', driver: drivers[0]?.key || '',
+    // Off by default and deliberately so: encryption changes what the drive can do for you
+    // (see the exposure notes below) and should be a decision, not a default someone
+    // discovers later.
+    encrypt: false, encryptWhat: 'all', encryptList: '',
+  };
   const colState = draftFor(view, COL_FORM, d, { form: blankForm });
   const form = colState.form;
   const driver = drivers.find((x) => x.key === form.driver) || drivers[0];
@@ -142,13 +148,24 @@ function collectionDialog(d, ui, caps, view) {
       const v = form[f.name];
       if (v !== undefined && v !== '') store[f.name] = f.type === 'number' ? Number(v) : v;
     }
-    ui.engine.dispatch(new CreateCollectionFromFormAction({ name: form.name, description: form.description, store }));
+    ui.engine.dispatch(new CreateCollectionFromFormAction({
+      name: form.name, description: form.description, store,
+      encryption: encryptionOf(form),
+    }));
   };
 
   const field = (lbl, k, ph = '') => div({ className: 'field', $styling: { 'margin-bottom': '10px' } },
     label(lbl), input({ className: 'input', placeholder: ph }).on({ input: set(k) }));
 
-  const ready = !!form.name.trim() && !!form.driver
+  // The server refuses a configuration that would match nothing, and saying so here is the
+  // difference between a form that explains itself and an API error after the fact.
+  const encryptionProblem = form.encrypt && form.encryptWhat !== 'all' && !parseList(form.encryptList).length
+    ? (form.encryptWhat === 'extensions'
+      ? 'Name at least one extension, or choose every file.'
+      : 'Name at least one media type, or choose every file.')
+    : null;
+
+  const ready = !!form.name.trim() && !!form.driver && !encryptionProblem
     && (driver?.fields || []).every((f) => !f.required || String(form[f.name] ?? '').trim());
 
   return div({},
@@ -167,12 +184,85 @@ function collectionDialog(d, ui, caps, view) {
         // misconfiguration — saying so beats an empty dropdown.
         : div({ className: 'body' }, 'This server has no storage drivers registered, so a collection cannot be created.'),
       driver ? storeFields(driver, form, set) : null,
+      encryptionSection(form, set, caps, encryptionProblem),
       div({ className: 'row-actions' },
         button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
         button({ className: 'btn primary', $attrs: ready ? {} : { disabled: 'true' } }, 'Create collection')
           .on({ click: () => ready && submit() }),
       ),
     ),
+  );
+}
+
+/** The rules as the API wants them, or null when encryption is off. */
+function encryptionOf(form) {
+  if (!form.encrypt) return null;
+  const list = parseList(form.encryptList);
+  return {
+    enabled: true,
+    rules: form.encryptWhat === 'all'
+      ? { all: true }
+      : form.encryptWhat === 'extensions'
+        ? { extensions: list }
+        : { mimeTypes: list },
+  };
+}
+
+/** A comma or space separated list, emptied of blanks. */
+function parseList(text) {
+  return String(text || '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * Turning encryption on, and saying what it does.
+ *
+ * The scope notes sit HERE rather than in a help page, because the moment someone enables
+ * this is the moment the scope matters. What it protects is the storage provider seeing
+ * file contents; what it does not protect against is anything that reads through the drive,
+ * which includes every indexer. Someone who believes they have just made their files
+ * unreadable to the server has been misled by omission.
+ */
+function encryptionSection(form, set, caps, problem) {
+  const indexers = (caps?.indexers || []).filter((i) => i.readsContent !== false);
+  return div({ className: 'field enc-section', $styling: { 'margin-bottom': '10px' } },
+    label({ className: 'enc-toggle' },
+      input({ type: 'checkbox', checked: !!form.encrypt }).on({ change: set('encrypt') }),
+      span('Encrypt files in this collection'),
+    ),
+    !form.encrypt
+      ? div({ className: 'enc-hint' }, 'Files are stored exactly as uploaded.')
+      : div({ className: 'enc-body' },
+        div({ className: 'field' },
+          label('What to encrypt'),
+          select({ className: 'input' },
+            option({ value: 'all', selected: form.encryptWhat === 'all' }, 'Every file'),
+            option({ value: 'extensions', selected: form.encryptWhat === 'extensions' }, 'Only these extensions'),
+            option({ value: 'mimeTypes', selected: form.encryptWhat === 'mimeTypes' }, 'Only these media types'),
+          ).on({ change: set('encryptWhat') })),
+        form.encryptWhat !== 'all'
+          ? div({ className: 'field' },
+            input({
+              className: 'input', value: form.encryptList,
+              placeholder: form.encryptWhat === 'extensions' ? '.pdf, .docx, .key' : 'image, application/pdf',
+            }).on({ input: set('encryptList') }),
+            // A media type matches by its leading part too, which is how someone actually
+            // thinks about "encrypt my photos".
+            div({ className: 'enc-hint' }, form.encryptWhat === 'extensions'
+              ? 'Separated by commas. The leading dot is optional.'
+              : 'Separated by commas. “image” covers every image type.'))
+          : null,
+        problem ? div({ className: 'enc-problem' }, icon('warn', { size: 13 }), span(problem)) : null,
+        div({ className: 'enc-scope' },
+          div({ className: 'es-title' }, 'What this does'),
+          div({ className: 'es-line' }, 'Files are sealed in your browser before they are uploaded, so the storage provider only ever holds ciphertext.'),
+          div({ className: 'es-title' }, 'What it does not do'),
+          div({ className: 'es-line' }, 'It is not end-to-end. The drive holds the key and decrypts for anything that reads through it — previews, downloads, and search indexing.'),
+          indexers.length
+            ? div({ className: 'es-line' }, `These read file contents in the clear: ${indexers.map((i) => i.title || i.id).join(', ')}.`)
+            : null,
+          div({ className: 'es-line note' }, 'This applies to files uploaded from now on. Turning it off later does not decrypt anything already sealed.'),
+        ),
+      ),
   );
 }
 

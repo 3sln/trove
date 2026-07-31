@@ -679,6 +679,23 @@ kbd {
 .review-meta { color: var(--text-faint); font-size: 11px; margin-top: 6px; }
 .dialog.review .row-actions { padding: 14px 18px; border-top: 1px solid var(--border); margin: 0; }
 
+/* ---- Encryption, on the collection form --------------------------------- */
+.enc-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
+.enc-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.enc-hint { color: var(--text-faint); font-size: 11.5px; margin-top: 4px; }
+.enc-body { margin-top: 10px; }
+.enc-body .field { margin-bottom: 8px; }
+.enc-problem { display: flex; align-items: center; gap: 6px; color: var(--warn); font-size: 12px; margin: 6px 0; }
+/* What it does and does not do, next to the toggle rather than in a help page: the moment
+   someone turns this on is the moment the scope matters. */
+.enc-scope { margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, transparent); }
+.enc-scope .es-title { font-size: 11px; font-weight: 650; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 3px; }
+.enc-scope .es-title + .es-line { margin-bottom: 8px; }
+.enc-scope .es-line { font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+.enc-scope .es-line.note { margin-top: 8px; color: var(--text-faint); }
+
 /* Provenance warning. Sits between the review and the Install button rather than beside
    the name, because a badge up in the header is something you read past. */
 .review-warning { padding: 12px 18px; border-top: 1px solid var(--border);

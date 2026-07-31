@@ -307,6 +307,28 @@ export class TroveApiClient {
     return this.request('POST', '/api/collections', { body });
   }
 
+  /** Change a collection's settings — including turning encryption on. */
+  updateCollection(id, patch) {
+    return this.request('PATCH', `/api/collections/${encodeURIComponent(id)}`, { body: patch });
+  }
+
+  // --- key rotation ---------------------------------------------------------
+  //
+  // What a rotation would cost before anyone starts one: on a metered store it is a real
+  // bill, and the button should not be the first place that becomes apparent.
+  rotationEstimate(id) {
+    return this.request('GET', `/api/collections/${encodeURIComponent(id)}/rotate/estimate`);
+  }
+  rotationState(id) {
+    return this.request('GET', `/api/collections/${encodeURIComponent(id)}/rotate`);
+  }
+  beginRotation(id) {
+    return this.request('POST', `/api/collections/${encodeURIComponent(id)}/rotate`);
+  }
+  cancelRotation(id) {
+    return this.request('DELETE', `/api/collections/${encodeURIComponent(id)}/rotate`);
+  }
+
   // --- conversations, tags, sidecar ------------------------------------------
   sidecar(id) {
     return this.request('GET', `/api/items/${encodeURIComponent(id)}/sidecar`);
