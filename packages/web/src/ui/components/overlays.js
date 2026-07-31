@@ -20,7 +20,6 @@ export function dialog(state, ui) {
   if (d.kind === 'collection') return collectionDialog(d, ui, state.caps, state.view);
   if (d.kind === 'plugin-review') return pluginReview(d, ui, state.view);
   if (d.kind === 'opener-chooser') return openerChooserDialog(d, ui);
-  const wb = ui.platform.workbench;
   let value = d.value ?? '';
   // A confirm carries ACTIONS — what happens if you say yes — rather than a callback, the
   // same as a menu item. Closing is this dialog's own business, so callers no longer have
@@ -61,7 +60,6 @@ export function dialog(state, ui) {
 // workbench dialog state (updateDialog), so radio/checkbox selection survives
 // re-renders. "Remember" persists a per-file-type association in settings.
 function openerChooserDialog(d, ui) {
-  const wb = ui.platform.workbench;
   const platform = ui.platform;
   const selected = d.openerId || d.current || d.openers[0]?.id;
   const remember = !!d.remember;
@@ -204,7 +202,6 @@ function storeFields(driver, form, set) {
 export function contextMenu(state, ui) {
   const m = state.overlay.contextMenu;
   if (!m || !m.items?.length) return null;
-  const wb = ui.platform.workbench;
   // Clamp on both edges. Anchoring a menu ABOVE its trigger (the status bar opens
   // upward) produces a negative top, and only the far edge used to be clamped.
   // The height is whatever the menu needs OR whatever the window allows, whichever is

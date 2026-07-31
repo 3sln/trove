@@ -98,7 +98,6 @@ function sheetRow({ icon: name, label, value, danger, onClick }) {
 export function phoneSheet(state, ui) {
   const which = state.wb.sheet;
   if (!which) return null;
-  const wb = ui.platform.workbench;
   return div({ className: 'sheet-wrap' },
     div({ className: 'scrim' }).on({ click: () => ui.go(new CloseSheetAction()) }),
     div({ className: 'sheet' },
@@ -110,7 +109,6 @@ export function phoneSheet(state, ui) {
 
 function statusSheet(state, ui) {
   const f = statusFacts(state, ui);
-  const wb = ui.platform.workbench;
   const go = (cmd) => () => { ui.go(new CloseSheetAction()); ui.exec(cmd); };
   return div({ className: 'sheet-body' },
     div({ className: 'sheet-title' }, f.collectionLabel),
@@ -165,7 +163,6 @@ function statusSheet(state, ui) {
 }
 
 function moreSheet(state, ui) {
-  const wb = ui.platform.workbench;
   const go = (cmd) => () => { ui.go(new CloseSheetAction()); ui.exec(cmd); };
   const me = state.so.me;
   const unread = state.so.notifications.unread;

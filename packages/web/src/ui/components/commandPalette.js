@@ -11,7 +11,6 @@ const { div, input, span } = dd;
 export default function commandPalette(state, ui) {
   const pal = state.overlay.palette;
   if (!pal) return null;
-  const wb = ui.platform.workbench;
   // With no query there is nothing to show — and showing the PREVIOUS session's hits
   // would be worse than nothing, since they don't match what the field now says.
   const items = pal.mode === 'files'
@@ -118,7 +117,6 @@ function fuzzyScore(hay, q) {
 }
 
 function onKey(e, ui, items, index, run) {
-  const wb = ui.platform.workbench;
   if (e.key === 'ArrowDown') {
     e.preventDefault();
     ui.go(new MovePaletteAction(1, items.length));
@@ -136,13 +134,11 @@ function onKey(e, ui, items, index, run) {
 
 let fileTimer = null;
 function onQuery(ui, value) {
-  const wb = ui.platform.workbench;
   ui.go(new SetPaletteQueryAction(value));
-  // The palette's CURRENT mode, not whichever one was on screen when this listener
-  // was created — see the note at the input.
   clearTimeout(fileTimer);
-  if (wb.overlay.state.palette?.mode !== 'files') return;
-  // Route the file search through an action; results land in the reactive search
-  // service (state.se.paletteFiles), so the palette re-renders without ad-hoc state.
+  // The mode guard moved into QuickOpenAction, where "current" means current: the timer
+  // below outlives the render that set it, so checking here would test a stale mode.
+  // Results land in the search service (state.se.paletteFiles), so the palette re-renders
+  // without ad-hoc state.
   fileTimer = setTimeout(() => ui.go(new QuickOpenAction(value)), 200);
 }

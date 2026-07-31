@@ -9,7 +9,7 @@ import { dd } from '../../runtime.js';
 import { icon, iconForNode } from '../icon.js';
 import { renderOpener } from './openers/index.js';
 import { availableOpeners } from '../../bl/openers.js';
-import { ShowDialogAction } from '../../bl/actions.js';
+import { NavigateBackAction, OpenInPanelAction, ShowDialogAction, ShowHomeAction, ToggleInfoPanelAction } from '../../bl/actions.js';
 
 const { div, span, button } = dd;
 
@@ -28,24 +28,23 @@ export default function editorArea(state, ui) {
 }
 
 function navBar(files, active, ui) {
-  const w = ui.platform.workbench;
   return div({ className: 'viewer-nav' },
     button({ className: 'vn-back', title: 'Back (Esc)' }, icon('chevron-left', { size: 16 }))
-      .on({ click: () => w.back() }),
+      .on({ click: () => ui.go(new NavigateBackAction()) }),
     div({ className: 'vn-trail' },
       button({ className: 'vn-crumb' }, icon('search', { size: 13 }), span('Search'))
-        .on({ click: () => w.showHome() }),
+        .on({ click: () => ui.go(new ShowHomeAction()) }),
       ...files.map((p) =>
         button({ className: `vn-crumb ${p.id === active.id ? 'active' : ''}`, title: p.node.name },
           icon(iconForNode(p.node), { size: 13 }), span({ className: 'label' }, p.node.name))
-          .on({ click: () => w.openFile(p.node, p.openerId) })),
+          .on({ click: () => ui.go(new OpenInPanelAction(p.node, p.openerId)) })),
     ),
     div({ className: 'vn-actions' },
       openerSwitch(active, ui),
       button({ className: 'iconbtn', title: 'Details & comments' }, icon('info', { size: 15 }))
-        .on({ click: () => w.toggleInfoPanel() }),
+        .on({ click: () => ui.go(new ToggleInfoPanelAction()) }),
       button({ className: 'iconbtn', title: 'Close (Esc)' }, icon('close', { size: 15 }))
-        .on({ click: () => w.showHome() }),
+        .on({ click: () => ui.go(new ShowHomeAction()) }),
     ),
   );
 }

@@ -526,14 +526,19 @@ export class FilterAction extends Action {
 /** Command-palette quick-open: a keyword file search whose results live in the search
  *  service (state.se.paletteFiles) instead of ad-hoc state hung off the UI. */
 export class QuickOpenAction extends Action {
-  static deps = ['api', 'search'];
+  static deps = ['api', 'search', 'workbench'];
 
   constructor(query) {
     super();
     this.query = query;
   }
   async execute(r) {
-    const { api, search } = r;
+    const { api, search, workbench } = r;
+    // The palette's mode as it is NOW, not as it was when the keystroke's timer was set.
+    // This guard used to live in the debounce callback in the component, which had to read
+    // it back off the service for exactly this reason — a listener belongs to the render
+    // that created it, and the mode can change under a pending timer.
+    if (workbench.overlay.state.palette?.mode !== 'files') return;
     const q = (this.query || '').trim();
     if (!q) { search.set({ paletteFiles: [], paletteQuery: '', paletteError: null, paletteLoading: false }); return; }
     // Keystrokes outrun the network: a slower request for an earlier query must not
@@ -1101,4 +1106,14 @@ export class SetSettingAction extends Action {
   static deps = ['settings'];
   constructor(key, value) { super(); this.key = key; this.value = value; }
   async execute({ settings }) { settings.set(this.key, this.value); }
+}
+
+/** Back through the panel stack. */
+export class NavigateBackAction extends ShellAction {
+  apply(wb) { wb.back(); }
+}
+
+/** Close the viewer stack and return to the drive. */
+export class ShowHomeAction extends ShellAction {
+  apply(wb) { wb.showHome(); }
 }

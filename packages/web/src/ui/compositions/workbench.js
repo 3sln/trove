@@ -4,7 +4,7 @@
 // either call ui.exec(commandId) or ui.go(action). This is the only module that
 // knows about every service at once.
 
-import { dd, derive, constant } from '../../runtime.js';
+import { dd, derive, constant, watch } from '../../runtime.js';
 import { region } from '../region.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import * as q from '../../bl/queries.js';
@@ -41,11 +41,12 @@ export default function workbench({ engine, app, platform }) {
   // the open question in docs/tickets.
   const ui = {
     engine, app, platform,
+    // Rendering a cell is a UI concern, not a platform subsystem to reach through.
+    watch,
     go: (action) => engine.dispatch(action),
     exec: (id, ...args) => engine.dispatch(new ExecCommandAction(id, ...args)),
   };
 
-  const { watch } = platform.reactive;
   // One derived snapshot of every slice the shell reads. `derive` invalidates when any
   // of them does and recomputes once on the next read, so fifteen changes in a frame
   // still cost one render.

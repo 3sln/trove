@@ -79,7 +79,7 @@ const TEXT_VIEW_BYTES = 512 * 1024;
 function textOpener(node, ui) {
   const src = fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: TEXT_VIEW_BYTES, size: node.size }));
   return dd.alias(() =>
-    ui.platform.reactive.watch(
+    ui.watch(
       src,
       ({ text, truncated, total }) => div({ className: 'viewer text' },
         pre(text),

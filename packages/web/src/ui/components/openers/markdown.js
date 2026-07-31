@@ -30,7 +30,7 @@ export function markdownOpener(node, ui) {
   // huge document, but without this the whole file is still pulled into the tab first.
   const src = fromAsync(() => ui.platform.api.readTextCapped(node.id, { maxBytes: MAX_CHARS, size: node.size }).then((r) => r.text));
   return dd.alias(() =>
-    ui.platform.reactive.watch(
+    ui.watch(
       src,
       // A throw in here is NOT covered by the `error:` handler below — that one is for
       // the observable failing, not for the mapper. Rendering untrusted content is
