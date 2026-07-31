@@ -130,7 +130,7 @@ export default function launcher(state, ui, opts = {}) {
       // Only where the browser can transcribe WITHOUT sending audio anywhere. A remote's
       // own mic needs no button from us — it dictates into this field once it is focused,
       // which is what `search.voice` is really for.
-      ui.platform.voice?.canListen()
+      state.voice?.canListen
         ? button({
           className: `launch-mic ${state.voice?.listening ? 'on' : ''}`,
           title: state.voice?.listening ? 'Stop listening' : 'Search by voice',
@@ -211,7 +211,7 @@ function buildContent(state, ui, q, mode, modal) {
   const closeModal = modal ? [new CloseSearchModalAction()] : [];
   if (mode === 'command') {
     const term = q.slice(1).trim().toLowerCase();
-    const items = ui.platform.commands.paletteCommands()
+    const items = (state.commands || [])
       .map((c) => ({ hay: `${c.category || ''} ${c.title}`.toLowerCase(), c }))
       .map(({ hay, c }) => ({ s: score(hay, term), c }))
       .filter((x) => term === '' || x.s > 0)
@@ -345,7 +345,7 @@ function fileMenu(node, ui, state) {
   // Ask what the shortcut actually IS. Hardcoding "⌘⇧L" told a Windows or Linux user
   // about a key their machine does not have, and told everyone the default even after
   // they had rebound it.
-  const kbd = (id) => ui.platform.keybindings.labelFor(id) || undefined;
+  const kbd = (id) => state.commandKeys?.[id] || undefined;
   return [
     { label: 'Open', icon: 'file-text', actions: [new ExecCommandAction('explorer.open', node)] },
     { label: 'Download', icon: 'download', actions: [new ExecCommandAction('explorer.download', node)] },

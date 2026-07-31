@@ -9,7 +9,7 @@ import { CopyTextAction, PatchApiKeyDraftAction, RebindKeyAction, SetSettingActi
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
 export default function settingsView(state, ui) {
-  const groups = ui.platform.settings.grouped();
+  const groups = state.settingsGroups || new Map();
   return div({ className: 'editor' },
     div({ className: 'stage' },
       div({ className: 'settings' },

@@ -154,12 +154,27 @@ export const overlay = new ServiceQuery('workbench', (r) => r.observeOverlay());
 export const notifications = new ServiceQuery('notifications', (r) => r.observe());
 /** Settings, defaults merged with overrides. */
 export const settings = new ServiceQuery('settings', (r) => r.observe());
+/**
+ * The settings SCHEMA, grouped by category, for the screen that edits them.
+ *
+ * Separate from `settings` rather than folded in, because that one emits the effective
+ * values keyed by setting name — adding a `groups` key to it would put a made-up entry in
+ * among the real ones.
+ */
+export const settingsGroups = new ServiceQuery('settings', (r) => r.observe(), (_v, r) => r.grouped());
+
 /** The when-clause keys: what is selected, what is open, what is focused. */
 export const context = new ServiceQuery('context', (r) => r.observe());
 /** Phone, desktop or TV. */
 export const viewport = new ServiceQuery('viewport', (r) => r.observe());
-/** Whether this browser can transcribe on-device. */
-export const voice = new ServiceQuery('voice', (r) => r.observe());
+/**
+ * Whether this browser can transcribe on-device, and whether it is listening now.
+ *
+ * `canListen` is folded in: it is a question about the state, so a component should not
+ * have to call the service to find out.
+ */
+export const voice = new ServiceQuery('voice', (r) => r.observe(),
+  (v, r) => ({ ...v, canListen: !!r.canListen?.() }));
 /** Installed plugins; null where the plugin host is not installed. */
 export const plugins = new ServiceQuery('plugins', (r) => r?.observe?.());
 /** What the UI is in the middle of doing: drafts, captures, ticked boxes. See viewState.js. */
@@ -331,6 +346,18 @@ export const keybindings = new ViewQuery(REGISTRY_DEPS, registries, (r) => {
  * subscriber gets a fresh answer rather than a stale one that can never refresh. That is the
  * right default and the opposite of what this wants.)
  */
+/**
+ * Command id → its keybinding label, for anything that shows a shortcut next to an action.
+ *
+ * Hardcoding "⌘⇧L" told a Windows or Linux user about a key their machine does not have,
+ * and told everyone the default even after they had rebound it. A map rather than a list
+ * because every caller is asking about one command it already knows the id of.
+ */
+export const commandKeys = new ViewQuery(REGISTRY_DEPS, registries, (r) =>
+  Object.fromEntries(r.keybindings.resolved()
+    .map((b) => [b.command, r.keybindings.labelFor(b.command)])
+    .filter(([, label]) => label)));
+
 class Capabilities extends Query {
   static deps = ['api'];
 

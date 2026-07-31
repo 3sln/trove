@@ -74,13 +74,20 @@ export default function workbench({ engine, app, platform }) {
       // Its query declares `initial = null`, so this stays a normal value while the request
       // is in flight instead of turning the whole snapshot PENDING and blanking the shell.
       watchQuery(engine, q.capabilities),
+      // Views the shell reads but no region owns yet: the palette's command list, the
+      // settings schema, and command id -> keybinding label.
+      watchQuery(engine, q.paletteCommands),
+      watchQuery(engine, q.settingsGroups),
+      watchQuery(engine, q.commandKeys),
     ],
     // No `_bump` any more. It existed to defeat `watch`'s shallow-equality check for a
     // forced re-render that left no trace in the snapshot — a counter smuggled into the
     // state to get past an optimisation designed to skip pointless renders. With the state
     // that needed it in a cell, every render has a reason again.
-    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, view, caps) =>
-      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, view, caps }),
+    (wb, overlay, nav, ex, se, keys, notif, ctx, settings, pluginList, so, off, act, vp, voice, view, caps,
+     commands, settingsGroups, commandKeys) =>
+      ({ wb, overlay, nav, ex, se, keys, notif, ctx, settings, plugins: pluginList, so, off, act, vp, voice, view, caps,
+        commands, settingsGroups, commandKeys }),
   );
 
   // The chrome, subscribed to what it reads instead of to everything.
