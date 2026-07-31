@@ -394,3 +394,18 @@ test('an object deleted while a slice was away does not strand its upload', asyn
   expect(d.storage.aborted).toContain(orphan);
   expect(after.inflight).toBe(null);
 });
+
+test('a rotation key does not accumulate suffixes across rotations', async () => {
+  // `${node.storageKey}.rot${...}` appends to the CURRENT key, which after one rotation
+  // already carries a suffix. Two rotations produced `obj_x.rotms9gq8j2.rotms9grnhf`, and
+  // the key grew by ~11 characters on every rotation forever — S3 refuses a key over 1024
+  // bytes, so a drive rotated on a schedule would eventually stop being able to rotate.
+  const { rotatedKey } = await import('../src/encryption/rotation.js');
+  const first = rotatedKey('obj_abc');
+  expect(first).toMatch(/^obj_abc\.rot[0-9a-z]+$/);
+  const second = rotatedKey(first);
+  expect(second).toMatch(/^obj_abc\.rot[0-9a-z]+$/);
+  expect(rotatedKey(second)).toMatch(/^obj_abc\.rot[0-9a-z]+$/);
+  // A name that merely contains "rot" is not a suffix and must survive.
+  expect(rotatedKey('obj_carrot')).toMatch(/^obj_carrot\.rot[0-9a-z]+$/);
+});

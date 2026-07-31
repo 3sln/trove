@@ -53,6 +53,20 @@ const PART_TARGET_BYTES = 8 * 1024 * 1024;
  * @property {'running'|'done'} status
  */
 
+/**
+ * The storage key a rotation writes to.
+ *
+ * Based on the key with any previous rotation suffix STRIPPED. Appending to
+ * `node.storageKey` instead compounds: a collection rotated twice held
+ * `obj_x.rotms9gq8j2.rotms9grnhf`, and a key grew by ~11 characters on every rotation for
+ * the life of the drive. S3 stops accepting a key at 1024 bytes, so a drive rotated on a
+ * schedule would eventually fail to rotate at all — years out, silently, and only for the
+ * objects with the longest names.
+ */
+export function rotatedKey(storageKey) {
+  return `${storageKey.replace(/(\.rot[0-9a-z]+)+$/, '')}.rot${Date.now().toString(36)}`;
+}
+
 export class RotationService {
   /**
    * @param {object} deps
@@ -276,7 +290,7 @@ export class RotationService {
     // nonce being reused with a key, and rewriting in place invites exactly that on a
     // retry; a new object also means a failure halfway leaves the original intact and
     // readable rather than a half-written file that is neither.
-    const nextKey = inflight?.storageKey ?? `${node.storageKey}.rot${Date.now().toString(36)}`;
+    const nextKey = inflight?.storageKey ?? rotatedKey(node.storageKey);
     const uploadId = inflight?.uploadId ?? await storage.createMultipart(nextKey, { contentType: node.contentType });
     const parts = inflight?.parts ? [...inflight.parts] : [];
     let chunkIndex = inflight?.chunkIndex ?? 0;
@@ -356,7 +370,7 @@ export class RotationService {
 
   /** The whole object in one put, for a store that cannot do multipart. */
   async #moveWhole(node, newKey, newFingerprint, storage, chunkSize) {
-    const nextKey = `${node.storageKey}.rot${Date.now().toString(36)}`;
+    const nextKey = rotatedKey(node.storageKey);
     const read = await this.vfs.readStream(node.id);
     const sealed = await encryptStream(newKey, read.stream, {
       fingerprint: newFingerprint,

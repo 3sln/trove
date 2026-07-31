@@ -120,3 +120,36 @@ test('maintenance leaves collections with no rotation alone', async () => {
   const out = await d.runMaintenance({ budgetMs: 2000, scan: true });
   expect(out.rotated).toEqual([]);
 });
+
+test('a long-lived process advances a rotation from its own interval', async () => {
+  // The regression this pins: `rotation.step` was reached ONLY through `runMaintenance`,
+  // and only the Worker adapter calls that. On Bun and Node — where this is actually
+  // self-hosted — the interval swept uploads, sidecar and trash and never touched a
+  // rotation, and no route steps one either. So `POST /rotate` minted the new key,
+  // reported "running", and moved nothing for the lifetime of the process.
+  const kv = new MemoryKV();
+  const storage = new MemoryStorage();
+  const collections = new CollectionService({
+    kv, storageFactory: () => storage, admins: [ADMIN], defaultOpen: false,
+  });
+  const server = await createServer({
+    rebuildIndexOnStart: false, collections, maintenanceIntervalMs: 25,
+    identity: { driver: 'header', header: { idHeader: 'x-user', required: false } },
+  });
+  const c = await collections.create({
+    name: 'Private', store: { driver: 'memory' }, encryption: { enabled: true, rules: { all: true } },
+  }, BOSS);
+
+  await call(server.handle, 'POST', `/api/collections/${c.id}/rotate`);
+  expect((await server.rotation.state(c.id)).status).toBe('running');
+
+  // Only the timer may finish it — runMaintenance is deliberately not called here.
+  const deadline = Date.now() + 5000;
+  let state = await server.rotation.state(c.id);
+  while (state?.status === 'running' && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+    state = await server.rotation.state(c.id);
+  }
+  expect(state?.status).toBe('done');
+  await server.close();
+});

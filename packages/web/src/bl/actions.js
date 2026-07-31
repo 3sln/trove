@@ -356,7 +356,9 @@ export class TrashAction extends Action {
 }
 
 export class DeleteAction extends Action {
-  static deps = ['api', 'engine', 'notifications', 'workbench'];
+  // `navigation`, not `workbench`: the panel stack is navigation's, and a deleted file must
+  // not stay open in it.
+  static deps = ['api', 'engine', 'navigation', 'notifications'];
 
   constructor(ids) {
     super();
@@ -366,7 +368,7 @@ export class DeleteAction extends Action {
     try {
       for (const id of this.ids) await r.api.remove(id);
       r.notifications.info(`Deleted ${this.ids.length} item${this.ids.length > 1 ? 's' : ''}`);
-      for (const id of this.ids) r.workbench.closeTab(id);
+      for (const id of this.ids) r.navigation.closeTab(id);
     } catch (err) {
       r.notifications.error(`Couldn’t delete: ${err.message}`);
     }
@@ -375,7 +377,9 @@ export class DeleteAction extends Action {
 }
 
 export class RenameAction extends Action {
-  static deps = ['api', 'engine', 'notifications', 'workbench'];
+  // The renamed node has to reach the open panel too, or the title bar keeps the old name
+  // until something else refreshes it. That stack belongs to `navigation`.
+  static deps = ['api', 'engine', 'navigation', 'notifications'];
 
   constructor(id, newName) {
     super();
@@ -385,7 +389,7 @@ export class RenameAction extends Action {
   async execute(r) {
     try {
       const node = await r.api.rename(this.id, this.newName);
-      r.workbench.updateTabNode(node.node);
+      r.navigation.updateTabNode(node.node);
       r.engine.dispatch(new RefreshAction());
     } catch (err) {
       r.notifications.error(`Couldn’t rename: ${err.message}`);
@@ -1448,12 +1452,12 @@ export class CloseOverlaysAction extends Action {
  * it hears.
  */
 export class VoiceSearchAction extends Action {
-  static deps = ['engine', 'voice', 'workbench'];
-  async execute({ engine, voice, workbench }) {
+  static deps = ['engine', 'voice'];
+  async execute({ engine, voice }) {
     await voice.run({
       onText: (text, { final }) => {
         if (!text) return;
-        workbench.setLaunchQuery(text);
+        engine.dispatch(new SetLaunchQueryAction(text));
         // Interim results keep the box in step with the speaker; only the settled
         // transcript is worth a round trip to the server.
         if (final) engine.dispatch(new SearchAction(text));

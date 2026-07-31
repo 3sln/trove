@@ -1,0 +1,116 @@
+// Slice-backed resources only answer the slice API.
+//
+// F3 dissolved WorkbenchService, a 17-method facade that forwarded to navigation, overlay
+// and a state bag. `workbench` became a plain slice — `observe/get/set/replace` and nothing
+// else — and three call sites kept calling methods only the facade had:
+//
+//   r.workbench.closeTab(id)            delete, on a file that was open
+//   r.workbench.updateTabNode(node)     every rename
+//   workbench.setLaunchQuery(text)      voice search
+//
+// All three are a TypeError the moment they run, and all three were invisible: the bundler
+// treats a property access as fine, `bun test` never dispatched them with a subject, and the
+// boot smoke test dispatches every command with an EMPTY selection — which is exactly the
+// path that returns before reaching the bad line. Rename reported "Couldn't rename:
+// A.workbench.updateTabNode is not a function" in a toast, and delete managed to report
+// success and failure at once.
+//
+// So: check the shape statically. A slice's whole API is four methods, which makes "is this
+// call answerable" decidable by reading, and makes the next facade removal fail here rather
+// than in a toast. The slice-backed names are DERIVED from the source rather than listed, so
+// promoting a slice to a service (or the reverse) does not silently switch the check off.
+
+import { test, expect } from 'bun:test';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+const SRC = new URL('../src/', import.meta.url).pathname;
+const SLICE_API = new Set(['observe', 'get', 'set', 'replace']);
+
+const read = (p) => readFileSync(join(SRC, p), 'utf8');
+
+/**
+ * Blank out comments and string bodies, preserving offsets so reported line numbers stay
+ * true. This file's own subject matter lives mostly in prose — the comment above every
+ * fixed call site names `workbench.closeTab()` — and a checker that reads its own
+ * explanation as a violation is a checker nobody keeps.
+ */
+function code(src) {
+  const out = src.split('');
+  const blank = (i, j) => { for (let k = i; k < j; k++) if (out[k] !== '\n') out[k] = ' '; };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i], d = src[i + 1];
+    if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); const j = e < 0 ? src.length : e + 2; blank(i, j); i = j - 1; }
+    else if (c === '/' && d === '/') { let j = src.indexOf('\n', i); if (j < 0) j = src.length; blank(i, j); i = j - 1; }
+    else if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      blank(i + 1, Math.min(j, src.length));
+      i = j;
+    }
+  }
+  return out.join('');
+}
+
+/** The `xState = () => slice({...})` factories. */
+function sliceFactories() {
+  const src = read('bl/state.js');
+  return new Set([...src.matchAll(/export const (\w+)\s*=\s*\([^)]*\)\s*=>\s*slice\(/g)].map((m) => m[1]));
+}
+
+/**
+ * Provider keys whose singleton came from one of those factories.
+ *
+ * Two hops, because the provider table names a local: `const workbench = workbenchState()`
+ * then `workbench: Provider.fromSingleton(workbench)`. The local may be renamed on the way
+ * in (`viewState` comes from `viewStateSlice`), so the second hop is by variable, not by key.
+ */
+function sliceBackedResources() {
+  const factories = sliceFactories();
+  const src = read('bl/index.js');
+  const locals = new Set(
+    [...src.matchAll(/const (\w+)\s*=\s*(\w+)\(/g)]
+      .filter(([, , fn]) => factories.has(fn) || factories.has(fn.replace(/Slice$/, '')))
+      .map(([, name]) => name),
+  );
+  return new Set(
+    [...src.matchAll(/(\w+):\s*Provider\.fromSingleton\((\w+)\)/g)]
+      .filter(([, , varName]) => locals.has(varName))
+      .map(([, key]) => key),
+  );
+}
+
+/** Every .js file under src/, so a call site cannot hide by moving. */
+function sources(dir = '') {
+  const out = [];
+  for (const e of readdirSync(join(SRC, dir), { withFileTypes: true })) {
+    const p = dir ? `${dir}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...sources(p));
+    else if (e.name.endsWith('.js')) out.push(p);
+  }
+  return out;
+}
+
+test('slice-backed resources are only ever called through the slice API', () => {
+  const slices = sliceBackedResources();
+  // If the derivation breaks, the test would pass by checking nothing. Assert it found the
+  // shell slices this exists to protect.
+  expect([...slices].sort()).toEqual(expect.arrayContaining(['overlay', 'search', 'workbench']));
+
+  const bad = [];
+  for (const file of sources()) {
+    const raw = read(file);
+    const src = code(raw);
+    const lines = raw.split('\n');
+    for (const name of slices) {
+      // `r.workbench.foo(` / `resources.workbench.foo(` and the destructured `workbench.foo(`.
+      const re = new RegExp(`\\b(?:r\\.|resources\\.)?${name}\\.(\\w+)\\s*\\(`, 'g');
+      for (const m of src.matchAll(re)) {
+        if (SLICE_API.has(m[1])) continue;
+        const line = src.slice(0, m.index).split('\n').length;
+        bad.push(`${file}:${line}  ${name}.${m[1]}()  —  ${lines[line - 1].trim()}`);
+      }
+    }
+  }
+  expect(bad).toEqual([]);
+});

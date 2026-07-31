@@ -232,6 +232,36 @@ export async function createServer(config = {}) {
     ? null
     : rebuildIndexIfLost(vfs, search, startReindex);
 
+  /**
+   * Advance every rotation that is part-way through, and say what moved.
+   *
+   * Extracted because there are TWO schedulers — the interval below, for a process that
+   * lives, and `runMaintenance`, for a Worker whose timers do not survive the request —
+   * and only the second one used to step rotations. On Bun and Node, which is where this
+   * is self-hosted, `POST /rotate` therefore minted the new key, reported "running", and
+   * then moved nothing, ever: `rotation.step` had no caller, and there is no route that
+   * steps one either. The old key stayed in the ring indefinitely, which is the exact
+   * failure a rotation exists to end.
+   *
+   * One function, both callers, so the next thing added to periodic work cannot land in
+   * one scheduler and not the other.
+   */
+  async function stepRotations(targets, budgetEach) {
+    const out = [];
+    for (const c of targets) {
+      const state = await rotation.state(c.id).catch(() => null);
+      if (!state || state.status !== 'running') continue;
+      // The slice claims the collection, so a firing that overlaps a manual run does
+      // nothing rather than racing it.
+      const next = await rotation.step(c.id, { budgetMs: budgetEach }).catch((e) => {
+        console.error(`[trove] rotation slice for ${c.id} failed`, e);
+        return null;
+      });
+      if (next) out.push({ collectionId: c.id, moved: next.moved, failed: next.failed, status: next.status });
+    }
+    return out;
+  }
+
   // Periodic maintenance. Both of these caches are otherwise unbounded: abandoned
   // upload sessions (a client that starts an upload and never finishes) accumulate in
   // the session store forever, and sidecar documents stay resident after their last
@@ -251,6 +281,12 @@ export async function createServer(config = {}) {
         .then(() => sidecar.sweep())
         .then(() => (trashMs > 0 ? vfs.purgeTrash({ before: Date.now() - trashMs }) : null))
         .then((r) => { if (r?.purged) console.log(`[trove] purged ${r.purged} item(s) from the trash after ${config.trashRetentionDays ?? 30} days`); })
+        // A rotation started through the API finishes on its own here. Unlike a scan this
+        // is NOT opt-in: it only touches collections someone has explicitly put into
+        // rotation, and leaving one half-moved is worse than the work of finishing it.
+        .then(() => (collections ? collections.all().catch(() => []) : []))
+        .then((targets) => stepRotations(targets, Math.max(1000, Math.floor(everyMs / 4))))
+        .then((moved) => { for (const m of moved) if (m.moved) console.log(`[trove] rotation ${m.collectionId}: ${m.moved} moved, ${m.status}`); })
         .catch((e) => console.error('maintenance sweep failed', e));
     }, everyMs);
     maintenance.unref?.();
@@ -472,25 +508,12 @@ export async function createServer(config = {}) {
       out.scans.push({ collectionId: c.id, ...r });
     }
 
-    // A rotation that has been started finishes on its own.
-    //
-    // Without this the walk only advances while somebody is watching, which is precisely
-    // wrong for a job that can take hours: the old key stays in the ring, the collection
-    // stays half-moved, and nothing says so. The slice claims the collection, so a firing
-    // that overlaps a manual run does nothing rather than racing it.
+    // A rotation that has been started finishes on its own — see `stepRotations`, which
+    // the interval scheduler shares so the two cannot drift apart.
     //
     // Last, and out of what the scans left, because a rotation is elective and a scan is
     // how the drive notices files that changed underneath it.
-    out.rotated = [];
-    for (const c of targets) {
-      const state = await rotation.state(c.id).catch(() => null);
-      if (!state || state.status !== 'running') continue;
-      const next = await rotation.step(c.id, { budgetMs: each }).catch((e) => {
-        console.error(`[trove] rotation slice for ${c.id} failed`, e);
-        return null;
-      });
-      if (next) out.rotated.push({ collectionId: c.id, moved: next.moved, failed: next.failed, status: next.status });
-    }
+    out.rotated = await stepRotations(targets, each);
     return out;
   }
 
