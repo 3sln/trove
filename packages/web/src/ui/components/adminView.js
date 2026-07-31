@@ -172,7 +172,8 @@ function workSection(state, ui) {
       running.length ? `${running.length}` : 'nothing running'),
     row('Needs attention', 'Standing problems — they persist until fixed, unlike a toast.',
       act.issues?.length ? `${act.issues.length}` : 'none'),
-    div({ className: 'setting' },
+    // `stacked`: three buttons do not fit the 200px control column — see styles.css.
+    div({ className: 'setting stacked' },
       div({ className: 'info' },
         div({ className: 't' }, 'Maintenance'),
         div({ className: 'd' }, 'A scan picks up files changed in the bucket by something other than Trove. A reindex rebuilds search from scratch.'),

@@ -85,7 +85,22 @@ export class NavigationService {
     const stack = this.state.stack.filter((p) => !(p.kind === 'file' && p.id === id));
     this.#applyStack(stack.length ? stack : [{ kind: 'search' }], { history: false });
   }
+  /**
+   * A node changed underneath us — a rename — so every copy of it here has to change.
+   *
+   * BOTH the stack and the recents list, because recents hold a SNAPSHOT (id, name,
+   * contentType) rather than a reference: updating only the stack renamed the open panel's
+   * title and left the recent tile showing the old name until it aged off the end of the
+   * list, which reads as the rename half-failing.
+   */
   updateTabNode(node) {
+    const recents = this.state.recents.map((r) => (r.id === node.id
+      ? { ...r, name: node.name, contentType: node.contentType || r.contentType }
+      : r));
+    if (recents.some((r, i) => r !== this.state.recents[i])) {
+      this.#set({ recents });
+      saveRecents(recents);
+    }
     const stack = this.state.stack.map((p) => (p.kind === 'file' && p.id === node.id ? { ...p, node } : p));
     this.#applyStack(stack, { history: false });
   }

@@ -681,7 +681,15 @@ kbd {
 
 /* The admin console's action rows: several small buttons side by side, which the settings
    `.control` column is not otherwise shaped for. */
-.admin .control.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* A row whose control is a GROUP of buttons rather than one input.
+   `.setting .control` is a fixed 200px column, which is right for a select or a toggle and
+   far too narrow for three buttons — they wrapped 2-then-1 and sat jammed against the
+   edge. Such a row wraps instead, giving the buttons their own full-width line under the
+   description, so the longest label stops squeezing the group. */
+.setting.stacked { flex-wrap: wrap; }
+.setting.stacked .info { flex: 1 1 100%; }
+.setting.stacked .control { width: 100%; margin-top: 12px; }
+.admin .control.admin-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .admin .control.admin-actions .btn { white-space: nowrap; }
 .admin .control .mono.muted { color: var(--text-faint); }
 

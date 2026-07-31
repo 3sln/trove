@@ -1415,19 +1415,18 @@ export class SetActivityAction extends ShellAction {
   apply(wb) { wb.set({ activity: this.activity, sidebarVisible: true }); }
 }
 
-/** Close the topmost transient overlay — the Escape key's command. */
 /**
  * Close the topmost transient thing — what Escape does.
  *
- * The ORDER is the whole content of this action, and it spans three resources: the menu
+ * The ORDER is the whole content of this action, and it spans four resources: the menu
  * over the dialog, the dialog over the phone sheet, the sheet over the modal search, and
  * only when none of those is up does Escape start popping the panel stack. Getting it wrong
  * is not a crash — it is Escape closing the wrong thing, which is why it is written out
  * once, here, rather than distributed over whoever owns each overlay.
  */
 export class CloseOverlaysAction extends Action {
-  static deps = ['navigation', 'overlay', 'workbench'];
-  async execute({ navigation, overlay, workbench }) {
+  static deps = ['activity', 'navigation', 'overlay', 'workbench'];
+  async execute({ activity, navigation, overlay, workbench }) {
     const o = overlay.get();
     const wb = workbench.get();
     if (o.contextMenu) return overlay.set({ contextMenu: null });
@@ -1436,6 +1435,12 @@ export class CloseOverlaysAction extends Action {
     if (wb.searchModal) return workbench.set({ searchModal: false });
     if (o.palette) return overlay.set({ palette: null });
     if (o.pluginPanel) return overlay.set({ pluginPanel: null });
+    // The activity panel floats over the page and carries a close button like everything
+    // else in this ladder, and was the one such surface Escape did not reach. Below the
+    // plugin panel deliberately: it opens BY ITSELF when a storage check finishes, and
+    // Escape should not close what you opened on purpose in order to dismiss what
+    // appeared on its own.
+    if (activity.state?.open) return activity.togglePanel(false);
     // Nothing floating: Escape pops the top viewer panel instead.
     if (navigation.state.stack.length > 1) navigation.back();
   }
