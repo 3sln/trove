@@ -16,6 +16,62 @@
 // in a badge is not.
 
 /**
+ * Whether a package may be installed at all, and on what terms.
+ *
+ * Three answers, because the states differ in kind rather than in degree:
+ *
+ *   - `invalid` is REFUSED. It means the package was signed and the signature does not
+ *     verify — the bytes are not the bytes that were signed. No development workflow
+ *     produces that; it means the package was altered in transit or at rest. There is
+ *     nothing for a user to weigh, so they are not asked.
+ *
+ *   - `unverified` is installable but only DELIBERATELY. Nobody signed it, which is the
+ *     ordinary state of a plugin you are writing: you cannot sign a package you are still
+ *     changing. So it stays possible, behind an acknowledgement that says what is being
+ *     given up — no publisher, no proof the code is what its author shipped.
+ *
+ *   - `signed` carries a real signature whose domain does not vouch for the key. That is a
+ *     claim to a namespace rather than a proof of one, so it is said prominently and left
+ *     to the user; refusing it would block a valid publisher whose assetlinks are merely
+ *     misconfigured.
+ *
+ * This is also what closes namespace squatting. A package claiming another publisher's
+ * domain is unverified by construction — the real domain does not publish its key — so it
+ * cannot be installed without the user being told exactly that.
+ */
+export function installPolicyFor(trust) {
+  const t = describeTrust(trust);
+  if (t.status === 'invalid') {
+    return {
+      status: t.status,
+      allowed: false,
+      requiresAcknowledgement: false,
+      headline: 'This package has been altered',
+      detail: `${t.explanation}. It was signed, and the signature does not match its contents — so it is not what its author published. Trove will not install it.`,
+    };
+  }
+  if (t.status === 'unverified') {
+    return {
+      status: t.status,
+      allowed: true,
+      requiresAcknowledgement: true,
+      headline: 'Unsigned — for development only',
+      detail: 'Nobody has signed this package, so there is no way to tell who wrote it or whether it has been altered since. Install it only if you built it yourself or you trust wherever you got it from.',
+    };
+  }
+  if (t.status === 'signed') {
+    return {
+      status: t.status,
+      allowed: true,
+      requiresAcknowledgement: false,
+      headline: 'Signed, but the domain does not vouch for the key',
+      detail: `${t.explanation}. The signature is real; what is unproven is that ${t.domain || 'the publisher'} authorised it.`,
+    };
+  }
+  return { status: t.status, allowed: true, requiresAcknowledgement: false, headline: null, detail: null };
+}
+
+/**
  * @param {{status?: string, domain?: string, reason?: string}|null} trust
  * @returns {{status: string, tone: string, icon: string, domain: string|null, explanation: string, severity: number}}
  */

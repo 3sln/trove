@@ -24,13 +24,19 @@ export function pluginReview(d, ui, view) {
   const sel = draftFor(view, KEY, d, {
     // Default: request everything the user is allowed to grant.
     grants: s.capabilities.filter((c) => !c.adminOnly || d.isAdmin).map((c) => c.id),
+    // Never defaulted true. An acknowledgement that arrives pre-ticked is not one.
+    acknowledged: false,
   });
+  const policy = d.policy || { requiresAcknowledgement: false };
+  // Install stays out of reach until the risk has actually been acknowledged. A package
+  // this applies to is unsigned — see installPolicyFor.
+  const blocked = policy.requiresAcknowledgement && !sel.acknowledged;
   // A new array rather than a mutated Set: the write has to be a different value for the
   // cell to see it as a change at all.
-  const toggle = (cap) => ui.engine.dispatch(new SetViewStateAction(KEY, {
-    ref: sel.ref,
+  const patch = (fields) => ui.engine.dispatch(new SetViewStateAction(KEY, { ...sel, ...fields }));
+  const toggle = (cap) => patch({
     grants: sel.grants.includes(cap) ? sel.grants.filter((c) => c !== cap) : [...sel.grants, cap],
-  }));
+  });
 
   return div({},
     div({ className: 'scrim' }).on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
@@ -50,11 +56,35 @@ export function pluginReview(d, ui, view) {
         s.settings.length ? section('Settings', div({ className: 'contrib-list' }, ...s.settings.map(settingRow))) : null,
         div({ className: 'review-meta' }, `${s.fileCount} files · ${fmtBytes(s.sizeBytes)} · id ${s.id}`),
       ),
+      policy.headline ? trustWarning(policy, sel, patch) : null,
       div({ className: 'row-actions' },
         button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
-        button({ className: 'btn primary' }, icon('plug', { size: 15 }), 'Install').on({ click: () => d.onInstall([...sel.grants]) }),
+        button({ className: `btn primary ${blocked ? 'disabled' : ''}`, disabled: blocked },
+          icon('plug', { size: 15 }), 'Install')
+          .on({ click: () => !blocked && d.onInstall([...sel.grants]) }),
       ),
     ),
+  );
+}
+
+/**
+ * What is wrong with this package's provenance, said before the Install button rather than
+ * as a badge beside the name.
+ *
+ * A badge is something you can read past. This sits between the review and the action, and
+ * where an acknowledgement is required it holds the button until the box is ticked — which
+ * is the difference between telling someone and asking them.
+ */
+function trustWarning(policy, sel, patch) {
+  return div({ className: `review-warning ${policy.status}` },
+    div({ className: 'rw-head' }, icon('warn', { size: 15 }), span(policy.headline)),
+    div({ className: 'rw-detail' }, policy.detail),
+    policy.requiresAcknowledgement
+      ? label({ className: 'rw-ack' },
+        input({ type: 'checkbox', checked: !!sel.acknowledged })
+          .on({ change: (e) => patch({ acknowledged: !!e.target.checked }) }),
+        span('I know this package is unsigned and I trust where it came from'))
+      : null,
   );
 }
 

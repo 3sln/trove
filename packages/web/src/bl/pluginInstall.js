@@ -8,6 +8,7 @@
 
 import { parsePackage, fetchPackage, reviewSummary, displayName } from '../platform/pluginPackage.js';
 import { pluginId } from '@3sln/trove/core/plugins/identity.js';
+import { installPolicyFor } from './trust.js';
 
 /** @typedef {{notifications: object, plugins: object, workbench: object, social: object}} InstallResources */
 
@@ -42,10 +43,22 @@ async function review(r, pkg) {
   try {
     trust = await r.plugins.assessTrust(pkg);
   } catch { /* offline / unreachable */ }
+
+  // A tampered package is refused here rather than presented with a warning. The review
+  // dialog exists to let someone weigh what a plugin asks for against who is asking; a
+  // signature that does not match its contents means the "who" is unknown and the contents
+  // are not what was signed, so there is nothing to weigh. See installPolicyFor.
+  const policy = installPolicyFor(trust);
+  if (!policy.allowed) {
+    r.notifications.error(`“${label}” was not installed. ${policy.detail}`, { sticky: true });
+    return;
+  }
+
   const summary = reviewSummary(pkg, trust);
   r.workbench.showDialog({
     kind: 'plugin-review',
     summary,
+    policy,
     isAdmin: !!r.social.state.admin,
     onInstall: async (grants) => {
       r.workbench.closeDialog();

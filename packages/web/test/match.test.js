@@ -5,7 +5,7 @@
 
 import { test, expect } from './testkit.js';
 import { matchScore, rankCommands } from '../src/bl/match.js';
-import { describeTrust } from '../src/bl/trust.js';
+import { describeTrust, installPolicyFor } from '../src/bl/trust.js';
 import { parseMentions } from '../src/bl/mentions.js';
 
 const CMDS = [
@@ -134,4 +134,49 @@ test('parsing twice gives the same answer', () => {
   // second parse of the same body would start halfway through it.
   const body = 'hi @bob and @[Ada](u_1)';
   expect(parseMentions(body)).toEqual(parseMentions(body));
+});
+
+// --- install policy -------------------------------------------------------------------
+//
+// The three states differ in kind, not degree, so they get three different answers.
+
+test('a tampered package is refused outright, not warned about', () => {
+  const p = installPolicyFor({ status: 'invalid' });
+  expect(p.allowed).toBe(false);
+  // Nothing to acknowledge: the review dialog exists to weigh what a plugin asks for
+  // against who is asking, and a signature that does not match its contents means the
+  // contents are not what was signed. There is no judgement to offer the user.
+  expect(p.requiresAcknowledgement).toBe(false);
+  expect(p.detail).toContain('not what its author published');
+});
+
+test('an unsigned package is installable, but only deliberately', () => {
+  const p = installPolicyFor({ status: 'unverified' });
+  expect(p.allowed).toBe(true);
+  // You cannot sign a package you are still changing, so banning this outright would make
+  // plugin development impossible.
+  expect(p.requiresAcknowledgement).toBe(true);
+  expect(p.headline).toContain('development only');
+});
+
+test('a signed package whose domain does not vouch is warned about, not gated', () => {
+  const p = installPolicyFor({ status: 'signed', domain: 'acme.com' });
+  expect(p.allowed).toBe(true);
+  expect(p.requiresAcknowledgement).toBe(false);
+  // Refusing would block a real publisher whose assetlinks are merely misconfigured.
+  expect(p.headline).toContain('does not vouch');
+});
+
+test('a verified package is installed without ceremony', () => {
+  const p = installPolicyFor({ status: 'verified', domain: 'acme.com' });
+  expect(p).toEqual({ status: 'verified', allowed: true, requiresAcknowledgement: false, headline: null, detail: null });
+});
+
+test('a package whose trust could not be assessed is treated as unsigned', () => {
+  // Offline, or an assetlinks lookup that failed. Never as verified.
+  for (const t of [null, undefined, {}, { status: 'nonsense' }]) {
+    const p = installPolicyFor(t);
+    expect(p.allowed).toBe(true);
+    expect(p.requiresAcknowledgement).toBe(true);
+  }
 });
