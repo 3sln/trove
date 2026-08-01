@@ -19,6 +19,7 @@ directory of closed tickets is a directory nobody reads.
 | [019](019-the-prose-has-drifted-from-the-code.md) | The prose has drifted from the code | A wrong comment in this codebase is believed, because the right ones are so good |
 | [020](020-state-that-escapes-the-engine.md) | State that escapes the engine | Side channels the resource graph cannot see — `window.__trove` ships to production |
 
+| [021](021-nothing-limits-what-one-caller-can-cost.md) | Nothing limits what one caller can cost | No rate limiting anywhere — a leaked key or an open drive can spend CPU, bandwidth and embedding credit without bound |
 Tickets 012–020 come from a multi-agent architecture audit (Aug 2026): eight lenses over
 the four packages, every finding put through an adversary whose job was to refute it. 16 were
 killed that way. The audit's verdict was that nothing here needs rearchitecting — it needs
