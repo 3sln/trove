@@ -90,9 +90,8 @@ itself: `worker/lib/mp4-faststart.js` walks atoms with no ffmpeg and no decode, 
 `moov` in memory.
 
 The second m4b problem is seeking: it wants `moov` before `mdat` ("faststart"), and storia
-remuxes server-side to guarantee it. We will not. Non-faststart files still play — the
-browser range-fetches the tail to find `moov` — but the first seek is slow. Accept that and
-say so in the UI; do not port a remuxer into a plugin.
+remuxes server-side to guarantee it. We will not — see **Probing for `moov`** below, which
+is how a book earns the right to stream instead of being downloaded first.
 
 **AAC, and the DRM question** — the word covers two different things and they have opposite
 answers:
@@ -109,9 +108,10 @@ decision. If it is wanted, the cheap and honest form is **convert on import** �
 becomes an m4b before it enters the drive — rather than a decryptor living inside the viewer
 sandbox. That keeps the key handling out of the plugin and out of the drive.
 
-## The thing to settle first: a viewer cannot get bytes
+## A viewer cannot get bytes — the gap under all of this
 
-Checked against the SDK and its host handlers, and this blocks the whole port:
+Checked against the SDK and its host handlers. Nothing else in this ticket can be built
+until it is closed:
 
 - `files:read` resolves `{ text: await api.readText(id) }` — **text**. There is no binary
   read for drive files. An m4b through that is not slow, it is corrupt.
@@ -124,17 +124,132 @@ Checked against the SDK and its host handlers, and this blocks the whole port:
 So today an audiobook plugin cannot obtain its audio at all — and even if it could, pulling a
 700 MB book into the iframe is not a design. Playback needs ranges and seeking, not a buffer.
 
-The fix already exists in shape. `platform/mediaUrls.js` mints URLs for exactly this problem
-— its header opens "URLs for things that cannot send a header … an `<img src>`, a
-`<video src>`" — batched, with expiry and re-minting. Exposing that to viewer frames gives
-`<audio src>` something that authenticates itself, seeks by range, and works through the
-sealed path for encrypted collections, where ranged reads already go through `cipherRangeFor`.
+Two ways to close it, and we are taking the second.
 
-One tension to resolve deliberately rather than by accident: the SDK header states that
-plugins hold opaque handles and "never host URLs". That stance is about *package resources*,
-and `files:downloadUrl` already departs from it for drive files. Decide whether minted media
-URLs are a sanctioned exception for viewers — they are scoped and they expire, which is the
-argument — and write it down where the next person will look.
+**Minted URLs.** `platform/mediaUrls.js` already mints self-authorizing URLs for exactly this
+problem — its header opens "URLs for things that cannot send a header … an `<img src>`, a
+`<video src>`". Hand one to the sandbox and `<audio src>` streams natively: the browser does
+its own range requests, seeking is free, and no format work is needed. The cost is that the
+sandbox now holds a host URL, against the SDK's stated rule that plugins hold only opaque
+handles. Keep this in mind — it is the escape hatch if the format work below proves too deep.
+
+**A Blob (chosen).** `Blob` is already the browser's interface for "bytes I can address
+without holding them": `slice()` is free, `stream()` is a reader, and everything that eats
+bytes eats a Blob. So the range reader wears the interface that already exists rather than
+inventing a parallel vocabulary, and no host URL crosses into the sandbox.
+
+## RemoteBlob
+
+`class RemoteBlob extends Blob`, constructed by the SDK, fetching ranges over the port the
+frame already holds. `ctx.files.blob(id)` returns one. Surface:
+
+- `size` / `type` / `etag` — `etag` refreshed from every read, because a file overwritten in
+  place keeps its id, and anything cached off these bytes has to notice.
+- `slice(start, end)` — a window on the same source. No bytes move and none need to exist.
+- `stream()`, `bytes()`, `arrayBuffer()`, `text()`, and a `chunks()` async iterator.
+- `local({ onProgress, signal })` — **realize** the bytes into an ordinary Blob.
+
+Two host-side pieces it needs: `api.readRange(id, {start, end})` returning
+`{bytes, etag, total}` (half-open `[start, end)`, converted to HTTP's inclusive range at that
+one boundary; `total` parsed from `content-range`), and a `files:bytes` RPC method that
+capability-gates it and returns the bytes as a transferred buffer.
+
+**The sharp edge, and it is sharp.** A Blob *subclass* only overrides what JavaScript calls.
+Anything reading the blob's INTERNAL bytes — `URL.createObjectURL`, `new Response(blob)`,
+`fetch(url, {body})`, and **structured clone through `postMessage`** — bypasses the overrides
+entirely and sees the empty blob passed to `super()`. Two consequences to design around:
+
+1. A RemoteBlob cannot be posted into the sandbox from the host; it would arrive as a plain,
+   empty Blob. It is constructed **inside** the frame that uses it.
+2. `local()` is the escape hatch for all of them: a realized Blob really does hold its bytes,
+   so it works with `createObjectURL` — which is precisely the download-then-play path for a
+   book that cannot be streamed.
+
+## Offline, and where a chunk comes from
+
+A read should prefer whatever local copy already exists. Three answers, in order:
+
+1. **A pinned whole-file copy.** `bl/offline.js` already pins: it fetches with a minted URL
+   and `cache.put`s the whole Response into Cache Storage (`trove-files-v1`), keyed on the
+   *stable* `mediaUrls.cacheKey(id)` rather than the minted URL, so `unpin` can find it
+   again. Slicing that cached Response's Blob is disk-backed and costs nothing — a pinned
+   book plays with the network off, and this comes almost free.
+2. **Chunks of a download in progress.** Playing from the middle fetches the middle. If that
+   file is *also* being taken offline, those bytes are worth keeping, so the read contributes
+   them to the store and the background filler skips them later.
+3. **The network**, keeping nothing.
+
+The third case is the default and the one that matters most: a plugin ranging over a file
+nobody asked to keep must not quietly fill the disk with it. **Bytes are retained only for an
+item someone has actually asked to have offline** — `start(id)` is that asking, and until it
+is called this is a plain ranged reader. That was the explicit requirement and it is the rule
+the whole design hangs off.
+
+Sketch: a `FileChunks` service in `platform/`, fixed chunk size (4 MiB — a long book is a few
+hundred entries, not a few thousand), chunks in their own cache keyed
+`${downloadUrl(id)}#chunk=${etag}:${chunkSize}:${index}`. **The etag is in the key**: a file
+overwritten in place keeps its id, so an id-keyed cache would hand a viewer the head of the
+old file and the tail of the new one — for a container format that is a parse failure, and a
+confusing one. On a changed etag the old chunks stop matching and get swept.
+
+`start(id)` marks the item as kept and runs a background filler over the missing chunks in
+order; it must be idempotent, so starting a running download returns its status rather than
+racing a second filler over the same chunks. Plus `status(id)`, `cancel(id)`, and `remove(id)`
+(cancel and reclaim).
+
+The natural flow this enables, and the one the player should use: **starting playback starts
+the download.** From then on every chunk is checked locally first and fetched only on a miss,
+so a book listened straight through downloads itself exactly once, and a book skipped around
+in fills its gaps in the background.
+
+## Download progress
+
+The SDK needs to both trigger and monitor a download, so a viewer can show a real progress
+bar and a Download button for anything that cannot stream. Two levels, and the plugin picks:
+
+- `RemoteBlob.local({ onProgress, signal })` — a one-shot download into memory. `onProgress`
+  gets `{loaded, total, ratio}` after each chunk **and once with `loaded: 0` before the
+  first**, so a bar can appear at 0% instead of jumping in partway. `signal` cancels between
+  chunks.
+- `ctx.files.offline.{start,status,cancel,remove}` plus progress events pushed to the frame —
+  a durable download that survives the viewer closing, which is what "make this available
+  offline" means as opposed to "fetch it so I can play it now".
+
+## Probing for `moov`
+
+**Whether we can locate `moov` is what decides streamable versus download-first**, so the
+probe runs before playback and its answer drives the UI.
+
+Best effort, cheap, and local. Read a head window and a tail window, then walk the top-level
+box chain: each box header gives its own size, so the next header's offset is known and can
+be read 16 bytes at a time — no scanning. Handle the 64-bit form (`size == 1` → `largesize`)
+and the to-EOF form (`size == 0`). Most files answer from the head and tail windows alone
+without a third request. If the chain breaks, fall back to scanning the tail window for a
+`moov` signature, validating a candidate by checking that the size in front of it lands
+exactly on EOF or on another plausible box header — that validation is what keeps a scan from
+returning garbage.
+
+Result: `{found, offset, size, faststart, via: 'chain'|'tail-scan'}`. Cache it **keyed by
+etag**, same reasoning as the chunk store — a re-uploaded file must re-probe rather than
+seek into a layout that is no longer there.
+
+Storia's `worker/lib/mp4-faststart.js` is a direct donor: `readBox`, `planFaststart` (which
+already walks exactly this chain), `patchMoovOffsets`, and `faststartChunks`. Note why
+patching exists — relocating `moov` shifts every media chunk, so `stco`/`co64` offset tables
+inside it have to be corrected by the delta or every sample points at the wrong bytes.
+
+**The open risk, which needs proving before the rest is built.** Finding `moov` gets us the
+sample tables, which is what makes time → byte-range mapping possible. But a Blob is not a
+URL, so there is no `<audio src>` to hand it to; feeding a player progressively means Media
+Source Extensions, and **MSE does not accept a progressive MP4** — it wants fragmented ISO
+BMFF (`moof`+`mdat` segments after an init segment), and a normal m4b is one `moov` plus one
+`mdat`. So streaming through the Blob path means fragmenting in the browser (mp4box.js does
+this; it is a real dependency and real work).
+
+Prove that end first with one file. If it turns out too deep, the minted-URL option above
+buys native streaming with no format work at all, and the moov probe is still what tells the
+user which of the two they are getting. Either way the fallback is the same and is worth
+shipping first because it always works: `local()` with progress, then an object URL.
 
 ## Done when
 
@@ -143,3 +258,8 @@ plugin opens LPF and M4B audiobooks from the drive, streams them by range instea
 them whole, shows chapters for both, keeps playing from the dock while the user browses, and
 drives the OS transport controls through the media session. Plain AAC plays. `.aax`/`.aaxc`
 is answered one way or the other in writing, even if the answer is "not supported".
+
+And underneath it: a viewer can read a file's bytes by range without a host URL; a book that
+cannot be streamed offers a Download button with real progress; a book being kept offline is
+fetched exactly once whether the listener plays it straight through or skips around; and a
+file nobody asked to keep leaves nothing behind on disk.
