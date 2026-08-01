@@ -129,3 +129,35 @@ test('indexing reads plaintext, which is why search still works', async () => {
   const asText = await new Response(seen.stream).text();
   expect(asText).toContain('tomato soup');
 });
+
+test('the server-side write path seals too, and records the file size', async () => {
+  // `writeFile` put bytes straight to the bucket and recorded the item with no `encryption`
+  // at all, never asking whether the collection encrypts — a readable file in a collection
+  // set up to be encrypted, stamped as unencrypted so the read path served it back happily.
+  // Once the drive started sealing uploads this was the only way left to get plaintext in.
+  const d = await drive();
+  const node = await d.vfs.writeFile('server-side.txt', 'the quick brown fox', {
+    collectionId: d.secret.id, contentType: 'text/plain',
+  });
+
+  expect(node.encryption?.fingerprint).toBe(d.secret.encryption.fingerprint);
+  // The size a person sees is the FILE's, not the envelope's.
+  expect(node.size).toBe('the quick brown fox'.length);
+  // Reads back as the file…
+  expect(await new Response((await d.vfs.readStream(node.id)).stream).text()).toBe('the quick brown fox');
+  // …and what the bucket holds is an envelope, with the text nowhere in it.
+  const raw = new Uint8Array(await new Response((await d.storage.get(node.storageKey)).stream).arrayBuffer());
+  expect(isEnvelope(raw)).toBe(true);
+  expect(new TextDecoder().decode(raw)).not.toContain('quick brown');
+});
+
+test('a collection that encrypts only some things still writes the rest in the clear', async () => {
+  // `shouldEncrypt` takes the name and content type, so this path has to ask the same
+  // question an upload asks or the two disagree about the same file.
+  const d = await drive({ rules: { extensions: ['.secret'] } });
+  const plain = await d.vfs.writeFile('notes.txt', 'hello', { collectionId: d.secret.id, contentType: 'text/plain' });
+  expect(plain.encryption ?? null).toBe(null);
+
+  const sealed = await d.vfs.writeFile('x.secret', 'hidden', { collectionId: d.secret.id, contentType: 'text/plain' });
+  expect(sealed.encryption?.fingerprint).toBe(d.secret.encryption.fingerprint);
+});

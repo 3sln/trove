@@ -10,4 +10,3 @@ directory of closed tickets is a directory nobody reads.
 | # | Ticket | Why it matters |
 |---|--------|----------------|
 | [002](002-admin-console.md) | Admin console | Collections, API keys and per-plugin egress are still not where an administrator would look |
-| [011](011-writefile-stores-plaintext.md) | `writeFile` stores plaintext | The server-side write path ignores a collection's encryption entirely |

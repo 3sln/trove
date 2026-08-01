@@ -12,8 +12,12 @@
 
 import { TroveError, isOutOfSpace } from './errors.js';
 import { UploadManager } from './uploads.js';
-import { toHex } from './encryption/keys.js';
-import { decryptStream, decodeHeader, cipherRangeFor, cipherSize, HEADER_BYTES } from './encryption/envelope.js';
+import { fromHex, toHex } from './encryption/keys.js';
+import {
+  encrypt, decryptStream, decodeHeader, cipherRangeFor, cipherSize, HEADER_BYTES,
+  DEFAULT_CHUNK_SIZE,
+} from './encryption/envelope.js';
+import { shouldEncrypt } from './encryption/policy.js';
 import { IndexerRegistry } from './indexers/registry.js';
 import { ParsingSearchTransformer, matchTagFilters } from './search/transformer.js';
 import { extname } from './util.js';
@@ -54,6 +58,24 @@ async function bytesOf(stream) {
   let at = 0;
   for (const p of parts) { out.set(p, at); at += p.length; }
   return out;
+}
+
+/**
+ * Whatever `writeFile` was handed, as bytes.
+ *
+ * Sealing needs the plaintext size before it can write the envelope header, and this path
+ * is the convenience write for things already resident, so buffering costs nothing that was
+ * not already paid.
+ */
+async function bytesOfBody(body) {
+  if (body == null) return new Uint8Array(0);
+  if (typeof body === 'string') return new TextEncoder().encode(body);
+  if (body instanceof Uint8Array) return body;
+  if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (typeof body.arrayBuffer === 'function') return new Uint8Array(await body.arrayBuffer());
+  if (typeof body.getReader === 'function') return bytesOf(body);
+  return new Uint8Array(body);
 }
 
 /**
@@ -130,6 +152,32 @@ export class Vfs {
   async init() {
     await this.metadata.init();
     if (this.collections) await this.collections.init();
+  }
+
+  /**
+   * What this collection wants sealed, and the key for it — or null.
+   *
+   * The same question `UploadManager` asks through its injected `encryptionFor`, including
+   * `shouldEncrypt`, so a collection with per-item rules answers identically whichever way
+   * the bytes arrive.
+   */
+  async #sealingFor(collectionId, name, contentType) {
+    if (!this.collections?.encryptionFor) return null;
+    // A collection record that is not there cannot ask for anything. `writeFile` defaults
+    // to 'default', which on a zero-config drive is a storage backend rather than a
+    // collection anyone created, and asking about it throws rather than answering "no".
+    let encryption;
+    try {
+      encryption = await this.collections.encryptionFor(collectionId);
+    } catch (err) {
+      if (err?.code === 'not_found') return null;
+      throw err;
+    }
+    if (!encryption?.enabled) return null;
+    if (!shouldEncrypt(encryption, { name, contentType })) return null;
+    const key = await this.collections.dataKeyFor(collectionId);
+    if (!key) throw TroveError.internal('This collection is encrypted but its key is unavailable');
+    return { key, fingerprint: fromHex(encryption.fingerprint), chunkSize: encryption.chunkSize || DEFAULT_CHUNK_SIZE };
   }
 
   /** Resolve the storage backend for a collection. */
@@ -256,9 +304,31 @@ export class Vfs {
     const storageKey = `obj_${cryptoId()}`;
     const ct = contentType || this.guessContentType(name);
     const storage = await this.storageFor(collectionId);
+    // Sealed here too, if the collection says so.
+    //
+    // This path wrote straight to the bucket and recorded the item with no `encryption`,
+    // never asking — so a server-side write put a READABLE file in a collection someone had
+    // set up to be encrypted, and stamped it as unencrypted so the read path served it back
+    // happily and nothing ever said otherwise. Once the drive started sealing uploads, this
+    // was the only remaining way to get plaintext into an encrypted bucket.
+    const sealing = await this.#sealingFor(collectionId, name, ct);
+    let toStore = body;
+    let encryption = null;
+    let plaintextSize = null;
+    if (sealing) {
+      // Buffered, unlike the upload path, which streams. This is the convenience write for
+      // things already resident — a sidecar, a test fixture, an in-process import — and the
+      // envelope needs the plaintext size before it can write its header.
+      const plain = await bytesOfBody(body);
+      plaintextSize = plain.length;
+      toStore = await encrypt(sealing.key, plain, {
+        fingerprint: sealing.fingerprint, chunkSize: sealing.chunkSize,
+      });
+      encryption = { fingerprint: toHex(sealing.fingerprint), chunkSize: sealing.chunkSize };
+    }
     let info;
     try {
-      info = await storage.put(storageKey, body, { contentType: ct, signal });
+      info = await storage.put(storageKey, toStore, { contentType: ct, signal });
     } catch (err) {
       // A write that failed for lack of room is a standing condition, not one bad
       // request: the next upload will fail the same way. Record it so it is visible
@@ -266,7 +336,11 @@ export class Vfs {
       if (isOutOfSpace(err)) await this.storageUsage(collectionId).catch(() => {});
       throw err;
     }
-    const node = await this.#upsertItem({ collectionId, name, storageKey, size: info.size, contentType: ct, etag: info.etag });
+    // The size the user sees is the FILE's, not the envelope's.
+    const node = await this.#upsertItem({
+      collectionId, name, storageKey, size: plaintextSize ?? info.size, contentType: ct,
+      etag: info.etag, encryption,
+    });
     // Small server-side writes index synchronously (search is ready on return);
     // large client uploads (completeUpload) index in the background instead.
     await this.indexing.indexNode(node).catch((e) => console.error('index error', e));
