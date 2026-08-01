@@ -10,4 +10,3 @@ directory of closed tickets is a directory nobody reads.
 | # | Ticket | Why it matters |
 |---|--------|----------------|
 | [002](002-admin-console.md) | Admin console | Collections, API keys and per-plugin egress are still not where an administrator would look |
-| [010](010-direct-read-round-trips.md) | Direct reads cost two round trips and a plan each | A gallery of a hundred thumbnails fetches a hundred collection keys |

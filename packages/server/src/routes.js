@@ -5,7 +5,7 @@
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
-  shouldEncrypt, estimateRotationCost, toHex,
+  shouldEncrypt, estimateRotationCost,
 } from '@3sln/trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@3sln/trove/core/plugins/identity.js';
 
@@ -375,73 +375,7 @@ export function createRouter() {
     return (await ctx.access.node(b.id, 'delete')).remove();
   });
 
-  // How long a download plan's URL is good for. Twelve hours, matching the `media`
-  // signed-URL purpose and for the same reason stated there.
-  const PLAN_TTL_SECONDS = 12 * 60 * 60;
-
   // --- download (presign redirect or range-aware proxy) ----------------------
-
-  /**
-   * How to fetch this object's bytes WITHOUT going through the drive.
-   *
-   * The mirror of the upload plan, and the same trade: the key travels, the bytes do not.
-   * Encryption here defends the storage host, not the server and not the client — the
-   * server holds the key already in order to index — so handing the key to a caller that
-   * may already read the file costs nothing and buys a download that never touches us.
-   * Without this, encryption silently disabled direct downloads: `getDownload` refuses to
-   * redirect to ciphertext unless asked, nothing asked, and so every read of an encrypted
-   * collection proxied — the collections that most wanted direct transfer got the least.
-   *
-   * Session auth only, which is simply what a JSON endpoint gets by not asking for more.
-   * Signed URLs are for callers that cannot send a header and want BYTES — an <img src>, a
-   * <video src>, cache.add(); a plan is read by code, and code has a session. Worth one
-   * line only as a note to whoever might later extend signatures across the API: leave
-   * this endpoint out, because a signature grants `read` on one node and the key this
-   * returns opens the whole collection.
-   *
-   * `fingerprint` selects which key, because mid-rotation the object's own header is the
-   * authority on what sealed it and some objects are still on the retired key. The caller
-   * reads the header, then asks for the key that matches it.
-   */
-  r.get('/api/items/download/plan', ['collections'], async (ctx) => {
-    const { query } = ctx;
-    if (!query.id) throw TroveError.invalid('id is required');
-    const node = await ctx.access.node(query.id, 'read');
-    // Long-lived on purpose, and `expiresAt` travels with it so a caller can hold the plan
-    // rather than re-ask per request. Same reasoning as the `media` signed-URL purpose: a
-    // <video> re-requests on every seek, so this has to outlive the SITTING, not the
-    // request — an evening of episodes, not one GET.
-    const expiresIn = PLAN_TTL_SECONDS;
-    const d = await node.download({ ciphertext: true, expiresIn });
-    // Not presign-capable, or nothing to redirect to: say so plainly rather than inventing
-    // a URL, and the caller keeps proxying.
-    if (d.mode !== 'redirect') return { direct: false };
-    const expiresAt = Date.now() + expiresIn * 1000;
-    const enc = d.encryption || null;
-    // The content type travels with the plan: the caller is building the Response the
-    // browser will see, and a decrypted <img>/<video> body served as octet-stream does not
-    // render.
-    const contentType = node.contentType || 'application/octet-stream';
-    if (!enc) return { direct: true, url: d.url, contentType, expiresAt, encryption: null };
-    const key = ctx.collections?.dataKeyFor
-      ? await ctx.collections.dataKeyFor(node.collectionId, query.fingerprint || undefined)
-      : null;
-    // A collection whose key this server cannot produce is one the caller cannot decrypt,
-    // so offering the direct URL would hand over bytes it can only fail on.
-    if (!key) return { direct: false };
-    return {
-      direct: true,
-      url: d.url,
-      contentType,
-      expiresAt,
-      encryption: {
-        algorithm: 'AES-256-GCM',
-        chunkSize: enc.chunkSize,
-        fingerprint: enc.fingerprint,
-        key: toHex(key),
-      },
-    };
-  });
 
   r.get('/api/items/download', [], async (ctx) => {
     const { query, req } = ctx;
