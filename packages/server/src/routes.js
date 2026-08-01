@@ -232,28 +232,31 @@ export function createRouter() {
   // --- collections -----------------------------------------------------------
 
   r.get('/api/collections', ['collections'], async (ctx) => {
-    const { collections, principal } = ctx;
-    return { collections: await collections.list(principal), canCreate: collections.canCreate(principal) };
+    // `listFor`, not `list(principal)`: a key request has no principal, and the drive it
+    // can see is the one its scopes name. `canCreate` stays a principal question — making
+    // a collection is not a capability any scope can hold, so a key never can.
+    return { collections: await listFor(ctx), canCreate: ctx.collections.canCreate(ctx.principal) };
   });
 
   r.get('/api/collections/:id', ['collections'], async (ctx) => {
-    const { collections, principal, params } = ctx;
-    const c = await collections.assert(principal, params.id, 'read');
-    return { collection: collections.describe(c, principal) };
+    return { collection: describeFor(ctx, await assertCap(ctx, ctx.params.id, 'read')) };
   });
 
   r.post('/api/collections', ['collections'], async (ctx) => {
     requireCollections(ctx);
+    refuseGrant(ctx, 'create collections');
     return { collection: await ctx.collections.create(await body(ctx.req), ctx.principal) };
   });
 
   r.post('/api/collections/:id', ['collections'], async (ctx) => {
     requireCollections(ctx);
+    refuseGrant(ctx, 'change a collection');
     return { collection: await ctx.collections.update(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
 
   r.delete('/api/collections/:id', ['collections', 'vfs'], async (ctx) => {
     requireCollections(ctx);
+    refuseGrant(ctx, 'delete a collection');
     const { collections, vfs, principal, params } = ctx;
     // A collection record is the only thing that knows where its items' BYTES live, so
     // deleting it while items still reference it stranded every one of them: `storageFor`
@@ -282,6 +285,7 @@ export function createRouter() {
    */
   r.get('/api/collections/:id/grants', ['collections'], async (ctx) => {
     requireCollections(ctx);
+    refuseGrant(ctx, 'read a collection\u2019s access list');
     const c = await ctx.collections.assert(ctx.principal, ctx.params.id, 'admin');
     // Drive administrators come from the DEPLOYMENT (TROVE_ADMINS), not from this ACL, and
     // returning them alongside rather than inside `grants` is the honest shape: they hold
@@ -295,6 +299,7 @@ export function createRouter() {
 
   r.post('/api/collections/:id/grants', ['collections'], async (ctx) => {
     requireCollections(ctx);
+    refuseGrant(ctx, 'change who can reach a collection');
     return { collection: await ctx.collections.setGrant(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
 
@@ -1158,8 +1163,29 @@ async function readableCollectionIds(ctx, narrowTo) {
     await ctx.access.collection(narrowTo, 'read');
     return [narrowTo];
   }
-  return (await ctx.collections.list(ctx.principal)).map((c) => c.id);
+  return (await listFor(ctx)).map((c) => c.id);
 }
+
+// --- who is asking ------------------------------------------------------------
+//
+// On a key request `ctx.principal` is NULL and the authority lives on `ctx.grant`, so
+// handing the principal to CollectionService asks about the anonymous caller instead of
+// about the key. That failed in both directions: on a locked drive a correctly-scoped
+// key got `list(null) === []` and 403s from search, tags, backlinks, tasks and issues,
+// while on a `defaultOpen` drive the `anyone` grant let a key scoped to one collection
+// read and write every one of them through those same routes. engine/providers/access.js
+// was the only place that had it right.
+//
+// One helper per question, so "does this surface understand API keys" has one answer
+// rather than one per call site. Never a union of the two: a request bearing a key is
+// the key's request, and falling back to whatever session is attached is how a weak
+// credential borrows a strong one.
+
+const listFor = (ctx) =>
+  (ctx.grant ? ctx.collections.listForGrant(ctx.grant) : ctx.collections.list(ctx.principal));
+
+const wholeDriveFor = (ctx) =>
+  (ctx.grant ? ctx.collections.grantHasWholeDrive(ctx.grant) : ctx.collections.hasWholeDrive(ctx.principal));
 
 /**
  * Whether this deployment has an ACL layer at all.
@@ -1183,9 +1209,30 @@ function requireCollections(ctx) {
   if (!collectionsEnabled(ctx)) throw TroveError.unsupported('Collections are not enabled');
 }
 
+/** Returns the collection record, so a caller that needs it does not assert twice. */
 async function assertCap(ctx, collectionId, capability) {
-  if (!collectionsEnabled(ctx)) return; // no ACL layer configured
-  await ctx.collections.assert(ctx.principal, collectionId, capability);
+  if (!collectionsEnabled(ctx)) return ctx.collections.get(collectionId); // no ACL layer configured
+  return ctx.grant
+    ? ctx.collections.assertForGrant(ctx.grant, collectionId, capability)
+    : ctx.collections.assert(ctx.principal, collectionId, capability);
+}
+
+/** The `describe` that matches whoever asked, so the reported capabilities are theirs. */
+const describeFor = (ctx, c) =>
+  (ctx.grant ? ctx.collections.describeForGrant(c, ctx.grant) : ctx.collections.describe(c, ctx.principal));
+
+/**
+ * Refuse a request that arrived on an API key.
+ *
+ * For the collection-ADMINISTRATION verbs, whose authority CollectionService reads from
+ * the principal alone. A key request has no principal, so those methods judge it as the
+ * anonymous caller — allowing everything on a `defaultOpen` drive and nothing on a locked
+ * one. Rather than teach create/update/remove/setGrant about grants, keys stay out: a key
+ * that can rewrite a collection's ACL can grant itself whatever it lacks, which is the
+ * self-escalation shape `requireHumanAdmin` refuses for the same reason.
+ */
+function refuseGrant(ctx, action) {
+  if (ctx.grant) throw TroveError.forbidden(`An API key cannot ${action} — sign in instead`);
 }
 
 /**
@@ -1194,15 +1241,13 @@ async function assertCap(ctx, collectionId, capability) {
  * CollectionService.hasWholeDrive for why this isn't plain `isAdmin`.
  */
 async function requireWholeDrive(ctx, what) {
-  const allowed = collectionsEnabled(ctx)
-    ? await ctx.collections.hasWholeDrive(ctx.principal)
-    : !!ctx.principal;
+  const allowed = collectionsEnabled(ctx) ? await wholeDriveFor(ctx) : !!(ctx.principal || ctx.grant);
   if (!allowed) throw TroveError.forbidden(`You do not have permission to ${what}`);
 }
 const canWholeDrive = (ctx) =>
   (collectionsEnabled(ctx)
-    ? ctx.collections.hasWholeDrive(ctx.principal)
-    : Promise.resolve(!!ctx.principal));
+    ? wholeDriveFor(ctx)
+    : Promise.resolve(!!(ctx.principal || ctx.grant)));
 
 /**
  * Who may act on an issue: whoever may act on the thing it is about.

@@ -9,7 +9,6 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [013](013-api-key-grants-are-invisible-to-authorization.md) | API-key grants invisible to authorization | A scoped key is refused on a locked drive and over-permitted on an open one |
 | [014](014-leases-have-drifted-from-what-actions-touch.md) | Leases have drifted from what actions touch | `static deps` is documentation, not a contract — one drift is a live crash |
 | [015](015-await-dispatch-sequences-nothing.md) | `await dispatch()` sequences nothing | Six sites await a feed that has no `then`; the right shape is already in the repo |
 | [016](016-one-rule-several-implementations.md) | One rule, several implementations | Every copy has diverged; this class already shipped the ciphertext-thumbnail bug |

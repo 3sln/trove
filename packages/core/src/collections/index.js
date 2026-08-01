@@ -80,6 +80,53 @@ export class CollectionService {
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
+  // --- the same questions, asked of an API key ---------------------------------
+  //
+  // A key is authority that ARRIVED WITH THE REQUEST. There is nobody to look up in the
+  // ACL, and `principal` is null on a key request — so asking the principal side answers
+  // for the ANONYMOUS caller, which is wrong in both directions. On a locked drive a
+  // correctly-scoped key is told it can read nothing; on a `defaultOpen` drive the
+  // `anyone` grant lets a key scoped to one collection read and write every one of them.
+  //
+  // Decided from the key ALONE, never unioned with whatever session happens to be
+  // attached — the same rule engine/providers/access.js states for node and collection
+  // handles, and the reason a weak key cannot borrow a strong session.
+
+  /** The collections an API key may read. `list`'s twin. */
+  async listForGrant(grant) {
+    const rows = await this.kv.list(NS);
+    return rows
+      .map((r) => r.value)
+      .filter((c) => c && grant.can(c.id, 'read'))
+      .map((c) => this.describeForGrant(c, grant))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  /** `assert`'s twin. Refuses with what the KEY lacks, not with what a user lacks. */
+  async assertForGrant(grant, collectionId, capability) {
+    const c = await this.get(collectionId);
+    if (!grant.can(collectionId, capability)) {
+      throw TroveError.forbidden(`This API key does not hold "${capability}" on collection "${c.name}"`);
+    }
+    return c;
+  }
+
+  /**
+   * `hasWholeDrive`'s twin: a key that can read and write every collection that exists.
+   *
+   * Same definition, so the answer does not depend on which credential asked — and it
+   * shrinks the moment a collection the key does not name is created, which is the safe
+   * direction. A `*`-scoped key satisfies it by construction. There is no admin-list
+   * shortcut, because a key is never a named admin: the drive-wide verbs that grant new
+   * power (minting keys, installing a server indexer) are gated by `requireHumanAdmin`
+   * and `isAdmin` and stay out of a key's reach entirely.
+   */
+  async grantHasWholeDrive(grant) {
+    const all = (await this.kv.list(NS)).map((r) => r.value).filter(Boolean);
+    if (!all.length) return false;
+    return all.every((c) => grant.can(c.id, 'read') && grant.can(c.id, 'write'));
+  }
+
   /**
    * The encryption settings for a collection, generating a key the first time.
    *
@@ -218,7 +265,16 @@ export class CollectionService {
 
   /** A safe, principal-scoped view (no secrets). */
   describe(c, principal) {
-    const caps = [...this.capabilities(principal, c)];
+    return this.#describe(c, this.capabilities(principal, c));
+  }
+
+  /** The same record, with the capabilities an API KEY holds rather than a principal's. */
+  describeForGrant(c, grant) {
+    return this.#describe(c, grant.capabilitiesFor(c.id));
+  }
+
+  #describe(c, held) {
+    const caps = [...held];
     return {
       id: c.id, name: c.name, description: c.description || '',
       driver: c.store?.driver, system: !!c.system,

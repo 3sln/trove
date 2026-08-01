@@ -179,3 +179,95 @@ test('a key and a session are never combined', async () => {
     { ...withKey(secret), ...asAdmin });
   expect(res.status).toBe(403);
 });
+
+// --- the routes that resolved the wrong subject -------------------------------
+//
+// Two authorization systems lived in routes.js and only the access providers knew what
+// an API key was. `readableCollectionIds`, `assertCap` and `requireWholeDrive` handed
+// `ctx.principal` — null on a key request — straight to CollectionService, so a key was
+// evaluated as the anonymous caller. Both directions were wrong, and each of these
+// asserts one of them.
+
+test('a scoped key can search and list on a locked drive', async () => {
+  // The refusal direction. `list(null)` is [] on a drive with no `anyone` grant, so a
+  // correctly-scoped key was scoped to nothing: search, tags and backlinks all answered
+  // 403 or "no results" for a collection the key plainly held `read` on.
+  const d = await drive();
+  const { secret } = await mint(d.handle, {
+    name: 'photo reader', scopes: [{ collectionId: d.photos.id, capabilities: ['read'] }],
+  });
+
+  const listed = await (await get(d.handle, '/api/collections', withKey(secret))).json();
+  expect(listed.collections.map((c) => c.id)).toEqual([d.photos.id]);
+  // And the capabilities reported are the KEY's, not an anonymous principal's empty set.
+  expect(listed.collections[0].capabilities).toContain('read');
+  expect(listed.canCreate).toBe(false);
+
+  const search = await get(d.handle, '/api/search?q=anything', withKey(secret));
+  expect(search.status).toBe(200);
+  const one = await get(d.handle, `/api/collections/${d.photos.id}`, withKey(secret));
+  expect(one.status).toBe(200);
+});
+
+test('an open drive does not lend its anyone-grant to a narrowly scoped key', async () => {
+  // The over-permit direction, and the one that matters. On a `defaultOpen` drive
+  // `capabilities(null, c)` matches the `anyone` grant, so a key scoped to `photos`
+  // silently read and wrote `invoices` through every route that asked the principal.
+  const kv = new MemoryKV();
+  const collections = new CollectionService({
+    kv, storageFactory: () => new MemoryStorage(), admins: [ADMIN],
+    defaultOpen: true, defaultStore: { driver: 'memory' },
+  });
+  const server = await createServer({
+    rebuildIndexOnStart: false, collections,
+    identity: { driver: 'header', header: { idHeader: 'x-user', required: false } },
+  });
+  const boss = { id: ADMIN, email: ADMIN, roles: [] };
+  const photos = await collections.create({ name: 'Photos', store: { driver: 'memory' } }, boss);
+  const invoices = await collections.create({ name: 'Invoices', store: { driver: 'memory' } }, boss);
+  const { secret } = await mint(server.handle, {
+    name: 'photo reader', scopes: [{ collectionId: photos.id, capabilities: ['read'] }],
+  });
+
+  const listed = await (await get(server.handle, '/api/collections', withKey(secret))).json();
+  expect(listed.collections.map((c) => c.id)).toEqual([photos.id]);
+
+  const other = await get(server.handle, `/api/collections/${invoices.id}`, withKey(secret));
+  expect(other.status).toBe(403);
+
+  // And it holds nothing drive-wide, however open the drive is to people.
+  const reindex = await post(server.handle, '/api/reindex', {}, withKey(secret));
+  expect(reindex.status).toBe(403);
+});
+
+test('a key cannot administer a collection, however broadly it is scoped', async () => {
+  // Changing an ACL is the self-escalation shape: a key that can rewrite who may reach a
+  // collection can grant itself whatever it lacks. Refused outright, like minting keys.
+  const d = await drive();
+  const { secret } = await mint(d.handle, {
+    name: 'everything', scopes: [{ collectionId: '*', capabilities: ['admin'] }],
+  });
+
+  expect((await get(d.handle, `/api/collections/${d.photos.id}/grants`, withKey(secret))).status).toBe(403);
+  expect((await post(d.handle, `/api/collections/${d.photos.id}/grants`,
+    { type: 'anyone', capabilities: ['admin'] }, withKey(secret))).status).toBe(403);
+  expect((await post(d.handle, '/api/collections',
+    { name: 'Mine', store: { driver: 'memory' } }, withKey(secret))).status).toBe(403);
+  expect((await del(d.handle, `/api/collections/${d.invoices.id}`, withKey(secret))).status).toBe(403);
+});
+
+test('a key scoped to every collection holds the drive-wide verbs', async () => {
+  // `hasWholeDrive` is "can read and write everything that exists" — not the admin list.
+  // Asked of the key rather than of the empty principal, a `*` read+write key satisfies
+  // it, and a key scoped to one collection does not.
+  const d = await drive();
+  const wide = await mint(d.handle, {
+    name: 'everything', scopes: [{ collectionId: '*', capabilities: ['read', 'write'] }],
+  });
+  const narrow = await mint(d.handle, {
+    name: 'photos only', scopes: [{ collectionId: d.photos.id, capabilities: ['read', 'write'] }],
+  });
+
+  expect((await post(d.handle, '/api/reindex', {}, withKey(wide.secret))).status).toBe(200);
+  expect((await post(d.handle, '/api/reindex', {}, withKey(narrow.secret))).status).toBe(403);
+});
