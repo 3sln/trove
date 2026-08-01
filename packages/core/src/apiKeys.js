@@ -26,6 +26,7 @@
 //   nothing replayable. It is shown to the minter exactly once.
 
 import { TroveError } from './errors.js';
+import { timingSafeEqual } from './timingSafe.js';
 import { CAPABILITIES, expand } from './collections/index.js';
 
 const NS = 'api-keys';
@@ -72,19 +73,6 @@ async function sha256(text) {
   return b64url(new Uint8Array(digest));
 }
 
-/**
- * Compare without leaking where two strings diverge.
- *
- * The hash of a presented secret against the stored hash. A `===` here would return
- * faster the earlier it finds a difference, which over enough attempts is a way to learn
- * a prefix — the classic reason credential comparison is not string equality.
- */
-function timingSafeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
 
 /** Normalise and validate one `{ collectionId, capabilities }` entry. */
 function normalizeScope(scope) {

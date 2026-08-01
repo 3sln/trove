@@ -18,6 +18,7 @@
 // may see must not be editable into one for a file you may not.
 
 import { TroveError } from './errors.js';
+import { timingSafeEqual } from './timingSafe.js';
 
 const MINUTES = 60;
 const HOURS = 60 * MINUTES;
@@ -132,19 +133,6 @@ export class SignedUrls {
   }
 }
 
-/**
- * Constant-time string compare.
- *
- * `a === b` on a signature leaks where the first differing byte is, which over enough
- * requests is a forgery oracle. The cost of not caring is small and the cost of caring is
- * nothing.
- */
-function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
 
 /**
  * A secret that survives a restart and is shared between instances.

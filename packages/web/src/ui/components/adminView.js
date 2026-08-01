@@ -193,8 +193,18 @@ function accessEditor(g, ui, collectionId) {
     );
   };
 
+  // Drive administrators, from the deployment's own configuration. Shown because leaving
+  // them out makes the list a lie — they hold admin on every collection — and shown
+  // WITHOUT controls because `setGrant` cannot touch them: a revoke button here would be
+  // one that silently does nothing.
+  const admins = (g.admins || []).map((who) => div({ className: 'acl-row acl-fixed' },
+    span({ className: 'acl-who' }, who),
+    span({ className: 'mono muted' }, 'admin · set by this deployment'),
+  ));
+
   return div({ className: 'acl' },
-    ...(grants.length ? grants.map(line) : [span({ className: 'mono muted' }, 'Nobody but drive administrators.')]),
+    ...admins,
+    ...(grants.length ? grants.map(line) : (admins.length ? [] : [span({ className: 'mono muted' }, 'Nobody yet.')])),
     div({ className: 'acl-row acl-add' },
       select({ className: 'acl-type' }, option({ value: 'user' }, 'user'), option({ value: 'role' }, 'role'), option({ value: 'anyone' }, 'anyone')),
       input({ className: 'acl-subject', placeholder: 'email, or a role name' }),

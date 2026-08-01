@@ -1792,7 +1792,7 @@ export class LoadGrantsAction extends Action {
     acl.set({ collectionId, loading: true, error: null });
     try {
       const res = await api.collectionGrants(collectionId);
-      acl.set({ grants: res?.grants || [], loading: false });
+      acl.set({ grants: res?.grants || [], admins: res?.admins || [], loading: false });
     } catch (err) {
       // A non-admin gets a 403, and that is the correct answer rather than an error worth
       // a toast — the section simply does not offer itself. Same reasoning as the rotation

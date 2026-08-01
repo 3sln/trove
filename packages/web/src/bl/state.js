@@ -150,7 +150,7 @@ export function wrapIndex(index, delta, count) {
  * question rather than a change to notice.
  */
 export const aclState = () => slice({
-  collectionId: null, grants: [], loading: false, error: null, busy: false,
+  collectionId: null, grants: [], admins: [], loading: false, error: null, busy: false,
 });
 
 export const rotationState = () => slice({

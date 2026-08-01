@@ -699,6 +699,9 @@ kbd {
 .acl-who { flex: 1; min-width: 160px; font-size: 12.5px; color: var(--text-dim); font-family: var(--font-mono); }
 .acl .btn.on { background: var(--accent); color: var(--accent-text); }
 .acl-add { margin-top: 2px; }
+/* A grant this screen cannot change — see adminView.js. Dimmed rather than hidden: the
+   list has to be true about who holds admin. */
+.acl-fixed .acl-who { color: var(--text-faint); }
 .acl-subject { flex: 1; min-width: 180px; }
 
 /* The rotation bill, itemised. Only where a provider actually charges for the traffic. */

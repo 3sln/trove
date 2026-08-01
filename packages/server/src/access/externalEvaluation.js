@@ -22,9 +22,12 @@
 // SETTING IT UP
 //
 //   1. Make a key pair. It is asymmetric because Cloudflare must be able to CHECK our
-//      answer without being able to MINT one:
+//      answer without being able to MINT one — and it is RSA because Access says so:
+//      "other key formats are not supported", and its reference implementation signs
+//      RS256. An EC key here is silently rejected by the only thing that reads these.
 //
-//        node -e "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify'])
+//        node -e "crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,
+//          publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify'])
 //          .then(k=>crypto.subtle.exportKey('jwk',k.privateKey)).then(j=>console.log(JSON.stringify(j)))"
 //
 //   2. TROVE_ACCESS_EVAL_KEY=<that JSON>   (and TROVE_CF_ACCESS_TEAM if not already set)
@@ -40,14 +43,18 @@
 // configured the component declines to mount rather than mounting an open oracle that
 // enumerates your users to anyone who can reach it.
 //
-// WHAT TO CHECK AGAINST CLOUDFLARE'S DOCS
+// THE TRANSPORT, CHECKED AGAINST CLOUDFLARE (Aug 2026)
 //
-// The transport shape below — a JWT posted in `{ "token": … }`, a signed `{ success }`
-// echoed back with the same `nonce` — is written from the External Evaluation contract as
-// understood at the time. The DECISION is ours and is well tested; the envelope is theirs
-// and may have moved. If Access reports a malformed response, this is the file to check,
-// and `parseAssertion` is deliberately generous about where the incoming JWT is found so a
-// small change on their side does not break it entirely.
+// Verified against the External Evaluation docs and their reference Worker:
+//
+//   in    POST, JSON body `{ token }`, the JWT signed by the Access account key
+//   out   JSON body `{ token }`, a JWT of `{ success, iat, exp, nonce }`, RS256
+//   keys  `{ keys: [ <public JWK, with kid> ] }`
+//
+// The identity lands at `claims.identity.email` in their example rather than at the top
+// level, which is why `principalOf` looks in both places. `parseAssertion` stays generous
+// about where it finds the incoming JWT: the token is self-authenticating, so accepting it
+// from more than one place costs nothing and survives a small change on their side.
 
 import { TroveError, verifyJwt, signJwt, publicJwkOf, JwksClient } from '@3sln/trove/core';
 

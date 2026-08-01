@@ -149,25 +149,29 @@ function bytesToBase64url(bytes) {
 }
 
 /**
- * Sign a JWT with an EC P-256 private key.
+ * Sign a JWT with a private JWK.
  *
  * The mirror of `verifyJwt`, and it exists for one caller: answering an external policy
- * evaluation, where the asker fetches OUR public key to check the answer. That is why it
- * is asymmetric where `signedUrls.js` is happy with HMAC — a shared secret would mean
- * handing the verifier the ability to mint answers.
+ * evaluation, where the asker fetches OUR public key to check the answer. That is why it is
+ * asymmetric where `signedUrls.js` is happy with HMAC — a shared secret would mean handing
+ * the verifier the ability to mint answers.
  *
- * ES256 only, deliberately. RS256 would work and needs a far larger key for the same
- * strength; there is one caller and it can use the better curve.
+ * RS256 by default, and that is not a preference. Cloudflare Access verifies these, its
+ * documentation says an RSA key pair and that "other key formats are not supported", and
+ * its own reference implementation signs with RSASSA-PKCS1-v1_5 over SHA-256. ES256 is a
+ * better curve and would have been silently rejected by the only thing that reads these.
  */
-export async function signJwt(payload, { privateJwk, kid, expiresInSec = 60, now = Date.now() } = {}) {
+export async function signJwt(payload, { privateJwk, kid, alg = 'RS256', expiresInSec = 60, now = Date.now() } = {}) {
   if (!privateJwk) throw TroveError.invalid('Signing a JWT needs a private JWK');
+  const spec = ALGS[alg];
+  if (!spec || alg === 'HS256') throw TroveError.unsupported(`Cannot sign a JWT with alg ${alg}`);
   const iat = Math.floor(now / 1000);
   const body = { iat, exp: iat + expiresInSec, ...payload };
-  const header = { alg: 'ES256', typ: 'JWT', ...(kid ? { kid } : {}) };
+  const header = { alg, typ: 'JWT', ...(kid ? { kid } : {}) };
   const signingInput = `${bytesToBase64url(enc.encode(JSON.stringify(header)))}.`
     + `${bytesToBase64url(enc.encode(JSON.stringify(body)))}`;
-  const key = await crypto.subtle.importKey('jwk', privateJwk, ALGS.ES256.import, false, ['sign']);
-  const sig = new Uint8Array(await crypto.subtle.sign(ALGS.ES256.verify, key, enc.encode(signingInput)));
+  const key = await crypto.subtle.importKey('jwk', { ...privateJwk, alg: undefined, key_ops: undefined }, spec.import, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign(spec.verify, key, enc.encode(signingInput)));
   return `${signingInput}.${bytesToBase64url(sig)}`;
 }
 
@@ -178,9 +182,11 @@ export async function signJwt(payload, { privateJwk, kid, expiresInSec = 60, now
  * not have. Written as a subtraction rather than a copy of the public fields so a JWK that
  * grows a field cannot silently start publishing it.
  */
-export function publicJwkOf(privateJwk, { kid } = {}) {
+export function publicJwkOf(privateJwk, { kid, alg = 'RS256' } = {}) {
   const { d, p, q, dp, dq, qi, ...pub } = privateJwk || {};
-  return { ...pub, key_ops: ['verify'], use: 'sig', ...(kid ? { kid } : {}) };
+  // `alg` is published because Cloudflare's own keys endpoint publishes it, and a verifier
+  // that trusts the JWK's alg over the token header's is the safer of the two.
+  return { ...pub, alg, key_ops: ['verify'], use: 'sig', ...(kid ? { kid } : {}) };
 }
 
 export async function verifyJwt(token, opts = {}) {

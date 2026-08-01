@@ -283,7 +283,14 @@ export function createRouter() {
   r.get('/api/collections/:id/grants', ['collections'], async (ctx) => {
     requireCollections(ctx);
     const c = await ctx.collections.assert(ctx.principal, ctx.params.id, 'admin');
-    return { grants: c.acl?.grants || [] };
+    // Drive administrators come from the DEPLOYMENT (TROVE_ADMINS), not from this ACL, and
+    // returning them alongside rather than inside `grants` is the honest shape: they hold
+    // admin on every collection, `setGrant` cannot touch them, and a UI that listed them as
+    // grants would offer a revoke button that silently does nothing.
+    return {
+      grants: c.acl?.grants || [],
+      admins: [...(ctx.collections.admins || [])],
+    };
   });
 
   r.post('/api/collections/:id/grants', ['collections'], async (ctx) => {

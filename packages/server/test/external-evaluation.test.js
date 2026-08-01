@@ -18,15 +18,19 @@ import {
 const ADMIN = 'boss@example.com';
 const BOSS = { id: ADMIN, email: ADMIN, roles: [] };
 
-async function ecKeyPair() {
-  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+/** RSA, because Access verifies these and refuses anything else — see the module header. */
+async function rsaKeyPair() {
+  const kp = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true, ['sign', 'verify'],
+  );
   return crypto.subtle.exportKey('jwk', kp.privateKey);
 }
 
 /** A drive whose external evaluation trusts `teamKey` as the caller. */
 async function drive({ open = false } = {}) {
-  const ourKey = await ecKeyPair();
-  const teamKey = await ecKeyPair();
+  const ourKey = await rsaKeyPair();
+  const teamKey = await rsaKeyPair();
   const kv = new MemoryKV();
   const storage = new MemoryStorage();
   const collections = new CollectionService({
@@ -94,10 +98,29 @@ test('an assertion this drive cannot attribute is refused, not answered', async 
   // address has access — so an unverifiable assertion is an ERROR, not a `success:false`,
   // which would be an answer.
   const d = await drive();
-  const stranger = await ecKeyPair();
+  const stranger = await rsaKeyPair();
   const res = await evaluate(d.server, await assert_(stranger, { email: ADMIN, nonce: 'n4' }));
   expect(res.status).toBeGreaterThanOrEqual(400);
   expect(JSON.stringify(await res.json())).not.toContain('success');
+});
+
+test('the answer is RS256, which is the only thing Access accepts', async () => {
+  const d = await drive();
+  const res = await evaluate(d.server, await assert_(d.teamKey, { identity: { email: ADMIN }, nonce: 'n6' }));
+  const { token } = await res.json();
+  expect(JSON.parse(atob(token.split('.')[0])).alg).toBe('RS256');
+  const keys = (await (await d.server.handle(new Request('https://d/api/access/keys'))).json()).keys;
+  expect(keys[0].alg).toBe('RS256');
+  expect(keys[0].kty).toBe('RSA');
+});
+
+test('the identity is read from claims.identity.email, where Access puts it', async () => {
+  // Their reference implementation reads `claims.identity.email`, not a top-level `email`.
+  const d = await drive();
+  const c = await d.collections.create({ name: 'Shared', store: { driver: 'memory' } }, BOSS);
+  await d.collections.setGrant(c.id, { type: 'user', subject: 'nested@example.com', capabilities: ['read'] }, BOSS);
+  const res = await evaluate(d.server, await assert_(d.teamKey, { identity: { email: 'nested@example.com' }, nonce: 'n7' }));
+  expect((await answerOf(d.server, res)).success).toBe(true);
 });
 
 test('the published keys are public only', async () => {
@@ -126,4 +149,19 @@ test('the routes do not exist at all when no key is configured', async () => {
   const collections = new CollectionService({ kv, storageFactory: () => storage, admins: [ADMIN] });
   const server = await createServer({ rebuildIndexOnStart: false, collections });
   expect((await server.handle(new Request('https://d/api/access/keys'))).status).toBe(404);
+});
+
+test('configured drive admins are reported apart from the grants, and cannot be edited', async () => {
+  // They come from TROVE_ADMINS, not from the ACL. `setGrant` cannot reach them, so a UI
+  // that listed them among the grants would show a revoke button that does nothing.
+  const d = await drive();
+  const c = await d.collections.create({ name: 'Shared', store: { driver: 'memory' } }, BOSS);
+  const res = await d.server.handle(new Request(`https://d/api/collections/${c.id}/grants`, {
+    headers: { 'x-user': ADMIN },
+  }));
+  const body = await res.json();
+  expect(body.admins).toContain(ADMIN);
+  // …and the ACL itself holds only the creator grant, not the deployment's admin list.
+  expect(body.grants.some((g) => g.subject === ADMIN && g.type === 'user')).toBe(true);
+  expect(body.grants.every((g) => g.type !== 'config')).toBe(true);
 });
