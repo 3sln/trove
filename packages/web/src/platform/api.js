@@ -15,75 +15,6 @@
 
 import { withRetry } from '@3sln/trove/core/retry.js';
 import { TroveError } from '@3sln/trove/core/errors.js';
-// Imported from the module rather than the barrel so a page that never uploads to an
-// encrypted collection still does not pull the rest of core in with it.
-import { encrypt, encryptStream, cipherSize } from '@3sln/trove/core/encryption/envelope.js';
-import { fromHex } from '@3sln/trove/core/encryption/keys.js';
-
-/**
- * Seal a whole file into an envelope.
- *
- * Only used where the plan already decided the STORED size fits a single PUT, so the
- * buffering is bounded by that limit rather than by the file.
- */
-async function sealWhole(file, enc) {
-  const plain = new Uint8Array(await file.arrayBuffer());
-  const sealed = await encrypt(fromHex(enc.key), plain, {
-    fingerprint: fromHex(enc.fingerprint),
-    chunkSize: enc.chunkSize,
-  });
-  return new Blob([sealed], { type: file.type || 'application/octet-stream' });
-}
-
-/**
- * A hand-off between one producer and several consumers, with a hard limit on how much may
- * be waiting.
- *
- * The bound is the point. Without it a fast producer — sealing runs at gigabytes per second
- * — would race ahead of a slow link and hold the whole file in memory, which is the exact
- * problem streaming the envelope was introduced to solve. `push` waits for room; `pull`
- * waits for work.
- */
-class BoundedQueue {
-  #items = [];
-  #capacity;
-  #closed = false;
-  #waitingPullers = [];
-  #waitingPushers = [];
-
-  constructor(capacity) {
-    this.#capacity = Math.max(1, capacity);
-  }
-
-  async push(item) {
-    while (this.#items.length >= this.#capacity && !this.#closed) {
-      await new Promise((resolve) => this.#waitingPushers.push(resolve));
-    }
-    if (this.#closed) return;
-    this.#items.push(item);
-    this.#waitingPullers.shift()?.();
-  }
-
-  /** The next item, or null once the queue is drained AND closed. */
-  async pull() {
-    for (;;) {
-      if (this.#items.length) {
-        const item = this.#items.shift();
-        this.#waitingPushers.shift()?.();
-        return item;
-      }
-      if (this.#closed) return null;
-      await new Promise((resolve) => this.#waitingPullers.push(resolve));
-    }
-  }
-
-  /** No more items are coming. Wakes everyone so nobody waits on a queue that is done. */
-  close() {
-    this.#closed = true;
-    for (const wake of this.#waitingPullers.splice(0)) wake();
-    for (const wake of this.#waitingPushers.splice(0)) wake();
-  }
-}
 
 export class TroveApiClient {
   /**
@@ -504,26 +435,24 @@ export class TroveApiClient {
     // (otherwise a multipart upload leaks server + storage state).
     if (plan.uploadId) opts.onStart?.(plan.uploadId);
 
-    // Progress is measured against what TRAVELS, which for an encrypted upload is the
-    // envelope — larger than the file by a header and a tag per chunk. Measured against the
-    // file, the bar would pass 100% and sit there.
-    const progress = new ProgressAggregator(plan.encryption?.storedSize || size, opts.onProgress);
+    // Progress is measured against what TRAVELS, which is now the file itself even for an
+    // encrypted collection: the drive seals it on the way to the store, so nothing larger
+    // than the file ever leaves this tab.
+    const progress = new ProgressAggregator(size, opts.onProgress);
     const t = plan.transfer || {};
     const completeUrl = plan.endpoints?.complete || `/api/uploads/${plan.uploadId}/complete`;
 
     if (plan.strategy === 'single') {
-      // One presigned PUT straight to storage (bytes never touch our server).
-      // Sealed here, before a byte leaves the browser, so the bucket only ever receives
-      // ciphertext while the PUT still goes straight to it. The whole envelope is built in
-      // memory, which is fine on this path: the plan only chooses `single` when what is
-      // stored fits under the single-PUT limit.
-      const body = plan.encryption ? await sealWhole(file, plan.encryption) : file;
+      // One presigned PUT straight to storage (bytes never touch our server). The plan
+      // only ever chooses this for an UNENCRYPTED collection now — a presigned PUT of a
+      // file this client has not sealed would put plaintext in the bucket.
+      const body = file;
       await step(() => xhrPut(t.url || plan.url, body, { headers: t.requiredHeaders, signal: opts.signal, onProgress: (l) => progress.set('single', l) }));
       const done = await step(() => this.request('POST', completeUrl, { body: {}, signal: opts.signal }));
       return done.node;
     }
     if (plan.strategy === 'direct-single') {
-      const body = plan.encryption ? await sealWhole(file, plan.encryption) : file;
+      const body = file;
       await step(() => xhrPut(this.baseUrl + this.#partUrl(plan, 1), body, {
         // Our own server, so it needs our bearer token; `t.authHeaders` lets the plan
         // add its own and wins on a clash.
@@ -532,21 +461,6 @@ export class TroveApiClient {
       }));
       const done = await step(() => this.request('POST', completeUrl, { body: {}, signal: opts.signal }));
       return done.node;
-    }
-
-    // Multipart, encrypted: sequential, and streamed.
-    //
-    // Two things stop the ordinary path working here. The parts have to be slices of the
-    // ENVELOPE rather than of the file, and the envelope is produced in order — chunk n
-    // cannot be sealed before chunk n-1, because the nonce is derived from its position. So
-    // parts are produced and sent one at a time, and the concurrency the plaintext path
-    // enjoys is not available.
-    //
-    // Streamed rather than assembled: building the whole envelope before slicing it would
-    // hold a second copy of the file in a browser tab, which for the large files that
-    // reach this path is exactly what it cannot afford.
-    if (plan.encryption) {
-      return this.#uploadSealed(file, plan, { ...opts, progress, step, completeUrl });
     }
 
     // Multipart (presign or direct).
@@ -623,137 +537,6 @@ export class TroveApiClient {
     return tmpl.replace('{partNumber}', String(n));
   }
 
-
-  /**
-   * A multipart upload of an encrypted object.
-   *
-   * SEALING is strictly sequential and cannot be otherwise: chunk n's nonce is
-   * `prefix || n`, so producing chunks out of order would either reuse a nonce or leave a
-   * gap. SENDING has no such constraint — S3 assembles by part number — and this used to
-   * conflate the two, awaiting each upload before reading more of the envelope. An
-   * encrypted upload was therefore about `concurrency` times slower than the same file to
-   * a plain collection on any link where round-trip time dominates.
-   *
-   * Measured before changing: sealing runs at roughly 2 GiB/s (AES-NI through Web Crypto),
-   * against 12 MiB/s for a good 100 Mbit link. Sealing is on the order of 1% of transfer
-   * time, so the producer can stay far ahead of the senders and a small queue is enough —
-   * exactly as the ticket predicted. Nothing here makes sealing faster, because sealing was
-   * never the cost.
-   *
-   * The queue is BOUNDED. A fast disk feeding a slow link would otherwise seal the whole
-   * file into memory and reproduce the problem the streaming rewrite existed to solve.
-   */
-  async #uploadSealed(file, plan, { signal, progress, step, completeUrl, onRetry, concurrency = 4 }) {
-    const enc = plan.encryption;
-    const sealed = await encryptStream(fromHex(enc.key), file.stream(), {
-      fingerprint: fromHex(enc.fingerprint),
-      plaintextSize: file.size,
-      chunkSize: enc.chunkSize,
-    });
-
-    const workers = Math.max(1, concurrency);
-    // Enough sealed parts in hand to keep every sender busy, plus one being filled. More
-    // than that buys nothing: the producer is orders of magnitude faster than the link.
-    const queue = new BoundedQueue(workers + 1);
-
-    // One part fails for good -> stop the siblings rather than let them keep PUTting bytes
-    // whose result is about to be discarded. Chained to the caller's signal so a user
-    // cancel still propagates.
-    const inner = new AbortController();
-    const onOuterAbort = () => inner.abort();
-    if (signal) {
-      if (signal.aborted) inner.abort();
-      else signal.addEventListener('abort', onOuterAbort, { once: true });
-    }
-
-    const produce = async () => {
-      const reader = sealed.getReader();
-      let held = [];
-      let size = 0;
-      let n = 1;
-      const emit = async () => {
-        const body = new Uint8Array(size);
-        let at = 0;
-        for (const p of held) { body.set(p, at); at += p.length; }
-        held = [];
-        size = 0;
-        // Blocks while the queue is full — this is the back-pressure that bounds memory.
-        await queue.push({ partNumber: n++, body });
-      };
-      try {
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (inner.signal.aborted) return;
-          // Filled EXACTLY to the part size, splitting a sealed chunk across parts when it
-          // straddles the boundary.
-          //
-          // Appending the chunk that crosses the line and flushing after — which is what
-          // this did — makes every part `partSize` plus most of a chunk, and the server caps
-          // a part body at exactly `partSize` (see capStream in core/uploads.js). So an
-          // encrypted upload big enough to need more than one part was refused with a 413 on
-          // its FIRST part, always. Nothing caught it because no test uploaded a large file
-          // to an encrypted collection.
-          //
-          // Splitting is safe in a way it would not be for the plaintext path: a part is a
-          // byte range of the envelope, not a unit of encryption, and the backend just
-          // concatenates them. Only SEALING has to respect chunk boundaries.
-          let rest = value;
-          while (rest.length) {
-            const room = plan.partSize - size;
-            const take = Math.min(room, rest.length);
-            held.push(rest.subarray(0, take));
-            size += take;
-            rest = rest.subarray(take);
-            if (size >= plan.partSize) await emit();
-          }
-        }
-        // The final part may be under the floor, and only the final part may be.
-        if (size || n === 1) await emit();
-      } finally {
-        reader.cancel().catch(() => {});
-        queue.close();
-      }
-    };
-
-    const parts = [];
-    const send = async () => {
-      for (;;) {
-        if (inner.signal.aborted) return;
-        const job = await queue.pull();
-        if (!job) return; // drained and closed
-        const { partNumber, body } = job;
-        const etag = await withRetry(
-          () => this.#uploadPart(plan, partNumber, new Blob([body]), {
-            signal: inner.signal, onProgress: (l) => progress.set(partNumber, l),
-          }),
-          {
-            signal: inner.signal,
-            retries: 4,
-            onRetry: ({ attempt, delayMs, error }) => onRetry?.({ attempt, delayMs, part: partNumber, message: error.message }),
-          },
-        );
-        progress.set(partNumber, body.length);
-        parts.push({ partNumber, etag });
-      }
-    };
-
-    try {
-      await Promise.all([produce(), ...Array.from({ length: workers }, send)]);
-    } catch (err) {
-      inner.abort(); // stop the siblings and unblock the producer before surfacing
-      queue.close();
-      throw err;
-    } finally {
-      signal?.removeEventListener('abort', onOuterAbort);
-    }
-
-    // Sent out of order, completed in order: the backend assembles by part number, but the
-    // manifest it is given still has to be sorted.
-    parts.sort((a, b) => a.partNumber - b.partNumber);
-    const finished = await step(() => this.request('POST', completeUrl, { body: { parts }, signal }));
-    return finished.node;
-  }
 
   async #uploadPart(plan, n, blob, { signal, onProgress }) {
     const t = plan.transfer || {};

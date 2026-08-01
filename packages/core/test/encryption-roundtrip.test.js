@@ -25,14 +25,8 @@ async function drive({ rules = { all: true } } = {}) {
 /** Put a file in, the way the upload routes do. */
 async function put(d, collectionId, name, body, contentType = 'text/plain') {
   const plan = await d.vfs.createUpload({ collectionId, name, size: body.length, contentType });
-  const sealed = plan.encryption
-    ? await (await import('../src/encryption/envelope.js')).encrypt(
-      (await import('../src/encryption/keys.js')).fromHex(plan.encryption.key),
-      body,
-      { fingerprint: (await import('../src/encryption/keys.js')).fromHex(plan.encryption.fingerprint), chunkSize: plan.encryption.chunkSize },
-    )
-    : body;
-  await d.vfs.uploads.uploadPart(plan.uploadId, 1, sealed);
+  // Plaintext: the drive seals on the way to the store now.
+  await d.vfs.uploads.uploadPart(plan.uploadId, 1, body);
   return d.vfs.completeUpload(plan.uploadId);
 }
 

@@ -34,8 +34,16 @@ function installXhr(handle) {
     send(body) {
       (async () => {
         try {
+          // A sliced Blob is read to bytes first. `XHR.send(file.slice(a, b))` transmits
+          // exactly that slice in a browser; handing the same Blob to `new Request()` here
+          // streams the WHOLE parent file, so part 1 arrived as the entire 12 MiB upload
+          // and was refused for exceeding one part. The harness has to send what a browser
+          // would send, or it is testing something else.
+          const payload = (body && typeof body.arrayBuffer === 'function' && typeof body.size === 'number')
+            ? new Uint8Array(await body.arrayBuffer())
+            : body;
           const res = await handle(new Request(this._url, {
-            method: this._method, headers: this._headers, body,
+            method: this._method, headers: this._headers, body: payload,
           }));
           this._res = res;
           this.status = res.status;
@@ -196,50 +204,18 @@ async function gatedDrive() {
   };
 }
 
-test('parts of an encrypted upload go out concurrently', async () => {
-  const d = await gatedDrive();
-  try {
-    // Four parts at the 5 MiB floor the plan uses.
-    const big = new File([new Uint8Array(21 * 1024 * 1024)], 'big.bin', { type: 'application/octet-stream' });
-    const done = d.client.upload(big, { collection: d.secret.id, concurrency: 4 });
-
-    // Give the producer time to seal ahead and the senders time to pick work up.
-    for (let i = 0; i < 20 && d.inFlight() < 2; i++) await new Promise((r) => setTimeout(r, 20));
-    // The property: more than one part is on the wire at once. Before this it was always
-    // exactly one, because sealing and sending were the same loop.
-    expect(d.peak()).toBeGreaterThan(1);
-
-    for (let i = 0; i < 40; i++) { d.releaseAll(); await new Promise((r) => setTimeout(r, 10)); }
-    const node = await done;
-    expect(node.size).toBe(21 * 1024 * 1024);
-  } finally {
-    d.restore();
-  }
-});
-
-test('sealing ahead is bounded, so a slow link cannot buffer the file', async () => {
-  const d = await gatedDrive();
-  try {
-    const big = new File([new Uint8Array(60 * 1024 * 1024)], 'huge.bin', { type: 'application/octet-stream' });
-    const done = d.client.upload(big, { collection: d.secret.id, concurrency: 2 });
-    // Nothing is released, so every sender is stuck. The producer must block on the queue
-    // rather than sealing the rest of the file into memory — which is the problem the
-    // streaming rewrite existed to solve and a queue could quietly reintroduce.
-    await new Promise((r) => setTimeout(r, 250));
-    // workers + 1 queued + the ones actually in flight. Far short of the 12 parts this file
-    // would make if the producer ran to completion.
-    expect(d.inFlight()).toBeLessThanOrEqual(4);
-
-    for (let i = 0; i < 60; i++) { d.releaseAll(); await new Promise((r) => setTimeout(r, 5)); }
-    await done;
-  } finally {
-    d.restore();
-  }
-});
+// The two tests that stood here — concurrent sealing, and bounded read-ahead — measured
+// the CLIENT's sealed-multipart producer, which no longer exists. The drive seals now, so a
+// client sends the file the ordinary way and the concurrency is the ordinary concurrency.
+// What survives below is the property that still matters, and matters more: parts are
+// sealed independently on the server, so their arrival order cannot affect the result.
 
 test('parts sent out of order still assemble into the original file', async () => {
-  // The risk of decoupling: a part manifest in arrival order rather than part-number order
-  // would produce a file that is byte-shuffled and still "uploads successfully".
+  // Two risks in one. A part manifest in arrival order rather than part-number order gives
+  // a byte-shuffled file that still "uploads successfully". And now that the DRIVE seals
+  // each part as it lands, a part's place in the envelope has to come from its NUMBER
+  // rather than from any running state — otherwise concurrent parts take each other's chunk
+  // indices, and every nonce after the first collision is wrong.
   const d = await drive();
   const body = new Uint8Array(12 * 1024 * 1024);
   for (let i = 0; i < body.length; i++) body[i] = (i * 31) % 251;

@@ -43,33 +43,44 @@ const upload = (handle, collectionId, headers) => handle(new Request(
   { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ name: 'x.txt', size: 4 }) },
 ));
 
-test('a write-only key cannot obtain the collection key', async () => {
-  // The escalation this closes: ask for a plan for a four-byte file, receive the means to
-  // decrypt the entire collection. Write-only API keys are a supported scope, so this was
-  // reachable rather than theoretical.
+test('no plan response contains anything key-shaped', async () => {
+  // The escalation this used to close: ask for a plan for a four-byte file, receive the
+  // means to decrypt the entire collection. It closed by refusing write-only callers; it is
+  // closed now by there being no key in the response at all, for anyone.
   const d = await drive();
   const secret = await mintKey(d.handle, [{ collectionId: d.secret.id, capabilities: ['write'] }]);
-  const res = await upload(d.handle, d.secret.id, { authorization: `Bearer ${secret}` });
-  expect(res.status).toBe(403);
-  // And it is refused rather than quietly downgraded to a plaintext upload — storing in the
-  // clear on a collection someone set up to encrypt is the worse outcome.
-  expect(JSON.stringify(await res.json())).not.toMatch(/[0-9a-f]{64}/);
+  for (const headers of [{ authorization: `Bearer ${secret}` }, asAdmin]) {
+    const res = await upload(d.handle, d.secret.id, headers);
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(await res.json())).not.toMatch(/[0-9a-f]{64}/);
+  }
 });
 
-test('read and write together does get the key', async () => {
+test('a plan never carries a key, whoever asks', async () => {
+  // The drive seals on the way to the store, so there is nothing readable in a plan and
+  // nothing for a caller to leak.
   const d = await drive();
   const secret = await mintKey(d.handle, [{ collectionId: d.secret.id, capabilities: ['read', 'write'] }]);
   const res = await upload(d.handle, d.secret.id, { authorization: `Bearer ${secret}` });
   expect(res.status).toBe(200);
   const plan = await res.json();
-  expect(plan.encryption.key).toMatch(/^[0-9a-f]{64}$/);
+  expect(plan.encryption.key).toBeUndefined();
+  expect(plan.encryption.sealedBy).toBe('server');
+
+  const asAdminPlan = await (await upload(d.handle, d.secret.id, asAdmin)).json();
+  expect(asAdminPlan.encryption.key).toBeUndefined();
 });
 
-test('an admin still gets it, because admin expands to everything', async () => {
+test('a write-only credential can upload to an encrypted collection again', async () => {
+  // It could not, and the reason was the key: a plan handed it over, which made the plan a
+  // read capability however it arrived, so `write` alone had to be refused. Nothing
+  // readable travels now, so the write-only ingest credential the key model advertises
+  // works where it always should have.
   const d = await drive();
-  const res = await upload(d.handle, d.secret.id, asAdmin);
+  const secret = await mintKey(d.handle, [{ collectionId: d.secret.id, capabilities: ['write'] }]);
+  const res = await upload(d.handle, d.secret.id, { authorization: `Bearer ${secret}` });
   expect(res.status).toBe(200);
-  expect((await res.json()).encryption.key).toMatch(/^[0-9a-f]{64}$/);
+  expect((await res.json()).encryption.key).toBeUndefined();
 });
 
 test('an unencrypted collection is unaffected by any of this', async () => {

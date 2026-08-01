@@ -14,8 +14,11 @@
 
 import { TroveError, ErrorCode } from './errors.js';
 import { newId, isValidItemName } from './util.js';
-import { cipherSize, DEFAULT_CHUNK_SIZE, isEnvelope, decodeHeader, HEADER_BYTES as ENVELOPE_HEAD } from './encryption/envelope.js';
-import { toHex } from './encryption/keys.js';
+import {
+  cipherSize, DEFAULT_CHUNK_SIZE, isEnvelope, decodeHeader, encodeHeader, encryptStream,
+  HEADER_BYTES as ENVELOPE_HEAD,
+} from './encryption/envelope.js';
+import { fromHex, toHex } from './encryption/keys.js';
 import { shouldEncrypt } from './encryption/policy.js';
 
 export const DEFAULT_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
@@ -101,6 +104,40 @@ export class KvSessionStore {
       .filter((s) => now - s.createdAt > SESSION_TTL_MS)
       .map((s) => s.id);
   }
+}
+
+/**
+ * Whatever a caller handed us, as a stream.
+ *
+ * A part arrives as a stream over HTTP and as bytes from a test or an in-process caller;
+ * `encryptStream` takes only the former, and the sealing path has to accept both.
+ */
+function asStream(body) {
+  if (body && typeof body.getReader === 'function') return body;
+  if (body && typeof body.stream === 'function') return body.stream(); // Blob
+  const bytes = typeof body === 'string'
+    ? new TextEncoder().encode(body)
+    : (body instanceof Uint8Array ? body : new Uint8Array(body || 0));
+  return new ReadableStream({
+    start(c) {
+      if (bytes.length) c.enqueue(bytes);
+      c.close();
+    },
+  });
+}
+
+/** A stream that emits `head`, then everything `rest` produces. */
+function prependBytes(head, rest) {
+  const reader = rest.getReader();
+  return new ReadableStream({
+    start(c) { c.enqueue(head); },
+    async pull(c) {
+      const { value, done } = await reader.read();
+      if (done) c.close();
+      else c.enqueue(value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
 }
 
 export class UploadManager {
@@ -204,6 +241,10 @@ export class UploadManager {
       storedSize,
       encrypted: encrypting,
       chunkSize: encrypting ? chunkSize : null,
+      // Fixed for the object, at negotiation, because parts are sealed INDEPENDENTLY and
+      // may arrive in any order — see `#sealPart`. Generating it per part would reuse
+      // nonces across the object, which AES-GCM does not survive.
+      noncePrefix: encrypting ? toHex(crypto.getRandomValues(new Uint8Array(8))) : null,
       keyFingerprint: encrypting ? policy.encryption.fingerprint : null,
       contentType,
       createdAt: Date.now(),
@@ -215,18 +256,35 @@ export class UploadManager {
 
     const limits = this.#limits();
 
+    // Presigned strategies hand the client a URL to the bucket, which is only safe when
+    // the client has something the bucket may hold. It seals nothing now, so for an
+    // encrypted collection a presigned PUT would put PLAINTEXT in the store — exactly what
+    // the encryption exists to prevent. Those go through us, and we seal on the way past.
+    const canPresign = caps.presignUpload && !encrypting;
+
     // Small file + presign → single PUT straight to storage (never through us).
-    if (storedSize <= SINGLE_PUT_LIMIT && caps.presignUpload) {
+    if (storedSize <= SINGLE_PUT_LIMIT && canPresign) {
       session.strategy = 'single';
       await this.sessions.put(session);
       const url = await storage.presignPut(storageKey, { contentType });
-      return { ...planSummary(session), strategy: 'single', multipart: false, presigned: true, url, limits, encryption: this.#planEncryption(session, policy) };
+      return { ...planSummary(session), strategy: 'single', multipart: false, presigned: true, url, limits, encryption: this.#planEncryption(session) };
     }
 
     // Multipart (presigned parts straight to storage, or streamed through us).
     if (caps.multipart) {
-      session.strategy = caps.presignUpload ? 'presign' : 'direct';
-      const partCount = Math.max(1, Math.ceil(storedSize / this.partSize));
+      session.strategy = canPresign ? 'presign' : 'direct';
+      // Measured in PLAINTEXT for an encrypted upload: the client sends us the file as it
+      // is, and the envelope it becomes is bigger by a tag per chunk. Sizing parts against
+      // the stored size would ask the client for bytes it does not have.
+      const wireSize = encrypting ? req.size : storedSize;
+      const partCount = Math.max(1, Math.ceil(wireSize / this.partSize));
+      // A part must hold a whole number of chunks, or the chunk a part boundary lands
+      // inside would be sealed twice under two different indices.
+      if (encrypting && this.partSize % chunkSize !== 0) {
+        throw TroveError.internal(
+          `Part size ${this.partSize} is not a multiple of the ${chunkSize}-byte chunk size`,
+        );
+      }
       // `#limits()` advertises maxParts in the very same response, and nothing enforced
       // it: a 150 GiB file planned 19,200 parts against a ceiling of 10,000, which S3
       // rejects at part 10,001 — after the client has transferred 80 GiB. On a presign
@@ -249,38 +307,31 @@ export class UploadManager {
           parts.push({ partNumber: n, url: await storage.presignPart(storageKey, session.uploadId, n) });
         }
       }
-      return { ...planSummary(session), strategy: session.strategy, multipart: true, presigned: session.strategy === 'presign', partCount, parts, limits, encryption: this.#planEncryption(session, policy) };
+      return { ...planSummary(session), strategy: session.strategy, multipart: true, presigned: session.strategy === 'presign', partCount, parts, limits, encryption: this.#planEncryption(session) };
     }
 
     // Fallback: whole-object PUT streamed through us (tiny/simple backends).
     session.strategy = 'direct-single';
     await this.sessions.put(session);
-    return { ...planSummary(session), strategy: 'direct-single', multipart: false, presigned: false, limits, encryption: this.#planEncryption(session, policy) };
+    return { ...planSummary(session), strategy: 'direct-single', multipart: false, presigned: false, limits, encryption: this.#planEncryption(session) };
   }
 
   /**
-   * What the client needs in order to encrypt before the bytes leave the browser.
+   * What a client is told about encryption: that it is happening, and nothing else.
    *
-   * The key travels, the bytes do not. That is what keeps a presigned direct-to-bucket
-   * upload possible while the bucket only ever sees ciphertext: the client seals the file
-   * locally and PUTs the envelope. Sending the key here is the explicit trade of this
-   * design — it defends the storage host, not the server, and the server had the key
-   * already in order to be able to index.
+   * This used to hand over the collection's data key so the browser could seal before the
+   * bytes left it — which is what made a presigned direct-to-bucket PUT possible while the
+   * bucket only ever held ciphertext. That trade is off. Encrypted collections now pass
+   * through the drive in BOTH directions, so the key never leaves the server and a client
+   * has nothing it could leak.
    *
-   * Null for anything not being encrypted, so a client has one thing to check.
+   * The cost is deliberate and worth naming: bytes for an encrypted collection are paid
+   * for twice, once to us and once to the store, and a presigned upload is unavailable for
+   * them. Unencrypted collections are untouched and still go straight to the bucket.
    */
-  #planEncryption(session, policy) {
+  #planEncryption(session) {
     if (!session.encrypted) return null;
-    return {
-      algorithm: 'AES-256-GCM',
-      chunkSize: session.chunkSize,
-      fingerprint: policy.encryption.fingerprint,
-      // Hex rather than raw bytes: this rides in a JSON plan.
-      key: policy.dataKeyHex,
-      // What the client should end up PUTting, so it can check its own work before
-      // spending the bytes.
-      storedSize: session.storedSize,
-    };
+    return { algorithm: 'AES-256-GCM', sealedBy: 'server' };
   }
 
 
@@ -351,7 +402,8 @@ export class UploadManager {
       // deliberately doesn't apply — so this is the only place a client can be stopped
       // from writing an unbounded object through us.
       const capped = capStream(body, this.maxBytes);
-      const info = await storage.put(s.storageKey, capped, { contentType: s.contentType, ...opts });
+      const toStore = s.encrypted ? await this.#sealPart(s, 1, capped, true) : capped;
+      const info = await storage.put(s.storageKey, toStore, { contentType: s.contentType, ...opts });
       s.parts[1] = { etag: info.etag || 'single' };
       await this.sessions.put(s);
       return { partNumber: 1, etag: s.parts[1].etag };
@@ -366,11 +418,60 @@ export class UploadManager {
     if (!Number.isInteger(partNumber) || partNumber < 1 || (s.partCount && partNumber > s.partCount)) {
       throw TroveError.invalid(`Part ${partNumber} is outside this upload's ${s.partCount} part(s)`);
     }
-    // A part is exactly `partSize` bytes, except the last, which is smaller.
-    const res = await storage.putPart(s.storageKey, s.uploadId, partNumber, capStream(body, s.partSize), opts);
+    // A part is exactly `partSize` bytes, except the last, which is smaller. Capped on the
+    // way IN — that is the plaintext the client sends; what we write is bigger by a tag per
+    // chunk.
+    const capped = capStream(body, s.partSize);
+    const toStore = s.encrypted
+      ? await this.#sealPart(s, partNumber, capped, partNumber === (s.partCount ?? 1))
+      : capped;
+    const res = await storage.putPart(s.storageKey, s.uploadId, partNumber, toStore, opts);
     s.parts[partNumber] = { etag: res.etag };
     await this.sessions.put(s);
     return res;
+  }
+
+  /**
+   * Seal one part on its way to the store.
+   *
+   * Parts are sealed INDEPENDENTLY, which is what lets a client keep sending them
+   * concurrently now that it no longer seals them itself. That is safe only because a
+   * part's position in the envelope is a function of its NUMBER: part n carries plaintext
+   * bytes [(n-1)·partSize, n·partSize), so it begins at chunk (n-1)·partSize/chunkSize, and
+   * the nonce prefix was fixed for the whole object at negotiation. Nothing depends on the
+   * order parts arrive in, and no two chunks can ever be sealed under the same nonce.
+   *
+   * The header goes on the front of part 1 and nowhere else — it is the first 44 bytes of
+   * the object. Every part but the last is `partial`, which is what makes `encryptStream`
+   * refuse to finish an envelope early and insist on stopping at a chunk boundary.
+   */
+  async #sealPart(s, partNumber, body, isLast) {
+    const chunksPerPart = s.partSize / s.chunkSize;
+    const startChunk = (partNumber - 1) * chunksPerPart;
+    const key = await this.#dataKeyFor(s);
+    const sealed = await encryptStream(key, asStream(body), {
+      fingerprint: fromHex(s.keyFingerprint),
+      plaintextSize: s.size,
+      chunkSize: s.chunkSize,
+      resume: { noncePrefix: fromHex(s.noncePrefix), index: startChunk },
+      partial: !isLast,
+    });
+    if (partNumber !== 1) return sealed;
+    const header = encodeHeader({
+      chunkSize: s.chunkSize,
+      plaintextSize: s.size,
+      noncePrefix: fromHex(s.noncePrefix),
+      fingerprint: fromHex(s.keyFingerprint),
+    });
+    return prependBytes(header, sealed);
+  }
+
+  /** The collection's key, for sealing. Never leaves this process. */
+  async #dataKeyFor(s) {
+    const policy = await this.encryptionFor(s.collectionId);
+    const key = policy?.dataKeyHex ? fromHex(policy.dataKeyHex) : null;
+    if (!key) throw TroveError.internal('This collection is encrypted but its key is unavailable');
+    return key;
   }
 
   /** Which parts are still outstanding (resume support). */

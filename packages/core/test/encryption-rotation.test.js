@@ -27,12 +27,9 @@ async function drive() {
 
 async function put(d, name, body) {
   const plan = await d.vfs.createUpload({ collectionId: d.c.id, name, size: body.length, contentType: 'text/plain' });
-  const sealed = plan.encryption
-    ? await encrypt(fromHex(plan.encryption.key), body, {
-      fingerprint: fromHex(plan.encryption.fingerprint), chunkSize: plan.encryption.chunkSize,
-    })
-    : body;
-  await d.vfs.uploads.uploadPart(plan.uploadId, 1, sealed);
+  // Plaintext, because that is what a client sends now — the drive seals on the way to
+  // the store and the key never leaves it.
+  await d.vfs.uploads.uploadPart(plan.uploadId, 1, body);
   return d.vfs.completeUpload(plan.uploadId);
 }
 const readBack = async (d, id) => new Response((await d.vfs.readStream(id)).stream).text();

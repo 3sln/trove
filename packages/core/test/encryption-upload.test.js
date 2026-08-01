@@ -11,7 +11,7 @@ import { UploadManager, CollectionService, MemoryKV, MemoryStorage, cipherSize, 
 const BOSS = { id: 'boss', roles: [] };
 
 /** A drive with one encrypted collection, and an UploadManager wired to it as Vfs does. */
-async function drive({ rules = { all: true }, storage = new MemoryStorage() } = {}) {
+async function drive({ rules = { all: true }, storage = new MemoryStorage(), maxBytes = null } = {}) {
   const collections = new CollectionService({
     kv: new MemoryKV(), storageFactory: () => storage, admins: ['boss'],
   });
@@ -28,20 +28,41 @@ async function drive({ rules = { all: true }, storage = new MemoryStorage() } = 
       const key = await collections.dataKeyFor(cid);
       return { encryption, dataKeyHex: Buffer.from(key).toString('hex') };
     },
+    maxBytes,
   });
   return { collections, uploads, encrypted: c, open };
 }
 
-test('the plan carries the key, so the bytes can be sealed before they leave', async () => {
-  // The deliberate trade: the key travels and the bytes do not, which is what keeps a
-  // presigned direct-to-bucket upload possible while the bucket only sees ciphertext.
+test('the plan says encryption is happening and hands over nothing to do it with', async () => {
+  // It used to carry the collection's data key so the browser could seal locally, which is
+  // what made a presigned direct-to-bucket PUT possible. That trade is off: encrypted
+  // collections pass through the drive, the drive seals, and the key never leaves it.
   const d = await drive();
   const plan = await d.uploads.create({ collectionId: d.encrypted.id, name: 'notes.txt', size: 100, contentType: 'text/plain' });
   expect(plan.encryption).toBeTruthy();
   expect(plan.encryption.algorithm).toBe('AES-256-GCM');
-  expect(plan.encryption.key).toMatch(/^[0-9a-f]{64}$/);
-  expect(plan.encryption.fingerprint).toBe(d.encrypted.encryption.fingerprint);
-  expect(plan.encryption.chunkSize).toBe(DEFAULT_CHUNK_SIZE);
+  expect(plan.encryption.sealedBy).toBe('server');
+  expect(plan.encryption.key).toBeUndefined();
+  expect(JSON.stringify(plan)).not.toMatch(/[0-9a-f]{64}/);
+});
+
+test('an encrypted upload is never presigned, whatever the store can do', async () => {
+  // A presigned PUT hands the client a URL to the bucket. The client seals nothing now, so
+  // honouring one would put PLAINTEXT in the store — the exact thing the encryption exists
+  // to prevent.
+  class Presigning extends MemoryStorage {
+    get capabilities() { return { ...super.capabilities, presignUpload: true }; }
+    async presignPut() { return 'https://bucket.example/x'; }
+    async presignPart() { return 'https://bucket.example/x?part'; }
+  }
+  const d = await drive({ storage: new Presigning() });
+  const small = await d.uploads.create({ collectionId: d.encrypted.id, name: 'a.txt', size: 10 });
+  expect(small.presigned).toBe(false);
+  expect(small.url).toBeUndefined();
+
+  // …while an unencrypted collection on the same store still goes straight to the bucket.
+  const open = await d.uploads.create({ collectionId: d.open.id, name: 'b.txt', size: 10 });
+  expect(open.presigned).toBe(true);
 });
 
 test('an unencrypted collection gets no key and says so plainly', async () => {
@@ -59,10 +80,12 @@ test('rules decide per item, not per collection', async () => {
   expect(text.encryption).toBe(null);
 });
 
-test('the plan is negotiated against the stored size, not the file size', async () => {
-  // The quiet one. An envelope is a header plus a tag per chunk larger than the file, and
-  // a multipart plan computed on the file size is short by exactly that — a final part
-  // that the client has bytes for and the plan has no slot for.
+test('parts are negotiated against what the CLIENT sends, which is the file', async () => {
+  // The inverse of what this used to assert. When the browser sealed, what travelled was
+  // the envelope and parts had to be sized against it. The drive seals now, so what
+  // travels is the file — sizing parts against the envelope would ask a client for bytes
+  // it does not have. The stored size still governs the per-file LIMIT, which is measured
+  // at both ends.
   const partSize = 5 * 1024 * 1024;
   const storage = new MemoryStorage();
   const d = await drive({ storage });
@@ -73,22 +96,21 @@ test('the plan is negotiated against the stored size, not the file size', async 
   const plan = await d.uploads.create({ collectionId: d.encrypted.id, name: 'big.bin', size });
   const stored = cipherSize(size, DEFAULT_CHUNK_SIZE);
   expect(stored).toBeGreaterThan(size);
-  expect(plan.encryption.storedSize).toBe(stored);
-  expect(plan.partCount).toBe(Math.ceil(stored / partSize));
-  // Which is one more part than the plaintext would have asked for.
-  expect(plan.partCount).toBeGreaterThan(Math.ceil(size / partSize));
+  expect(plan.partCount).toBe(Math.ceil(size / partSize));
+  // And one part FEWER than the envelope would have asked for — which is the whole
+  // difference between the two designs.
+  expect(plan.partCount).toBeLessThan(Math.ceil(stored / partSize));
 });
 
-test('a file that would fit one PUT unencrypted may not once sealed', async () => {
-  // The boundary between "one presigned PUT" and multipart is a size comparison, and it
-  // has to be made against what actually travels.
-  const storage = new MemoryStorage();
-  const d = await drive({ storage });
-  const justUnder = 5 * 1024 * 1024; // exactly the single-PUT limit as plaintext
-  const plan = await d.uploads.create({ collectionId: d.encrypted.id, name: 'x.bin', size: justUnder });
-  // MemoryStorage cannot presign, so this lands on the proxied path either way; what
-  // matters is that the decision saw the larger number.
-  expect(plan.encryption.storedSize).toBe(justUnder + HEADER_BYTES + TAG_BYTES * Math.ceil(justUnder / DEFAULT_CHUNK_SIZE));
+test('the per-file limit is still measured against what the store will hold', async () => {
+  // The envelope is bigger than the file, and `complete` checks the size read back from the
+  // store. Measuring the limit against the file at negotiation and the envelope at
+  // completion is how a file just under the limit got transferred in full and then deleted.
+  const justUnder = 5 * 1024 * 1024;
+  const stored = justUnder + HEADER_BYTES + TAG_BYTES * Math.ceil(justUnder / DEFAULT_CHUNK_SIZE);
+  const d = await drive({ storage: new MemoryStorage(), maxBytes: stored - 1 });
+  await expect(d.uploads.create({ collectionId: d.encrypted.id, name: 'x.bin', size: justUnder }))
+    .rejects.toThrow(/storage|limit/i);
 });
 
 test('the item keeps the size the user recognises', async () => {

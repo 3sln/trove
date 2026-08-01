@@ -3,7 +3,7 @@
 import { test, expect } from 'bun:test';
 import {
   createVfs, CollectionService, MemoryKV, MemoryStorage, UploadManager,
-  CollectionScanner, RotationService, encrypt, fromHex, cipherSize,
+  CollectionScanner, RotationService, encrypt, fromHex, cipherSize, isEnvelope,
   describeExposure, DEFAULT_CHUNK_SIZE,
 } from '../src/index.js';
 
@@ -22,12 +22,9 @@ async function drive({ maxUploadBytes = null } = {}) {
 }
 async function put(d, name, body) {
   const plan = await d.vfs.createUpload({ collectionId: d.c.id, name, size: body.length, contentType: 'text/plain' });
-  const sealed = plan.encryption
-    ? await encrypt(fromHex(plan.encryption.key), body, {
-      fingerprint: fromHex(plan.encryption.fingerprint), chunkSize: plan.encryption.chunkSize,
-    })
-    : body;
-  await d.vfs.uploads.uploadPart(plan.uploadId, 1, sealed);
+  // Plaintext, because that is what a client sends now — the drive seals on the way to
+  // the store and the key never leaves it.
+  await d.vfs.uploads.uploadPart(plan.uploadId, 1, body);
   return d.vfs.completeUpload(plan.uploadId);
 }
 
@@ -128,37 +125,26 @@ test('exposure with no way to read manifests reports unknown, not safe', async (
   expect(e.anyEgress).toBe(true);
 });
 
-test('an upload that arrives unencrypted on an encrypted collection is refused', async () => {
-  // Every client that has not implemented encryption yet — which today is all of them —
-  // ignores `plan.encryption` and sends the raw bytes. Recording what the session INTENDED
-  // stamped those with a key fingerprint anyway, producing the worst of both outcomes: an
-  // item permanently unreadable, because the read path looks for an envelope that is not
-  // there, AND plaintext sitting in a bucket the collection claims is ciphertext.
+test('a client that just sends the file gets a sealed object, not a refusal', async () => {
+  // The inverse of what this used to assert, and the point of moving sealing to the drive.
+  // Every client that had not implemented encryption sent raw bytes and was REFUSED at
+  // completion — correct at the time, because the alternative was plaintext in a bucket the
+  // collection claimed was ciphertext. Now sending the file is simply how it is done.
   const d = await drive();
   const plan = await d.vfs.createUpload({
     collectionId: d.c.id, name: 'naive.txt', size: 5, contentType: 'text/plain',
   });
   expect(plan.encryption).toBeTruthy();
+  expect(plan.encryption.key).toBeUndefined();
   await d.vfs.uploads.uploadPart(plan.uploadId, 1, text('hello'));
-  await expect(d.vfs.completeUpload(plan.uploadId)).rejects.toThrow(/arrived unencrypted/);
+  const node = await d.vfs.completeUpload(plan.uploadId);
 
-  // And nothing is left behind: no item, and no plaintext in the bucket.
-  expect(await d.vfs.metadata.getByName(d.c.id, 'naive.txt')).toBe(null);
-  const left = await d.storage.list({});
-  expect((left.items || []).length).toBe(0);
-});
-
-test('an upload sealed with the wrong key is refused too', async () => {
-  const d = await drive();
-  const plan = await d.vfs.createUpload({
-    collectionId: d.c.id, name: 'wrong.txt', size: 5, contentType: 'text/plain',
-  });
-  const stranger = new Uint8Array(32).fill(3);
-  const sealed = await encrypt(stranger, text('hello'), {
-    fingerprint: new Uint8Array(16).fill(9), chunkSize: plan.encryption.chunkSize,
-  });
-  await d.vfs.uploads.uploadPart(plan.uploadId, 1, sealed);
-  await expect(d.vfs.completeUpload(plan.uploadId)).rejects.toThrow(/wrong key for this collection/);
+  // Sealed under this collection's key, and readable as the file.
+  expect(node.encryption?.fingerprint).toBe(d.c.encryption.fingerprint);
+  expect(await new Response((await d.vfs.readStream(node.id)).stream).text()).toBe('hello');
+  // And what the bucket holds is an envelope, not the text.
+  const raw = await new Response((await d.storage.get(node.storageKey)).stream).arrayBuffer();
+  expect(isEnvelope(new Uint8Array(raw))).toBe(true);
 });
 
 test('a correctly sealed upload still completes', async () => {
