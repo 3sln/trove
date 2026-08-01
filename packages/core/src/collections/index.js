@@ -324,6 +324,30 @@ export class CollectionService {
     return all.every((c) => this.can(principal, c, 'read') && this.can(principal, c, 'write'));
   }
 
+  /**
+   * What this principal may reach across the whole drive, and whether that is anything.
+   *
+   * The ACL as a DECISION rather than as a record, so something outside this library can
+   * ask it — an edge policy deciding whether an email gets through the front door at all,
+   * for instance. Everything it needs is already here; what was missing was a way to ask
+   * without reimplementing `can()` against the grant shape, which is exactly how two
+   * copies of an authorization rule start.
+   *
+   * "Allowed" means: a named admin, or read on at least one collection. Read on nothing is
+   * the honest definition of someone with no business here — note that on a `defaultOpen`
+   * drive the `anyone` grant makes that true for everybody, which is correct, because the
+   * ACL is what says so.
+   */
+  async accessFor(principal) {
+    const admin = this.isAdmin(principal);
+    const collections = await this.list(principal);
+    return {
+      allowed: admin || collections.length > 0,
+      admin,
+      collections: collections.map((c) => ({ id: c.id, name: c.name, capabilities: c.capabilities })),
+    };
+  }
+
   /** Global admin (can do anything, incl. grant admin-only plugin capabilities). */
   isAdmin(principal) {
     return this.#isNamedAdmin(principal);

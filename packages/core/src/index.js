@@ -83,7 +83,7 @@ export {
   AnonymousIdentityProvider, principalFromClaims,
   cloudflareAccess, accessHost,
 } from './identity/index.js';
-export { verifyJwt, decodeJwt, JwksClient, StaticJwks } from './identity/jwt.js';
+export { verifyJwt, signJwt, publicJwkOf, decodeJwt, JwksClient, StaticJwks } from './identity/jwt.js';
 // Where an unauthenticated client is told to go — one answer for the whole drive.
 export {
   protectedResourceMetadata, challengeHeaders, metadataUrl, publicOrigin,

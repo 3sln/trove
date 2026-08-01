@@ -23,6 +23,7 @@ import { storageRegistry } from './engine/providers/core.js';
 import { createMcpHandler } from './mcp/index.js';
 import { cacheControlFor } from './cachePolicy.js';
 import { MANIFEST_PATH, webManifest, manifestFromEnv } from './manifest.js';
+import { externalEvaluation } from './access/externalEvaluation.js';
 
 // Every backend is pluggable. Each field of `config` accepts EITHER a ready
 // provider instance (pass your own class) OR a `{ driver, ... }` config object
@@ -323,6 +324,17 @@ export async function createServer(config = {}) {
     for (const route of channel.routes?.(routeHelpers) || []) {
       router.add(route.method, route.path, route.deps || [], route.handler);
     }
+  }
+
+  // The external policy component, on the same terms: it contributes routes or it does not
+  // exist. A drive that has not configured one has no `/api/access/*` at all, rather than
+  // endpoints that exist to answer "no" — which is the difference between a feature that is
+  // off and a feature that is broken.
+  const accessPolicy = config.accessEvaluation
+    ? externalEvaluation({ ...config.accessEvaluation, team: config.accessEvaluation.team || config.identity?.access?.team })
+    : null;
+  for (const route of accessPolicy?.routes?.(routeHelpers) || []) {
+    router.add(route.method, route.path, route.deps || [], route.handler);
   }
 
   // Said at boot, because that is when someone is looking and can still fix it. The
@@ -850,6 +862,22 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   }
 
   // Cross-origin API access is off unless an origin (or '*') is configured.
+  // External policy evaluation: present only when a signing key is. See
+  // access/externalEvaluation.js for how to make one.
+  if (env.TROVE_ACCESS_EVAL_KEY) {
+    let privateJwk;
+    try {
+      privateJwk = JSON.parse(env.TROVE_ACCESS_EVAL_KEY);
+    } catch {
+      throw TroveError.invalid('TROVE_ACCESS_EVAL_KEY must be a private JWK as JSON');
+    }
+    config.accessEvaluation = {
+      privateJwk,
+      team: env.TROVE_CF_ACCESS_TEAM || null,
+      kid: env.TROVE_ACCESS_EVAL_KID || 'trove-access',
+    };
+  }
+
   config.corsOrigin = env.TROVE_CORS_ORIGIN || null;
   // App-shell CSP is opt-in (see SAMPLE_CSP) — provide a full policy string to
   // enable it. Off by default because sandboxed plugin iframes can't satisfy one.

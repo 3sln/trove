@@ -141,6 +141,48 @@ async function importVerifyKey(alg, key) {
  * @param {number} [opts.clockToleranceSec]
  * @param {number|null} [opts.now]     ms epoch; pass null to say there is no clock
  */
+/** base64url WITHOUT padding, which is what a JWT wants everywhere. */
+function bytesToBase64url(bytes) {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Sign a JWT with an EC P-256 private key.
+ *
+ * The mirror of `verifyJwt`, and it exists for one caller: answering an external policy
+ * evaluation, where the asker fetches OUR public key to check the answer. That is why it
+ * is asymmetric where `signedUrls.js` is happy with HMAC — a shared secret would mean
+ * handing the verifier the ability to mint answers.
+ *
+ * ES256 only, deliberately. RS256 would work and needs a far larger key for the same
+ * strength; there is one caller and it can use the better curve.
+ */
+export async function signJwt(payload, { privateJwk, kid, expiresInSec = 60, now = Date.now() } = {}) {
+  if (!privateJwk) throw TroveError.invalid('Signing a JWT needs a private JWK');
+  const iat = Math.floor(now / 1000);
+  const body = { iat, exp: iat + expiresInSec, ...payload };
+  const header = { alg: 'ES256', typ: 'JWT', ...(kid ? { kid } : {}) };
+  const signingInput = `${bytesToBase64url(enc.encode(JSON.stringify(header)))}.`
+    + `${bytesToBase64url(enc.encode(JSON.stringify(body)))}`;
+  const key = await crypto.subtle.importKey('jwk', privateJwk, ALGS.ES256.import, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign(ALGS.ES256.verify, key, enc.encode(signingInput)));
+  return `${signingInput}.${bytesToBase64url(sig)}`;
+}
+
+/**
+ * The public half of a private JWK, as a JWKS entry.
+ *
+ * Strips `d` — the private scalar — and everything else a signer needs and a verifier must
+ * not have. Written as a subtraction rather than a copy of the public fields so a JWK that
+ * grows a field cannot silently start publishing it.
+ */
+export function publicJwkOf(privateJwk, { kid } = {}) {
+  const { d, p, q, dp, dq, qi, ...pub } = privateJwk || {};
+  return { ...pub, key_ops: ['verify'], use: 'sig', ...(kid ? { kid } : {}) };
+}
+
 export async function verifyJwt(token, opts = {}) {
   const { header, payload, parts } = decodeJwt(token);
   const alg = header.alg;
