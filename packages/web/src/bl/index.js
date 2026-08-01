@@ -8,7 +8,7 @@ import { Engine, Provider } from '@3sln/ngin';
 import { cell } from '../runtime.js';
 import { registerCoreContext, registerViewportContext } from './context.js';
 import { TransfersService } from './services.js';
-import { explorerState, searchState, apiKeysState, viewState as viewStateSlice, overlayState, workbenchState, rotationState } from './state.js';
+import { explorerState, searchState, apiKeysState, viewState as viewStateSlice, overlayState, workbenchState, aclState, rotationState } from './state.js';
 import { NavigationService } from '../platform/navigation.js';
 import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
@@ -23,6 +23,7 @@ export function createApp(platform) {
   const search = searchState();
   const apiKeys = apiKeysState();
   const rotation = rotationState();
+  const acl = aclState();
   // One place for "what's running" and "what's stuck", covering both sides of the wire.
   const activity = new ActivityService(platform);
   // What the UI is in the middle of doing — see bl/state.js. A resource, because it
@@ -72,6 +73,7 @@ export function createApp(platform) {
       activity: Provider.fromSingleton(activity),
       apiKeys: Provider.fromSingleton(apiKeys),
       rotation: Provider.fromSingleton(rotation),
+      acl: Provider.fromSingleton(acl),
       viewState: Provider.fromSingleton(viewState),
 
       // The engine itself, for actions that choreograph — dispatching a follow-up rather

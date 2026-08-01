@@ -9,7 +9,6 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [002](002-admin-console.md) | Admin console | Collections, API keys and per-plugin egress are still not where an administrator would look |
 | [012](012-rotation-retires-a-key-the-trash-still-needs.md) | Rotation retires a key the trash still needs | **Data loss.** The walk is live-only, so it retires a key trashed items are still sealed with |
 | [013](013-api-key-grants-are-invisible-to-authorization.md) | API-key grants invisible to authorization | A scoped key is refused on a locked drive and over-permitted on an open one |
 | [014](014-leases-have-drifted-from-what-actions-touch.md) | Leases have drifted from what actions touch | `static deps` is documentation, not a contract — one drift is a live crash |

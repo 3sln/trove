@@ -272,6 +272,20 @@ export function createRouter() {
     return collections.remove(params.id, principal);
   });
 
+  /**
+   * Who has access to this collection.
+   *
+   * A separate route rather than a field on `describe()`, which is documented as "a safe,
+   * principal-scoped view (no secrets)" and is returned to everyone who can see the
+   * collection at all. The ACL is not a secret exactly, but it names people, and every
+   * listing would carry it. Asking for it is an explicitly admin-gated act.
+   */
+  r.get('/api/collections/:id/grants', ['collections'], async (ctx) => {
+    requireCollections(ctx);
+    const c = await ctx.collections.assert(ctx.principal, ctx.params.id, 'admin');
+    return { grants: c.acl?.grants || [] };
+  });
+
   r.post('/api/collections/:id/grants', ['collections'], async (ctx) => {
     requireCollections(ctx);
     return { collection: await ctx.collections.setGrant(ctx.params.id, await body(ctx.req), ctx.principal) };

@@ -32,7 +32,7 @@
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf, collectionAdminOf } from './services.js';
-import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction, LoadRotationAction } from './actions.js';
+import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction, LoadRotationAction, LoadGrantsAction, ShowCollectionAccessAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
 import { statusFactsOf, driveConditionOf } from './status.js';
@@ -156,6 +156,7 @@ export const explorer = new ServiceQuery('explorer', (r) => r.observe(), (v) => 
     scan: () => new ExecCommandAction('workbench.scanCollection'),
     rotate: () => new ExecCommandAction('workbench.openSettings'),
     create: () => new ExecCommandAction('collections.create'),
+    access: (id) => new ShowCollectionAccessAction(id),
   }),
 }));
 /** Query text, results, and the palette's file list. */
@@ -214,6 +215,37 @@ class RotationView extends Query {
     release(r, this);
   }
 }
+/**
+ * Who may do what on one collection.
+ *
+ * Keyed by collection and loaded by `bootAction`, the same shape as `rotationFor` above —
+ * it loads when an administrator opens the row and stops mattering when they close it.
+ * No polling: an ACL only changes when somebody changes it, and the action that does so
+ * reloads.
+ */
+export const grantsFor = (collectionId) => GrantsView.of(collectionId);
+
+class GrantsView extends Query {
+  static deps = ['acl', 'appState'];
+  static of = queryOf(GrantsView);
+
+  constructor(collectionId) {
+    super();
+    this.collectionId = collectionId;
+    this.bootAction = new LoadGrantsAction(collectionId);
+  }
+
+  boot(r, { notify }) {
+    const cell = r.acl.observe();
+    notify(cell.getValue());
+    hold(r, this, cell.onDirty(() => notify(cell.getValue())));
+  }
+
+  kill(r) {
+    release(r, this);
+  }
+}
+
 /** The admin API-key list, with the unsubmitted draft resolved into what it would grant. */
 export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe(),
   (v) => ({ ...v, draftScopes: draftScopesOf(v) }));

@@ -212,7 +212,7 @@ export function draftScopesOf(state) {
  * starting one: the estimate and the confirmation live there, and a rotation begun without
  * seeing its cost is exactly the button nobody should have.
  */
-export function collectionAdminOf(state, { open, scan, rotate, create }) {
+export function collectionAdminOf(state, { open, scan, rotate, create, access }) {
   const current = state?.collectionId;
   const rows = (state?.collections || []).map((c) => ({
     id: c.id,
@@ -229,6 +229,8 @@ export function collectionAdminOf(state, { open, scan, rotate, create }) {
       open: [open(c.id)],
       scan: [open(c.id), scan()],
       rotate: c.encryption ? [open(c.id), rotate()] : null,
+      // Access needs no switch: the ACL is read by collection id, not by what is open.
+      access: c.capabilities?.includes('admin') ? [access(c.id)] : null,
     },
   }));
   return { rows, canCreate: !!state?.canCreateCollection, create: [create()] };

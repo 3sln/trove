@@ -17,11 +17,13 @@
 // exists. What was missing was somewhere to look.
 
 import { dd } from '../../runtime.js';
+import { watchQuery } from '../../bl/watchQuery.js';
+import { grantsFor } from '../../bl/queries.js';
 import { icon } from '../icon.js';
 import { bytes } from '../format.js';
-import { ExecCommandAction } from '../../bl/actions.js';
+import { ExecCommandAction, SetGrantAction } from '../../bl/actions.js';
 
-const { div, h2, h3, p, span, button } = dd;
+const { div, h2, h3, p, span, button, select, option, input } = dd;
 
 export default function adminView(state, ui) {
   const caps = state.caps;
@@ -124,7 +126,18 @@ function collectionsSection(state, ui) {
         c.actions.rotate
           ? button({ className: 'btn small' }, 'Rotate key…').on({ click: run(c.actions.rotate) })
           : null,
+        // Only offered where you could actually change it — `setGrant` asserts admin, so a
+        // button that always showed would be one that sometimes only produces a 403.
+        c.actions.access
+          ? button({ className: `btn small ${state.wb?.aclFor === c.id ? 'on' : ''}` }, 'Access…')
+            .on({ click: run(c.actions.access) })
+          : null,
       ),
+      // Leased only while open, by a query keyed on this collection — the same shape
+      // settingsView uses for `rotationFor`.
+      state.wb?.aclFor === c.id
+        ? ui.watch(watchQuery(ui.engine, grantsFor(c.id)), (g) => accessEditor(g, ui, c.id))
+        : null,
     )) : [row('Collections', 'Nothing has been created yet.', 'none')]),
     admin?.canCreate
       ? div({ className: 'setting' },
@@ -136,6 +149,65 @@ function collectionsSection(state, ui) {
           button({ className: 'btn small' }, 'Create…').on({ click: run(admin.create) })),
       )
       : row('New collection', 'You do not have permission to create one on this drive.', 'not allowed'),
+  );
+}
+
+/** The capabilities a grant can carry. `admin` expands to the rest, server-side. */
+const CAPS = ['read', 'write', 'delete', 'admin'];
+
+/**
+ * Who may do what on one collection.
+ *
+ * Rendered under the row an administrator opened, and reading `grantsFor(id)` — a query
+ * keyed by collection with a `bootAction`, so it loads when this is shown and stops
+ * mattering when it is not.
+ *
+ * Revoking is granting with nothing: one call, so the two cannot drift.
+ */
+function accessEditor(g, ui, collectionId) {
+  if (!g) return div({ className: 'acl' }, span({ className: 'mono muted' }, 'Loading access…'));
+  if (g.error) return div({ className: 'acl' }, span({ className: 'mono muted' }, g.error));
+  const grants = g.grants || [];
+  const set = (grant) => ui.engine.dispatch(new SetGrantAction(collectionId, grant));
+
+  const line = (grant) => {
+    const held = new Set(grant.capabilities || []);
+    const who = grant.type === 'anyone' ? 'Everyone' : `${grant.type}: ${grant.subject}`;
+    return div({ className: 'acl-row' },
+      span({ className: 'acl-who' }, who),
+      ...CAPS.map((cap) => button({
+        className: `btn small ${held.has(cap) ? 'on' : ''}`,
+        title: cap === 'admin' ? 'admin implies every other capability' : `toggle ${cap}`,
+      }, cap).on({
+        click: () => set({
+          type: grant.type,
+          subject: grant.subject,
+          capabilities: held.has(cap)
+            ? (grant.capabilities || []).filter((c) => c !== cap)
+            : [...(grant.capabilities || []), cap],
+        }),
+      })),
+      // Revoke is the same call with an empty list.
+      button({ className: 'btn small', title: 'remove this grant entirely' }, '\u00d7')
+        .on({ click: () => set({ type: grant.type, subject: grant.subject, capabilities: [] }) }),
+    );
+  };
+
+  return div({ className: 'acl' },
+    ...(grants.length ? grants.map(line) : [span({ className: 'mono muted' }, 'Nobody but drive administrators.')]),
+    div({ className: 'acl-row acl-add' },
+      select({ className: 'acl-type' }, option({ value: 'user' }, 'user'), option({ value: 'role' }, 'role'), option({ value: 'anyone' }, 'anyone')),
+      input({ className: 'acl-subject', placeholder: 'email, or a role name' }),
+      button({ className: 'btn small' }, 'Grant read').on({
+        click: (e) => {
+          const rowEl = e.target.closest('.acl-add');
+          const type = rowEl.querySelector('.acl-type').value;
+          const subject = rowEl.querySelector('.acl-subject').value.trim();
+          if (type !== 'anyone' && !subject) return;
+          set({ type, subject: type === 'anyone' ? '' : subject, capabilities: ['read'] });
+        },
+      }),
+    ),
   );
 }
 

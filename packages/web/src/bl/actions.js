@@ -890,6 +890,12 @@ export class CloseSearchModalAction extends ShellAction {
   apply(wb) { wb.set({ searchModal: false }); }
 }
 
+/** Open (or close) one collection's access list on the administration screen. */
+export class ShowCollectionAccessAction extends ShellAction {
+  constructor(collectionId) { super(); this.collectionId = collectionId; }
+  apply(wb) { wb.set({ aclFor: wb.get().aclFor === this.collectionId ? null : this.collectionId }); }
+}
+
 export class SetLaunchQueryAction extends ShellAction {
   constructor(query) { super(); this.query = query; }
   // Back to the top, for the same reason the palette does: the old highlight belonged to
@@ -1770,6 +1776,61 @@ export class ClearSidecarAction extends Action {
  * The estimate comes with the state rather than only before starting: on a metered store
  * this is a real bill, and the number is worth having in front of the button.
  */
+/**
+ * Read one collection's access list.
+ *
+ * Takes the collection rather than reading the open one, because this is asked from a
+ * screen that lists every collection — the rotation equivalent next door can assume the
+ * open one and this cannot.
+ */
+export class LoadGrantsAction extends Action {
+  static deps = ['acl', 'api', 'notifications'];
+  constructor(collectionId) { super(); this.collectionId = collectionId; }
+  async execute({ acl, api, notifications }) {
+    const collectionId = this.collectionId;
+    if (!collectionId) return;
+    acl.set({ collectionId, loading: true, error: null });
+    try {
+      const res = await api.collectionGrants(collectionId);
+      acl.set({ grants: res?.grants || [], loading: false });
+    } catch (err) {
+      // A non-admin gets a 403, and that is the correct answer rather than an error worth
+      // a toast — the section simply does not offer itself. Same reasoning as the rotation
+      // loader immediately below.
+      acl.set({ loading: false, error: err?.message || 'Could not read the access list' });
+      if (err?.status !== 403) notifications.error?.(err?.message || 'Could not read the access list');
+    }
+  }
+}
+
+/**
+ * Grant or revoke, which are one operation.
+ *
+ * An empty capability list removes the grant — that is `setGrant`'s existing shape, and
+ * keeping it means revoking cannot drift from granting. Reloads afterwards rather than
+ * patching the slice, because the server expands capabilities (admin implies the rest) and
+ * a client that guessed the expansion would eventually disagree with it.
+ */
+export class SetGrantAction extends Action {
+  static deps = ['acl', 'api', 'engine', 'notifications'];
+  constructor(collectionId, grant) { super(); this.collectionId = collectionId; this.grant = grant; }
+  async execute({ acl, api, engine, notifications }) {
+    acl.set({ busy: true });
+    try {
+      await api.setCollectionGrant(this.collectionId, this.grant);
+      const who = this.grant.type === 'anyone' ? 'everyone' : this.grant.subject;
+      notifications.success?.(this.grant.capabilities?.length
+        ? `Access for ${who} updated`
+        : `Access for ${who} removed`);
+    } catch (err) {
+      notifications.error?.(err?.message || 'Could not change access');
+    } finally {
+      acl.set({ busy: false });
+      await engine.dispatch(new LoadGrantsAction(this.collectionId)).next(['complete', 'error', 'abort']);
+    }
+  }
+}
+
 export class LoadRotationAction extends Action {
   static deps = ['api', 'explorer', 'notifications', 'rotation'];
   async execute({ api, explorer, notifications, rotation }) {

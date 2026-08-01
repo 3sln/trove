@@ -250,6 +250,21 @@ export class TroveApiClient {
   rotationEstimate(id) {
     return this.request('GET', `/api/collections/${encodeURIComponent(id)}/rotate/estimate`);
   }
+  /** Who has access to a collection. Admin-only, server-side. */
+  collectionGrants(id) {
+    return this.request('GET', `/api/collections/${encodeURIComponent(id)}/grants`);
+  }
+
+  /**
+   * Add, change or remove one grant.
+   *
+   * Upsert by (type, subject); an empty capability list REMOVES the grant, which is the
+   * shape `setGrant` already had — so revoking is the same call as granting, with nothing.
+   */
+  setCollectionGrant(id, grant) {
+    return this.request('POST', `/api/collections/${encodeURIComponent(id)}/grants`, { body: grant });
+  }
+
   rotationState(id) {
     return this.request('GET', `/api/collections/${encodeURIComponent(id)}/rotate`);
   }

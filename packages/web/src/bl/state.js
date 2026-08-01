@@ -119,6 +119,9 @@ export const workbenchState = () => slice({
   activity: 'home', // home (stack) | plugins | settings
   sidebarVisible: true,
   launch: { query: '', index: 0 },
+  // Which collection's access list an administrator has opened, if any. Shell state
+  // rather than a component field: it decides what is on screen.
+  aclFor: null,
   searchModal: false, // the double-shift modal search overlay
   // Phone chrome: which bottom sheet is up, if any ('status' | 'more'). A phone has no room
   // for a permanent status bar or a left rail, so both fold into a sheet pulled up on demand.
@@ -139,6 +142,17 @@ export function wrapIndex(index, delta, count) {
  * rather than a fetch-per-render because two things read it (the progress line and whether
  * Start is offered) and they must not disagree.
  */
+/**
+ * Who may do what on one collection, while an administrator is looking at it.
+ *
+ * Keyed by collection like the rotation slice next door, and for the same reason: the
+ * answer belongs to a collection rather than to the drive, so switching is a different
+ * question rather than a change to notice.
+ */
+export const aclState = () => slice({
+  collectionId: null, grants: [], loading: false, error: null, busy: false,
+});
+
 export const rotationState = () => slice({
   collectionId: null, rotation: null, estimate: null, loading: false, error: null, busy: false,
 });

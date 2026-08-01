@@ -155,6 +155,7 @@ export default function workbench({ engine, platform }) {
     // Gathers what already exists rather than fetching anything new — see adminView.js.
     adminView: region(engine, {
       caps: q.capabilities, ex: q.explorer, plugins: q.plugins, act: q.activity, so: q.social,
+      wb: q.workbench,
     }, (s) => adminView(s, ui)),
     infoPanel: region(engine, { so: q.social, off: q.offline, nav: q.navigation },
       (s) => infoPanel(s, ui)),
