@@ -406,3 +406,41 @@ test('a rotation key does not accumulate suffixes across rotations', async () =>
   // A name that merely contains "rot" is not a suffix and must survive.
   expect(rotatedKey('obj_carrot')).toMatch(/^obj_carrot\.rot[0-9a-z]+$/);
 });
+
+test('a rotation moves the trash too, so a restore afterwards still opens', async () => {
+  // The walk used to source from `listItems`, which is live-only by design — so a pass
+  // over a collection whose only stragglers were trashed found nothing, declared itself
+  // finished, and retired a key those objects were still sealed with. Restoring one after
+  // that failed permanently: the bytes were there and nothing could open them.
+  const d = await drive();
+  const before = d.c.encryption.fingerprint;
+  const live = await put(d, 'live.txt', text('still here'));
+  const gone = await put(d, 'gone.txt', text('in the trash'));
+  await d.vfs.remove(gone.id);
+
+  await d.rotation.begin(d.c.id, BOSS);
+  let state = await d.rotation.step(d.c.id);
+  while (state.status === 'running') state = await d.rotation.step(d.c.id);
+  expect(state.failed).toBe(0);
+
+  // The old key is retired — which is only safe because the trashed object moved with it.
+  expect(await d.collections.dataKeyFor(d.c.id, before)).toBe(null);
+  const trashed = await d.vfs.metadata.getById(gone.id);
+  expect(trashed.encryption.fingerprint).not.toBe(before);
+
+  const back = await d.vfs.restore(gone.id);
+  expect(await readBack(d, back.id)).toBe('in the trash');
+  expect(await readBack(d, live.id)).toBe('still here');
+});
+
+test('the sealed walk spans the trash and skips what was never sealed', async () => {
+  // `listSealed` is the primitive the fix rests on: live + trashed, sealed only.
+  const d = await drive();
+  const a = await put(d, 'a.txt', text('one'));
+  const b = await put(d, 'b.txt', text('two'));
+  await d.vfs.remove(b.id);
+  await d.vfs.metadata.create({ collectionId: d.c.id, name: 'plain.txt', storageKey: 'k', size: 3 });
+
+  const page = await d.vfs.metadata.listSealed(d.c.id, {});
+  expect(page.items.map((n) => n.id).sort()).toEqual([a.id, b.id].sort());
+});

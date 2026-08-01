@@ -208,13 +208,35 @@ export class SqliteStore extends MetadataStore {
     );
     return rows.map(row);
   }
-  /** Items trashed before `cutoff` — what the purge sweep collects. */
   async trashedStorageKeys(collectionId) {
     const rows = await this.db.all(
       'SELECT storageKey FROM nodes WHERE collectionId = ? AND deletedAt IS NOT NULL AND storageKey IS NOT NULL',
       collectionId,
     );
     return new Set(rows.map((r) => r.storageKey));
+  }
+
+  async listSealed(collectionId = 'default', opts = {}) {
+    // No `deletedAt IS NULL`, deliberately — see the interface docblock. The trash is the
+    // half of the key's working set that `listItems` cannot see.
+    const limit = opts.limit ?? 500;
+    const at = decodeCursor('name', opts.cursor);
+    // The same keyset shape and the same NOCASE expression `listItems` uses, so a cursor
+    // means the same thing here and the page boundary lines up with the ordering.
+    const where = at ? 'AND (name COLLATE NOCASE > ? OR (name COLLATE NOCASE = ? AND id > ?))' : '';
+    const args = at ? [at.value, at.value, at.id] : [];
+    const rows = await this.db.all(
+      `SELECT * FROM nodes WHERE collectionId = ? AND encryption IS NOT NULL ${where}
+       ORDER BY name COLLATE NOCASE ASC, id ASC
+       LIMIT ?`,
+      collectionId, ...args, limit + 1,
+    );
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit).map(row);
+    return {
+      items: page,
+      nextCursor: hasMore ? encodeCursor('name', page[page.length - 1]) : null,
+    };
   }
 
   async trashedBefore(cutoff, limit = 500) {

@@ -153,6 +153,21 @@ export class MemoryStore extends MetadataStore {
     return keys;
   }
 
+  async listSealed(collectionId = 'default', opts = {}) {
+    // `this.nodes` rather than `#live()`, deliberately — see the interface docblock. The
+    // trash is the half of the key's working set that `listItems` cannot see.
+    const items = [...this.nodes.values()].filter((n) => n.collectionId === collectionId && n.encryption);
+    items.sort((a, b) => compareForSort(a, b, 'name', 1));
+    const limit = opts.limit ?? 500;
+    const at = decodeCursor('name', opts.cursor);
+    const rest = at ? items.filter((n) => afterCursor(n, 'name', at, false)) : items;
+    const page = rest.slice(0, limit);
+    return {
+      items: page.map(clone),
+      nextCursor: rest.length > limit ? encodeCursor('name', page[page.length - 1]) : null,
+    };
+  }
+
   async trashedBefore(cutoff, limit = 500) {
     return [...this.nodes.values()]
       .filter((n) => n.deletedAt && n.deletedAt < cutoff)

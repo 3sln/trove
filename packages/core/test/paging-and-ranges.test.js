@@ -102,6 +102,30 @@ for (const [label, make] of stores) {
     } while (cursor);
     expect(seen.sort()).toEqual(['four', 'one', 'three', 'two']);
   });
+
+  test(`${label}: listSealed spans the trash, and only its sealed half`, async () => {
+    const store = await make();
+    if (store.init && label === 'memory') await store.init();
+    const sealed = { fingerprint: 'aa', chunkSize: 1024 };
+    await store.create({ name: 'a.txt', collectionId: 'default', encryption: sealed });
+    const b = await store.create({ name: 'b.txt', collectionId: 'default', encryption: sealed });
+    await store.create({ name: 'c.txt', collectionId: 'default' });
+    await store.softDelete(b.id, Date.now());
+
+    // A trashed object keeps its bytes and stays sealed with whatever sealed it, so a key
+    // rotation has to move it before that key can be retired — and `listItems` cannot see
+    // it, which is the whole reason this method exists. Paged one at a time, because the
+    // cursor has to hold across the live/trashed boundary too.
+    const seen = [];
+    let cursor = null;
+    do {
+      const page = await store.listSealed('default', { limit: 1, cursor });
+      seen.push(...page.items.map((i) => i.name));
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(seen).toEqual(['a.txt', 'b.txt']);
+    expect((await store.listItems('default')).items.map((i) => i.name)).toEqual(['a.txt', 'c.txt']);
+  });
 }
 
 test('purging a trashed item leaves a live file of the same name alone', async () => {

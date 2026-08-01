@@ -611,8 +611,25 @@ export class Vfs {
     return { url: `${base}/api/items/download?${q}`, expiresAt: g.expiresAt, node, signed: 'trove' };
   }
 
-  async readStream(id, { range, signal } = {}) {
-    const node = await this.resolve(id);
+  async readStream(id, opts = {}) {
+    return this.readNode(await this.resolve(id), opts);
+  }
+
+  /**
+   * Read a node the caller has ALREADY resolved.
+   *
+   * The trash guard belongs to resolution, not to reading: `resolve` refuses a trashed
+   * item so a deleted file cannot answer a download-by-id, and that is the whole of the
+   * rule. Reading is mechanical — a storage key, an envelope, a key ring.
+   *
+   * Key rotation is the caller that needs the distinction. A trashed object keeps its
+   * bytes and is still sealed with whatever key sealed it, so the rotation must move it
+   * before that key can be retired; it reaches those nodes through `listSealed`, which
+   * spans the trash on purpose. Going around this and reading storage directly would put
+   * a second copy of the envelope/range/key-ring logic in the rotation, which is the one
+   * thing this file has spent the most comments arguing against.
+   */
+  async readNode(node, { range, signal } = {}) {
     if (!node.storageKey) throw TroveError.notFound('File content');
     const storage = await this.storageFor(node.collectionId);
     if (!node.encryption) return storage.get(node.storageKey, { range, signal });

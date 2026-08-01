@@ -165,6 +165,28 @@ export class MetadataStore {
   async trashedStorageKeys(collectionId) {
     throw TroveError.unsupported('trashedStorageKeys not implemented');
   }
+  /**
+   * Every SEALED item in a collection, live AND trashed, paged by (name, id).
+   *
+   * Key rotation is the caller, and it cannot use `listItems` for the same reason the
+   * scanner cannot: that is live-only by design, while the Vfs deliberately keeps the
+   * BYTES of a soft-deleted item so a restore can bring it back. A rotation that walks
+   * only live items completes a pass having never looked at the trash, retires the old
+   * key on the strength of it, and every trashed object still sealed with that key
+   * becomes permanently unopenable — the restore fails, forever. Retiring by observation
+   * is only sound if the observation covers everything the key still opens.
+   *
+   * Sealed-only because that is the entire set a rotation can act on, and applying the
+   * predicate in the store means a mostly-plaintext collection is one page rather than
+   * hundreds of pages of items to skip.
+   *
+   * @param {string} collectionId
+   * @param {{limit?: number, cursor?: string}} [opts]
+   * @returns {Promise<{items: object[], nextCursor: string|null}>}
+   */
+  async listSealed(collectionId, opts) {
+    throw TroveError.unsupported('listSealed not implemented');
+  }
   /** Rename an item. Rejects ALREADY_EXISTS if the name is taken in its collection. */
   async rename(id, newName) {
     throw TroveError.unsupported('rename not implemented');

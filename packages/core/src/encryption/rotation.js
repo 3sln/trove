@@ -23,6 +23,12 @@
 // on it — not when a counter says the job is done. A count can be wrong; a pass that finds
 // nothing cannot be. That also handles the awkward case of an object uploaded onto the old
 // key by a request that was in flight when the rotation started.
+//
+// WHICH IS ONLY SOUND IF THE PASS SEES EVERYTHING THE KEY OPENS. The trash keeps its
+// bytes, so a soft-deleted object is still sealed and still needs its key on the day
+// someone restores it. The walk therefore sources from `listSealed`, which spans live and
+// trashed, and not from `listItems`, which is live-only by design. Retiring on a pass over
+// a subset is not observation, it is a guess — and the guess destroys data silently.
 
 import { TroveError } from '../errors.js';
 import { encryptStream, decodeHeader } from './envelope.js';
@@ -197,12 +203,16 @@ export class RotationService {
     }
 
     for (;;) {
-      const page = await this.vfs.metadata.listItems(collectionId, { cursor, limit: 50 });
+      // `listSealed`, NOT `listItems`: the trash keeps its bytes, so a trashed object is
+      // still sealed with the old key, and a walk that cannot see it would retire that key
+      // out from under every future restore. The store applies the sealed predicate too,
+      // so a mostly-plaintext collection is one page rather than hundreds to skip.
+      const page = await this.vfs.metadata.listSealed(collectionId, { cursor, limit: 50 });
       const items = page.items || [];
       for (const node of items) {
-        // Only encrypted items, and only ones not already on the current key. This is what
-        // makes re-running a slice free rather than destructive.
-        if (!node.encryption || node.encryption.fingerprint === state.to) continue;
+        // Only items not already on the current key. This is what makes re-running a slice
+        // free rather than destructive.
+        if (node.encryption.fingerprint === state.to) continue;
         sawStragglers = true;
         try {
           const r = await this.#moveSlice(node, key, fp, null, { deadline, now });
@@ -307,7 +317,7 @@ export class RotationService {
         const end = Math.min(start + chunksPerPart * chunkSize, plaintextSize) - 1;
         const last = end + 1 >= plaintextSize;
 
-        const read = await this.vfs.readStream(node.id, { range: { start, end } });
+        const read = await this.vfs.readNode(node, { range: { start, end } });
         const sealed = await encryptStream(newKey, read.stream, {
           fingerprint: newFingerprint,
           plaintextSize,
@@ -371,7 +381,7 @@ export class RotationService {
   /** The whole object in one put, for a store that cannot do multipart. */
   async #moveWhole(node, newKey, newFingerprint, storage, chunkSize) {
     const nextKey = rotatedKey(node.storageKey);
-    const read = await this.vfs.readStream(node.id);
+    const read = await this.vfs.readNode(node);
     const sealed = await encryptStream(newKey, read.stream, {
       fingerprint: newFingerprint,
       plaintextSize: read.size ?? node.size,
