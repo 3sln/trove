@@ -57,12 +57,21 @@ export const explorerState = (settings) => slice({
   // `stats` is the whole collection; `items` is the page on screen. Keeping both is what
   // lets the UI say "500 of 3,006" instead of quietly claiming 500.
   stats: null, usage: null, nextCursor: null, loadingMore: false, trash: null,
+  // The selected NODES, not just their ids — the primary read path in `selectedNodesOf`,
+  // with `items` as the fallback for when a selection was made somewhere `items` covers.
+  // That function exists to end the class of silent bug where rename/trash/copy-link
+  // returned quietly while `hasSelection` said there was something to act on.
+  selectionNodes: null,
 });
 
 /** Query text, results, and the palette's separate file list. */
 export const searchState = () => slice({
   query: '', mode: 'hybrid', results: [], loading: false, error: null, ran: false,
   paletteFiles: [], paletteQuery: '', paletteLoading: false, paletteError: null,
+  // `filtered` is a tag/type filter rather than a query; `offline` says the results came
+  // from the local pinned index; `resolved` is the query the results on screen are FOR,
+  // and it is what `pickView` reads to decide whether to show them at all.
+  filtered: false, offline: false, resolved: null,
 });
 
 /**

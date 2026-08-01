@@ -1279,22 +1279,30 @@ export class SetPluginSecretAction extends Action {
  * lost access to. Either way the click must say so rather than do nothing.
  */
 export class OpenNotificationTargetAction extends Action {
-  static deps = ['api', 'context', 'contributions', 'engine', 'explorer', 'notifications', 'plugins', 'settings', 'workbench'];
+  // Five of these used to exist only to feed a hand-call of `OpenFileAction.execute(r)` —
+  // the one `.execute(` in the package — and one of them, `explorer`, fed nothing at all.
+  // The coupling was invisible: a dep added to OpenFileAction broke THIS action at runtime
+  // with an `undefined`, the same failure mode as the missing `overlay` above. Dispatching
+  // instead also puts the open on the feed, which it never was: opening from a notification
+  // and opening from a row click are the same intent and the engine should see both.
+  static deps = ['api', 'engine', 'notifications', 'workbench'];
 
   constructor(nodeId) { super(); this.nodeId = nodeId; }
 
-  async execute(r) {
+  async execute({ api, engine, notifications, workbench }) {
     let node;
     try {
-      ({ node } = await r.api.stat(this.nodeId));
+      ({ node } = await api.stat(this.nodeId));
     } catch (err) {
-      r.notifications.warn(err?.status === 403 || err?.code === 'forbidden'
+      notifications.warn(err?.status === 403 || err?.code === 'forbidden'
         ? 'You no longer have access to that item.'
         : 'That item no longer exists.');
       return;
     }
-    await new OpenFileAction(node).execute(r);
-    r.workbench.set({ infoPanel: true });
+    // `.next([...])`, because `dispatch` returns a feed and the panel must open AFTER the
+    // file does — see platform/commands.js, which names this trap.
+    await engine.dispatch(new OpenFileAction(node)).next(['complete', 'error', 'abort']);
+    workbench.set({ infoPanel: true });
   }
 }
 
@@ -1722,7 +1730,7 @@ export class ToggleDetailsAction extends Action {
 
 /** Ask for a .zip and take it through the install review. */
 export class PickAndInstallPluginAction extends Action {
-  static deps = ['notifications', 'plugins', 'social', 'workbench'];
+  static deps = ['notifications', 'overlay', 'plugins', 'social', 'workbench'];
   async execute(r) {
     pickZip((file) => file && beginInstallFromFile(r, file));
   }

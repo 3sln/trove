@@ -135,7 +135,6 @@ export function createApp(platform) {
         },
         () => {},
       ),
-      mediaUrls: Provider.fromSingleton(platform.mediaUrls),
       plugins: Provider.fromSingleton(platform.plugins),
     },
   });

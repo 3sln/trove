@@ -10,7 +10,14 @@ import { parsePackage, fetchPackage, reviewSummary, displayName } from '../platf
 import { pluginId } from '@3sln/trove/core/plugins/identity.js';
 import { installPolicyFor } from './trust.js';
 
-/** @typedef {{notifications: object, overlay: object, plugins: object, social: object, workbench: object}} InstallResources */
+/**
+ * What an install touches. The parameter list below is the same set spelled out, so a lease
+ * that forgot one is a missing ARGUMENT at the top of the function rather than an
+ * `undefined` several lines in — which is how a missing `overlay` came to be reported to
+ * the user as "Couldn't read the plugin", about a file that read perfectly.
+ *
+ * @typedef {{notifications: object, overlay: object, plugins: object, social: object, workbench: object}} InstallResources
+ */
 
 /** @param {InstallResources} r */
 export async function beginInstallFromFile(r, file) {
@@ -32,16 +39,17 @@ export async function beginInstallFromUrl(r, url) {
   }
 }
 
-async function review(r, pkg) {
+/** @param {InstallResources} r */
+async function review({ notifications, overlay, plugins, social, workbench }, pkg) {
   const label = displayName(pkg.manifest);
-  if (r.plugins.plugins.has(pluginId(pkg.manifest))) {
-    r.notifications.warn(`“${label}” is already installed.`);
+  if (plugins.plugins.has(pluginId(pkg.manifest))) {
+    notifications.warn(`“${label}” is already installed.`);
     return;
   }
   // Trust assessment can hit the network (domain assetlinks); do it before review.
   let trust = { status: 'unverified' };
   try {
-    trust = await r.plugins.assessTrust(pkg);
+    trust = await plugins.assessTrust(pkg);
   } catch { /* offline / unreachable */ }
 
   // A tampered package is refused here rather than presented with a warning. The review
@@ -50,30 +58,30 @@ async function review(r, pkg) {
   // are not what was signed, so there is nothing to weigh. See installPolicyFor.
   const policy = installPolicyFor(trust);
   if (!policy.allowed) {
-    r.notifications.error(`“${label}” was not installed. ${policy.detail}`, { sticky: true });
+    notifications.error(`“${label}” was not installed. ${policy.detail}`, { sticky: true });
     return;
   }
 
   const summary = reviewSummary(pkg, trust);
-  r.overlay.set({ dialog: {
+  overlay.set({ dialog: {
     kind: 'plugin-review',
     summary,
     policy,
-    isAdmin: !!r.social.state.admin,
+    isAdmin: !!social.state.admin,
     onInstall: async (grants) => {
-      r.overlay.set({ dialog: null });
+      overlay.set({ dialog: null });
       // Account installs upload the package + run a handshake that can take a while —
       // switch to the plugins view (which shows the plugin's loading state) and hold a
       // sticky "Installing…" toast so the user isn't left staring at nothing.
-      r.workbench.set({ activity: 'plugins', sidebarVisible: true });
-      const pending = r.notifications.info(`Installing “${label}”…`, { sticky: true });
+      workbench.set({ activity: 'plugins', sidebarVisible: true });
+      const pending = notifications.info(`Installing “${label}”…`, { sticky: true });
       try {
-        await r.plugins.install(pkg, { grants, trust });
-        r.notifications.dismiss(pending);
-        r.notifications.success(`Installed “${label}”`);
+        await plugins.install(pkg, { grants, trust });
+        notifications.dismiss(pending);
+        notifications.success(`Installed “${label}”`);
       } catch (err) {
-        r.notifications.dismiss(pending);
-        r.notifications.error(`Install failed: ${err.message}`);
+        notifications.dismiss(pending);
+        notifications.error(`Install failed: ${err.message}`);
       }
     },
   } });

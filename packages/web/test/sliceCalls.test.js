@@ -58,6 +58,68 @@ function sliceFactories() {
   return new Set([...src.matchAll(/export const (\w+)\s*=\s*\([^)]*\)\s*=>\s*slice\(/g)].map((m) => m[1]));
 }
 
+/** From `at`, which must be an opening bracket, to its match. Returns the index after it. */
+function matchBracket(src, at) {
+  const pairs = { '(': ')', '{': '}', '[': ']' };
+  const stack = [pairs[src[at]]];
+  let i = at + 1;
+  for (; i < src.length && stack.length; i++) {
+    if (pairs[src[i]]) stack.push(pairs[src[i]]);
+    else if (src[i] === stack[stack.length - 1]) stack.pop();
+  }
+  return i;
+}
+
+/**
+ * The TOP-LEVEL keys of an object literal body — nested objects and arrays skipped whole,
+ * so `{ a: { b: 1 } }` is `['a']`. Computed and spread keys are not names and are ignored;
+ * a slice that takes one is dynamic in that position and the check has nothing to say.
+ */
+function literalKeys(body) {
+  const keys = [];
+  let i = 0;
+  while (i < body.length) {
+    while (i < body.length && /[\s,]/.test(body[i])) i++;
+    const rest = body.slice(i);
+    const named = /^([A-Za-z_$][\w$]*)\s*:/.exec(rest) || /^([A-Za-z_$][\w$]*)\s*(?=[,}]|$)/.exec(rest);
+    if (named) { keys.push(named[1]); i += named[0].length; }
+    // Skip this entry's VALUE to the next top-level comma — otherwise a ternary reads as
+    // another key (`error: n ? null : msg` looked like a key called `null`).
+    while (i < body.length && body[i] !== ',') {
+      i = '{[('.includes(body[i]) ? matchBracket(body, i) : i + 1;
+    }
+  }
+  return keys;
+}
+
+/** Factory name → the keys its initializer declares. */
+function declaredKeys() {
+  const src = code(read('bl/state.js'));
+  const out = new Map();
+  for (const m of src.matchAll(/export const (\w+)\s*=\s*\([^)]*\)\s*=>\s*slice\(/g)) {
+    const open = src.indexOf('{', m.index + m[0].length - 1);
+    const close = matchBracket(src, open);
+    out.set(m[1], new Set(literalKeys(src.slice(open + 1, close - 1))));
+  }
+  return out;
+}
+
+/** Provider key → the factory behind it, by the same two hops as above. */
+function sliceBackedFactories() {
+  const factories = sliceFactories();
+  const src = read('bl/index.js');
+  const locals = new Map();
+  for (const [, name, fn] of src.matchAll(/const (\w+)\s*=\s*(\w+)\(/g)) {
+    if (factories.has(fn)) locals.set(name, fn);
+    else if (factories.has(fn.replace(/Slice$/, ''))) locals.set(name, fn.replace(/Slice$/, ''));
+  }
+  const out = new Map();
+  for (const [, key, varName] of src.matchAll(/(\w+):\s*Provider\.fromSingleton\((\w+)\)/g)) {
+    if (locals.has(varName)) out.set(key, locals.get(varName));
+  }
+  return out;
+}
+
 /**
  * Provider keys whose singleton came from one of those factories.
  *
@@ -109,6 +171,43 @@ test('slice-backed resources are only ever called through the slice API', () => 
         if (SLICE_API.has(m[1])) continue;
         const line = src.slice(0, m.index).split('\n').length;
         bad.push(`${file}:${line}  ${name}.${m[1]}()  —  ${lines[line - 1].trim()}`);
+      }
+    }
+  }
+  expect(bad).toEqual([]);
+});
+
+// And the other half of the same promise. `set` merges ANYTHING, so a key written but
+// never declared is silent: `explorerState` never mentioned `selectionNodes`, yet it was
+// the primary read path in `selectedNodesOf` — the very function written to end the class
+// of bug where rename/trash/copy-link returned quietly while `hasSelection` disagreed.
+// `searchState` never mentioned `filtered`, `offline` or `resolved`, and `resolved` drives
+// `pickView`. state.js presents the initializer as the documentation of what a slice is,
+// so someone reading it to find out got a wrong answer, and nothing said so.
+test('every key written to a slice is declared in its initializer', () => {
+  const backing = sliceBackedFactories();
+  const declared = declaredKeys();
+  expect(backing.size).toBeGreaterThan(4);
+
+  const bad = [];
+  for (const file of sources()) {
+    const raw = read(file);
+    const src = code(raw);
+    const lines = raw.split('\n');
+    for (const [name, factory] of backing) {
+      const keys = declared.get(factory);
+      // A slice that declares NO keys is declaring that its keys are dynamic — `viewState`
+      // is keyed by component, so there is no fixed set to check against.
+      if (!keys || !keys.size) continue;
+      const re = new RegExp(`\\b(?:r\\.|resources\\.)?${name}\\.(?:set|replace)\\s*\\(\\s*\\{`, 'g');
+      for (const m of src.matchAll(re)) {
+        const open = m.index + m[0].length - 1;
+        const written = literalKeys(src.slice(open + 1, matchBracket(src, open) - 1));
+        for (const key of written) {
+          if (keys.has(key)) continue;
+          const line = src.slice(0, m.index).split('\n').length;
+          bad.push(`${file}:${line}  ${name}.set({ ${key}: … })  —  ${lines[line - 1].trim()}`);
+        }
       }
     }
   }

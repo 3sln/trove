@@ -75,7 +75,6 @@ function engineWith(app) {
         },
         () => {},
       ),
-      mediaUrls: singleton(p.mediaUrls),
       plugins: singleton(p.plugins),
     },
   });
