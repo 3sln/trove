@@ -31,7 +31,7 @@
 
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
-import { selectedNodesOf, draftScopesOf, collectionMenuOf } from './services.js';
+import { selectedNodesOf, draftScopesOf, collectionMenuOf, collectionAdminOf } from './services.js';
 import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction, LoadRotationAction } from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
@@ -149,6 +149,14 @@ export const explorer = new ServiceQuery('explorer', (r) => r.observe(), (v) => 
   collectionMenu: collectionMenuOf(v,
     (id) => new ExecCommandAction('collections.switch', id),
     () => new ExecCommandAction('collections.create')),
+  // The administration screen's view of the same collections: what each is on, whether it
+  // is sealed, and what may be done to it.
+  collectionAdmin: collectionAdminOf(v, {
+    open: (id) => new ExecCommandAction('collections.switch', id),
+    scan: () => new ExecCommandAction('workbench.scanCollection'),
+    rotate: () => new ExecCommandAction('workbench.openSettings'),
+    create: () => new ExecCommandAction('collections.create'),
+  }),
 }));
 /** Query text, results, and the palette's file list. */
 export const search = new ServiceQuery('search', (r) => r.observe());

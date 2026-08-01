@@ -198,6 +198,42 @@ export function draftScopesOf(state) {
  * @param {(id?: string) => object} switchTo builds the action for picking a collection
  * @param {() => object} create builds the action for making a new one
  */
+/**
+ * The administration screen's row per collection.
+ *
+ * Built here rather than in the component for the same reason `collectionMenuOf` is: these
+ * rows carry ACTIONS, and deciding which actions a collection offers is a question about
+ * the collection, not about rendering. A component that assembled them would have to know
+ * that rotation lives behind Settings and that scanning applies to the OPEN collection.
+ *
+ * `scan` and `rotate` are sequenced pairs — switch first, then do the thing — because both
+ * operate on whatever is open. That is what makes them work from a screen that lists every
+ * collection rather than only the current one. Rotation routes to Settings rather than
+ * starting one: the estimate and the confirmation live there, and a rotation begun without
+ * seeing its cost is exactly the button nobody should have.
+ */
+export function collectionAdminOf(state, { open, scan, rotate, create }) {
+  const current = state?.collectionId;
+  const rows = (state?.collections || []).map((c) => ({
+    id: c.id,
+    name: c.name || c.id,
+    driver: c.driver || 'unknown',
+    system: !!c.system,
+    current: c.id === current,
+    // `describeEncryption` gives the fingerprint and nothing secret, so this is safe to show
+    // and is the only way to tell two keys apart across a rotation.
+    fingerprint: c.encryption?.fingerprint || null,
+    encrypted: !!c.encryption,
+    capabilities: c.capabilities || [],
+    actions: {
+      open: [open(c.id)],
+      scan: [open(c.id), scan()],
+      rotate: c.encryption ? [open(c.id), rotate()] : null,
+    },
+  }));
+  return { rows, canCreate: !!state?.canCreateCollection, create: [create()] };
+}
+
 export function collectionMenuOf(state, switchTo, create) {
   // No fallback: this only decides which row gets a tick, and with nothing open the answer
   // is that none of them do. `|| 'default'` ticked a collection the user had not chosen,

@@ -31,6 +31,7 @@ export default function adminView(state, ui) {
         h2('Administration'),
         p({ className: 'sub' }, 'How this drive is configured, and what it can do. Most of it is decided by the deployment rather than here.'),
         accessSection(caps, state, ui),
+        collectionsSection(state, ui),
         storageSection(caps, state, ui),
         extensionsSection(caps, state),
         workSection(state, ui),
@@ -76,6 +77,55 @@ function accessSection(caps, state, ui) {
     row('API keys', 'Credentials for scripts and services, scoped per collection.',
       button({ className: 'btn small' }, 'In Settings')
         .on({ click: () => ui.engine.dispatch(new ExecCommandAction('workbench.openSettings')) })),
+  );
+}
+
+/**
+ * Every collection, what it sits on, and whether it is sealed.
+ *
+ * The list an administrator actually wants: not "which one am I looking at" — the switcher
+ * in the status bar answers that — but what exists, on what, under which key. Rows and their
+ * actions come from the engine (`collectionAdmin`), so this only draws.
+ */
+function collectionsSection(state, ui) {
+  const admin = state.ex?.collectionAdmin;
+  const rows = admin?.rows || [];
+  const run = (actions) => () => actions.forEach((a) => ui.engine.dispatch(a));
+  return div({ className: 'group' },
+    h3('Collections'),
+    p({ className: 'sub' }, 'What exists on this drive, where its bytes live, and which key seals it.'),
+    ...(rows.length ? rows.map((c) => div({ className: 'setting stacked' },
+      div({ className: 'info' },
+        div({ className: 't' }, c.name, c.current ? span({ className: 'mono muted' }, '  · open') : null),
+        div({ className: 'd' },
+          c.encrypted
+            // The fingerprint is the only way to tell two keys apart across a rotation, and
+            // it is safe to show — it is not the key.
+            ? `${c.driver} · sealed, key ${String(c.fingerprint).slice(0, 12)}…`
+            : `${c.driver} · not encrypted`),
+        div({ className: 'd' }, `You may: ${c.capabilities.join(', ') || 'nothing'}`),
+      ),
+      div({ className: 'control admin-actions' },
+        c.current ? null : button({ className: 'btn small' }, 'Open').on({ click: run(c.actions.open) }),
+        button({ className: 'btn small' }, 'Scan').on({ click: run(c.actions.scan) }),
+        // Routed to Settings rather than started here: the estimate and the confirmation
+        // live there, and a rotation begun without seeing its cost is the button nobody
+        // should have.
+        c.actions.rotate
+          ? button({ className: 'btn small' }, 'Rotate key…').on({ click: run(c.actions.rotate) })
+          : null,
+      ),
+    )) : [row('Collections', 'Nothing has been created yet.', 'none')]),
+    admin?.canCreate
+      ? div({ className: 'setting' },
+        div({ className: 'info' },
+          div({ className: 't' }, 'New collection'),
+          div({ className: 'd' }, 'A backing store you own — a bucket, a directory, a mount. Encryption is chosen here, at creation.'),
+        ),
+        div({ className: 'control' },
+          button({ className: 'btn small' }, 'Create…').on({ click: run(admin.create) })),
+      )
+      : row('New collection', 'You do not have permission to create one on this drive.', 'not allowed'),
   );
 }
 
