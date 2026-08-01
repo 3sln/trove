@@ -45,9 +45,9 @@ counts. The storage check and the maintenance actions are reachable from it.
 
 ## Still to move
 
-- **Collections** — create, ACLs, backing store, scan and rotate. Creation and encryption
-  are on the collection dialog and rotation is in Settings (001); neither is *wrong*, but
-  neither is where an administrator would look.
+- **ACLs** — who may read or write a collection is still set through the API alone. This is
+  the one part of the ticket that is new capability rather than gathering, which is why it
+  did not come with the rest.
 - **API keys** — built, and still a section of Settings. Linked from here rather than
   duplicated, because two places to revoke a credential is worse than one place in the
   wrong screen. Moving it should keep `requireHumanAdmin` refusing API-key credentials.
@@ -60,3 +60,10 @@ counts. The storage check and the maintenance actions are reachable from it.
 
 There is one place an administrator goes, and the things that are currently only reachable
 through `curl` are reachable through it.
+
+Collections landed: every collection, the store it sits on, whether it is sealed and under
+which key fingerprint, what you may do to it, and the actions — open, scan, rotate, create.
+Rows and their actions are built in `bl/services.js:collectionAdminOf` and ride the explorer
+query, so the component only draws. Rotation routes to Settings rather than starting one:
+the estimate and the confirmation live there, and a rotation begun without seeing its cost
+is the button nobody should have.

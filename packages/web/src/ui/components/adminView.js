@@ -90,7 +90,17 @@ function accessSection(caps, state, ui) {
 function collectionsSection(state, ui) {
   const admin = state.ex?.collectionAdmin;
   const rows = admin?.rows || [];
-  const run = (actions) => () => actions.forEach((a) => ui.engine.dispatch(a));
+  // SEQUENCED, not fired together. `dispatch()` returns a feed rather than a promise, so
+  // `forEach(dispatch)` starts everything at once — and these pairs are switch-then-do,
+  // where the second only means anything after the first has landed. Fired concurrently,
+  // "Rotate key…" opened Settings and was then thrown back to home by the switch that had
+  // not finished yet. Same shape as platform/commands.js, which got this right first.
+  const run = (actions) => async () => {
+    for (const action of actions) {
+      const settled = await ui.engine.dispatch(action).next(['complete', 'error', 'abort']);
+      if (settled?.type !== 'complete') break;
+    }
+  };
   return div({ className: 'group' },
     h3('Collections'),
     p({ className: 'sub' }, 'What exists on this drive, where its bytes live, and which key seals it.'),
