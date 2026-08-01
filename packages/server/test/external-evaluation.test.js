@@ -165,3 +165,41 @@ test('configured drive admins are reported apart from the grants, and cannot be 
   expect(body.grants.some((g) => g.subject === ADMIN && g.type === 'user')).toBe(true);
   expect(body.grants.every((g) => g.type !== 'config')).toBe(true);
 });
+
+test('the access endpoints answer on a drive that requires authentication', async () => {
+  // The failure this pins, found by pointing Cloudflare at a real deployment: the drive
+  // authenticates every /api/ request BEFORE routing, so these two answered 401 to the one
+  // caller that can never hold a Trove session — Access itself. They authenticate by other
+  // means (a signed assertion; a public key is not a secret), so they opt out.
+  const ourKey = await rsaKeyPair();
+  const teamKey = await rsaKeyPair();
+  const kv = new MemoryKV();
+  const storage = new MemoryStorage();
+  const collections = new CollectionService({
+    kv, storageFactory: () => storage, admins: [ADMIN], defaultOpen: false,
+  });
+  const server = await createServer({
+    rebuildIndexOnStart: false, collections,
+    // The shape of the deployed drive: a session is required for everything.
+    identity: { driver: 'header', header: { idHeader: 'x-user', required: true } },
+    accessEvaluation: {
+      privateJwk: ourKey, kid: 'k1',
+      jwks: new StaticJwks([publicJwkOf(teamKey, { kid: 'team' })]),
+    },
+  });
+
+  // No credentials of any kind.
+  const keys = await server.handle(new Request('https://d/api/access/keys'));
+  expect(keys.status).toBe(200);
+  expect((await keys.json()).keys[0].kty).toBe('RSA');
+
+  const evald = await server.handle(new Request('https://d/api/access/evaluate', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: await signJwt({ email: ADMIN, nonce: 'n8' }, { privateJwk: teamKey, kid: 'team' }) }),
+  }));
+  expect(evald.status).toBe(200);
+
+  // …while everything else on the same drive still demands one.
+  expect((await server.handle(new Request('https://d/api/collections'))).status).toBe(401);
+});

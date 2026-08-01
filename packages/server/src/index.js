@@ -330,11 +330,18 @@ export async function createServer(config = {}) {
   // exist. A drive that has not configured one has no `/api/access/*` at all, rather than
   // endpoints that exist to answer "no" — which is the difference between a feature that is
   // off and a feature that is broken.
+  // Paths a contributed component declared as needing no Trove identity. Exact matches
+  // only, and that is deliberate: the check below runs BEFORE routing, so it cannot know
+  // which parameterised route would have matched. A component that wants a public route
+  // gives it a fixed path.
+  const publicPaths = new Set();
+
   const accessPolicy = config.accessEvaluation
     ? externalEvaluation({ ...config.accessEvaluation, team: config.accessEvaluation.team || config.identity?.access?.team })
     : null;
   for (const route of accessPolicy?.routes?.(routeHelpers) || []) {
     router.add(route.method, route.path, route.deps || [], route.handler);
+    if (route.public) publicPaths.add(route.path);
   }
 
   // Said at boot, because that is when someone is looking and can still fix it. The
@@ -409,8 +416,14 @@ export async function createServer(config = {}) {
       let principal = null;
       let grant = null;
       try {
-        grant = await capabilities.resolve(req);
-        if (!grant) principal = await identity.authenticate(req);
+        // A public route answers to something other than this drive's identity — the
+        // external policy endpoints verify a Cloudflare-signed assertion themselves, and
+        // the keys endpoint serves a public key. Requiring a session on those is asking
+        // the caller to authenticate as a user it is not and does not have.
+        if (!publicPaths.has(url.pathname)) {
+          grant = await capabilities.resolve(req);
+          if (!grant) principal = await identity.authenticate(req);
+        }
       } catch (err) {
         const e = err instanceof TroveError ? err : TroveError.unauthorized('Authentication failed');
         return withChallenge(new Response(JSON.stringify(e.toJSON()), { status: e.status, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' } }), req);

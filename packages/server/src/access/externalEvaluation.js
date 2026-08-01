@@ -35,6 +35,18 @@
 //        Evaluate URL   https://<your drive>/api/access/evaluate
 //        Keys URL       https://<your drive>/api/access/keys
 //
+//   4. AND let Access reach them. If the drive sits behind Access — which is the whole
+//      point — then by default these two paths do as well, and Access would have to
+//      authenticate to itself to call them. It cannot, so it fails with nothing useful to
+//      say. Add a Bypass policy for `/api/access/*`.
+//
+//      Bypassing is safe here rather than a concession, and that is by construction: the
+//      keys endpoint serves a public key, and the evaluate endpoint authenticates its
+//      caller itself by verifying the assertion. Neither ever depended on Access for its
+//      own protection. They are also `public: true`, so this drive's OWN identity
+//      requirement does not apply to them either — Access holds no Trove session and
+//      never will.
+//
 // WHY IT REFUSES TO RUN UNVERIFIED
 //
 // This endpoint answers "does this email have access to this drive". That is a question
@@ -116,6 +128,10 @@ export function externalEvaluation({ privateJwk, team, kid = 'trove-access', jwk
           method: 'POST',
           path: '/api/access/evaluate',
           deps: ['collections'],
+          // No Trove identity: the caller is Cloudflare, not a user of this drive, and it
+          // authenticates by signing the assertion — which `verifyJwt` below checks. A
+          // session requirement here would be asking Access to log in as somebody.
+          public: true,
           async handler(ctx) {
             const token = await parseAssertion(ctx.req);
             if (!token) throw TroveError.invalid('No access assertion in the request');
@@ -141,6 +157,7 @@ export function externalEvaluation({ privateJwk, team, kid = 'trove-access', jwk
           method: 'GET',
           path: '/api/access/keys',
           deps: [],
+          public: true,
           // Public by design: it is a public key, and Cloudflare fetches it unauthenticated.
           handler() {
             return { keys: [publicJwkOf(privateJwk, { kid })] };
