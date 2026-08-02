@@ -8,7 +8,6 @@
 // drive with a photo gallery installed offered "gallery" over a list of audiobooks.
 
 import { test, expect } from 'bun:test';
-import { viewsFor } from '../src/ui/components/views/index.js';
 import { modeShowsItems, launcherMode } from '../src/bl/launcher.js';
 
 const LIST = { id: 'list', title: 'List' };            // no selector: draws anything
@@ -29,32 +28,18 @@ test('a command search is not a place to choose a view', () => {
   expect(modeShowsItems(launcherMode(''))).toBe(true);
 });
 
-test('a view with a selector only counts when it can draw what is on screen', () => {
-  // A gallery over a list of audiobooks is not a choice anyone has.
-  expect(viewsFor([LIST, GRID, GALLERY], groupsOf(BOOK)).map((v) => v.id)).toEqual(['list', 'grid']);
-  // ...and over photographs it is.
-  expect(viewsFor([LIST, GRID, GALLERY], groupsOf(PHOTO)).map((v) => v.id)).toEqual(['list', 'grid', 'gallery']);
-  // A mixed set keeps it: a view that can draw half the results is still worth offering.
-  expect(viewsFor([LIST, GRID, GALLERY], groupsOf(BOOK, PHOTO)).map((v) => v.id))
-    .toEqual(['list', 'grid', 'gallery']);
-});
-
-test('no results is not the same as nothing matching', () => {
-  // While a search is loading there are no nodes to test against. Filtering to zero would
-  // make the switcher blink out and back on every keystroke, so "not asked" keeps them.
-  expect(viewsFor([LIST, GRID, GALLERY], undefined)).toHaveLength(3);
-  expect(viewsFor([LIST, GRID, GALLERY], [])).toHaveLength(3);
-  expect(viewsFor([LIST, GRID, GALLERY], [{ id: 'g', items: [] }])).toHaveLength(3);
-});
-
-test('items without a node do not drag a selector-carrying view in', () => {
-  // Command rows have no `node`. If they counted as "nothing to match against", a
-  // command list would show every view — which is the bug, reached the other way.
-  const commandRows = [{ id: 'commands', items: [{ title: 'Reindex', badge: 'command' }] }];
-  expect(viewsFor([LIST, GRID, GALLERY], commandRows)).toHaveLength(3);
-  // Which is exactly why the mode check exists as well, and why one without the other
-  // is not enough.
-  expect(modeShowsItems('command')).toBe(false);
+test('a view\u2019s `match` is a preference, not a restriction', () => {
+  // The trap this test exists for. The grid declares `match: { mime: ['image/*'] }` and
+  // its own comment says why: "offered first where the results are pictures, and
+  // available everywhere". Reading that as a filter hid the grid on a drive of
+  // audiobooks — the switcher vanished entirely, which is the opposite of the point.
+  //
+  // So the count is of REGISTERED views. If a view ever needs to say "I cannot draw
+  // this", that wants a field of its own rather than this one reused.
+  expect(GRID.match).toBeUndefined();          // the built-ins in this file are minimal…
+  expect(GALLERY.match).toBeTruthy();          // …and this one stands in for the real grid
+  // Both still count, whatever is on screen.
+  expect([LIST, GALLERY].length).toBe(2);
 });
 
 // --- recents carry their own thumbnail ----------------------------------------

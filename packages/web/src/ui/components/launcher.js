@@ -153,7 +153,7 @@ export default function launcher(state, ui, opts = {}) {
         : null,
       // Which way to look at the drive. Not in the modal search, where the answer is
       // always "the one thing I am about to press Enter on".
-      modal ? null : viewSwitcher(state.views, view, ui, { mode, groups }),
+      modal ? null : viewSwitcher(state.views, view, ui, { mode }),
     ),
     showResolved ? resolvedBar(resolved) : null,
     // The results belong to the active view — see ui/components/views. The launcher says
