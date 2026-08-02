@@ -22,7 +22,14 @@ function appFor({ collections = [], node = null, statThrows = false } = {}) {
       state: {},
       set(patch) { state.set.push(patch); Object.assign(this.state, patch); },
     },
-    engine: { dispatch(a) { state.dispatched.push(a.constructor.name); return Promise.resolve(); } },
+    // A feed, not a promise — that is what `dispatch` answers, and the double said
+    // otherwise for as long as nothing here waited for an action to actually finish.
+    engine: {
+      dispatch(a) {
+        state.dispatched.push(a.constructor.name);
+        return { next: async () => ({ type: 'complete' }) };
+      },
+    },
     settings: { get: () => null },
     notifications: {
       warn: (m) => state.notes.push(['warn', m]),

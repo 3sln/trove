@@ -13,10 +13,26 @@
 // file from the search modal opens it and then closes the modal. Sequencing them here keeps
 // that out of the item.
 
+import { runAction } from '../dispatch.js';
+
 /**
+ * Run an item's actions, one genuinely finished before the next begins.
+ *
+ * The loop used to be a bare `ui.engine.dispatch(action)` under a comment claiming it
+ * sequenced them — `dispatch` returns a feed and schedules the body, so it fired them all
+ * at once. Nothing was visibly broken, because the lists touched independent slices, but
+ * bl/launcher.js already emits `[SetLaunchQueryAction, FilterAction]` and the comment was
+ * telling the next reader that a read-after-write pair here would be safe.
+ *
+ * The same shape and the same stop-on-failure rule as CommandService.execute, which is the
+ * other implementation of "run this item's list of actions".
+ *
  * @param {object} ui
  * @param {{actions?: object[]}} item
  */
-export function activate(ui, item) {
-  for (const action of item?.actions || []) ui.engine.dispatch(action);
+export async function activate(ui, item) {
+  for (const action of item?.actions || []) {
+    const settled = await runAction(ui.engine, action);
+    if (settled?.type !== 'complete') break;
+  }
 }

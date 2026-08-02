@@ -9,7 +9,6 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [015](015-await-dispatch-sequences-nothing.md) | `await dispatch()` sequences nothing | Six sites await a feed that has no `then`; the right shape is already in the repo |
 | [016](016-one-rule-several-implementations.md) | One rule, several implementations | Every copy has diverged; this class already shipped the ciphertext-thumbnail bug |
 | [017](017-second-front-doors-disagree.md) | Second front doors disagree | HTTP vs MCP, Workers vs Node/Bun — the runtime pair already caused the rotation stall |
 | [018](018-delete-the-dead-machinery.md) | Delete the dead machinery | ~400 unreachable lines, most of it advertised in module headers as live |

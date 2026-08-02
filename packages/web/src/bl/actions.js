@@ -5,6 +5,7 @@
 // they update flow straight back into the UI via `watch`.
 
 import { Action } from '@3sln/ngin';
+import { runAction } from '../dispatch.js';
 import { PROMPT } from './viewState.js';
 import { beginInstallFromUrl } from './pluginInstall.js';
 import { newId } from '@3sln/trove/core/util.js';
@@ -186,7 +187,9 @@ export class OpenInitialCollectionAction extends Action {
     }
 
     explorer.set({ gate: null });
-    await engine.dispatch(new NavigateAction(shared.collection));
+    // Sequenced, so the panel this opens below lands on top of the collection rather than
+    // racing its load — see src/dispatch.js for why a bare `await` here did nothing.
+    await runAction(engine, new NavigateAction(shared.collection));
 
     let node;
     try {
@@ -275,7 +278,10 @@ export class CreateCollectionAction extends Action {
     try {
       const res = await r.api.createCollection(this.record);
       r.notifications.success(`Created collection “${res.collection.name}”`);
-      await r.engine.dispatch(new LoadCollectionsAction());
+      // Sequenced: `NavigateAction` writes `collectionId` synchronously while the load
+      // writes `collections` after a round trip, so navigating first left the status bar's
+      // `collectionLabelOf` with nothing to look the id up in — it showed a raw `col_…`.
+      await runAction(r.engine, new LoadCollectionsAction());
       r.engine.dispatch(new NavigateAction(res.collection.id));
     } catch (err) {
       r.notifications.error(`Couldn’t create collection: ${err.message}`);
@@ -348,7 +354,7 @@ export class TrashAction extends Action {
       const { items } = await api.trash(collection);
       explorer.set({ trash: items });
       // Restoring puts something back in the drive, so the list on screen is now stale.
-      if (this.op !== 'list') await r.engine.dispatch(new NavigateAction(collection));
+      if (this.op !== 'list') r.engine.dispatch(new NavigateAction(collection));
     } catch (err) {
       notifications.error(`Trash: ${err.message}`);
     }
@@ -1301,7 +1307,7 @@ export class OpenNotificationTargetAction extends Action {
     }
     // `.next([...])`, because `dispatch` returns a feed and the panel must open AFTER the
     // file does — see platform/commands.js, which names this trap.
-    await engine.dispatch(new OpenFileAction(node)).next(['complete', 'error', 'abort']);
+    await runAction(engine, new OpenFileAction(node));
     workbench.set({ infoPanel: true });
   }
 }
@@ -1329,7 +1335,7 @@ export class RenamePromptAction extends PromptAction {
   static deps = ['engine', 'overlay', 'viewState'];
   constructor(node) { super(); this.node = node; }
   async withValue(name, { engine }) {
-    if (name !== this.node.name) await engine.dispatch(new RenameAction(this.node.id, name));
+    if (name !== this.node.name) engine.dispatch(new RenameAction(this.node.id, name));
   }
 }
 
@@ -1352,7 +1358,7 @@ export class CreateCollectionFromFormAction extends Action {
   constructor(record) { super(); this.record = record; }
   async execute({ engine, overlay }) {
     overlay.set({ dialog: null });
-    if (this.record) await engine.dispatch(new CreateCollectionAction(this.record));
+    if (this.record) engine.dispatch(new CreateCollectionAction(this.record));
   }
 }
 
@@ -1523,7 +1529,10 @@ export class PickAndUploadAction extends Action {
   static deps = ['engine', 'explorer'];
   async execute({ engine, explorer }) {
     const collection = explorer.get().collectionId;
-    pickFiles((files) => files.length && engine.dispatch(new UploadFilesAction(files, collection)));
+    // Awaited, so the feed's `complete` means the upload started rather than the dialog
+    // opened — and so the leases below it are still held when the upload uses them.
+    const files = await pickFiles();
+    if (files?.length) await runAction(engine, new UploadFilesAction(files, collection));
   }
 }
 
@@ -1732,7 +1741,8 @@ export class ToggleDetailsAction extends Action {
 export class PickAndInstallPluginAction extends Action {
   static deps = ['notifications', 'overlay', 'plugins', 'social', 'workbench'];
   async execute(r) {
-    pickZip((file) => file && beginInstallFromFile(r, file));
+    const file = await pickZip();
+    if (file) await beginInstallFromFile(r, file);
   }
 }
 
@@ -1834,7 +1844,7 @@ export class SetGrantAction extends Action {
       notifications.error?.(err?.message || 'Could not change access');
     } finally {
       acl.set({ busy: false });
-      await engine.dispatch(new LoadGrantsAction(this.collectionId)).next(['complete', 'error', 'abort']);
+      await runAction(engine, new LoadGrantsAction(this.collectionId));
     }
   }
 }
@@ -1876,7 +1886,7 @@ export class BeginRotationAction extends Action {
       // fingerprint on screen is already out of date. Reload the collections or it keeps
       // showing the key the collection is moving OFF, which is the one thing this field
       // exists to get right.
-      await engine.dispatch(new LoadCollectionsAction());
+      engine.dispatch(new LoadCollectionsAction());
       notifications.info('Key rotation started. It runs in the background and survives a reload.');
     } catch (err) {
       rotation.set({ busy: false });

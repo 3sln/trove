@@ -5,6 +5,8 @@
 // plain functions, plugin handlers proxy over RPC). Errors surface as a
 // notification instead of a silent console log — failure is always visible.
 
+import { runAction } from '../dispatch.js';
+
 export class CommandService {
   /**
    * @param {import('./contributions.js').ContributionRegistry} contributions
@@ -98,18 +100,14 @@ export class CommandService {
     try {
       const actions = actionsFor(...args);
       if (!actions) return;
-      // One at a time, each genuinely finished before the next begins.
+      // One at a time, each genuinely finished before the next begins — see
+      // src/dispatch.js for why a bare `await dispatch(a)` in this loop would start them
+      // all at once while looking like it sequenced them.
       //
-      // `dispatch` answers an event FEED, not a promise for the work — awaiting it resolves
-      // immediately and the action runs afterwards, so a bare `await dispatch(a)` in a loop
-      // would start all of them at once while looking like it sequenced them. `next` on the
-      // terminal events is the actual completion signal.
-      //
-      // It resolves with whichever of complete/error/abort fired rather than rejecting, so
-      // a failing action does not throw here — but it does stop the rest, because a command
-      // whose first step failed rarely wants its second.
+      // A failing action does not throw here, but it does stop the rest: a command whose
+      // first step failed rarely wants its second.
       for (const action of [].concat(actions)) {
-        const settled = await this.dispatch(action).next(['complete', 'error', 'abort']);
+        const settled = await runAction(this, action);
         if (settled?.type !== 'complete') break;
       }
     } catch (err) {

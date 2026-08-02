@@ -20,6 +20,7 @@ import { dd } from '../../runtime.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import { grantsFor } from '../../bl/queries.js';
 import { icon } from '../icon.js';
+import { activate } from '../activate.js';
 import { bytes } from '../format.js';
 import { ExecCommandAction, SetGrantAction } from '../../bl/actions.js';
 
@@ -97,12 +98,9 @@ function collectionsSection(state, ui) {
   // where the second only means anything after the first has landed. Fired concurrently,
   // "Rotate key…" opened Settings and was then thrown back to home by the switch that had
   // not finished yet. Same shape as platform/commands.js, which got this right first.
-  const run = (actions) => async () => {
-    for (const action of actions) {
-      const settled = await ui.engine.dispatch(action).next(['complete', 'error', 'abort']);
-      if (settled?.type !== 'complete') break;
-    }
-  };
+  // The same "run this item's list of actions" as every menu item and list row — one
+  // implementation, in ui/activate.js, rather than a third spelling of the loop here.
+  const run = (actions) => () => activate(ui, { actions });
   return div({ className: 'group' },
     h3('Collections'),
     p({ className: 'sub' }, 'What exists on this drive, where its bytes live, and which key seals it.'),
