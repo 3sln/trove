@@ -41,7 +41,7 @@ import { IndexerRuntime } from './runtime.js';
  * indexer cannot tell which runtime it is on — that is what makes the audiobook indexer
  * work unchanged on both.
  */
-const SHIM = `
+export const SHIM = `
 import * as entry from './entry.js';
 
 const fn = entry.default || entry.index;
@@ -59,8 +59,12 @@ export default {
       const from = Math.max(0, Math.min(start, node.size));
       const to = Math.min(end, from + maxBytes, node.size);
       if (to <= from) return new Uint8Array(0);
-      const res = await fetch(url, { headers: { Range: \\\`bytes=\\\${from}-\\\${to - 1}\\\` } });
-      if (!res.ok && res.status !== 206) throw new Error(\\\`range read failed: \\\${res.status}\\\`);
+      // Concatenation rather than a template literal, deliberately: this whole module is
+      // itself a template literal, and a nested one has to be escaped through two levels.
+      // The first version got that wrong and every sandbox died with "Failed to start
+      // Worker" — a syntax error in generated code, which is invisible at the call site.
+      const res = await fetch(url, { headers: { Range: 'bytes=' + from + '-' + (to - 1) } });
+      if (!res.ok && res.status !== 206) throw new Error('range read failed: ' + res.status);
       return new Uint8Array(await res.arrayBuffer());
     };
     const ctx = {

@@ -345,8 +345,9 @@ export class Vfs {
       collectionId, name, storageKey, size: plaintextSize ?? info.size, contentType: ct,
       etag: info.etag, encryption,
     });
-    // Small server-side writes index synchronously (search is ready on return);
-    // large client uploads (completeUpload) index in the background instead.
+    // Indexing is awaited on BOTH write paths — here and in `completeUpload` — so search
+    // is ready when the call returns. See the note there for why the background variant
+    // could not work on a request-scoped runtime.
     await this.indexing.indexNode(node).catch((e) => console.error('index error', e));
     return node;
   }
@@ -763,7 +764,17 @@ export class Vfs {
         size: obj.size, contentType: obj.contentType, etag: obj.etag,
         overwrite: obj.overwrite, encryption: obj.encryption || null,
       });
-      this.indexing.indexNode(node).catch((e) => console.error('index error', e));
+      // AWAITED, like the small-write path above. It used to be fire-and-forget, and the
+      // reasoning ("large client uploads index in the background") only holds on a
+      // runtime with a process that outlives the request. On Workers there is none: the
+      // response returns, the isolate goes, and the indexing is cut off mid-read — so an
+      // uploaded file got no contributions, no search entry and NO ISSUE either, because
+      // nothing failed. It simply never ran.
+      //
+      // Awaiting is bounded rather than open-ended: an indexer reads through `readRange`,
+      // capped at `maxIndexBytes` (2 MiB by default), so this costs a couple of megabytes
+      // of reads regardless of whether the file is 400 KB or 400 MB.
+      await this.indexing.indexNode(node).catch((e) => console.error('index error', e));
       return node;
     } catch (err) {
       await (await this.storageFor(obj.collectionId)).delete(obj.storageKey).catch(() => {});

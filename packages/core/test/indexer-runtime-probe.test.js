@@ -16,6 +16,27 @@
 import { test, expect } from 'bun:test';
 import { zipSync, strToU8 } from 'fflate';
 import { InProcessIndexerRuntime, WorkerLoaderIndexerRuntime, PluginService, MemoryPluginInstallStore, parsePluginPackage } from '../src/index.js';
+import { SHIM } from '../src/plugins/workerLoaderRuntime.js';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+// Written to a file rather than imported as a data: URL — Bun refuses one this long
+// with `NameTooLong`, which is a property of the test harness, not of the shim.
+let n = 0;
+const asModule = async (src) => {
+  // Each module gets its OWN fresh directory. Bun resolves the first dynamic import of a
+  // newly-written file in a directory and then fails the second with
+  // `Cannot find module … from ''` — a cached directory listing, reproducible in four
+  // lines outside this suite. A new directory per module sidesteps it; writing both files
+  // up front does not.
+  const dir = join(tmpdir(), `trove-shim-${process.pid}-${n++}`);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'shim.mjs');
+  writeFileSync(file, src);
+  return import(pathToFileURL(file).href);
+};
 
 test('the in-process runtime probes true where dynamic import works', async () => {
   // Bun, so it does work — and the probe must say so, or the refusal would fire on every
@@ -161,4 +182,48 @@ test('a storage backend that cannot presign fails loudly rather than indexing no
   // No `presignRead` on the context: the sandbox has no other way to reach the bytes,
   // and an empty contribution would look like "this file has no metadata".
   await expect(runtime.run(spec, { id: 'n', name: 'x', size: 1 }, {})).rejects.toThrow(/presigned read URL/);
+});
+
+test('the sandbox shim is valid JavaScript', async () => {
+  // The shim is code GENERATED as a template literal, which means a mis-escaped nested
+  // literal is a syntax error nothing catches until a sandbox refuses to boot — and what
+  // workerd says then is "Failed to start Worker:", with no location and no detail.
+  // The first version of this file had exactly that bug, and the fake-loader test above
+  // sailed past it because a fake loader never compiles anything.
+  //
+  // So: actually parse it. Bun can import a data: URL, which is the cheapest real parser
+  // available here.
+  const mod = await asModule(SHIM.replace("import * as entry from './entry.js';", 'const entry = { default: () => ({}) };'));
+  expect(typeof mod.default?.fetch).toBe('function');
+});
+
+test('the shim reads a range as an inclusive HTTP header, and honours maxBytes', async () => {
+  // `end` is EXCLUSIVE host-side and INCLUSIVE in a Range header. Getting that wrong
+  // silently drops the last byte of every read, which in an MP4 box walk means a header
+  // that is one byte short and a parse that fails somewhere else entirely.
+  // Load the module BEFORE stubbing fetch: Bun's ESM loader uses global fetch to resolve,
+  // so a stub installed first makes the import itself fail.
+  const mod = await asModule(SHIM.replace(
+    "import * as entry from './entry.js';",
+    'const entry = { default: async (node, ctx) => { await ctx.readRange(0, 4); await ctx.readRange(0, 1e9); return {}; } };',
+  ));
+
+  const asked = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    asked.push(init?.headers?.Range);
+    return new Response(new Uint8Array(4), { status: 206 });
+  };
+  try {
+    await mod.default.fetch(new Request('https://x/', {
+      method: 'POST',
+      body: JSON.stringify({ node: { size: 100 }, url: 'https://o/', maxBytes: 10, config: {}, secrets: {} }),
+    }));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  // 0..4 exclusive -> bytes=0-3
+  expect(asked[0]).toBe('bytes=0-3');
+  // clamped by maxBytes (10), not by the node's size (100)
+  expect(asked[1]).toBe('bytes=0-9');
 });

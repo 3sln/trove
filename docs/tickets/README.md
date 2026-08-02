@@ -8,8 +8,9 @@ A ticket that is done is deleted in the commit that finishes it — git remember
 directory of closed tickets is a directory nobody reads.
 
 **Open: 023** — indexing that actually runs. Three defects found by opening one audiobook
-on a real drive; two fixed in the commits that reference it, the rest is upload-time
-indexing that does not survive a Worker request.
+on a real drive, all three now fixed and verified end to end in a real Worker runtime.
+What remains is the install-time backfill (still inline, still awaited inside the request)
+and drawing `indexersSkipped` where someone can see it.
 
 **Nothing open.** 012–020 came from a multi-agent architecture audit (Aug 2026): eight
 lenses over the four packages, every finding put through an adversary whose job was to
