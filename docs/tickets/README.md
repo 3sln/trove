@@ -7,9 +7,10 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
-**Open: 027–030** — "Select this item" and a bulk mode; LPF books getting three metadata
-fields where an m4b gets thirteen; a transfers panel that cannot be dismissed while it is
-transferring; and grid tiles showing a filename when the indexer already knows the title.
+**Open: 027, 028, 031, 032** — "Select this item" and a bulk mode; LPF books getting three
+metadata fields where an m4b gets thirteen; a 520 MB book that opens onto a static
+"Reading the book's structure…" with no spinner and a blocked main thread; and whether
+uninstalling a plugin clears a default opener pointing at it.
 
 **Open: 026** — plugin storage on Workers must be a Durable Object, not a shared D1
 database. `D1SqliteProvider` cannot create a database on demand, so every plugin scope for
