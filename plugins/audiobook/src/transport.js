@@ -24,6 +24,35 @@ export class Transport {
     this.onState = onState || (() => {});
     this.onEnd = onEnd || (() => {});
 
+    // DIAGNOSTIC. The frame is sandboxed on an opaque origin, so nothing outside it can
+    // see why a load failed — the host page cannot reach this element, and a silent
+    // failure here looks exactly like "the play button does nothing", which is how this
+    // shipped. Every terminal media state says so out loud, prefixed so it is greppable
+    // in a console that also carries the host's logs.
+    //
+    // Remove this only once the media path no longer depends on the frame fetching a URL
+    // of its own — see the remote-blob/MediaSource work.
+    const MEDIA_ERR = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+    const NETWORK_STATE = ['EMPTY', 'IDLE', 'LOADING', 'NO_SOURCE'];
+    this.audio.addEventListener('error', () => {
+      const code = this.audio.error?.code;
+      console.error('[audiobook] media load failed:', {
+        code,
+        why: MEDIA_ERR[code] || 'unknown',
+        message: this.audio.error?.message || null,
+        networkState: NETWORK_STATE[this.audio.networkState] ?? this.audio.networkState,
+        readyState: this.audio.readyState,
+        // The src is the whole question: an opaque-origin document sends no credentials,
+        // so a drive behind an authenticating proxy answers this differently than it
+        // answers the host.
+        src: String(this.audio.currentSrc || this.audio.src || '').slice(0, 120),
+      });
+    });
+    this.audio.addEventListener('stalled', () => console.warn('[audiobook] media stalled'));
+    this.audio.addEventListener('loadedmetadata', () => {
+      console.info('[audiobook] media ready:', { duration: this.audio.duration });
+    });
+
     this.audio.addEventListener('timeupdate', () => this.onTime(this.position()));
     this.audio.addEventListener('durationchange', () => this.onTime(this.position()));
     this.audio.addEventListener('play', () => this.onState('playing'));

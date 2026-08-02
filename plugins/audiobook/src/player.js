@@ -60,6 +60,10 @@ activate(async (ctx) => {
     if (!book.tracks) {
       try {
         src = (await ctx.files.mediaUrl(file.id)).url;
+        // Which URL the frame was handed, and whether it is same-origin with this
+        // document. It never is — the frame runs on an OPAQUE origin — and saying so
+        // here is what makes the media error below legible instead of mysterious.
+        console.info('[audiobook] media url:', { url: String(src).slice(0, 120), frameOrigin: String(location.origin) });
       } catch (err) {
         root.innerHTML = '';
         root.appendChild(el('div', 'ab-error', `This book cannot be played: ${err.message}`));

@@ -23,6 +23,46 @@ behind Cloudflare Access — but that is a hypothesis, not a finding. **Test it 
 `audio.error.code` and `audio.networkState` from inside the frame**, which is the only
 place the answer exists.
 
+### What the fix actually is
+
+Not "make the frame's fetch work" — the frame should not be fetching a media URL at all.
+Its only view of a file is a **remote blob**: an SDK handle that streams the slices it
+needs on demand through the host, or asks the host for a download. Streaming and
+downloading are then COUPLED rather than parallel — slices fetched for playback are kept
+by the host as download progress, so listening to a book and keeping it offline are one
+transfer instead of two.
+
+Playback is fed from that: a **MediaSource** the frame appends slices to, with the `moov`
+atom moved to the FRONT so the browser can start decoding without the index that normally
+sits at the end of an Audible file. `mp4.js` already finds `moov` wherever it is and
+`findMoov` reports `faststart`, so the pieces to do the relocation are in hand.
+
+That also disposes of the opaque-origin problem by construction: nothing crosses an origin
+boundary, because the frame never issues a request — the host does, and hands bytes over
+the port it already owns.
+
+### Instrumentation, and a limit worth knowing
+
+`transport.js` now logs every terminal media state (`error` with a decoded
+`MEDIA_ERR_*` name, `networkState`, `readyState`, `currentSrc`), `stalled`, and
+`loadedmetadata` with the duration; `player.js` logs the media URL it was handed alongside
+the frame's own origin.
+
+**These could not be read from outside.** The Chrome extension's console reader returns
+nothing for the viewer — it sees the top document, not a sandboxed child frame. Reading
+them means DevTools with the frame selected in the context picker. That limitation is the
+same one that made this bug invisible in the first place, and it is an argument for the
+host logging on the plugin's behalf.
+
+### A second, sharper reproduction
+
+On the LOCAL dev drive the viewer does not merely fail to play — it hangs on
+**“Opening…” indefinitely**, for a 441-byte m4b that is fully indexed. `mountViewer`
+awaits `frame.channel.call('opener:open', …)` and shows `onReady` or the error; neither
+fires, so the call never settles. That is a better starting point than the production
+symptom, because it reproduces on a file small enough to reason about and needs no
+Cloudflare Access in the picture.
+
 ## b. No cover art in the player
 
 Not a bug so much as something never written: `player.js` renders a title, a byline, a
