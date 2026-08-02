@@ -80,10 +80,7 @@ export class InProcessIndexerRuntime extends IndexerRuntime {
     if (!p) {
       const code = spec.files?.[spec.entry];
       if (!code) return Promise.reject(TroveError.invalid(`Indexer "${spec.id}" is missing its entry "${spec.entry}"`));
-      // base64 data URL — percent-encoded JS confuses some runtimes' data: loader
-      // (they fall back to a text module), whereas base64 imports reliably.
-      const url = 'data:text/javascript;base64,' + bytesToBase64(code);
-      p = import(/* @vite-ignore */ url).then((mod) => {
+      p = importModule(code).then((mod) => {
         const fn = mod.default || mod.index;
         if (typeof fn !== 'function') throw TroveError.invalid(`Indexer "${spec.id}" has no default/index export`);
         return fn;
@@ -103,7 +100,14 @@ export class InProcessIndexerRuntime extends IndexerRuntime {
    * and will not change while the process lives.
    */
   async probe() {
-    this._probe ||= import(/* @vite-ignore */ 'data:text/javascript;base64,' + btoa('export default 1'))
+    // A REALISTICALLY SIZED module, not `export default 1`. The tiny version answered a
+    // question nobody was asking: Bun imports a small data: URL happily and refuses one
+    // over ~1.5 KB with ENAMETOOLONG, so a 12-byte probe passed and every real indexer —
+    // the audiobook one is 34 KB — failed per file. That is the same silent shape this
+    // probe exists to prevent, so it now loads something the size of a real entry.
+    const padding = 'x'.repeat(PROBE_BYTES);
+    const code = new TextEncoder().encode(`export default 1; //${padding}`);
+    this._probe ||= importModule(code)
       .then(() => ({ ok: true }))
       .catch((err) => ({
         ok: false,
@@ -121,6 +125,58 @@ export class InProcessIndexerRuntime extends IndexerRuntime {
       `Indexer "${spec.id}" timed out after ${this.timeoutMs}ms`,
     );
     return clampContribution(result, this.caps);
+  }
+}
+
+/**
+ * How big a module the probe pretends to load. Larger than any plausible bundled indexer
+ * entry (the audiobook one is 34 KB), because the failure being detected is a SIZE limit
+ * and a probe under it proves nothing.
+ */
+export const PROBE_BYTES = 64 * 1024;
+
+/**
+ * Import a module from bytes, on whichever runtime this is.
+ *
+ * The two schemes are exactly complementary, which is why both are here:
+ *
+ *   data:   Node takes it at any size (2.6 MB tested). Bun refuses over ~1.5 KB with
+ *           `NameTooLong` — it resolves the URL as a path, so ENAMETOOLONG.
+ *   blob:   Bun takes it at any size. Node's ESM loader supports exactly `file:`, `data:`
+ *           and `node:`, so it throws ERR_UNSUPPORTED_ESM_URL_SCHEME.
+ *
+ * data: first because it needs no cleanup and the same bytes give the same URL, so the
+ * engine's module cache makes a re-import free. An object URL is a live registry entry
+ * that leaks until revoked, which is the only reason it is the fallback rather than the
+ * default.
+ *
+ * Neither works on workerd. That is what `WorkerLoaderIndexerRuntime` is for, and what
+ * `probe()` reports when it is missing.
+ */
+async function importModule(code) {
+  // base64 rather than percent-encoded: some runtimes' data: loader treats
+  // percent-encoded JS as a text module instead of code.
+  try {
+    return await import(/* @vite-ignore */ 'data:text/javascript;base64,' + bytesToBase64(code));
+  } catch (dataErr) {
+    if (typeof URL.createObjectURL !== 'function' || typeof Blob !== 'function') throw dataErr;
+    let url;
+    try {
+      url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+    } catch {
+      throw dataErr; // report the data: failure — it is the one that describes the runtime
+    }
+    try {
+      return await import(/* @vite-ignore */ url);
+    } catch {
+      throw dataErr;
+    } finally {
+      // Safe here and only here: an ESM module is fully instantiated by the time the
+      // import resolves, and `#load` caches the promise so this URL is never resolved
+      // again. Without it every indexer would pin its own source in memory for the life
+      // of the process.
+      URL.revokeObjectURL?.(url);
+    }
   }
 }
 

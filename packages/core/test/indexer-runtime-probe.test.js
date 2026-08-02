@@ -17,7 +17,8 @@ import { test, expect } from 'bun:test';
 import { zipSync, strToU8 } from 'fflate';
 import { InProcessIndexerRuntime, WorkerLoaderIndexerRuntime, PluginService, MemoryPluginInstallStore, parsePluginPackage } from '../src/index.js';
 import { SHIM } from '../src/plugins/workerLoaderRuntime.js';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { PROBE_BYTES } from '../src/plugins/runtime.js';
+import { writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -42,6 +43,29 @@ test('the in-process runtime probes true where dynamic import works', async () =
   // Bun, so it does work — and the probe must say so, or the refusal would fire on every
   // deployment and nobody could install an indexer anywhere.
   expect(await new InProcessIndexerRuntime().probe()).toEqual({ ok: true });
+});
+
+test('an indexer bigger than a data: URL can hold still loads', async () => {
+  // The bug this pins: Bun resolves a data: URL as a PATH, so anything over ~1.5 KB comes
+  // back as `NameTooLong`. The real audiobook entry is 34 KB — thirty times over — so
+  // every non-toy indexer failed on Bun, per file, while a 12-byte probe said all was
+  // well. Node has no such limit but rejects the blob: fallback, so the loader needs both.
+  const runtime = new InProcessIndexerRuntime();
+  const big = new TextEncoder().encode(
+    `export default (node) => ({ tags: { size: '${'x'.repeat(40_000)}'.length } });`,
+  );
+  const out = await runtime.run({ id: 'big', entry: 'e.js', files: { 'e.js': big } }, { id: 'n' }, {});
+  expect(out.tags.size).toBe(40_000);
+});
+
+test('the probe is bigger than a real indexer entry, or it proves nothing', async () => {
+  // The whole point of the padding: a probe under the limit it is meant to detect passes
+  // on a runtime that then fails every actual file. Pinned against the real thing — the
+  // audiobook indexer's built entry — so shrinking the probe fails here rather than in
+  // production. If a plugin ever ships an entry larger than this, the probe stops being
+  // representative and this test is where that gets noticed.
+  const entry = statSync(new URL('../../../plugins/audiobook/src/bookIndexer.js', import.meta.url)).size;
+  expect(PROBE_BYTES).toBeGreaterThan(entry);
 });
 
 test('a runtime that cannot load code SKIPS the indexers and says so', async () => {
