@@ -202,20 +202,51 @@ function byline(book) {
 
 /** The chapter list as a read-only rundown, for the state with no transport to drive. */
 function chapterList(book) {
-  const sel = el('select', 'ab-chapters');
+  return chapterRows(book, null);
+}
+
+/**
+ * The chapters, as rows.
+ *
+ * A LIST rather than a `<select>`, which is what Storia does and the reason is the
+ * content: an audiobook has sixty-odd chapters with real titles and start times, and a
+ * select shows exactly one of them at a time. A list is scannable, says where you are,
+ * and lets someone jump without first opening a menu to see what the options were.
+ *
+ * `onSeek` null makes it a rundown rather than a control — the offline state has a book
+ * to describe and no transport to drive.
+ */
+function chapterRows(book, onSeek) {
+  const list = el('ul', 'tracks');
   for (const [i, c] of book.chapters.entries()) {
-    sel.appendChild(el('option', null, `${i + 1}. ${c.title}`));
+    const row = el('li', 'chapter');
+    row.dataset.index = String(i);
+    const go = el('button', 'chapter-play', '▶');
+    go.title = `Play “${c.title}”`;
+    if (onSeek) go.addEventListener('click', () => onSeek(c.time));
+    else go.disabled = true;
+    kids(row, [
+      go,
+      el('span', 'track-num', String(i + 1)),
+      el('span', 'chapter-title', c.title),
+      el('span', 'chapter-time', clock(c.time)),
+    ]);
+    list.appendChild(row);
   }
-  sel.disabled = true;
-  return sel;
+  return list;
 }
 
 function render(ctx, root, book, src, skip, file, stream) {
   root.innerHTML = '';
 
-  const chapterLine = el('div', 'ab-chapter', '');
-  const times = el('div', 'ab-times', '');
-  const bar = el('input', 'ab-seek');
+  // The stage is Storia's, class for class — see `src/client/player/player.css` in
+  // 3sln/storia. Same names on purpose: this viewer and that app are the same product
+  // seen from two directions, and a change to one should be legible against the other.
+  const chapterLine = el('h2', 'np-chapter', '');
+  const sub = el('div', 'np-sub muted', '');
+  const timeNow = el('span', 'time', '0:00');
+  const timeLeft = el('span', 'time', '0:00');
+  const bar = el('input', 'seek-bar');
   bar.type = 'range';
   bar.min = '0';
   bar.step = '1';
@@ -245,57 +276,68 @@ function render(ctx, root, book, src, skip, file, stream) {
     const to = book.chapters[Math.max(0, Math.min(book.chapters.length - 1, index + delta))];
     if (to) transport.seek(to.time);
   };
-  const play = button('▶', 'Play', () => transport.toggle(), 'ab-btn ab-play');
+  const play = button('▶', 'Play', () => transport.toggle(), 'play-big');
 
-  const chapters = el('select', 'ab-chapters');
-  for (const [i, c] of book.chapters.entries()) {
-    const o = el('option', null, `${i + 1}. ${c.title}`);
-    o.value = String(c.time);
-    chapters.appendChild(o);
-  }
-  chapters.addEventListener('change', () => transport.seek(Number(chapters.value)));
+  // A skip button carries its own number, the way Storia's does: two buttons that differ
+  // only by direction are hard to tell apart at a glance, and the interval is the thing
+  // someone is actually choosing between.
+  const skipBtn = (glyph, hint, fn) => {
+    const b = el('button', 'icon-btn skip-btn');
+    b.title = hint;
+    b.appendChild(el('span', 'skip-glyph', glyph));
+    b.appendChild(el('span', 'skip-num', String(skip)));
+    b.addEventListener('click', fn);
+    return b;
+  };
 
-  // Playback rate. A primary control for an audiobook rather than a nicety — most people
-  // who listen to books do not listen at 1× — and the transport and media session already
-  // carry it, so the only thing missing was somewhere to press.
-  const rate = el('select', 'ab-rate');
-  for (const r of [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3]) {
-    const o = el('option', null, `${r}×`);
-    o.value = String(r);
-    if (r === 1) o.selected = true;
-    rate.appendChild(o);
+  // Speeds as PILLS rather than a <select>. Playback rate is the control an audiobook
+  // listener touches most, and a select hides the current value behind a click.
+  const rates = el('div', 'rates');
+  const paintRates = () => {
+    for (const b of rates.children) b.classList.toggle('active', Number(b.dataset.rate) === transport.rate);
+  };
+  for (const r of [1, 1.25, 1.5, 1.75, 2]) {
+    const b = el('button', 'rate', `${r}×`);
+    b.dataset.rate = String(r);
+    b.addEventListener('click', () => {
+      transport.rate = r;
+      paintRates();
+      // The OS draws its own progress from the rate as well as the position, so a book at
+      // 1.5× drifts visibly on the lock screen unless this is re-reported.
+      paint(transport.position());
+    });
+    rates.appendChild(b);
   }
-  rate.title = 'Playback speed';
-  rate.addEventListener('change', () => {
-    transport.rate = Number(rate.value);
-    // The OS draws its own progress from the rate as well as the position, so a book at
-    // 1.5× drifts visibly on the lock screen unless this is re-reported.
-    paint(transport.position());
-  });
+
+  const cover = coverOf(book);
+  const list = chapterRows(book, (time) => transport.seek(time));
 
   kids(root, [
-    kids(el('div', 'ab-head'), [
-      coverOf(book),
-      kids(el('div', 'ab-headings'), [
-        el('div', 'ab-title', book.title),
-        byline(book),
-        book.series ? el('div', 'ab-series', book.series) : null,
+    kids(el('div', 'np-hero'), [
+      cover ? kids(el('div', 'np-cover'), [cover]) : null,
+      kids(el('div', 'np-controls'), [
+        kids(el('div', 'np-meta'), [
+          el('h1', 'np-book-title', book.title),
+          byline(book),
+          book.series ? el('div', 'np-series muted', book.series) : null,
+        ]),
+        chapterLine,
+        sub,
+        kids(el('div', 'np-scrub'), [timeNow, bar, timeLeft]),
+        kids(el('div', 'transport'), [
+          button('⏮', 'Previous chapter', () => jump(-1), 'icon-btn'),
+          skipBtn('↺', `Back ${skip} seconds`, () => transport.seek(transport.position() - skip)),
+          play,
+          skipBtn('↻', `Forward ${skip} seconds`, () => transport.seek(transport.position() + skip)),
+          button('⏭', 'Next chapter', () => jump(1), 'icon-btn'),
+        ]),
+        rates,
       ]),
     ]),
-    chapterLine,
-    bar,
-    times,
-    kids(el('div', 'ab-controls'), [
-      button('⏮', 'Previous chapter', () => jump(-1)),
-      button('↺', `Back ${skip}s`, () => transport.seek(transport.position() - skip)),
-      play,
-      button('↻', `Forward ${skip}s`, () => transport.seek(transport.position() + skip)),
-      button('⏭', 'Next chapter', () => jump(1)),
-      rate,
-    ]),
-    book.chapters.length > 1 ? chapters : null,
+    book.chapters.length > 1 ? list : null,
     book.why ? el('div', 'ab-note', book.why) : null,
   ]);
+  paintRates();
 
   transport.open(book, src);
   // The feeder needs the element to know where the playhead is: it appends ahead of
@@ -322,8 +364,16 @@ function render(ctx, root, book, src, skip, file, stream) {
     const total = transport.duration();
     const { index, chapter } = chapterAt(book.chapters, at);
     chapterLine.textContent = chapter ? chapter.title : '';
-    if (chapters.selectedIndex !== index) chapters.selectedIndex = index;
-    times.textContent = total ? `${clock(at)} · ${clock(total - at)} left` : clock(at);
+    sub.textContent = index >= 0
+      ? `Chapter ${index + 1} of ${book.chapters.length}`
+      : `${book.chapters.length} chapter${book.chapters.length === 1 ? '' : 's'}`;
+    timeNow.textContent = clock(at);
+    // Remaining rather than total on the right: "how much longer" is the question, and
+    // the bar already implies the length.
+    timeLeft.textContent = total ? `-${clock(Math.max(0, total - at))}` : '0:00';
+    for (const row of list.children) {
+      row.classList.toggle('active', Number(row.dataset.index) === index);
+    }
   }
 
   wireOs(ctx, transport, book, skip, jump, src, stream);
@@ -357,7 +407,13 @@ async function wireOs(ctx, transport, book, skip, jump, src, stream) {
 
   // Docked, so the book survives navigating away. The frame is never re-parented — the
   // host floats it over a target box — which is precisely why this works at all.
-  ctx.dock.enable({ minSize: { width: 300, height: 96 } }).catch(() => {});
+  // Tall enough for the whole docked strip — cover, title, chapter line and the
+  // transport row — because 96px was not: the controls fell below the fold and a docked
+  // book could only be paused by scrolling a picture-in-picture window first, which is
+  // the one thing the dock exists to make easy. Measured against the docked rules in
+  // `injectStyle`: a 64px cover plus a 44px play button plus padding does not fit in
+  // less than about 180.
+  ctx.dock.enable({ minSize: { width: 340, height: 190 } }).catch(() => {});
   ctx.dock.onChange((state) => { document.body.dataset.docked = state?.docked ? 'yes' : 'no'; });
 
   ctx.onDeactivate(() => {
@@ -385,45 +441,155 @@ function injectStyle() {
   const s = document.createElement('style');
   s.id = 'ab-style';
   s.textContent = `
-    :root { color-scheme: dark; }
-    body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #e8e8ea; background: transparent; }
-    /* The panel is as tall as the pane it is given, so the card centres in it rather than
-       clinging to the top edge with a field of black beneath — which is what the docked
-       styling did when it was asked to fill a viewer. Docked, the max-width and the
-       centring both stop mattering because the frame is only a few hundred pixels wide. */
-    .ab { display: grid; gap: 8px; align-content: start; padding: 16px;
-          background: rgba(20,21,25,.92); border-radius: 10px;
-          max-width: 560px; margin: 0 auto; }
-    .ab-head { display: flex; gap: 12px; align-items: flex-start; }
-    .ab-headings { display: grid; gap: 2px; min-width: 0; }
-    .ab-cover { width: 88px; height: 88px; object-fit: cover; border-radius: 6px;
-                background: #2a2c34; flex: none; }
-    .ab-series { color: #8f929c; font-size: 11px; }
-    .ab-rate { background: #2a2c34; color: inherit; border: 0; border-radius: 6px;
-               padding: 6px; font-size: 12px; cursor: pointer; }
-    .ab-get { justify-self: start; }
-    .ab-dl { height: 4px; border-radius: 2px; background: #2a2c34; overflow: hidden; }
-    .ab-dl-fill { height: 100%; width: 0; background: #6ea8fe; transition: width .3s; }
-    .ab-title { font-weight: 600; font-size: 14px; }
-    .ab-author, .ab-times, .ab-note { color: #a2a4ad; font-size: 12px; }
-    .ab-chapter { font-size: 12px; }
-    .ab-seek { width: 100%; accent-color: #6ea8fe; }
-    .ab-controls { display: flex; gap: 6px; align-items: center; justify-content: center; }
-    .ab-btn { background: #2a2c34; color: inherit; border: 0; border-radius: 6px;
-              padding: 6px 10px; font-size: 14px; cursor: pointer; }
-    .ab-btn:hover { background: #353845; }
-    .ab-play { font-size: 16px; padding: 6px 14px; }
-    .ab-chapters { background: #2a2c34; color: inherit; border: 0; border-radius: 6px; padding: 5px; }
-    .ab-error { color: #ff9a9a; padding: 12px; }
-    .ab-status { color: #a2a4ad; padding: 12px; }
-    /* Docked, the frame is a strip in the corner: the chapter list and the note do not fit
-       and are not what someone glancing at it wants. */
-    body[data-docked="yes"] .ab-chapters,
-    body[data-docked="yes"] .ab-note { display: none; }
-    /* Docked, the card is the whole strip and the cover shrinks to a thumbnail. */
-    body[data-docked="yes"] .ab { max-width: none; padding: 10px 12px; gap: 6px; }
-    body[data-docked="yes"] .ab-cover { width: 40px; height: 40px; }
-    body[data-docked="yes"] .ab-series { display: none; }
+    /* Storia's tokens and stage, transplanted. The frame is on an opaque origin with its
+       own document, so nothing here can be shared with the host or with that app — the
+       values are copied, and the class names are kept identical so the two are legible
+       against each other. See 3sln/storia: src/worker/routes/pages.js (tokens) and
+       src/client/player/player.css (stage). */
+    :root {
+      color-scheme: dark;
+      --bg: #12121a;
+      --accent: #5b3df5;
+      --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+      --accent-contrast: #fff;
+      --fg: #ece9f3;
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --surface-1: color-mix(in srgb, var(--fg) 5%, transparent);
+      --surface-2: color-mix(in srgb, var(--fg) 8%, transparent);
+      --surface-3: color-mix(in srgb, var(--fg) 12%, transparent);
+      --hairline: color-mix(in srgb, var(--fg) 12%, transparent);
+      --shadow-3: 0 20px 60px rgba(0,0,0,.5);
+      --ease: cubic-bezier(.22,.61,.36,1);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.45 system-ui, -apple-system, sans-serif; color: var(--fg);
+           background: transparent; }
+    .muted { color: var(--muted); }
+
+    /* The stage. The accent wash behind the cover is Storia's .player-app background —
+       and note the absence of backticks in this comment: the whole stylesheet is a
+       template literal, so one here ends it and turns the next CSS selector into
+       JavaScript. It did, and the viewer failed with "app is not defined".
+       it is what stops a dark panel reading as an empty one. */
+    .ab {
+      min-height: 100%;
+      display: flex; flex-direction: column; align-items: center;
+      gap: clamp(10px, 2.2vh, 22px);
+      padding: clamp(14px, 3vh, 26px) clamp(16px, 5vw, 34px);
+      background:
+        radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+        var(--bg);
+    }
+    .np-hero { display: flex; flex-direction: column; align-items: center;
+               gap: clamp(10px, 2.2vh, 22px); text-align: center;
+               width: 100%; max-width: 600px; }
+    .np-cover { line-height: 0; }
+    .np-cover .ab-cover { width: min(74vw, 38vh, 340px); height: auto; aspect-ratio: 1;
+      border-radius: clamp(16px, 2.4vw, 24px); object-fit: cover;
+      box-shadow: var(--shadow-3); background: var(--surface-2); }
+    .np-controls { display: flex; flex-direction: column; align-items: stretch;
+                   gap: clamp(10px, 2.2vh, 22px); width: 100%; min-width: 0; }
+    .np-meta { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+    .np-book-title { font-size: clamp(1.15rem, 3.6vw, 1.55rem); font-weight: 700; margin: 0;
+      line-height: 1.18; max-width: 20ch;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .ab-author { font-size: 0.88rem; margin: 0; color: var(--muted); }
+    .np-series { font-size: 0.78rem; }
+    .np-chapter { font-size: 0.98rem; font-weight: 550; color: var(--accent); margin: 6px 0 0;
+      line-height: 1.25; max-width: 30ch;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .np-sub { font-size: 0.78rem; margin: 0; }
+
+    .np-scrub { display: flex; align-items: center; gap: 12px; width: 100%; max-width: 460px;
+                margin: 0 auto; }
+    .np-scrub .time { font-variant-numeric: tabular-nums; font-size: 0.77rem; color: var(--muted);
+                      min-width: 48px; text-align: center; }
+    .seek-bar { flex: 1; accent-color: var(--accent); height: 6px; cursor: pointer; }
+
+    .transport { display: flex; align-items: center; justify-content: center; gap: clamp(6px, 3vw, 20px); }
+    .icon-btn { background: none; border: none; color: var(--fg); cursor: pointer;
+      display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px;
+      font-size: 22px; transition: background .12s, color .12s, transform .06s; }
+    .icon-btn:hover { background: var(--surface-2); }
+    .icon-btn:active { transform: scale(.94); }
+    .skip-btn { position: relative; font-size: 27px; }
+    .skip-btn .skip-glyph { font-size: 27px; line-height: 1; }
+    /* The interval sits INSIDE the glyph, which is the only thing that tells two
+       otherwise-identical arrows apart at a glance. */
+    .skip-num { position: absolute; inset: 0; display: grid; place-items: center;
+      font-size: 0.55rem; font-weight: 700; padding-top: 1px; font-variant-numeric: tabular-nums; }
+    .play-big { width: clamp(64px, 16vw, 76px); height: clamp(64px, 16vw, 76px); border-radius: 50%;
+      border: none; background: var(--accent); color: var(--accent-contrast);
+      display: grid; place-items: center; cursor: pointer; font-size: 30px;
+      box-shadow: 0 12px 30px color-mix(in srgb, var(--accent) 55%, transparent);
+      transition: transform .12s var(--ease); }
+    .play-big:hover { transform: scale(1.05); }
+    .play-big:active { transform: scale(.96); }
+
+    .rates { display: flex; gap: 4px; justify-content: center; }
+    .rate { background: none; border: 1px solid transparent; color: var(--muted);
+      font-size: 0.8rem; font-weight: 600; padding: 5px 11px; border-radius: 999px;
+      cursor: pointer; transition: color .12s, background .12s; }
+    .rate:hover { color: var(--fg); }
+    .rate.active { color: var(--accent-contrast); background: var(--accent); }
+
+    /* Chapters, beneath the stage. A list rather than a select — see chapterRows. */
+    .tracks { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 600px;
+      display: flex; flex-direction: column; gap: 1px; }
+    .chapter { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+      border-radius: 9px; }
+    .chapter:hover { background: var(--surface-1); }
+    .chapter.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+    .chapter-play { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--hairline);
+      background: none; color: var(--fg); display: grid; place-items: center; cursor: pointer;
+      font-size: 11px; flex: none; }
+    .chapter-play:disabled { opacity: .3; cursor: default; }
+    .chapter.active .chapter-play { background: var(--accent); color: var(--accent-contrast);
+      border-color: transparent; }
+    .track-num { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.8rem;
+      min-width: 1.8em; text-align: right; }
+    .chapter-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 0.92rem; text-align: left; }
+    .chapter-time { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+
+    .ab-note { color: var(--muted); font-size: 12px; max-width: 600px; }
+    .ab-error { color: #fb7185; padding: 12px; }
+    .ab-status { color: var(--muted); padding: 12px; }
+
+    /* The download state, when a book cannot be streamed here. */
+    .ab-dl { height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden;
+      width: 100%; max-width: 460px; }
+    .ab-dl-fill { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+    .ab-get { background: var(--accent); color: var(--accent-contrast); border: 0;
+      border-radius: 11px; padding: 10px 15px; font: inherit; font-weight: 550; cursor: pointer; }
+
+    /* DOCKED: the frame is a strip a few hundred pixels wide, so the stage turns on its
+       side — cover as a thumbnail, controls beside it. The chapter list and the note do
+       not fit and are not what someone glancing at a docked player wants. */
+    body[data-docked="yes"] .tracks,
+    body[data-docked="yes"] .ab-note,
+    body[data-docked="yes"] .np-sub,
+    body[data-docked="yes"] .np-series,
+    body[data-docked="yes"] .rates { display: none; }
+    body[data-docked="yes"] .ab { padding: 10px 12px; gap: 8px; }
+    body[data-docked="yes"] .np-hero { flex-direction: row; align-items: center;
+      text-align: left; gap: 12px; }
+    body[data-docked="yes"] .np-cover .ab-cover { width: 64px; border-radius: 10px; }
+    body[data-docked="yes"] .np-meta { align-items: flex-start; }
+    body[data-docked="yes"] .np-book-title { font-size: 0.95rem; -webkit-line-clamp: 1; }
+    body[data-docked="yes"] .np-chapter { font-size: 0.82rem; margin: 0; -webkit-line-clamp: 1; }
+    body[data-docked="yes"] .play-big { width: 44px; height: 44px; font-size: 20px; }
+    body[data-docked="yes"] .icon-btn { width: 32px; height: 32px; font-size: 18px; }
+    body[data-docked="yes"] .transport { gap: 4px; justify-content: flex-start; }
+
+    /* Short viewports: the cover is the first thing that can go — the chapter, the
+       scrubber and the transport all matter more than a picture. */
+    @media (max-height: 560px) {
+      .np-hero { gap: 10px; }
+      .np-book-title { font-size: 1.05rem; }
+      .play-big { width: 56px; height: 56px; }
+    }
+    @media (max-height: 430px) { .np-cover { display: none; } }
   `;
   document.head.appendChild(s);
 }
