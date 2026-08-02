@@ -41,13 +41,34 @@ test('the package parses the way the server parses it', async () => {
 
 test('it asks for exactly the capabilities it can justify', async () => {
   const pkg = await parsePluginPackage(pack());
-  expect(pkg.capabilities.sort()).toEqual(['dock', 'files', 'indexer', 'media', 'ui']);
+  expect(pkg.capabilities.sort()).toEqual(['dock', 'files', 'indexer', 'media', 'opener', 'ui']);
   // Not `network` — it talks to nothing but the drive — and not `storage`, because it keeps
   // no database of its own. A capability nobody can justify in one line is one the review
   // dialog should not be asking someone to grant.
   expect(pkg.capabilities).not.toContain('network');
   expect(pkg.capabilities).not.toContain('storage');
   for (const c of pkg.capabilities) expect(ALL_CAPABILITIES).toContain(c);
+});
+
+// The failure this exists for cost a real afternoon: the manifest declared a `player`
+// opener and did NOT declare the `opener` capability. It installed, it validated, the
+// contribution showed up in the install record — and the host dropped it on the floor,
+// because registration is gated on the GRANT (pluginHost.js: `if
+// (runtime.grants.includes('opener'))`). The viewer had never once run, and the symptom
+// was the built-in audio player quietly winning instead. Nothing errored.
+//
+// So: a contribution whose enabling capability is undeclared is dead weight, and saying so
+// is the only way this class of bug is visible before someone opens a file.
+test('every contribution type it declares has the capability that enables it', async () => {
+  const pkg = await parsePluginPackage(pack());
+  // Only the types that are gated. A `command` or `register` needs no matching capability
+  // — listing them here would assert a rule the host does not have.
+  const ENABLED_BY = { opener: 'opener', indexer: 'indexer' };
+  for (const c of pkg.contributions) {
+    const needed = ENABLED_BY[c.type];
+    if (!needed) continue;
+    expect(pkg.capabilities).toContain(needed);
+  }
 });
 
 test('every entry the manifest names is really in the package', async () => {

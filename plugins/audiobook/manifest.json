@@ -2,12 +2,13 @@
   "domain": "3sln.com",
   "name": "audiobook",
   "displayName": "Audiobook Player",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Play M4B and LPF audiobooks from the drive, with chapters, cover art, a dock and OS transport controls.",
   "entry": "src/index.js",
   "capabilities": {
     "files": true,
     "ui": true,
+    "opener": true,
     "media": true,
     "dock": true,
     "indexer": true
