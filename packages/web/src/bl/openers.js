@@ -95,6 +95,22 @@ export function rememberedOpenerId(r, node) {
  * keeping the arithmetic separate from the effect is what lets both the settings screen and
  * the opener chooser reach it without either touching `settings`.
  */
+/**
+ * WHY A STALE ASSOCIATION IS KEPT rather than cleared on uninstall.
+ *
+ * Nothing deletes these when a plugin goes, and that is deliberate. Two places already
+ * make it safe: `OpenFileAction` honours a remembered opener only if it is still
+ * AVAILABLE, and `openerAssociations` marks a row `missing` so the settings screen says
+ * the opener is gone rather than showing a bare id.
+ *
+ * Keeping it is the better behaviour — reinstalling the plugin restores the preference,
+ * and deleting it eagerly would discard a choice on an action (uninstall) that says
+ * nothing about file associations. It can still be dropped on purpose, through this
+ * function with a null openerId.
+ *
+ * See opener-association.test.js: this is correct in two places at once, neither obvious
+ * from the other, which is the kind of thing that gets tidied into a bug.
+ */
 export function withAssociation(assoc, typeKey, openerId) {
   const next = { ...(assoc || {}) };
   if (openerId) next[typeKey] = openerId;
