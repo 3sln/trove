@@ -41,7 +41,19 @@ export const METHODS = {
   // its `commands` allowlist) to run someone else's. The direction disambiguates.
   command: { execute: 'command:execute' },
   resources: { list: 'resources:list', read: 'resources:read' },
-  files: { read: 'files:read', list: 'files:list', stat: 'files:stat', downloadUrl: 'files:downloadUrl', index: 'files:index' },
+  files: {
+    read: 'files:read', list: 'files:list', stat: 'files:stat', downloadUrl: 'files:downloadUrl',
+    index: 'files:index',
+    // Bytes by range — the only way a viewer gets binary content at all, since `read`
+    // answers text and a sandboxed frame cannot authenticate a bare download URL.
+    bytes: 'files:bytes',
+    // A minted URL for a media element. See pluginRpc.js for why this one host URL crosses.
+    mediaUrl: 'files:mediaUrl',
+    offline: {
+      start: 'files:offline:start', status: 'files:offline:status',
+      cancel: 'files:offline:cancel', remove: 'files:offline:remove',
+    },
+  },
   net: { fetch: 'net:fetch' },
   storage: { sql: 'storage:sql' },
   settings: { get: 'settings:get', set: 'settings:set', getSecret: 'settings:getSecret' },

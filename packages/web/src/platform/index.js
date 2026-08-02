@@ -20,6 +20,7 @@ import { ViewportService } from './viewport.js';
 import { SpatialNavigationService } from './spatialNav.js';
 import { VoiceSearchService } from './voiceSearch.js';
 import { MediaUrlService } from './mediaUrls.js';
+import { FileChunks } from './fileChunks.js';
 
 /**
  * The bearer token for this browser, if any.
@@ -76,6 +77,10 @@ export function createPlatform({ baseUrl = '' } = {}) {
     // hands back what the few imperative edges below still need.
   };
   platform.mediaUrls = new MediaUrlService({ api: platform.api, settings });
+  // Where a viewer's ranged reads go: a pinned copy, chunks of a download someone asked
+  // for, or the network keeping nothing. See fileChunks.js — the retention rule is the
+  // whole point of it having a name of its own.
+  platform.fileChunks = new FileChunks({ api: platform.api, mediaUrls: platform.mediaUrls });
   platform.plugins = new PluginHost(platform);
   // Commands consult the plugin host to hide/disable plugin commands that aren't
   // available right now (offline, or the plugin isn't responding).

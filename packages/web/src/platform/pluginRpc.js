@@ -147,7 +147,48 @@ export class PluginRpcRouter {
         { sort: params.sort, order: params.order, limit: params.limit, cursor: params.cursor },
       );
       case 'files:stat': return cap('files'), this.platform.api.stat(params.id);
-      case 'files:downloadUrl': return cap('files'), { url: this.platform.api.downloadUrl(params.id) };
+
+      // BYTES, by range. `files:read` answers text, which for an audiobook or any other
+      // container is not slow, it is corrupt — and `files:downloadUrl` used to hand out a
+      // bare route URL carrying no authorization, which an opaque-origin sandbox cannot
+      // make good on: no cookies, no `Authorization` header, a 401 on any drive that
+      // authenticates. So this is how a viewer gets bytes at all.
+      //
+      // Half-open `[start, end)`, and through `fileChunks` rather than the API directly:
+      // a pinned file answers from disk, a file being kept offline contributes what it
+      // fetches, and a file nobody asked to keep leaves nothing behind. See fileChunks.js.
+      case 'files:bytes': {
+        cap('files');
+        const r = await this.platform.fileChunks.read(params.id, { start: params.start, end: params.end });
+        // Transferred rather than copied: a 4 MiB chunk crossing by structured clone twice
+        // per read is the difference between a seek and a stutter.
+        return { bytes: r.bytes.buffer, etag: r.etag, total: r.total };
+      }
+
+      // Keeping a file offline, which is a DIFFERENT act from reading it — see
+      // fileChunks.js. Until `start` is called, ranging over a file stores nothing.
+      case 'files:offline:start': return cap('files'), this.platform.fileChunks.start(params.id);
+      case 'files:offline:status': return cap('files'), this.platform.fileChunks.status(params.id);
+      case 'files:offline:cancel': return cap('files'), (this.platform.fileChunks.cancel(params.id), { ok: true });
+      case 'files:offline:remove': return cap('files'), this.platform.fileChunks.remove(params.id).then(() => ({ ok: true }));
+
+      /**
+       * A URL a media element can load on its own.
+       *
+       * The one place a host URL deliberately crosses into the sandbox, and it is minted —
+       * it carries its own grant and expires, which is exactly what `platform/mediaUrls.js`
+       * exists for: "URLs for things that cannot send a header … an <img src>, a <video
+       * src>". The rule it bends is that plugins hold only opaque handles; the reason is
+       * that `<audio src>` is the only way to stream a progressive MP4 without a
+       * fragmenter, because MSE refuses one and a Blob has to be whole before it can
+       * become an object URL. A viewer that can range-read for chapters and stream for
+       * playback needs both, and this is the streaming half.
+       */
+      case 'files:mediaUrl': {
+        cap('files');
+        const { url, expiresAt } = await this.platform.mediaUrls.url(params.id, { op: params.op || 'media' });
+        return { url, expiresAt };
+      }
       case 'files:index': {
         cap('indexer');
         const ns = parseContribUri(params.indexerId) ? params.indexerId : contribUri(record.manifest, params.indexerId || 'default');

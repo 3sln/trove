@@ -372,6 +372,38 @@ export class TroveApiClient {
   }
 
   /**
+   * Read `[start, end)` of a file.
+   *
+   * HALF-OPEN, like every other range in JavaScript — `slice`, `subarray`, `TypedArray`.
+   * HTTP's is inclusive, and the conversion happens at this one boundary rather than in
+   * every caller, because an off-by-one that only shows up as a missing final byte of a
+   * container header is the kind of bug that reads as a corrupt file.
+   *
+   * `etag` comes back with the bytes, and callers are expected to care: a file overwritten
+   * in place keeps its id, so anything cached off these bytes — a chunk store, a parsed
+   * atom layout — has to notice that the head of the old file and the tail of the new one
+   * are not the same file. `total` is parsed from `content-range`, which is the only place
+   * a ranged read learns how big the whole thing is.
+   *
+   * @returns {Promise<{bytes: Uint8Array, etag: string|null, total: number|null}>}
+   */
+  async readRange(id, { start = 0, end, signal } = {}) {
+    const range = end == null ? `bytes=${start}-` : `bytes=${start}-${end - 1}`;
+    const res = await this._fetch(this.downloadUrl(id), {
+      signal,
+      headers: { ...this.authHeaders(), range },
+    });
+    // A zero-length file has no satisfiable range, and asking for one is not an error the
+    // caller can do anything with — it is an empty file, which is a legitimate answer.
+    if (res.status === 416) return { bytes: new Uint8Array(0), etag: res.headers.get('etag'), total: 0 };
+    if (!res.ok && res.status !== 206) throw new TroveError('internal', `Read failed (${res.status})`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const total = Number(/\/(\d+)$/.exec(res.headers.get('content-range') || '')?.[1])
+      || (res.status === 200 ? bytes.length : null);
+    return { bytes, etag: res.headers.get('etag'), total };
+  }
+
+  /**
    * Read at most `maxBytes` of a file as text.
    *
    * A viewer must never pull a whole file just to show the top of it. A drive holds

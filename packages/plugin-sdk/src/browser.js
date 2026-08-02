@@ -42,6 +42,110 @@
   }
   const emit = (method, params) => port.postMessage({ __trove: 'event', method, params });
 
+  /**
+   * A file's bytes, addressable without holding them.
+   *
+   * `Blob` is already the browser's interface for exactly that — `slice()` is free,
+   * `stream()` is a reader, and everything that eats bytes eats a Blob — so a range reader
+   * wears the interface that exists rather than inventing a parallel vocabulary.
+   *
+   * THE SHARP EDGE, and it is sharp: a Blob SUBCLASS only overrides what JavaScript calls.
+   * Anything reading the blob's internal bytes — `URL.createObjectURL`, `new
+   * Response(blob)`, `fetch(url, {body})`, and structured clone through `postMessage` —
+   * bypasses every override here and sees the empty blob passed to `super()`. Two
+   * consequences the design is built around:
+   *
+   *   1. A RemoteBlob cannot be posted INTO this frame from the host; it would arrive as a
+   *      plain, empty Blob. It is constructed here, in the frame that uses it.
+   *   2. `local()` is the escape hatch for all of them. A realized Blob really does hold
+   *      its bytes, so it works with `createObjectURL` — which is the download-then-play
+   *      path for anything that cannot be streamed.
+   */
+  class RemoteBlob extends Blob {
+    constructor(id, { size = 0, type = '', etag = null, start = 0, end = null } = {}) {
+      super();
+      this.id = id;
+      this.type = type;
+      this.etag = etag;
+      // A window on the source. `size` is this window's length, which is what makes
+      // `slice()` of a slice behave the way a caller expects.
+      this._start = start;
+      this._end = end == null ? size : end;
+    }
+
+    get size() { return Math.max(0, this._end - this._start); }
+
+    /**
+     * A window on the same source. No bytes move and none need to exist yet.
+     *
+     * Negative indices count from the end, as `Blob.slice` does — which is what makes
+     * "the last 64 KiB" expressible, and reading the tail of a file is half of what a
+     * container parser does.
+     */
+    slice(begin = 0, finish = this.size, type = this.type) {
+      const len = this.size;
+      const from = begin < 0 ? Math.max(0, len + begin) : Math.min(begin, len);
+      const to = finish < 0 ? Math.max(0, len + finish) : Math.min(finish, len);
+      const win = new RemoteBlob(this.id, {
+        type, etag: this.etag,
+        start: this._start + from,
+        end: this._start + Math.max(from, to),
+      });
+      return win;
+    }
+
+    /** The bytes of this window. */
+    async bytes(opts) {
+      const r = await call('files:bytes', { id: this.id, start: this._start, end: this._end }, undefined);
+      // Every read refreshes the etag, because a file overwritten in place keeps its id
+      // and anything cached off these bytes has to notice.
+      if (r.etag) this.etag = r.etag;
+      if (opts && opts.signal && opts.signal.aborted) throw new Error('Aborted');
+      return new Uint8Array(r.bytes);
+    }
+    async arrayBuffer() { return (await this.bytes()).buffer; }
+    async text() { return new TextDecoder().decode(await this.bytes()); }
+
+    /** One window at a time, so a caller can walk a large file without holding it. */
+    async *chunks({ size = 4 * 1024 * 1024, signal } = {}) {
+      for (let at = 0; at < this.size; at += size) {
+        if (signal && signal.aborted) throw new Error('Aborted');
+        yield this.slice(at, Math.min(at + size, this.size)).bytes();
+      }
+    }
+
+    stream() {
+      const iter = this.chunks();
+      return new ReadableStream({
+        async pull(controller) {
+          const { value, done } = await iter.next();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        },
+      });
+    }
+
+    /**
+     * REALIZE the bytes into an ordinary Blob.
+     *
+     * The escape hatch named above, and the download half of "this book cannot be
+     * streamed, here is a Download button". `onProgress` fires once with `loaded: 0`
+     * BEFORE the first chunk, so a bar appears at 0% instead of jumping in partway.
+     */
+    async local({ onProgress, signal, chunkSize = 4 * 1024 * 1024 } = {}) {
+      const total = this.size;
+      const parts = [];
+      let loaded = 0;
+      if (onProgress) onProgress({ loaded: 0, total, ratio: 0 });
+      for await (const chunk of this.chunks({ size: chunkSize, signal })) {
+        parts.push(chunk);
+        loaded += chunk.length;
+        if (onProgress) onProgress({ loaded, total, ratio: total ? loaded / total : 0 });
+      }
+      return new Blob(parts, { type: this.type });
+    }
+  }
+
   // What this frame reports about itself on every heartbeat. Contributions are the
   // host's own manifest reading — all the plugin can usefully say is which of its
   // declared contributions it actually bound a handler to, plus whether it thinks
@@ -259,6 +363,45 @@
         list: (pathOrId, opts) => (requireCap('files'), call('files:list', Object.assign({ pathOrId }, opts))),
         stat: (id) => (requireCap('files'), call('files:stat', { id })),
         downloadUrl: (id) => (requireCap('files'), call('files:downloadUrl', { id })),
+
+        /**
+         * A file's bytes as a Blob you can slice, stream and realize — see RemoteBlob.
+         *
+         * `stat` first, because a Blob has to know its own size before `slice` means
+         * anything. One round trip, and every later read is a range.
+         */
+        async blob(id) {
+          requireCap('files');
+          const { node } = await call('files:stat', { id });
+          return new RemoteBlob(id, { size: node.size || 0, type: node.contentType || '', etag: node.etag || null });
+        },
+
+        /**
+         * A URL a media element can load by itself, for streaming.
+         *
+         * It is MINTED — it carries its own grant and expires — which is the one place a
+         * host URL deliberately reaches a plugin. `<audio src>` is the only way to play a
+         * progressive MP4 without a fragmenter: MSE refuses one, and a Blob has to be
+         * whole before it can become an object URL. Use `blob(id)` for the parsing (a
+         * container's chapters are a few kilobytes out of a few hundred megabytes) and
+         * this for the playing.
+         */
+        mediaUrl: (id, opts) => (requireCap('files'), call('files:mediaUrl', Object.assign({ id }, opts))),
+
+        /**
+         * Keeping a file, which is a DIFFERENT act from reading one.
+         *
+         * Ranging over a file stores nothing. `start(id)` is someone asking to have it
+         * offline, and from then on every chunk a read fetches is kept and the background
+         * filler skips it — so a book listened straight through downloads itself exactly
+         * once, and a book skipped around in fills its gaps.
+         */
+        offline: {
+          start: (id) => (requireCap('files'), call('files:offline:start', { id })),
+          status: (id) => (requireCap('files'), call('files:offline:status', { id })),
+          cancel: (id) => (requireCap('files'), call('files:offline:cancel', { id })),
+          remove: (id) => (requireCap('files'), call('files:offline:remove', { id })),
+        },
         // index(indexerId, nodeId, contribution) where contribution is
         // { semanticTexts?, tags?, metadata? }. Legacy (indexerId, nodeId, documents[], facet)
         // is still accepted when the 3rd arg is an array of documents.
