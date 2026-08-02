@@ -7,6 +7,10 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
+**Open: 025** — the audiobook player is a prototype: play does nothing, there is no cover
+art and no rate control, the full-pane layout is wrong, and RECENT tiles never draw a
+thumbnail. The blocking part needs logging from inside the sandboxed frame.
+
 **Open: 024** — the view chooser should only appear when it means something: more than one
 view can draw the results, and the results are items rather than commands.
 
