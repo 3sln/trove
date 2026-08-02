@@ -7,6 +7,10 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
+**Open: 023** — indexing that actually runs. Three defects found by opening one audiobook
+on a real drive; two fixed in the commits that reference it, the rest is upload-time
+indexing that does not survive a Worker request.
+
 **Nothing open.** 012–020 came from a multi-agent architecture audit (Aug 2026): eight
 lenses over the four packages, every finding put through an adversary whose job was to
 refute it, 16 killed that way. Its verdict was that nothing here needed rearchitecting — it

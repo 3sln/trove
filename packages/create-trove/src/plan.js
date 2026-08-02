@@ -348,7 +348,7 @@ export async function askPlan(prompter, { name, version, runtime: preset, genera
  */
 async function askWorkers(prompter, { embeddingDim }) {
   const w = {
-    d1: null, pluginDb: null, vectorize: null, ai: false, tasks: true,
+    d1: null, pluginDb: null, vectorize: null, ai: false, tasks: true, workerLoader: false,
     // nodejs_compat v2 needs 2024-09-23 or later; that exact floor was also the hardcoded
     // value, which made it two years stale on the day it shipped.
     compatibilityDate: '2026-07-01',
@@ -368,6 +368,18 @@ async function askWorkers(prompter, { embeddingDim }) {
       };
     }
   }
+
+  // Default FALSE, and the wording says why: running dynamic Workers on Cloudflare needs
+  // the closed beta, so for most people the honest answer today is "not yet". Declaring
+  // the binding without access makes the deploy fail, which is a worse first experience
+  // than an install that refuses a plugin with a clear message.
+  w.workerLoader = await prompter.confirm(
+    '  Bind a Worker Loader so plugin indexers can run?',
+    { key: 'workers.loader.enabled', default: false,
+      hint: 'without it, plugin indexers are skipped — a plugin still installs and its '
+        + 'viewers work, but nothing it would have contributed to search appears. '
+        + 'Needs the Dynamic Workers closed beta; works in `wrangler dev` regardless' },
+  );
 
   if (await prompter.section('Vectorize (semantic search)', { key: 'workers.vectorize.enabled',
     blurb: 'sqlite-vec is a native artifact and cannot load here, so semantic search needs Vectorize.',

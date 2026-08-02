@@ -434,6 +434,29 @@ function wranglerToml(plan) {
     L.push('');
   }
 
+  // Where PLUGIN INDEXERS run. A plugin's indexer is somebody else's code executing on
+  // the server, and a Worker cannot simply import it: the in-process runner loads code
+  // through a `data:` URL, which workerd refuses outright — so without this binding every
+  // plugin indexer fails on every file. (It used to fail SILENTLY; the install now
+  // refuses up front and says why.)
+  //
+  // A Worker Loader gives that code a real isolate with no bindings and no network beyond
+  // the one presigned URL the host hands it. Commented out because running dynamic
+  // Workers on Cloudflare needs the closed beta — it works in `wrangler dev` today, so
+  // uncommenting it locally is how you try plugin indexers before you have access.
+  if (w?.workerLoader) {
+    L.push('# Isolates for plugin indexers. See "Server indexers" in the README.');
+    L.push('[[worker_loaders]]');
+    L.push('binding = "LOADER"');
+    L.push('');
+  } else {
+    L.push('# [[worker_loaders]]        # plugin indexers run in isolates loaded through this');
+    L.push('# binding = "LOADER"        # works in `wrangler dev`; on Cloudflare needs the');
+    L.push('#                           # Dynamic Workers closed beta. Without it, installing');
+    L.push('#                           # a plugin that ships a server indexer is refused.');
+    L.push('');
+  }
+
   if (w?.vectorize) {
     L.push('[[vectorize]]');
     L.push('binding = "VECTORIZE"');

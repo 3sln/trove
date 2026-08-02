@@ -424,3 +424,18 @@ test('the README never tells you to overwrite a .dev.vars that was written', asy
   expect(fileNamed(bare.files, '.dev.vars')).toBeUndefined();
   expect(fileNamed(bare.files, 'README.md').contents).toContain('cp .dev.vars.example .dev.vars');
 });
+
+test('the Worker Loader binding is rendered when asked for, and explained when not', async () => {
+  // Both arms, because the commented-out block is the one almost every drive gets today
+  // (the binding needs Cloudflare's closed beta) and it is the only place a reader learns
+  // why installing a plugin with a server indexer gets refused.
+  const on = await plan([...WORKERS_SCRIPT, ['Bind a Worker Loader', true]], 'workers');
+  expect(fileNamed(on.files, 'wrangler.toml').contents).toContain('[[worker_loaders]]');
+  expect(fileNamed(on.files, 'wrangler.toml').contents).toContain('binding = "LOADER"');
+
+  const off = await plan([...WORKERS_SCRIPT, ['Bind a Worker Loader', false]], 'workers');
+  const toml = fileNamed(off.files, 'wrangler.toml').contents;
+  expect(toml).toContain('# [[worker_loaders]]');
+  // Names the consequence, not just the feature.
+  expect(toml).toMatch(/refused/);
+});
