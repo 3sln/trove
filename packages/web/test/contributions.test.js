@@ -40,8 +40,6 @@ test('kinds coexist under one plugin without colliding', () => {
   expect(r.ofType('statusItem').length).toBe(2);
   expect(r.get(URI('status')).slot).toBe('right');
   expect(r.get('trove+contrib:acme.com/sheets/status').slot).toBe('left');
-  expect(r.ofPlugin('acme.com/docs').length).toBe(3);
-  expect(r.ofPlugin('acme.com/docs', 'command').length).toBe(1);
   // `id` and `pluginId` are derived from the address for plugin contributions.
   expect(r.get(URI('busy')).id).toBe(URI('busy'));
   expect(r.get(URI('busy')).name).toBe('busy');
@@ -57,7 +55,9 @@ test('an unknown type is refused rather than stored as an inert entry', () => {
 test('register/update/unregister drive the reactive views', () => {
   const r = registry();
   const seen = [];
-  effect(r.observeType('statusItem'), (v) => seen.push(v.length));
+  // One cell over the whole list — `observeType` derived a second one per type, and the
+  // query layer already filters by type from this cell, so nothing ever asked for it.
+  effect(r.observe(), (v) => seen.push(v.filter((c) => c.type === 'statusItem').length));
 
   const dispose = r.register(URI('status'), { pluginId: 'acme.com/docs', type: 'statusItem', slot: 'right', html: '' });
   expect(r.ofType('statusItem').length).toBe(1);
@@ -72,20 +72,6 @@ test('register/update/unregister drive the reactive views', () => {
   expect(seen[seen.length - 1]).toBe(0);
 });
 
-test('unregisterPlugin drops everything one plugin contributed, and nothing else', () => {
-  const r = registry();
-  r.register('explorer.delete', { type: 'command' });
-  r.register(URI('a'), { pluginId: 'acme.com/docs', type: 'command' });
-  r.register(URI('b'), { pluginId: 'acme.com/docs', type: 'opener', match: {} });
-  r.register('trove+contrib:acme.com/sheets/a', { pluginId: 'acme.com/sheets', type: 'command' });
-
-  r.unregisterPlugin('acme.com/docs');
-  expect(r.all().map((c) => c.uri).sort()).toEqual([
-    'trove+contrib:acme.com/sheets/a',
-    'trove+contrib:core/workbench/explorer.delete',
-  ]);
-});
-
 test('openers are matched by selector and ordered by priority', () => {
   const r = registry();
   r.register('core.text', { type: 'opener', priority: 10, match: { ext: ['.md'] } });
@@ -94,9 +80,6 @@ test('openers are matched by selector and ordered by priority', () => {
 
   const node = { kind: 'file', name: 'a.md', contentType: 'text/markdown' };
   expect(r.openersFor(node).map((o) => o.id)).toEqual([URI('fancy'), 'core.text']);
-  expect(r.openerFor(node, () => true).id).toBe(URI('fancy'));
-  // `when` and availability both filter, so a gated opener yields to the next best.
-  expect(r.openerFor(node, () => true, (o) => !o.pluginId).id).toBe('core.text');
   expect(r.openersFor({ kind: 'file', name: 'a.zip', contentType: 'application/zip' })).toEqual([]);
 });
 

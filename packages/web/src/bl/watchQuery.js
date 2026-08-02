@@ -59,14 +59,7 @@ export function watchQuery(engine, queryInstance) {
   }
   let cell = forEngine.get(queryInstance);
   if (!cell) {
-    // A query may declare what it means before it knows — `initial = null` for something
-    // fetched over the network, say. Without one the cell is PENDING, and PENDING reaching
-    // a `watch` renders its placeholder: fine for a region that can show an empty bar for a
-    // frame, wrong for a snapshot feeding the whole shell, which would blank until the
-    // request came back. The initial belongs to the query rather than to this call, so it
-    // cannot differ between two call sites reading the same thing.
-    const initial = 'initial' in queryInstance ? queryInstance.initial : PENDING;
-    cell = fromObservable(engine.query(queryInstance), { initial });
+    cell = fromObservable(engine.query(queryInstance), { initial: PENDING });
     forEngine.set(queryInstance, cell);
   }
   return cell;

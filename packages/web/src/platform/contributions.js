@@ -23,7 +23,7 @@
 //   keymap      { bindings:[{key, command, when?, args?}] }
 //   view        { title, icon?, match?, priority?, render, move? }
 
-import { cell, derive } from '../runtime.js';
+import { cell } from '../runtime.js';
 import { selectorMatches } from '@3sln/trove/core/util.js';
 import { parseContribUri, coreUri, CONTRIB_SCHEME } from '@3sln/trove/core/plugins/identity.js';
 import { CONTRIBUTION_TYPES as PACKAGE_TYPES } from '@3sln/trove/core/plugins/contributions.js';
@@ -47,7 +47,6 @@ export class ContributionRegistry {
   constructor() {
     this.items = new Map(); // uri -> { uri, type, id, name, pluginId, ...options }
     this.cell = cell([]);
-    this.byType = new Map(); // type -> derived cell (lazily created)
   }
 
   #emit() {
@@ -94,13 +93,6 @@ export class ContributionRegistry {
   unregister(nameOrUri) {
     if (this.items.delete(toUri(nameOrUri))) this.#emit();
   }
-  /** Drop everything a plugin contributed (uninstall / reload). */
-  unregisterPlugin(pluginId) {
-    let changed = false;
-    for (const [uri, c] of this.items) if (c.pluginId === pluginId) { this.items.delete(uri); changed = true; }
-    if (changed) this.#emit();
-  }
-
   get(nameOrUri) {
     return nameOrUri ? this.items.get(toUri(nameOrUri)) || null : null;
   }
@@ -110,29 +102,9 @@ export class ContributionRegistry {
   ofType(type) {
     return this.all().filter((c) => c.type === type);
   }
-  /** One plugin's contributions, optionally of a single type. */
-  ofPlugin(pluginId, type) {
-    return this.all().filter((c) => c.pluginId === pluginId && (!type || c.type === type));
-  }
   observe() {
     return this.cell;
   }
-  /**
-   * A reactive view of one type (status items, openers, …).
-   *
-   * Derived rather than a second subject fanned out to by hand: `derive` recomputes
-   * from the one list, and a watcher of the result is only re-rendered when its own
-   * slice actually differs — so registering an opener no longer redraws the status bar.
-   */
-  observeType(type) {
-    let view = this.byType.get(type);
-    if (!view) {
-      view = derive([this.cell], (all) => all.filter((c) => c.type === type));
-      this.byType.set(type, view);
-    }
-    return view;
-  }
-
   // --- typed lookups ---------------------------------------------------------
 
   /** Every opener whose selector matches `node`, best (highest priority) first. */
@@ -140,12 +112,6 @@ export class ContributionRegistry {
     return this.ofType('opener')
       .filter((o) => selectorMatches(o.match, node))
       .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-  }
-
-  /** Pick the best opener for a node, honouring `when` and availability. */
-  openerFor(node, evaluate, isAvailable) {
-    return this.openersFor(node)
-      .find((o) => (!o.when || evaluate(o.when)) && (!isAvailable || isAvailable(o))) || null;
   }
 
   /** Every keybinding from every registered keymap, in registration order. */

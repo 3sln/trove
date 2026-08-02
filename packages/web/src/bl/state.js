@@ -27,8 +27,9 @@ import { cell } from '../runtime.js';
  * One named piece of the drive's state.
  *
  * `set` merges, because every caller was already merging and doing it here removes the
- * chance of a caller replacing a slice by forgetting to spread it. `replace` exists for
- * the cases that genuinely mean "all of it" — a fresh panel stack, an emptied list.
+ * chance of a caller replacing a slice by forgetting to spread it. There is no `replace`:
+ * one existed for "the cases that genuinely mean all of it" and no caller ever turned out
+ * to mean that, so a slice has exactly one way to be written.
  *
  * @param {object} initial
  */
@@ -41,8 +42,6 @@ export function slice(initial = {}) {
     get: () => held.getValue(),
     /** Merge a patch in. A new object every time — a cell compares with Object.is. */
     set: (patch) => held.setValue({ ...held.getValue(), ...patch }),
-    /** Replace it outright, for when a patch would be a lie. */
-    replace: (next) => held.setValue(next),
   };
 }
 

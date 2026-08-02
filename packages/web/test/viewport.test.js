@@ -138,5 +138,5 @@ test('two owners for one key is refused rather than silently taken over', () => 
   owned.set(7);
   expect(registry.get('demo.key')).toBe(7);
   owned.dispose();
-  expect(registry.has('demo.key')).toBe(false);
+  expect(registry.get('demo.key')).toBe(undefined);
 });

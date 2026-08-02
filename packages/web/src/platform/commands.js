@@ -58,10 +58,6 @@ export class CommandService {
     };
   }
 
-  has(id) {
-    return this.handlers.has(id);
-  }
-
   isEnabled(id) {
     const cmd = this.contributions.get(id);
     if (cmd?.when && !this.context.evaluate(cmd.when)) return false;
@@ -93,7 +89,12 @@ export class CommandService {
     }
     const cmd = this.contributions.get(id);
     if (!this.isAvailable(cmd)) {
-      this.notifications.warn(`“${cmd?.title || id}” isn’t available${this.availability ? ' offline' : ''} right now.`);
+      // Not "…isn't available OFFLINE": that word was printed whenever an availability
+      // hook was installed, which platform/index.js makes unconditionally true, and
+      // `#availableSpec` answers false for a plugin frame that is inactive or has stopped
+      // answering its heartbeat BEFORE it ever consults `this.online`. So a crashed iframe
+      // on a perfectly connected machine told the user to check their network.
+      this.notifications.warn(`“${cmd?.title || id}” isn’t available right now.`);
       return;
     }
     if (!this.isEnabled(id)) return; // gated by when-clause

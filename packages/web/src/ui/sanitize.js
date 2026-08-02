@@ -33,11 +33,6 @@ export function sanitizeFragment(html) {
   return out;
 }
 
-/** Sanitize `html` and set it as the only content of `el`. */
-export function setSanitizedHtml(el, html) {
-  el.replaceChildren(sanitizeFragment(html));
-}
-
 /** The plain-text content of `html`, for tooltips and other attribute contexts. */
 export function htmlToText(html) {
   const frag = sanitizeFragment(html);

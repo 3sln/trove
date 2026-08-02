@@ -15,7 +15,7 @@
 // A.workbench.updateTabNode is not a function" in a toast, and delete managed to report
 // success and failure at once.
 //
-// So: check the shape statically. A slice's whole API is four methods, which makes "is this
+// So: check the shape statically. A slice's whole API is three methods, which makes "is this
 // call answerable" decidable by reading, and makes the next facade removal fail here rather
 // than in a toast. The slice-backed names are DERIVED from the source rather than listed, so
 // promoting a slice to a service (or the reverse) does not silently switch the check off.
@@ -25,7 +25,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SRC = new URL('../src/', import.meta.url).pathname;
-const SLICE_API = new Set(['observe', 'get', 'set', 'replace']);
+const SLICE_API = new Set(['observe', 'get', 'set']);
 
 const read = (p) => readFileSync(join(SRC, p), 'utf8');
 
@@ -199,7 +199,7 @@ test('every key written to a slice is declared in its initializer', () => {
       // A slice that declares NO keys is declaring that its keys are dynamic — `viewState`
       // is keyed by component, so there is no fixed set to check against.
       if (!keys || !keys.size) continue;
-      const re = new RegExp(`\\b(?:r\\.|resources\\.)?${name}\\.(?:set|replace)\\s*\\(\\s*\\{`, 'g');
+      const re = new RegExp(`\\b(?:r\\.|resources\\.)?${name}\\.set\\s*\\(\\s*\\{`, 'g');
       for (const m of src.matchAll(re)) {
         const open = m.index + m[0].length - 1;
         const written = literalKeys(src.slice(open + 1, matchBracket(src, open) - 1));

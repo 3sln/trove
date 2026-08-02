@@ -33,14 +33,9 @@ import { MediaUrlService } from './mediaUrls.js';
 export function readToken() {
   try { return localStorage.getItem('trove.token') || null; } catch { return null; }
 }
-/** Store (or clear, with null) the bearer token this browser presents. */
-export function writeToken(token) {
-  try {
-    if (token) localStorage.setItem('trove.token', token);
-    else localStorage.removeItem('trove.token');
-  } catch { /* storage unavailable; the session is simply not persisted */ }
-}
-
+// Read only, deliberately: nothing in the workbench signs in. The key is written by the
+// page that EMBEDS the workbench — see test/multiuser.e2e.mjs, which is the arrangement
+// this is built for — so a writer here would be a second owner of somebody else's fact.
 export function createPlatform({ baseUrl = '' } = {}) {
   const contributions = new ContributionRegistry();
   // Only the fixed facts are seeded. Everything else is registered by whoever owns it —

@@ -59,6 +59,7 @@ function engineWith(app) {
       activity: singleton(app.activity),
       apiKeys: singleton(app.apiKeys),
       workbench: singleton(p.workbench),
+      overlay: singleton(p.overlay),
       settings: singleton(p.settings),
       notifications: singleton(p.notifications),
       context: singleton(p.context),
@@ -210,10 +211,10 @@ test('two components watching one query land on one cell', async () => {
 });
 
 test('a parameterised query memoises, so it is not a new realization per render', async () => {
-  // `contributionsOfType('statusItem')` called in a render would otherwise mint a fresh
-  // instance every frame — a new live realization each time, none of them shared.
-  expect(q.contributionsOfType('statusItem')).toBe(q.contributionsOfType('statusItem'));
-  expect(q.contributionsOfType('statusItem')).not.toBe(q.contributionsOfType('opener'));
+  // `grantsFor(id)` called in a render would otherwise mint a fresh instance every frame —
+  // a new live realization each time, none of them shared.
+  expect(q.grantsFor('c1')).toBe(q.grantsFor('c1'));
+  expect(q.grantsFor('c1')).not.toBe(q.grantsFor('c2'));
 });
 
 // --- view queries: plain data, never handles ------------------------------------
@@ -243,6 +244,9 @@ function platformStub() {
   ];
   return {
     platform: {
+      // The palette view is keyed off what was typed, so the shell slices are part of it.
+      overlay: service({ palette: { mode: 'commands', query: '', index: 0 } }),
+      workbench: service({ launch: { query: '', index: 0 } }),
       contributions: {
         observe: () => contributions,
         ofType: (t) => items.filter((i) => i.type === t),
@@ -284,10 +288,9 @@ async function readOnce(query, app) {
 
 test('the palette command view is a description, not a command', async () => {
   const app = platformStub();
-  const list = await readOnce(q.paletteCommands, app);
+  const list = await readOnce(q.paletteMatches, app);
   expect(list).toEqual([
-    { id: 'x.run', title: 'Run it', category: 'Test', icon: null, keybinding: '⌘R',
-      available: true, enabled: true },
+    { id: 'x.run', title: 'Run it', category: 'Test', icon: null, keybinding: '⌘R', available: true },
   ]);
   // The source command had a `handler`. Emitting it would hand a component a way to run
   // something without going through the engine at all.
@@ -489,11 +492,6 @@ test('a live query stays interned, which is what makes weak eviction safe', asyn
 test('keyOfArgs is available on its own, for a key built from part of the arguments', () => {
   expect(keyOfArgs('a', 1)).toBe(keyOfArgs('a', 1));
   expect(keyOfArgs('a', 1)).not.toBe(keyOfArgs('a', '1'));
-});
-
-test('contributionsOfType shares through queryOf rather than its own memo table', () => {
-  expect(q.contributionsOfType('statusItem')).toBe(q.contributionsOfType('statusItem'));
-  expect(q.contributionsOfType('statusItem')).not.toBe(q.contributionsOfType('opener'));
 });
 
 test('a subclass inheriting `of` is refused rather than quietly building the parent', () => {

@@ -288,24 +288,6 @@ export const plugins = new ServiceQuery('plugins', (r) => r?.observe?.());
 /** What the UI is in the middle of doing: drafts, captures, ticked boxes. See viewState.js. */
 export const viewState = new ServiceQuery('viewState', (r) => r.observe());
 
-/**
- * Contributions of one type — status items, openers, views.
- *
- * Parameterised, so it MUST memoise: a fresh instance per render would boot a second live
- * realization every frame and never share one. Keyed by the type, which is the only thing
- * that distinguishes them.
- */
-export const contributionsOfType = (type) => ContributionsOfType.of(type);
-
-class ContributionsOfType extends ServiceQuery {
-  static of = queryOf(ContributionsOfType);
-
-  constructor(type) {
-    super('contributions', (r) => r.observeType(type));
-    this.type = type;
-  }
-}
-
 // --- view queries ---------------------------------------------------------------
 //
 // The ones above hand a service's state through unchanged. These COMPOSE: they answer a
@@ -372,8 +354,6 @@ const registries = (r) => [
  * No `when` expression and no handler. A component shows the title, greys out what is
  * disabled, and dispatches `ExecCommandAction(id)`.
  */
-export const paletteCommands = new ViewQuery(REGISTRY_DEPS, registries, paletteCommandsOf);
-
 function paletteCommandsOf(r) {
   return r.commands.paletteCommands().map((c) => ({
     id: c.id,
@@ -381,12 +361,15 @@ function paletteCommandsOf(r) {
     category: c.category ?? null,
     icon: c.icon ?? null,
     keybinding: r.keybindings.labelFor(c.id),
-    // Two different reasons a command might not run, and they are labelled differently in
-    // the palette: `available` is the plugin behind it being reachable, `enabled` also
-    // folds in the when-clause. Collapsing them would tag a command disabled by context as
-    // "offline", which is a false explanation rather than a vague one.
+    // Only `available` — the plugin behind this command being reachable. There was an
+    // `enabled` beside it, under a paragraph explaining that collapsing the two would tag a
+    // context-disabled command as "offline", and the code made the distinction impossible:
+    // `paletteCommands()` has already dropped every when-clause failure, so for every row
+    // that survives, `isEnabled` re-evaluates the same clause against the same registry and
+    // agrees with `isAvailable` by construction. Nothing rendered it. If greying a gated
+    // command out with a reason is wanted, do the other half — stop filtering in
+    // `paletteCommands()` — rather than keeping the label for a state that cannot occur.
     available: r.commands.isAvailable(c),
-    enabled: r.commands.isEnabled(c.id),
   }));
 }
 

@@ -758,21 +758,6 @@ export class CopyTextAction extends Action {
   }
 }
 
-/** Say something to the user. `kind` is one of info, success, warn, error. */
-export class NotifyAction extends Action {
-  static deps = ['notifications'];
-  constructor(kind, message, opts) {
-    super();
-    this.kind = kind;
-    this.message = message;
-    this.opts = opts;
-  }
-
-  async execute({ notifications: notes }) {
-    (notes[this.kind] ?? notes.info).call(notes, this.message, this.opts);
-  }
-}
-
 /** Dismiss one notification, by id. */
 export class DismissNotificationAction extends Action {
   static deps = ['notifications'];
@@ -1107,37 +1092,6 @@ export class ToggleApiKeyCapAction extends ApiKeysAction {
 }
 
 /**
- * Select items in the explorer.
- *
- * `opts` is `{ additive, nodes }`, matching the service — NOT a boolean. It was written as
- * `additive` first, which worked at the one call site only because the options object passed
- * through positionally unchanged. `new SelectItemsAction(ids, true)` would have destructured
- * a boolean into `{additive = false, nodes = null}` and quietly not been additive at all.
- *
- * `nodes` matters when the selection cannot be resolved from the loaded page: the launcher's
- * rows come from search, which is scoped across collections, so the node has to travel with
- * the id.
- */
-export class SelectItemsAction extends Action {
-  static deps = ['explorer'];
-
-  constructor(ids, opts = {}) { super(); this.ids = ids; this.opts = opts; }
-
-  async execute({ explorer }) {
-    const { additive = false, nodes = null } = this.opts;
-    const current = explorer.get().selection;
-    const next = additive ? Array.from(new Set([...current, ...this.ids])) : this.ids;
-    // Selecting what is already selected must not emit. The launcher syncs the highlighted
-    // row into here on every mouseenter, and a state push per mouse move would re-render
-    // the list under the pointer. The rule lives with the mutation now rather than inside
-    // the resource, so the resource only holds and only `set` writes.
-    const same = next.length === current.length && next.every((id, i) => id === current[i]);
-    if (same) return;
-    explorer.set({ selection: next, selectionNodes: nodes && !additive ? nodes : null });
-  }
-}
-
-/**
  * Move the launcher's highlight and sync the selection to whatever it landed on.
  *
  * ONE action because the two halves are not separable. Moving computes a new index — with
@@ -1172,7 +1126,19 @@ export class SelectLaunchAction extends Action {
   }
 }
 
-/** Select exactly one node, or nothing. Carries the node itself — see SelectItemsAction. */
+/**
+ * Select exactly one node, or nothing.
+ *
+ * `selectionNodes` carries the NODE and not just the id, because the selection often cannot
+ * be resolved from the loaded page: the launcher's rows come from search, which is scoped
+ * across collections, so the node has to travel with the id or `selectedNodesOf` finds
+ * nothing and rename/trash/copy-link return quietly while `hasSelection` disagrees.
+ *
+ * Selecting what is already selected must not emit. The launcher syncs the highlighted row
+ * into here on every mouseenter, and a state push per mouse move would re-render the list
+ * under the pointer. The rule lives with the mutation rather than inside the resource, so
+ * the resource only holds and only `set` writes.
+ */
 function selectNode(explorer, node) {
   const ids = node?.id ? [node.id] : [];
   const current = explorer.get().selection;
@@ -1654,18 +1620,14 @@ export class PinAction extends Action {
 
 // --- API keys (admin) ------------------------------------------------------------
 
-class ApiKeyDraftAction extends Action {
-  static deps = ['apiKeys'];
-  async execute({ apiKeys }) { this.apply(apiKeys); }
-}
-export class StartApiKeyDraftAction extends ApiKeyDraftAction {
+export class StartApiKeyDraftAction extends ApiKeysAction {
   apply(s) { s.set({ draft: { name: '', expiresInDays: '', caps: {} }, error: null }); }
 }
-export class CancelApiKeyDraftAction extends ApiKeyDraftAction {
+export class CancelApiKeyDraftAction extends ApiKeysAction {
   apply(s) { s.set({ draft: null }); }
 }
 /** Forget the freshly minted secret. On dismiss, and after a copy. */
-export class ClearMintedApiKeyAction extends ApiKeyDraftAction {
+export class ClearMintedApiKeyAction extends ApiKeysAction {
   apply(s) { if (s.get().minted) s.set({ minted: null }); }
 }
 

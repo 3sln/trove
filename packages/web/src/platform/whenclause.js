@@ -7,11 +7,14 @@
 // parentheses, string/number/boolean literals. Expressions are parsed once into
 // a predicate function and cached, so evaluation on every keydown is cheap.
 //
-// The compiled predicate carries `.keys`: every context key the expression names. That is
-// what lets a clause be WATCHED rather than polled — see ContextRegistry#watch, which
-// derives a cell over exactly those keys, so a clause about `view.active` stops recomputing
-// every time the selection changes. Collected while parsing because that is the only place
-// the distinction between a key and a literal is known.
+// Every clause is evaluated against the WHOLE context snapshot, which is what the palette,
+// the keybindings and the openers all do. A per-clause subscription layer lived here once —
+// the parser collected the keys an expression named and ContextRegistry derived a cell over
+// exactly those — and nothing ever used it, while `evaluate` over the snapshot did all the
+// work. If per-clause reactivity is ever wanted (a palette that becomes its own region is
+// the case for it), the lexer already sees the key/literal distinction in one pass, so it
+// is ~25 lines to bring back. Shipping both halves and using neither is the one thing that
+// was not defensible.
 //
 // A key is either a core context key (`view.active`, `explorer.hasSelection`) or a
 // contribution URI naming a plugin's `register` — `trove+contrib:acme.com/docs/busy`.
@@ -25,16 +28,10 @@ export function compileWhen(expr) {
   if (cache.has(expr)) return cache.get(expr);
   let fn;
   try {
-    const parser = new Parser(expr);
-    fn = parser.parseExpression();
-    // The keys this clause reads. Frozen: it is shared by every caller through the cache.
-    fn.keys = Object.freeze([...parser.keys]);
+    fn = new Parser(expr).parseExpression();
   } catch (err) {
     console.warn(`Invalid when clause: "${expr}" — ${err.message}`);
     fn = () => false;
-    // A clause that could not be parsed depends on nothing, so watching it yields a cell
-    // that is constantly false rather than one that never settles.
-    fn.keys = Object.freeze([]);
   }
   cache.set(expr, fn);
   return fn;
@@ -42,11 +39,6 @@ export function compileWhen(expr) {
 
 export function evaluateWhen(expr, ctx) {
   return compileWhen(expr)(ctx || {});
-}
-
-/** Every context key `expr` names — `[]` for a constant or unparseable clause. */
-export function keysOf(expr) {
-  return compileWhen(expr).keys ?? [];
 }
 
 // Note the `trove+contrib:` alternative comes before the regex-literal one: a URI's
@@ -58,7 +50,6 @@ class Parser {
     this.src = src;
     this.tokens = this.#lex(src);
     this.pos = 0;
-    this.keys = new Set();
   }
   #lex(src) {
     const out = [];
@@ -155,7 +146,6 @@ class Parser {
       return () => s;
     }
     // A context key.
-    this.keys.add(t);
     return (c) => c[t];
   }
 }
