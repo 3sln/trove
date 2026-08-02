@@ -35,7 +35,13 @@ activate(async (ctx) => {
     document.body.innerHTML = '';
     const root = el('div', 'ab');
     document.body.appendChild(root);
-    root.appendChild(el('div', 'ab-status', 'Reading the book’s structure…'));
+    // A SPINNER and a phase, because this can be slow and used to be a single unchanging
+    // line. "Reading the book's structure…" sat there for minutes on a 500 MB book with
+    // nothing to say whether it was working, and no way to tell slow from hung.
+    const status = el('div', 'ab-status');
+    const say = (text) => { status.innerHTML = ''; status.append(el('span', 'ab-spin'), el('span', null, text)); };
+    say('Opening…');
+    root.appendChild(status);
 
     // Both settings up front. `settings.get` crosses the port, so reading one inside a
     // click handler would put a round trip between the tap and the seek.
@@ -90,8 +96,25 @@ activate(async (ctx) => {
     let src = null;
     let stream = null;
     if (!book.tracks) {
-      const streamable = canStream(book.moov, book.moovError);
+      // The sample tables, which only streaming needs. For an indexed book they have not
+      // been read yet — see `loadTables` — and reading them is the expensive part, so it
+      // is announced.
+      let moov = book.moov;
+      let moovError = book.moovError;
+      if (!moov && book.tables) {
+        say('Reading the book’s index…');
+        const got = await book.tables((size) => say(`Reading the book’s index (${Math.round(size / 1048576)} MB)…`));
+        moov = got.moov;
+        moovError = got.error;
+      }
+
+      const streamable = canStream(moov, moovError);
       if (streamable.track) {
+        // A million-sample table has already been walked by `canStream`, on this thread.
+        // Yield once so the spinner it was drawn behind actually paints before the next
+        // stretch of work — otherwise the frame is frozen and looks hung rather than busy.
+        say('Preparing playback…');
+        await new Promise((r) => setTimeout(r, 0));
         const blob = await ctx.files.blob(file.id).catch(() => null);
         if (blob) {
           stream = streamUrl(streamable, async (start, end) => blob.slice(start, end).bytes(), {
@@ -629,7 +652,13 @@ function injectStyle() {
 
     .ab-note { color: var(--muted); font-size: 12px; max-width: 600px; }
     .ab-error { color: #fb7185; padding: 12px; }
-    .ab-status { color: var(--muted); padding: 12px; }
+    .ab-status { color: var(--muted); padding: 12px; display: flex; align-items: center; gap: 10px; }
+    /* A spinner, because the work behind this message can take a while and a line of
+       static text cannot tell slow from hung. */
+    .ab-spin { width: 14px; height: 14px; flex: none; border-radius: 50%;
+      border: 2px solid var(--surface-3); border-top-color: var(--accent);
+      animation: ab-spin 0.8s linear infinite; }
+    @keyframes ab-spin { to { transform: rotate(360deg); } }
 
     /* The download state, when a book cannot be streamed here. */
     .ab-dl { height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden;

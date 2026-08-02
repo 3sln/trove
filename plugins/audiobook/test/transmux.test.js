@@ -272,3 +272,37 @@ test('the track reports its own duration, so a stream can declare one', () => {
   for (let i = 0; i < t.count; i++) summed += t.deltas[i];
   expect(summed / t.timescale).toBe(100);
 });
+
+// --- the index read is bounded ------------------------------------------------
+//
+// `findMoov` reports `total - offset` for a box claiming to run to the end of the file,
+// and its chain branch does not validate the size the header states. Believing one meant
+// asking for four hundred megabytes through a MessagePort — which is not slow, it is
+// indistinguishable from hung, and is what "Reading the book's structure…" sat on for
+// minutes with nothing else to say.
+
+import { readMoovFor } from '../src/book.js';
+
+test('a moov that claims to be the whole file is refused, not fetched', async () => {
+  // 500 MB "index" on a 500 MB book: a misparse, not a book. The read must not be issued.
+  let requested = 0;
+  const read = async (a, b) => { requested += b - a; return new Uint8Array(0); };
+  const got = await readMoovFor(read, { found: true, offset: 0, size: 500 * 1024 * 1024 });
+  expect(got.error).toMatch(/not an index/);
+  expect(requested).toBe(0);
+});
+
+test('a real index is read, and its size is reported before the wait', async () => {
+  const read = async (a, b) => new Uint8Array(b - a);
+  const sizes = [];
+  const got = await readMoovFor(read, { found: true, offset: 10, size: 4_900_000 }, (n) => sizes.push(n));
+  expect(got.moov.length).toBe(4_900_000);
+  // Announced BEFORE the read, so the message names the wait rather than following it.
+  expect(sizes).toEqual([4_900_000]);
+});
+
+test('a missing or zero-sized index is a reason, not a throw', async () => {
+  const read = async () => new Uint8Array(0);
+  expect((await readMoovFor(read, { found: false })).error).toMatch(/no moov/);
+  expect((await readMoovFor(read, { found: true, offset: 0, size: 0 })).error).toMatch(/no size/);
+});

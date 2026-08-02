@@ -26,6 +26,35 @@ export { loadCover } from './loadCover.js';
 /** How much of the head and tail to read while looking for structure. */
 const WINDOW = 64 * 1024;
 
+/**
+ * The most `moov` we will ever pull over the wire.
+ *
+ * A real one is a few megabytes — 4.7 MiB for a 496 MB, 1.18-million-sample book, and it
+ * scales with sample COUNT rather than with audio. Anything far past that is not an index,
+ * it is a misparse: `findMoov` reports `total - offset` for a box that claims to run to the
+ * end of the file, and the chain branch does not validate the size it was told. Believing
+ * one meant asking for four hundred megabytes through a MessagePort, which is not slow, it
+ * is indistinguishable from hung — and that is what "Reading the book's structure…" sat on
+ * for minutes with nothing else to say.
+ */
+const MAX_MOOV_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Read `moov`, or say why not.
+ *
+ * One place, because both callers had the same unbounded read and only one of them would
+ * have been noticed.
+ */
+export async function readMoovFor(read, probe, onProgress) {
+  if (!probe?.found) return { error: 'no moov box was found in it' };
+  if (!(probe.size > 0)) return { error: 'its index has no size' };
+  if (probe.size > MAX_MOOV_BYTES) {
+    return { error: `its index claims to be ${Math.round(probe.size / 1048576)} MB, which is not an index` };
+  }
+  onProgress?.(probe.size);
+  return { moov: await read(probe.offset, probe.offset + probe.size) };
+}
+
 const isLpf = (file) => /\.lpf$/i.test(file.name || '') || (file.contentType || '').includes('lpf');
 
 /**
@@ -35,6 +64,25 @@ const isLpf = (file) => /\.lpf$/i.test(file.name || '') || (file.contentType || 
  *   duration: number|null, chapters: Array<{time: number, title: string}>,
  *   streamable: boolean, why: string|null, tracks?: Array<object>}>}
  */
+/**
+ * The sample tables, fetched on demand — what streaming needs and nothing else does.
+ *
+ * Separate from `openBook` because the costs are nothing alike: opening reads a few
+ * kilobytes of container, or nothing at all for an indexed book, while this reads the
+ * whole index. Charging that to "open" made a 500 MB book look broken.
+ */
+export async function loadTables(ctx, file, onProgress) {
+  try {
+    const blob = await ctx.files.blob(file.id);
+    if (!blob?.size) return { error: `the drive reported this file as ${blob?.size ?? 'unknown'} bytes` };
+    const read = async (start, end) => blob.slice(start, end).bytes();
+    const probe = await findMoov(read, blob.size, { window: WINDOW });
+    return readMoovFor(read, probe, onProgress);
+  } catch (err) {
+    return { error: err?.message || String(err) };
+  }
+}
+
 export async function openBook(ctx, file) {
   // INDEXED FIRST. The book indexer already walked this container on the server, once, at
   // upload — so the title, chapters and cover are on the node before anyone opens it, and
@@ -51,16 +99,14 @@ export async function openBook(ctx, file) {
     // Swallowing this was a mistake worth naming: the probe failed for a reason the
     // player then reported as "this book's index could not be read", which is true and
     // useless. The reason reaches the screen now.
-    try {
-      const blob = await ctx.files.blob(file.id);
-      if (!blob?.size) throw new Error(`the drive reported this file as ${blob?.size ?? 'unknown'} bytes`);
-      const read = async (start, end) => blob.slice(start, end).bytes();
-      const probe = await findMoov(read, blob.size, { window: WINDOW });
-      if (!probe.found) throw new Error('no moov box was found in it');
-      indexed.moov = await read(probe.offset, probe.offset + probe.size);
-    } catch (err) {
-      indexed.moovError = err?.message || String(err);
-    }
+    // NOT READ HERE. An indexed book already has everything needed to draw it — cover,
+    // title, narrator, chapters — so opening one should cost nothing, and it used to.
+    // Probing for `moov` on open was a regression: a `moov` is megabytes, and pulling it
+    // before anyone has pressed play made opening a large book slower than it had ever
+    // been, for a table only playback needs.
+    //
+    // So the streamer asks for it, on first play. See `loadTables`.
+    indexed.tables = () => loadTables(ctx, file);
     return indexed;
   }
 
@@ -128,7 +174,19 @@ async function openMp4(ctx, file, blob) {
     };
   }
 
-  const moov = await read(probe.offset, probe.offset + probe.size);
+  const got = await readMoovFor(read, probe);
+  if (got.error) {
+    return {
+      kind: 'audio',
+      title: file.name,
+      author: null,
+      duration: null,
+      chapters: [{ time: 0, title: file.name }],
+      streamable: true,
+      why: `No chapter information — ${got.error}.`,
+    };
+  }
+  const moov = got.moov;
   const meta = metadataFrom(moov);
   // Kept for the streamer, which needs the sample tables this walk already has in hand.
   const moovBytes = moov;
