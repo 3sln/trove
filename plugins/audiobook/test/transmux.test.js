@@ -167,3 +167,92 @@ test('the MIME comes from the sample entry, not from a guess', () => {
   const alac = { stsd: box('stsd', b(u32(0), u32(1)), box('alac', b(new Array(8).fill(0)))) };
   expect(mimeOf(alac)).toBe('audio/mp4; codecs="alac"');
 });
+
+// --- box layout, field by field -------------------------------------------------
+//
+// Everything above tests what the boxes SAY. These test how long they are, which is the
+// failure mode that actually bit: a 24-byte matrix where the spec wants 36 shifts every
+// field after it, the box still parses as a box, and the decoder answers with
+// "the decoder rejected a fragment" and not one word about which field it disliked.
+
+const SPEC = {
+  // ISO/IEC 14496-12 payload sizes, excluding the 8-byte box header.
+  mvhd: 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 8 + 36 + 24 + 4,   // 100
+  tkhd: 4 + 4 + 4 + 4 + 4 + 4 + 8 + 2 + 2 + 2 + 2 + 36 + 8, // 84
+  mdhd: 4 + 4 + 4 + 4 + 4 + 2 + 2,                          // 24
+  trex: 4 + 4 + 4 + 4 + 4 + 4,                              // 24
+  smhd: 4 + 2 + 2,                                          // 8
+};
+
+function payloadOf(bytes, path) {
+  // Walk to a box and return its payload length. Bounds start past the container header.
+  let at = 8;
+  let end = bytes.length;
+  let found = null;
+  for (const want of path) {
+    found = findBox(bytes, [want], { at, end });
+    if (!found) return null;
+    at = found.offset;
+    end = found.end;
+  }
+  return found.end - found.offset;
+}
+
+test('every header box in the init segment is exactly the length the spec says', () => {
+  const init = initSegment(audioTrack(progressive().moov));
+  const moovBox = topLevelBoxes(init).find((x) => x.type === 'moov');
+  const inMoov = { at: moovBox.offset + 8, end: moovBox.offset + moovBox.size };
+
+  const len = (path) => {
+    let at = inMoov.at;
+    let end = inMoov.end;
+    let found = null;
+    for (const want of path) {
+      found = findBox(init, [want], { at, end });
+      if (!found) return null;
+      at = found.offset;
+      end = found.end;
+    }
+    return found.end - found.offset;
+  };
+
+  // A wrong length here is not a cosmetic problem: it is a decoder rejecting every
+  // fragment with no indication of why.
+  expect(len(['mvhd'])).toBe(SPEC.mvhd);
+  expect(len(['trak', 'tkhd'])).toBe(SPEC.tkhd);
+  expect(len(['trak', 'mdia', 'mdhd'])).toBe(SPEC.mdhd);
+  expect(len(['mvex', 'trex'])).toBe(SPEC.trex);
+  expect(len(['trak', 'mdia', 'minf', 'smhd'])).toBe(SPEC.smhd);
+});
+
+test('the transformation matrix is 36 bytes, in both headers that carry one', () => {
+  // Pinned separately because it is the specific mistake that was made, and because both
+  // mvhd and tkhd carry one — fixing a single copy would leave the other shifted.
+  const init = initSegment(audioTrack(progressive().moov));
+  const moovBox = topLevelBoxes(init).find((x) => x.type === 'moov');
+  const inMoov = { at: moovBox.offset + 8, end: moovBox.offset + moovBox.size };
+  const mvhd = findBox(init, ['mvhd'], inMoov);
+  // The matrix ends 28 bytes before the end of mvhd (pre_defined 24 + next_track_ID 4),
+  // and begins 36 before that. Unity's first cell is 0x00010000.
+  expect(read32(init, mvhd.end - 28 - 36)).toBe(0x00010000);
+  // ...and its last is 0x40000000, which is where a short matrix shows up as garbage.
+  expect(read32(init, mvhd.end - 28 - 4)).toBe(0x40000000);
+});
+
+test('trun flags are 0x000301, not a byte-order accident', () => {
+  const f = progressive();
+  const t = audioTrack(f.moov);
+  const start = t.offsets[0];
+  const seg = mediaSegment(t, 0, 2, f.file.subarray(start, t.offsets[1] + t.sizes[1]), start, 1);
+  const moofBox = topLevelBoxes(seg).find((x) => x.type === 'moof');
+  const trun = findBox(seg, ['traf', 'trun'], { at: moofBox.offset + 8, end: moofBox.offset + moofBox.size });
+  // version(1) + flags(3). Packing these by hand produced 0x030100 the first time, which
+  // asks the decoder for fields in an order the entries are not written in.
+  expect(seg[trun.offset]).toBe(0);              // version
+  expect(read32(seg, trun.offset) & 0xffffff).toBe(0x000301);
+  // data-offset-present | sample-duration-present | sample-size-present, and the entry
+  // table has to match: two samples, two 4-byte fields each.
+  const n = read32(seg, trun.offset + 4);
+  expect(n).toBe(2);
+  expect(trun.end - trun.offset).toBe(4 + 4 + 4 + n * 8);
+});

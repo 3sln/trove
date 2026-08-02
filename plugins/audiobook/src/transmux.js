@@ -37,6 +37,25 @@ export function box(type, ...parts) {
 const bytes = (...n) => Uint8Array.from(n.flat());
 
 /**
+ * The unity transformation matrix every ISO BMFF header carries: NINE 32-bit fixed-point
+ * values, thirty-six bytes.
+ *
+ * Written once because getting its LENGTH wrong is silent — every field after it in the
+ * box shifts, the box still parses as a box, and the decoder rejects the segment with no
+ * indication of which field it disagreed about. A 24-byte version of this cost an
+ * afternoon.
+ */
+// A PLAIN array, not a Uint8Array: `bytes()` flattens with `Array.prototype.flat`, which
+// does not flatten typed arrays — a Uint8Array here collapsed to a single zero byte and
+// took 35 bytes out of both headers, which is the same shifted-field failure by a
+// different route.
+const MATRIX = [
+  ...u32be(0x00010000), ...u32be(0), ...u32be(0),
+  ...u32be(0), ...u32be(0x00010000), ...u32be(0),
+  ...u32be(0), ...u32be(0), ...u32be(0x40000000),
+];
+
+/**
  * Everything about the audio track that building fragments needs.
  *
  * Kept as TYPED ARRAYS rather than an array of objects on purpose: a thirteen-hour
@@ -154,22 +173,26 @@ export function initSegment(track) {
     u32be(0), u32be(0), // created / modified
     u32be(track.timescale),
     u32be(0), // duration 0: a fragmented movie declares its length as it goes
-    u32be(0x00010000), u32be(0x01000000), // rate 1.0, volume 1.0
-    u32be(0), u32be(0),
-    [0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0], // unity matrix
-    u32be(0), u32be(0), u32be(0), u32be(0), u32be(0), u32be(0),
+    u32be(0x00010000), // rate 1.0
+    u32be(0x01000000), // volume 1.0 (16.16 high half) + reserved
+    u32be(0), u32be(0), // reserved
+    MATRIX,
+    u32be(0), u32be(0), u32be(0), u32be(0), u32be(0), u32be(0), // pre_defined
     u32be(track.id + 1), // next track id
   ));
 
   const tkhd = box('tkhd', bytes(
     [0, 0, 0, 7], // version 0, flags: enabled | in movie | in preview
-    u32be(0), u32be(0),
+    u32be(0), u32be(0), // created / modified
     u32be(track.id),
-    u32be(0),
+    u32be(0), // reserved
     u32be(0), // duration 0, as above
-    u32be(0), u32be(0),
-    u32be(0x01000000), // volume 1.0 for an audio track, then reserved
-    [0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0],
+    u32be(0), u32be(0), // reserved
+    [0, 0], // layer
+    [0, 0], // alternate_group
+    [0x01, 0x00], // volume 1.0 — an audio track, so this is not decorative
+    [0, 0], // reserved
+    MATRIX,
     u32be(0), u32be(0), // width/height: zero for audio
   ));
 
@@ -246,7 +269,10 @@ export function mediaSegment(track, from, to, data, dataStart, sequence = 1) {
   const moofSize = 8 + mfhd.length + trafSize;
   // The offset from the moof to the first byte of sample data — past the mdat header.
   const dataOffset = moofSize + 8;
-  const trun = box('trun', bytes([0, 0x03, 0x01], [0]), bytes(u32be(n)), bytes(u32be(dataOffset)), trunEntries);
+  // version 0, flags 0x000301 — data-offset-present | sample-duration-present |
+  // sample-size-present. Written as four bytes in order, because packing them by hand is
+  // exactly how this came out as 0x030100 the first time and every fragment was rejected.
+  const trun = box('trun', bytes([0x00, 0x00, 0x03, 0x01]), bytes(u32be(n)), bytes(u32be(dataOffset)), trunEntries);
   const traf = box('traf', tfhd, tfdt, trun);
   const moof = box('moof', mfhd, traf);
 
