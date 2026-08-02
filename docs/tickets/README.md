@@ -11,9 +11,6 @@ directory of closed tickets is a directory nobody reads.
 art and no rate control, the full-pane layout is wrong, and RECENT tiles never draw a
 thumbnail. The blocking part needs logging from inside the sandboxed frame.
 
-**Open: 024** — the view chooser should only appear when it means something: more than one
-view can draw the results, and the results are items rather than commands.
-
 023 was three defects found by opening one audiobook on a real drive:
 a plugin viewer that had never run (an undeclared capability), plugin indexers that could
 not run on Workers at all (a `data:` import workerd refuses), and upload-time indexing that

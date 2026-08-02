@@ -22,6 +22,8 @@ import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { SetSettingAction } from '../../../bl/actions.js';
 import { SETTING } from '../../../bl/views.js';
+import { modeShowsItems } from '../../../bl/launcher.js';
+import { selectorMatches } from '@3sln/trove/core/util.js';
 import { listView } from './list.js';
 import { gridView, gridMove } from './grid.js';
 
@@ -49,8 +51,36 @@ export function registerBuiltinViews(platform) {
 
 
 /** The switcher, shown only when there is more than one way to look at this. */
-export function viewSwitcher(slice, current, ui) {
-  const views = slice?.views || [];
+/**
+ * The views that can draw these results, best first.
+ *
+ * A view with no `match` draws anything — that is what the built-in list and grid are, and
+ * why the common case is unfiltered. One that carries a selector is asked about the nodes
+ * actually on screen; it survives if it claims any of them, because a mixed result set
+ * should still offer the gallery that can draw half of it.
+ *
+ * `groups` undefined means "not asked" rather than "nothing matches" — a caller that has
+ * no results in hand gets the full list, which keeps the switcher stable while a search
+ * is still loading instead of blinking out and back.
+ */
+export function viewsFor(views, groups) {
+  if (!groups) return views;
+  const nodes = [];
+  for (const g of groups) for (const item of g?.items || []) if (item?.node) nodes.push(item.node);
+  if (!nodes.length) return views;
+  return views.filter((v) => !v.match || nodes.some((n) => selectorMatches(v.match, n)));
+}
+
+export function viewSwitcher(slice, current, ui, { mode, groups } = {}) {
+  // Two conditions, and the control is furniture without both.
+  //
+  //   1. The results are FILES. `!` lists commands, and a grid/list toggle over commands
+  //      is meaningless — see `modeShowsItems`.
+  //   2. More than one view can draw THESE results. A view may carry a selector, so the
+  //      count that matters is how many claim what is on screen, not how many are
+  //      registered. Same rule the opener chooser follows: ask when there is a choice.
+  if (mode !== undefined && !modeShowsItems(mode)) return null;
+  const views = viewsFor(slice?.views || [], groups);
   if (views.length < 2) return null;
   return div({ className: 'view-switch' }, ...views.map((v) =>
     button({

@@ -29,6 +29,21 @@ export function launcherMode(query) {
 }
 
 /**
+ * Does this mode put FILES on screen?
+ *
+ * Asked because a view is a way of drawing files, so anything that decides "can the user
+ * switch views" has to know whether files are what is being shown. `!` lists commands —
+ * there is no second way to draw a command, and offering a grid/list toggle over them
+ * says the results are something they are not.
+ *
+ * Expressed as a question about the mode rather than a check for `'command'` at the call
+ * site, so a future mode that lists something else is handled here, once.
+ */
+export function modeShowsItems(mode) {
+  return mode !== 'command';
+}
+
+/**
  * Everything you can do to a file, as descriptions.
  *
  * `pinned` and `keys` are resolved by the caller because both are questions about engine
