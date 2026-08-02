@@ -85,8 +85,8 @@ activate(async (ctx) => {
     let src = null;
     let stream = null;
     if (!book.tracks) {
-      const streamable = book.moov ? canStream(book.moov) : null;
-      if (streamable) {
+      const streamable = canStream(book.moov, book.moovError);
+      if (streamable.track) {
         const blob = await ctx.files.blob(file.id).catch(() => null);
         if (blob) {
           stream = streamUrl(streamable, async (start, end) => blob.slice(start, end).bytes(), {
@@ -101,8 +101,8 @@ activate(async (ctx) => {
       }
       if (!src) {
         // Draw the book anyway — cover, title and chapters all came from the index — with
-        // a download in place of the transport.
-        renderOffline(ctx, root, book, file, skip);
+        // a download in place of the transport, and the reason streaming was not on offer.
+        renderOffline(ctx, root, book, file, skip, streamable.why);
         return;
       }
     }
@@ -125,9 +125,11 @@ activate(async (ctx) => {
  * missing is the audio, and the honest thing is to say so and offer to get it, rather
  * than draw a play button that cannot work.
  */
-function renderOffline(ctx, root, book, file, skip) {
+function renderOffline(ctx, root, book, file, skip, why) {
   root.innerHTML = '';
-  const status = el('div', 'ab-note', 'This book is not on this device yet.');
+  const status = el('div', 'ab-note', why
+    ? `Can\u2019t stream this one — ${why}. Download it to listen.`
+    : 'This book is not on this device yet.');
   const bar = el('div', 'ab-dl');
   const fill = el('div', 'ab-dl-fill');
   bar.appendChild(fill);

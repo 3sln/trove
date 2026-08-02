@@ -24,23 +24,53 @@ const FILES = 'trove-files-v1';
 const KEEP = new Set([SHELL, API, FILES]);
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/index.html', '/icon.svg']).catch(() => {})).then(() => self.skipWaiting()));
+  // Nothing is precached in dev — see the fetch handler. Precaching the shell there is
+  // precisely how a stale build survives a reload.
+  e.waitUntil((isDev
+    ? Promise.resolve()
+    : caches.open(SHELL).then((c) => c.addAll(['/', '/index.html', '/icon.svg']).catch(() => {}))
+  ).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     (async () => {
       const names = await caches.keys();
-      await Promise.all(names.filter((n) => !KEEP.has(n)).map((n) => caches.delete(n)));
+      // In dev, the shell and API caches are not kept at all — including any left behind
+      // by a worker installed before this rule existed, which is the case that otherwise
+      // keeps serving yesterday's HTML until someone clears storage by hand.
+      const keep = isDev ? new Set([FILES]) : KEEP;
+      await Promise.all(names.filter((n) => !keep.has(n)).map((n) => caches.delete(n)));
       await self.clients.claim();
     })(),
   );
 });
 
+/**
+ * A local development origin, where caching CODE is a liability rather than a feature.
+ *
+ * The shell and the plugin packages are cached by CONTENT, and in production that is
+ * exactly right: assets are fingerprinted, a deploy mints a new shell name, and the old
+ * one is swept. In `wrangler dev` the loop is rebuild-and-reload, many times a minute, and
+ * a cached shell keeps serving the previous build's HTML — which points at the previous
+ * build's bundle. The symptom is the worst kind: a fix that plainly does not take, with no
+ * error anywhere, because the page you are looking at is not the page you just built.
+ *
+ * That cost hours during the audiobook work. So on localhost the worker gets out of the
+ * way for everything except FILE bytes — the offline store is the feature under test some
+ * of the time, and it is keyed by node id and etag rather than by build.
+ */
+const DEV_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0']);
+const isDev = DEV_HOSTS.has(self.location.hostname);
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin || req.method !== 'GET') return; // only same-origin GETs
+
+  // Dev: code and API responses go straight to the network, uncached. Pinned file bytes
+  // still go through, because that machinery is worth exercising locally.
+  if (isDev && url.pathname !== '/api/items/download') return;
 
   if (url.pathname === '/api/items/download') {
     event.respondWith(pinnedFirst(req));

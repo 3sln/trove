@@ -25,14 +25,20 @@ const AHEAD_SECONDS = 30;
  * out not to work — is what this whole ticket was about. A `null` means "offer the
  * download instead", which is a real answer rather than a failure.
  */
-export function canStream(moov) {
-  if (typeof MediaSource === 'undefined') return null;
-  const track = audioTrack(moov);
-  if (!track) return null;
+export function canStream(moov, moovError) {
+  // Every `no` carries a REASON, and the reason reaches the screen. "Download to play"
+  // with no explanation is the same dead end as a play button that does nothing — the
+  // person looking at it cannot tell whether their book is unusual, their browser is, or
+  // something is broken.
+  if (typeof MediaSource === 'undefined') return { why: 'this browser has no MediaSource' };
+  if (!moov) return { why: moovError ? `its index could not be read — ${moovError}` : 'its index could not be read' };
+  let track = null;
+  try { track = audioTrack(moov); } catch (err) { return { why: `its sample tables could not be read (${err.message})` }; }
+  if (!track) return { why: 'it has no audio track this can fragment' };
   const mime = mimeOf(track);
   // The decoder gets the final say. A book this can describe but the browser cannot play
   // must fall back rather than append into a source buffer that will never accept it.
-  if (!MediaSource.isTypeSupported?.(mime)) return null;
+  if (!MediaSource.isTypeSupported?.(mime)) return { why: `this browser cannot play ${mime}` };
   return { track, mime };
 }
 

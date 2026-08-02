@@ -48,11 +48,18 @@ export async function openBook(ctx, file) {
   // tables, which only live in `moov`. So the probe still runs for an m4b — a few
   // kilobytes, no audio — and the record carries the result.
   if (indexed && !isLpf(file)) {
-    const blob = await ctx.files.blob(file.id).catch(() => null);
-    if (blob) {
+    // Swallowing this was a mistake worth naming: the probe failed for a reason the
+    // player then reported as "this book's index could not be read", which is true and
+    // useless. The reason reaches the screen now.
+    try {
+      const blob = await ctx.files.blob(file.id);
+      if (!blob?.size) throw new Error(`the drive reported this file as ${blob?.size ?? 'unknown'} bytes`);
       const read = async (start, end) => blob.slice(start, end).bytes();
-      const probe = await findMoov(read, blob.size, { window: WINDOW }).catch(() => ({ found: false }));
-      if (probe.found) indexed.moov = await read(probe.offset, probe.offset + probe.size).catch(() => null);
+      const probe = await findMoov(read, blob.size, { window: WINDOW });
+      if (!probe.found) throw new Error('no moov box was found in it');
+      indexed.moov = await read(probe.offset, probe.offset + probe.size);
+    } catch (err) {
+      indexed.moovError = err?.message || String(err);
     }
     return indexed;
   }

@@ -65,7 +65,13 @@
     constructor(id, { size = 0, type = '', etag = null, start = 0, end = null } = {}) {
       super();
       this.id = id;
-      this.type = type;
+      // `_type`, and a getter below. `Blob.prototype.type` is an accessor with no setter,
+      // so `this.type = …` THROWS in strict mode — which every module is. That one line
+      // meant `ctx.files.blob()` rejected on construction for every plugin that ever
+      // called it: no cover art, no container parsing, no streaming, and an error message
+      // ("Cannot set property type of #<Blob> which has only a getter") that never left
+      // the sandboxed frame it was thrown in.
+      this._type = type;
       this.etag = etag;
       // A window on the source. `size` is this window's length, which is what makes
       // `slice()` of a slice behave the way a caller expects.
@@ -74,6 +80,7 @@
     }
 
     get size() { return Math.max(0, this._end - this._start); }
+    get type() { return this._type; }
 
     /**
      * A window on the same source. No bytes move and none need to exist yet.

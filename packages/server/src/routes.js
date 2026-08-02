@@ -373,6 +373,29 @@ export function createRouter() {
     return { node: handle.node };
   });
 
+  // The same question with no collection in the path, for a caller that has an id.
+  //
+  // `api.stat(ref)` builds this URL whenever it is not given a collection, which is the
+  // normal case — an id and a `trove:` URI each name themselves, so there is nothing to
+  // scope. The route did not exist, so every such call answered "No such route": that is
+  // what broke `ctx.files.blob()` for plugins, and with it every viewer that reads its own
+  // file. The audiobook player showed it twice over — no cover art, and no sample tables
+  // to stream from — and on the drive it simply said "No such route" and stopped.
+  //
+  // A NAME is refused here rather than guessed at. A name is only unique inside a
+  // collection, so resolving one without saying which collection is a question with more
+  // than one right answer.
+  r.get('/api/items/resolve', [], async (ctx) => {
+    const ref = ctx.query.id || ctx.query.uri;
+    if (!ref) {
+      throw TroveError.invalid(ctx.query.name
+        ? 'a name is only unique within a collection — resolve it at /api/collections/:collection/items/resolve'
+        : 'id or uri is required');
+    }
+    const handle = await ctx.access.node(ref, 'read');
+    return { node: handle.node };
+  });
+
   // What links to this item — the inverse of the links its own content declares, and
   // what replaces "which folder is it in?".
   r.get('/api/items/backlinks', ['collections'], async (ctx) => {
