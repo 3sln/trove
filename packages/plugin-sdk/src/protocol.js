@@ -51,6 +51,11 @@ export const METHODS = {
     mediaUrl: 'files:mediaUrl',
     // Is the whole file here, and can I have it? The pair a viewer needs because the
     // frame's CSP forbids loading media from a URL — see pluginFrames.js.
+    // A file's own key/value data for this plugin — local-first, merged with the
+    // server opportunistically. See platform/itemData.js.
+    dataGet: 'items:data:get',
+    dataSet: 'items:data:set',
+    dataRemove: 'items:data:remove',
     hasLocal: 'files:hasLocal',
     localBlob: 'files:localBlob',
     offline: {

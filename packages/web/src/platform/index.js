@@ -20,6 +20,7 @@ import { ViewportService } from './viewport.js';
 import { SpatialNavigationService } from './spatialNav.js';
 import { VoiceSearchService } from './voiceSearch.js';
 import { MediaUrlService } from './mediaUrls.js';
+import { ItemDataService } from './itemData.js';
 import { FileChunks } from './fileChunks.js';
 
 /**
@@ -81,6 +82,13 @@ export function createPlatform({ baseUrl = '' } = {}) {
   // for, or the network keeping nothing. See fileChunks.js — the retention rule is the
   // whole point of it having a name of its own.
   platform.fileChunks = new FileChunks({ api: platform.api, mediaUrls: platform.mediaUrls });
+  // Per-plugin, per-item state — a listening position, a last page. Local first, merged
+  // with the server's sidecar when there is one. See itemData.js for why it is neither a
+  // contribution nor a setting.
+  platform.itemData = new ItemDataService({
+    api: platform.api,
+    actor: () => platform.identity?.get?.()?.principal?.id || 'local',
+  });
   platform.plugins = new PluginHost(platform);
   // Commands consult the plugin host to hide/disable plugin commands that aren't
   // available right now (offline, or the plugin isn't responding).

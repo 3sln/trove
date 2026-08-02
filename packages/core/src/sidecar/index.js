@@ -8,7 +8,7 @@ import { SidecarStore } from './store.js';
 import { SidecarManager } from './manager.js';
 import {
   addComment, editComment, deleteComment, react, setTag, removeTag,
-  subscribe, unsubscribe, viewDoc, extractMentions,
+  subscribe, unsubscribe, viewDoc, extractMentions, setData, removeData, dataOf,
 } from './document.js';
 import { newId } from '../util.js';
 import { TroveError } from '../errors.js';
@@ -113,6 +113,33 @@ export class SidecarService {
   async removeTag(nodeId, name, principal) {
     await this.manager.mutate(nodeId, (doc) => removeTag(doc, name, { actor: principal?.id }));
     return this.view(nodeId);
+  }
+
+  // --- per-plugin item data --------------------------------------------------
+  //
+  // A viewer's state about an ITEM, which is neither a contribution nor a setting. A
+  // contribution is derived from the file and is rewritten whenever it is re-indexed; a
+  // setting is per-device, and a listening position that does not follow you to your phone
+  // is the one people notice missing. This is the third thing, and the sidecar is where it
+  // belongs because the sidecar is already a per-item CRDT.
+  //
+  // `scope` is passed in by the caller and is NOT the plugin's to choose — the route
+  // derives it from the plugin it has already authenticated, the same way
+  // `/api/index/:indexerId` derives a contributor namespace.
+
+  async setData(nodeId, scope, key, value, principal) {
+    await this.manager.mutate(nodeId, (doc) => setData(doc, scope, key, value, { actor: principal?.id }));
+    return { ok: true };
+  }
+
+  async removeData(nodeId, scope, key, principal) {
+    await this.manager.mutate(nodeId, (doc) => removeData(doc, scope, key, { actor: principal?.id }));
+    return { ok: true };
+  }
+
+  /** One scope's present keys. Never another scope's — see `dataOf`. */
+  async data(nodeId, scope) {
+    return dataOf(await this.manager.get(nodeId), scope);
   }
 
   // --- subscriptions ---------------------------------------------------------

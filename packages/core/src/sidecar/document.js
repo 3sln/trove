@@ -22,7 +22,7 @@
 export const SIDECAR_VERSION = 1;
 
 export function emptyDoc(nodeId) {
-  return { v: SIDECAR_VERSION, nodeId, clock: 0, tags: {}, comments: {}, subscribers: {} };
+  return { v: SIDECAR_VERSION, nodeId, clock: 0, tags: {}, comments: {}, subscribers: {}, data: {} };
 }
 
 // A stamp orders and tie-breaks a write. Higher clock wins; equal clock → higher
@@ -101,6 +101,53 @@ export function removeTag(doc, name, { actor, at } = {}) {
   if (newer(s, cur)) doc.tags[name] = { present: false, value: cur?.value, ...s };
 }
 
+/**
+ * A plugin's own key/value data for this item.
+ *
+ * SCOPED, and the scope is not the plugin's to choose: the caller passes the plugin id it
+ * has already authenticated, exactly as `/api/index/:indexerId` does for contributions.
+ * Two plugins writing `position` to the same book are writing two different things, and a
+ * flat namespace would make one silently overwrite the other.
+ *
+ * Same LWW register as a tag, for the same reason: a listener finishes a chapter on their
+ * phone and opens the book on a laptop that has been offline for a day. Both wrote. The
+ * later write wins, and `newer` breaks a tie the same total, deterministic way it does
+ * everywhere else in this document — so both devices converge on the same answer without
+ * either having to be authoritative.
+ */
+export function setData(doc, scope, key, value, { actor, at } = {}) {
+  if (!scope || !key) return null;
+  doc.data ||= {};
+  doc.data[scope] ||= {};
+  const s = stamp(doc, actor, at);
+  const cur = doc.data[scope][key];
+  if (newer(s, cur)) doc.data[scope][key] = { present: true, value, ...s };
+  return doc.data[scope][key];
+}
+
+/**
+ * Forget one key. A TOMBSTONE rather than a delete, because a delete that removed the
+ * entry would be silently undone by any replica that still had the old value — the
+ * absence has to be a fact with a stamp, or it cannot win a merge.
+ */
+export function removeData(doc, scope, key, { actor, at } = {}) {
+  if (!scope || !key) return;
+  doc.data ||= {};
+  doc.data[scope] ||= {};
+  const s = stamp(doc, actor, at);
+  const cur = doc.data[scope][key];
+  if (newer(s, cur)) doc.data[scope][key] = { present: false, value: cur?.value, ...s };
+}
+
+/** What a plugin sees of its own scope: present keys, values only. */
+export function dataOf(doc, scope) {
+  const out = {};
+  for (const [key, cell] of Object.entries(doc?.data?.[scope] || {})) {
+    if (cell?.present) out[key] = cell.value;
+  }
+  return out;
+}
+
 export function subscribe(doc, userId, { muted = false, actor, at } = {}) {
   if (!userId) return;
   const s = stamp(doc, actor ?? userId, at);
@@ -119,7 +166,7 @@ export function unsubscribe(doc, userId, { actor, at } = {}) {
 export function mergeDoc(a, b) {
   if (!a) return structuredCloneSafe(b);
   if (!b) return structuredCloneSafe(a);
-  const out = { v: SIDECAR_VERSION, nodeId: a.nodeId || b.nodeId, clock: Math.max(a.clock || 0, b.clock || 0), tags: {}, comments: {}, subscribers: {} };
+  const out = { v: SIDECAR_VERSION, nodeId: a.nodeId || b.nodeId, clock: Math.max(a.clock || 0, b.clock || 0), tags: {}, comments: {}, subscribers: {}, data: {} };
 
   for (const key of union(a.tags, b.tags)) out.tags[key] = pick(a.tags[key], b.tags[key]);
   // Documents written before the register was removed still carry one, and a merge that
@@ -130,6 +177,17 @@ export function mergeDoc(a, b) {
     for (const key of union(a.facets, b.facets)) out.facets[key] = pick(a.facets[key], b.facets[key]);
   }
   for (const key of union(a.subscribers, b.subscribers)) out.subscribers[key] = pick(a.subscribers[key], b.subscribers[key]);
+
+  // Data is a map of maps — scope, then key — so it merges a level deeper than the rest.
+  // Merged per KEY rather than per scope: two devices that each wrote a different key in
+  // the same scope must end up with both, and picking a whole scope would drop one.
+  out.data = {};
+  for (const scope of union(a.data, b.data)) {
+    out.data[scope] = {};
+    for (const key of union(a.data?.[scope], b.data?.[scope])) {
+      out.data[scope][key] = pick(a.data?.[scope]?.[key], b.data?.[scope]?.[key]);
+    }
+  }
 
   for (const id of union(a.comments, b.comments)) {
     out.comments[id] = mergeComment(a.comments[id], b.comments[id]);

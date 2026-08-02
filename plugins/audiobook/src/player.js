@@ -239,6 +239,11 @@ function chapterRows(book, onSeek) {
 function render(ctx, root, book, src, skip, file, stream) {
   root.innerHTML = '';
 
+  // This item's data, for THIS plugin — the position and the speed. Declared here rather
+  // than where it is first read because the rate buttons are built before the resume, and
+  // a `const` used above its declaration is a dead-zone error rather than a hoist.
+  const store = ctx.files.data(file.id);
+
   // The stage is Storia's, class for class — see `src/client/player/player.css` in
   // 3sln/storia. Same names on purpose: this viewer and that app are the same product
   // seen from two directions, and a change to one should be legible against the other.
@@ -302,6 +307,9 @@ function render(ctx, root, book, src, skip, file, stream) {
     b.addEventListener('click', () => {
       transport.rate = r;
       paintRates();
+      // Speed is a per-book preference, not a global one: people listen to a dense
+      // non-fiction title slower than a novel they already know.
+      store.set('rate', r).catch(() => {});
       // The OS draws its own progress from the rate as well as the position, so a book at
       // 1.5× drifts visibly on the lock screen unless this is re-reported.
       paint(transport.position());
@@ -338,6 +346,36 @@ function render(ctx, root, book, src, skip, file, stream) {
     book.why ? el('div', 'ab-note', book.why) : null,
   ]);
   paintRates();
+
+  // WHERE THE LISTENER LEFT OFF.
+  //
+  // Stored against the item rather than in a setting, so it follows someone to their
+  // phone — which is the whole reason `files.data` exists. Read before the transport
+  // opens so the first seek is the resume rather than a jump the listener sees.
+  let saved = 0;
+  store.all().then((d) => {
+    const at = Number(d?.position) || 0;
+    // Ignore a position at the very end: a book finished last week should start again,
+    // not open two seconds from the end with nothing left to play.
+    const total = transport.duration();
+    if (at > 5 && (!total || at < total - 15)) transport.seek(at);
+    if (Number(d?.rate) > 0) { transport.rate = Number(d.rate); paintRates(); }
+  }).catch(() => {});
+
+  // Saved on the events that mean "the listener stopped", not on a timer: a book closed
+  // mid-sentence should remember the sentence, and a tick would round that to the last
+  // multiple of whatever interval was chosen. `pagehide` rather than `unload`, which
+  // does not fire reliably when a tab is discarded.
+  const remember = () => {
+    const at = transport.position();
+    if (!Number.isFinite(at) || Math.abs(at - saved) < 1) return;
+    saved = at;
+    store.set('position', Math.floor(at)).catch(() => {});
+  };
+  transport.audio.addEventListener('pause', remember);
+  transport.audio.addEventListener('seeked', remember);
+  addEventListener('pagehide', remember);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) remember(); });
 
   transport.open(book, src);
   // The feeder needs the element to know where the playhead is: it appends ahead of

@@ -7,7 +7,12 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
-**Nothing open.** 024 was the view switcher appearing where switching is not a choice.
+**Open: 026** — plugin storage on Workers must be a Durable Object, not a shared D1
+database. `D1SqliteProvider` cannot create a database on demand, so every plugin scope for
+every user lives side by side in one binding; the code says so itself and keeps it only
+because it is the strongest thing D1 allows.
+
+024 was the view switcher appearing where switching is not a choice.
 025 was the audiobook player: play did nothing (the sandbox CSP forbids loading media from
 a URL, by design), no cover art, no rate control, a layout written only for the docked
 case, and recent tiles that never drew a thumbnail. Closed by transmuxing to fragmented

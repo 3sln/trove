@@ -402,6 +402,32 @@
         mediaUrl: (id, opts) => (requireCap('files'), call('files:mediaUrl', Object.assign({ id }, opts))),
 
         /**
+         * A file's own key/value data, for THIS plugin.
+         *
+         * The third kind of state a viewer has, and the one there was nowhere to put. A
+         * contribution is derived from the file and is rewritten whenever it is
+         * re-indexed. A setting is per-device, so a listening position kept there does
+         * not follow you to your phone — which is the moment people notice. This is the
+         * other thing: state about a user's use of an item.
+         *
+         * ONE INTERFACE, and it deliberately does not say where the bytes are. A write
+         * lands locally at once and reaches the server when there is a server to reach;
+         * a read is the merge of both. Two devices that each wrote while apart converge,
+         * later write winning, because the sidecar underneath is a CRDT — see
+         * core/sidecar/document.js.
+         *
+         * Scoped to this plugin by the HOST, from the plugin it authenticated. There is
+         * no parameter for the scope because there is no version of this where a plugin
+         * chooses whose data it is writing.
+         */
+        data: (id) => ({
+          all: () => (requireCap('files'), call('items:data:get', { id })),
+          get: async (key) => (requireCap('files'), (await call('items:data:get', { id }))[key]),
+          set: (key, value) => (requireCap('files'), call('items:data:set', { id, key, value })),
+          remove: (key) => (requireCap('files'), call('items:data:remove', { id, key })),
+        }),
+
+        /**
          * Is the whole file already in this browser?
          *
          * Cheap — it reads bookkeeping, not bytes — so ask it before deciding what to

@@ -198,6 +198,28 @@ export class PluginRpcRouter {
         return { blob: new Blob([r.bytes], { type: node?.node?.contentType || 'application/octet-stream' }) };
       }
 
+      // A plugin's own key/value data for an item — see sidecar/document.js.
+      //
+      // The scope is derived from the AUTHENTICATED plugin, never from the params: a
+      // frame asking for someone else's namespace gets its own. That is the same rule
+      // `files:index` follows for contributions, and the reason "scoped" is a boundary
+      // rather than a naming convention.
+      case 'items:data:get': {
+        cap('files');
+        return this.platform.itemData.get(pid, params.id);
+      }
+      case 'items:data:set': {
+        cap('files');
+        // Written locally FIRST and flushed later, so a viewer that saves a position on a
+        // train keeps it, and the merge happens when there is a network again. See
+        // platform/itemData.js.
+        return this.platform.itemData.set(pid, params.id, params.key, params.value);
+      }
+      case 'items:data:remove': {
+        cap('files');
+        return this.platform.itemData.remove(pid, params.id, params.key);
+      }
+
       // Keeping a file offline, which is a DIFFERENT act from reading it — see
       // fileChunks.js. Until `start` is called, ranging over a file stores nothing.
       case 'files:offline:start': return cap('files'), this.platform.fileChunks.start(params.id);

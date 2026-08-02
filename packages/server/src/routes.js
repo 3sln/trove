@@ -877,6 +877,24 @@ export function createRouter() {
     admin: ctx.collections.isAdmin(ctx.principal),
   }));
 
+  /**
+   * Which plugin scope this caller may write, from `?scope=`.
+   *
+   * A contribution URI names a plugin, and the caller must have it installed — otherwise
+   * "scoped per plugin" is a naming convention rather than a boundary, and one plugin
+   * could read or overwrite another's state on every item in the drive.
+   */
+  async function requireScope(ctx) {
+    const scope = String(ctx.query.scope || '').trim();
+    if (!scope) throw TroveError.invalid('scope is required');
+    const pluginId = parseContribUri(scope)?.pluginId ?? (scope.startsWith('trove+plugin:') ? scope.slice('trove+plugin:'.length) : null);
+    if (!pluginId) throw TroveError.invalid('scope must be a trove+plugin: URI');
+    requirePlugins(ctx.plugins);
+    const installed = await ctx.plugins.get(ctx.principal, pluginId);
+    if (!installed) throw TroveError.forbidden(`"${pluginId}" is not installed for this account`);
+    return `trove+plugin:${pluginId}`;
+  }
+
   // --- conversations, tags, sidecar (per file) -------------------------------
   // The :id is a file node id; the sidecar is that file's CRDT document.
 
@@ -884,6 +902,39 @@ export function createRouter() {
     // The handle is the sidecar for this node: obtaining it resolved the node
     // (404 if gone) and asserted `read` on its collection.
     return (await ctx.access.node(ctx.params.id, 'read')).view();
+  });
+
+  // A PLUGIN's own key/value data for this item — a listening position, a last page.
+  //
+  // The scope is `?scope=` and the route does NOT trust it on its own: `requireScope`
+  // checks the caller owns that plugin id, the same gate `/api/index/:indexerId` applies
+  // to contributions. Without it any caller could write into any plugin's namespace, and
+  // "scoped" would be a naming convention rather than a boundary.
+  //
+  // `read` to read and `write` to write, on the ITEM — this is data about someone's use of
+  // a file, so it follows the file's permissions.
+  r.get('/api/items/:id/data', ['sidecar'], async (ctx) => {
+    const scope = await requireScope(ctx);
+    await ctx.access.node(ctx.params.id, 'read');
+    return { scope, data: await ctx.sidecar.data(ctx.params.id, scope) };
+  });
+
+  r.post('/api/items/:id/data', ['sidecar'], async (ctx) => {
+    const scope = await requireScope(ctx);
+    requirePrincipal(ctx.principal);
+    await ctx.access.node(ctx.params.id, 'write');
+    const b = await body(ctx.req);
+    // A BATCH, because the client flushes what it queued while offline and one request
+    // per key would make a reconnect a thundering herd against one sidecar document.
+    const entries = Array.isArray(b.entries) ? b.entries : [{ key: b.key, value: b.value, remove: b.remove }];
+    for (const e of entries) {
+      if (!e?.key) continue;
+      if (e.remove) await ctx.sidecar.removeData(ctx.params.id, scope, e.key, ctx.principal);
+      else await ctx.sidecar.setData(ctx.params.id, scope, e.key, e.value, ctx.principal);
+    }
+    // The merged view back, so a client that was offline learns what won without a
+    // second round trip — which is the whole shape of "write, then reconcile".
+    return { scope, data: await ctx.sidecar.data(ctx.params.id, scope) };
   });
 
   r.post('/api/items/:id/comments', [], async (ctx) => {
