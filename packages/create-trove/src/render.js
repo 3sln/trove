@@ -437,23 +437,27 @@ function wranglerToml(plan) {
   // Where PLUGIN INDEXERS run. A plugin's indexer is somebody else's code executing on
   // the server, and a Worker cannot simply import it: the in-process runner loads code
   // through a `data:` URL, which workerd refuses outright — so without this binding every
-  // plugin indexer fails on every file. (It used to fail SILENTLY; the install now
-  // refuses up front and says why.)
+  // plugin indexer fails on every file. (It used to fail silently; a deployment that
+  // cannot run them now skips them and raises an issue saying so.)
   //
   // A Worker Loader gives that code a real isolate with no bindings and no network beyond
-  // the one presigned URL the host hands it. Commented out because running dynamic
-  // Workers on Cloudflare needs the closed beta — it works in `wrangler dev` today, so
-  // uncommenting it locally is how you try plugin indexers before you have access.
+  // the one presigned URL the host hands it. Open beta since March 2026 on the Workers
+  // Paid plan — which a drive already needs for D1 and Durable Objects — and it works in
+  // `wrangler dev` on any plan.
+  //
+  // Billing is per unique Worker LOADED per day, not per file indexed: the loader is keyed
+  // by package digest, so a plugin costs one load a day however many files it walks.
   if (w?.workerLoader) {
     L.push('# Isolates for plugin indexers. See "Server indexers" in the README.');
     L.push('[[worker_loaders]]');
     L.push('binding = "LOADER"');
     L.push('');
   } else {
-    L.push('# [[worker_loaders]]        # plugin indexers run in isolates loaded through this');
-    L.push('# binding = "LOADER"        # works in `wrangler dev`; on Cloudflare needs the');
-    L.push('#                           # Dynamic Workers closed beta. Without it, installing');
-    L.push('#                           # a plugin that ships a server indexer is refused.');
+    L.push('# [[worker_loaders]]        # plugin indexers run in isolates loaded through this.');
+    L.push('# binding = "LOADER"        # Needs the Workers Paid plan; works in `wrangler dev`');
+    L.push('#                           # on any plan. Without it a plugin that ships a server');
+    L.push('#                           # indexer still installs and its viewers work, but its');
+    L.push('#                           # indexers are skipped and the drive raises an issue.');
     L.push('');
   }
 

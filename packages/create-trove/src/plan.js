@@ -369,16 +369,17 @@ async function askWorkers(prompter, { embeddingDim }) {
     }
   }
 
-  // Default FALSE, and the wording says why: running dynamic Workers on Cloudflare needs
-  // the closed beta, so for most people the honest answer today is "not yet". Declaring
-  // the binding without access makes the deploy fail, which is a worse first experience
-  // than an install that refuses a plugin with a clear message.
+  // Default TRUE. Dynamic Workers reached open beta in March 2026 and is available to
+  // everyone on the Workers Paid plan — which a drive already needs for D1 and Durable
+  // Objects — so the binding is the ordinary case rather than the exotic one. Still a
+  // question, because it is the difference between "plugin indexers run" and "plugin
+  // indexers are skipped and the drive raises an issue saying so".
   w.workerLoader = await prompter.confirm(
     '  Bind a Worker Loader so plugin indexers can run?',
-    { key: 'workers.loader.enabled', default: false,
+    { key: 'workers.loader.enabled', default: true,
       hint: 'without it, plugin indexers are skipped — a plugin still installs and its '
         + 'viewers work, but nothing it would have contributed to search appears. '
-        + 'Needs the Dynamic Workers closed beta; works in `wrangler dev` regardless' },
+        + 'Needs the Workers Paid plan; works in `wrangler dev` regardless' },
   );
 
   if (await prompter.section('Vectorize (semantic search)', { key: 'workers.vectorize.enabled',
