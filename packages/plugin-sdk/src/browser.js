@@ -18,7 +18,13 @@
   const pending = new Map();
   const commandHandlers = new Map();
   const openerHandlers = new Map();
-  let onConnectivity = null, onDeactivate = null, onSettingsChange = null, onDock = null;
+  let onConnectivity = null, onSettingsChange = null, onDock = null;
+  // A LIST. It was one slot — `onDeactivate = fn` — so a second registration silently
+  // discarded the first, and the plugin that lost one had no way to notice: the symptom
+  // is a timer or an object URL that outlives the viewer. The audiobook player has two
+  // teardowns (a download poller and the transport), which is not exotic; anything with
+  // more than one resource has more than one.
+  const onDeactivateFns = [];
   const mediaHandlers = {}; // action -> handler, for OS media-session controls
 
   const now = () => { try { return Date.now(); } catch { return 0; } };
@@ -209,7 +215,14 @@
     throw new Error('Unknown host call ' + method);
   }
   async function dispatchEvent(method, params) {
-    if (method === 'deactivate') return onDeactivate && onDeactivate();
+    if (method === 'deactivate') {
+      // Every handler runs even if one throws: teardown is where resources are released,
+      // and one bad handler must not strand the rest.
+      for (const fn of onDeactivateFns.splice(0)) {
+        try { fn(); } catch (e) { console.error('[trove] a deactivate handler threw', e); }
+      }
+      return undefined;
+    }
     if (method === 'connectivity') { online = !!params.online; try { onConnectivity && (await onConnectivity({ online })); } catch (e) { console.error(e); } announce(); }
     if (method === 'settings:changed') { try { onSettingsChange && onSettingsChange(params.key, params.value); } catch (e) { console.error(e); } }
     // The OS/host fired a media transport control (play/pause/next/seek…).
@@ -500,7 +513,11 @@
       },
       onConnectivity: (fn) => { onConnectivity = fn; },
       announce,
-      onDeactivate: (fn) => { onDeactivate = fn; },
+      onDeactivate: (fn) => {
+        if (typeof fn === 'function') onDeactivateFns.push(fn);
+        // A disposer, so a caller that registers per-render can drop the previous one.
+        return () => { const i = onDeactivateFns.indexOf(fn); if (i >= 0) onDeactivateFns.splice(i, 1); };
+      },
     };
   }
 

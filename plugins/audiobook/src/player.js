@@ -362,18 +362,36 @@ function render(ctx, root, book, src, skip, file, stream) {
     if (Number(d?.rate) > 0) { transport.rate = Number(d.rate); paintRates(); }
   }).catch(() => {});
 
-  // Saved on the events that mean "the listener stopped", not on a timer: a book closed
-  // mid-sentence should remember the sentence, and a tick would round that to the last
-  // multiple of whatever interval was chosen. `pagehide` rather than `unload`, which
-  // does not fire reliably when a tab is discarded.
+  // Saved TWO WAYS, and it needs both.
+  //
+  // On the events that mean "the listener stopped" — pause, seek, the tab going away —
+  // because those are exact: a book closed mid-sentence remembers the sentence, where a
+  // timer alone would round it back to the last tick.
+  //
+  // And on a timer WHILE PLAYING, because those events only cover a graceful stop. A tab
+  // that crashes, a browser the OS kills for memory, a laptop that loses power, a phone
+  // evicting a background tab — none of them fire `pagehide`, and an audiobook is exactly
+  // the thing people leave running for hours. Without the timer, that is hours re-listened.
+  //
+  // The interval is the floor on how much can be lost, not how often anything is written:
+  // the 1-second delta guard below and the SDK's own coalescing mean a paused book writes
+  // nothing at all, and a playing one writes a few bytes locally and one small request.
+  // Every twenty seconds OF BOOK, not of wall clock — see `paint`, which is where the
+  // periodic save is driven from.
+  const SAVE_EVERY_SECONDS = 20;
   const remember = () => {
     const at = transport.position();
     if (!Number.isFinite(at) || Math.abs(at - saved) < 1) return;
     saved = at;
     store.set('position', Math.floor(at)).catch(() => {});
   };
+
   transport.audio.addEventListener('pause', remember);
+  transport.audio.addEventListener('ended', remember);
+  // `seeked`, not the seek handlers: a lock-screen scrub and a drag of the bar both end
+  // here, and so does a chapter jump. One place, whoever asked.
   transport.audio.addEventListener('seeked', remember);
+  // `pagehide` rather than `unload`, which does not fire reliably when a tab is discarded.
   addEventListener('pagehide', remember);
   document.addEventListener('visibilitychange', () => { if (document.hidden) remember(); });
 
@@ -392,6 +410,20 @@ function render(ctx, root, book, src, skip, file, stream) {
     if (total) bar.max = String(Math.floor(total));
     if (!scrubbing) bar.value = String(Math.floor(at));
     labels(at);
+    // THE PERIODIC SAVE, driven by the MEDIA CLOCK rather than a timer.
+    //
+    // `paint` runs from `timeupdate`, which fires because playback advanced. That matters
+    // for the case this exists to cover: someone listening with the tab in the background
+    // or the screen off, driving it from the lock screen. A hidden tab has its timers
+    // throttled — Chrome exempts audible tabs, but that is a policy to rely on rather than
+    // a guarantee, and it is not uniform across browsers. `timeupdate` keeps arriving for
+    // as long as audio is actually moving, which is exactly when there is progress worth
+    // recording, and stops on its own when it is not.
+    //
+    // The event saves above still handle a graceful stop precisely; this bounds what an
+    // ungraceful one can lose — a crashed tab, an OOM kill, a flat battery — to twenty
+    // seconds of book rather than to the whole session.
+    if (Math.abs(at - saved) >= SAVE_EVERY_SECONDS) remember();
     // Position AND rate: the OS draws its own progress from these, and without the rate a
     // book played at 1.5× drifts visibly out of step on the lock screen.
     ctx.media.setPositionState({ duration: total || 0, position: at, playbackRate: transport.rate })

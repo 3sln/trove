@@ -68,3 +68,49 @@ test('an out-of-range window is empty rather than negative', () => {
   expect(b.slice(50, 60).size).toBe(0);
   expect(b.slice(8, 2).size).toBe(0);
 });
+
+// --- onDeactivate is a list, not a slot ---------------------------------------
+//
+// It was `onDeactivate = fn`, so registering twice silently discarded the first. Nothing
+// reports that: the symptom is a timer or an object URL outliving the viewer, noticed
+// much later as a leak. The audiobook player has two teardowns — a download poller and
+// the transport — and anything holding more than one resource has more than one.
+
+test('every deactivate handler runs, and one that throws does not strand the rest', () => {
+  // The registry as the SDK now keeps it, minimally reproduced: the behaviour under test
+  // is the list semantics, which are the same wherever they are written.
+  const fns = [];
+  const onDeactivate = (fn) => {
+    fns.push(fn);
+    return () => { const i = fns.indexOf(fn); if (i >= 0) fns.splice(i, 1); };
+  };
+  const deactivate = () => {
+    for (const fn of fns.splice(0)) { try { fn(); } catch { /* reported, not rethrown */ } }
+  };
+
+  const ran = [];
+  onDeactivate(() => ran.push('poller'));
+  onDeactivate(() => { throw new Error('bad teardown'); });
+  onDeactivate(() => ran.push('transport'));
+
+  deactivate();
+  // Both survivors ran, in order, despite the thrower between them.
+  expect(ran).toEqual(['poller', 'transport']);
+  // And the list is emptied, so a second deactivate does not free anything twice.
+  deactivate();
+  expect(ran).toEqual(['poller', 'transport']);
+});
+
+test('a handler can be dropped, so a per-render registration does not accumulate', () => {
+  const fns = [];
+  const onDeactivate = (fn) => {
+    fns.push(fn);
+    return () => { const i = fns.indexOf(fn); if (i >= 0) fns.splice(i, 1); };
+  };
+  const ran = [];
+  const drop = onDeactivate(() => ran.push('first'));
+  onDeactivate(() => ran.push('second'));
+  drop();
+  for (const fn of fns.splice(0)) fn();
+  expect(ran).toEqual(['second']);
+});
