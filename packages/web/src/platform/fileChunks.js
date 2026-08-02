@@ -67,9 +67,11 @@ export class FileChunks {
   }
 
   #key(id, etag, index) {
-    // The stable download URL as the prefix, so a chunk key reads as "part of this file"
-    // in devtools and sorts beside the pinned whole-file entry.
-    return `${this.mediaUrls.cacheKey(id)}#chunk=${etag || 'none'}:${CHUNK_SIZE}:${index}`;
+    // The stable download URL, plus a QUERY parameter. Not a fragment: the Cache API keys
+    // on a Request, and a Request's url excludes its fragment — so `…#chunk=0` and
+    // `…#chunk=1` are the same key, and every chunk of every file would collide on the
+    // first one. It reads as "part of this file" in devtools either way.
+    return `${this.mediaUrls.cacheKey(id)}&chunk=${etag || 'none'}:${CHUNK_SIZE}:${index}`;
   }
 
   async #cache(name) {
@@ -270,7 +272,7 @@ export class FileChunks {
   async #dropChunks(id) {
     const cache = await this.#cache(CHUNKS_CACHE);
     if (!cache) return;
-    const prefix = `${this.mediaUrls.cacheKey(id)}#chunk=`;
+    const prefix = `${this.mediaUrls.cacheKey(id)}&chunk=`;
     const keys = await cache.keys().catch(() => []);
     for (const req of keys) {
       if (req.url.startsWith(prefix)) await cache.delete(req).catch(() => {});

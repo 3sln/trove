@@ -1,0 +1,43 @@
+{
+  "domain": "3sln.com",
+  "name": "audiobook",
+  "displayName": "Audiobook Player",
+  "version": "0.1.0",
+  "description": "Play M4B and LPF audiobooks from the drive, with chapters, a dock and OS transport controls.",
+  "entry": "src/index.js",
+  "capabilities": {
+    "files": true,
+    "ui": true,
+    "media": true,
+    "dock": true
+  },
+  "contributes": {
+    "player": {
+      "type": "opener",
+      "title": "Audiobook Player",
+      "priority": 60,
+      "dock": true,
+      "match": {
+        "ext": [".m4b", ".lpf", ".m4a", ".aac"],
+        "mime": ["audio/mp4", "audio/x-m4b", "application/lpf+zip", "audio/aac"]
+      },
+      "entry": "src/player.js"
+    }
+  },
+  "settings": [
+    {
+      "key": "audiobook.skipSeconds",
+      "type": "number",
+      "title": "Skip by",
+      "description": "How far the back and forward buttons jump, in seconds.",
+      "default": 30
+    },
+    {
+      "key": "audiobook.keepOffline",
+      "type": "boolean",
+      "title": "Keep books offline while listening",
+      "description": "Store the parts of a book as you play it, so it finishes downloading exactly once and then works with no connection.",
+      "default": false
+    }
+  ]
+}

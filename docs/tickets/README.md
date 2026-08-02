@@ -7,11 +7,11 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
-| # | Ticket | Why it matters |
-|---|--------|----------------|
-| [022](022-a-plugins-directory-and-its-first-tenant.md) | A plugins directory, and its first tenant | `plugins/*` in the monorepo, and storia's audiobook player ported into it as a docking, media-session viewer |
+**Nothing open.** 012–020 came from a multi-agent architecture audit (Aug 2026): eight
+lenses over the four packages, every finding put through an adversary whose job was to
+refute it, 16 killed that way. Its verdict was that nothing here needed rearchitecting — it
+needed finishing, collapsing and deleting — and that is what those nine tickets were. 021
+added rate limiting; 022 opened `plugins/` and put the audiobook player in it.
 
-Tickets 012–020 come from a multi-agent architecture audit (Aug 2026): eight lenses over
-the four packages, every finding put through an adversary whose job was to refute it. 16 were
-killed that way. The audit's verdict was that nothing here needs rearchitecting — it needs
-*finishing, collapsing and deleting*.
+`git log` is where they went. Each closing commit carries the finding and the reasoning,
+which is the half a ticket file was holding.

@@ -1196,7 +1196,16 @@ packages/
   plugin-sdk/   @3sln/trove/plugin-sdk — the iframe-side plugin API + RPC
   create-trove/ @3sln/create-trove — the scaffolder; the one directory that is
                 its own published package rather than part of @3sln/trove
+plugins/
+  audiobook/    a plugin we ship, built into a signed zip
 ```
+
+`plugins/` is a BUILD location rather than a workspace, and the difference is the point: a
+plugin's artifact is a zip the server independently re-parses and installs, never an npm
+dependency and never imported from `packages/`. `bun run build:plugins` produces the same
+bytes a user would drag into the install dialog — there is no privileged path for our own.
+Nothing there is preinstalled: a drive with a plugin its owner did not choose is a drive
+with a capability grant its owner did not make. See `plugins/README.md`.
 
 ## Releasing
 

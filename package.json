@@ -41,6 +41,7 @@
   "scripts": {
     "dev": "web-dev-server --config packages/web/web-dev-server.config.mjs",
     "build:web": "cd packages/web && bun build.mjs",
+    "build:plugins": "bun plugins/build.mjs",
     "serve": "bun packages/server/src/adapters/bun.js",
     "serve:node": "node packages/server/src/adapters/node.js",
     "test": "bun test",
