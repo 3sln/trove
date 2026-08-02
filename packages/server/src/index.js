@@ -902,6 +902,17 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
   // TROVE_SERVER_INDEXERS=0/false refuses server-indexer plugins on this deployment.
   if (env.TROVE_SERVER_INDEXERS === '0' || env.TROVE_SERVER_INDEXERS === 'false') config.serverIndexers = false;
 
+  // A `worker_loaders` binding means this is a Worker that CAN run plugin code, in a
+  // real isolate — so it does, rather than falling back to the in-process runner, which
+  // cannot import a `data:` URL on workerd and fails on every file. Discovered from the
+  // binding rather than configured: a deployment that declared the binding wants it, and
+  // one that did not gets the honest install-time refusal from the probe.
+  //
+  // Any binding name is accepted so the wrangler config can call it what it likes;
+  // TROVE_WORKER_LOADER names it explicitly when there is more than one.
+  const loader = env[env.TROVE_WORKER_LOADER || 'LOADER'] ?? findWorkerLoader(env);
+  if (loader && config.serverIndexers !== false) config.indexerRuntime = { loader };
+
   // Plugin package blob store: defaults to the primary storage backend (prefixed).
   // Point it at a separate bucket/root with TROVE_PACKAGE_STORE (+ its own settings).
   if (env.TROVE_PACKAGE_STORE) {
@@ -955,3 +966,25 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
 }
 
 export { createRouter };
+
+/**
+ * A `worker_loaders` binding, found by shape.
+ *
+ * Bindings arrive as an untyped bag and a loader is only identifiable by having `get`
+ * and nothing else — deliberately narrow, because a false positive here would hand
+ * plugin code to whatever object happened to match. Skips the names of bindings that
+ * also expose `get` and are emphatically not loaders (KV, R2, D1, Durable Objects are
+ * declared under their own config keys and reached by name, so a drive that wants this
+ * can always be explicit with TROVE_WORKER_LOADER).
+ */
+function findWorkerLoader(env) {
+  for (const [name, value] of Object.entries(env || {})) {
+    if (!value || typeof value !== 'object') continue;
+    if (typeof value.get !== 'function') continue;
+    // A loader has exactly one method. KV has `put`/`list`, R2 has `head`/`delete`,
+    // a DO namespace has `idFromName`, D1 has `prepare` — all disqualifying.
+    if (value.put || value.list || value.head || value.delete || value.idFromName || value.prepare) continue;
+    if (/loader/i.test(name)) return value;
+  }
+  return null;
+}

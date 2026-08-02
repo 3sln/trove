@@ -36,7 +36,7 @@ export { EmbeddingProvider, LocalHashEmbedding, HttpEmbedding } from './search/e
 export { SqliteVectorStore, SqliteKeywordStore, SEARCH_DB_KEY } from './search/sqliteStores.js';
 
 export { IndexerRegistry, textIndexer, chunkText } from './indexers/registry.js';
-export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, PluginIndexers, matchFromSelector } from './plugins/index.js';
+export { PluginService, PackageStore, StoragePackageStore, PluginInstallStore, SqlitePluginInstallStore, MemoryPluginInstallStore, parsePluginPackage, capabilityList, ALL_CAPABILITIES, IndexerRuntime, InProcessIndexerRuntime, WorkerLoaderIndexerRuntime, PluginIndexers, matchFromSelector } from './plugins/index.js';
 export { UploadManager, KvSessionStore, DEFAULT_PART_SIZE } from './uploads.js';
 // Encryption at rest: the bucket holds ciphertext, the drive holds the key. Protects
 // against the STORAGE host (a leaked bucket credential, a storage vendor who is not the

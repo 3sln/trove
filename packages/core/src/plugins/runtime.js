@@ -33,6 +33,27 @@ export class IndexerRuntime {
    */
   async run(spec, node, ctx) { throw TroveError.unsupported('IndexerRuntime.run'); }
   async close() {}
+
+  /**
+   * Can this runtime actually execute an indexer HERE, on this deployment?
+   *
+   * Asked once, at install, because the alternative is what shipped: a runtime that
+   * installs happily and then fails on every single file, silently, for the life of the
+   * deployment. The in-process runner loads code by importing a `data:` URL — which
+   * Node and Bun allow and **workerd does not** — so on Cloudflare every plugin indexer
+   * failed with `No such module "data:text/javascript;base64,…"`, once per node, with
+   * nothing to see at install time and nothing in the UI to explain the empty index.
+   *
+   * The design doc's provider matrix already called for this (§7, the `CF plain / none`
+   * row: *"install-scope check refuses server-indexer plugins on this deployment, with a
+   * clear message"*). It could not fire, because it keyed on the runtime being ABSENT
+   * and the broken runtime is present — it just cannot run.
+   *
+   * Default true: a runtime that does not implement a probe is one that works.
+   *
+   * @returns {Promise<{ok: true} | {ok: false, reason: string}>}
+   */
+  async probe() { return { ok: true }; }
 }
 
 /**
@@ -70,6 +91,26 @@ export class InProcessIndexerRuntime extends IndexerRuntime {
       this._mods.set(key, p);
     }
     return p;
+  }
+
+  /**
+   * Try the loader itself, once, on a module that does nothing.
+   *
+   * The probe imports a real `data:` URL rather than sniffing for a runtime name.
+   * Feature-detection over branding: workerd is the case that prompted this, but the
+   * question is "does dynamic import of a data: URL work here", and only doing it
+   * answers that. Cached — including the failure, which is a property of the runtime
+   * and will not change while the process lives.
+   */
+  async probe() {
+    this._probe ||= import(/* @vite-ignore */ 'data:text/javascript;base64,' + btoa('export default 1'))
+      .then(() => ({ ok: true }))
+      .catch((err) => ({
+        ok: false,
+        reason: `this deployment's JavaScript runtime cannot load plugin code dynamically (${err?.message || err}). `
+          + 'Server indexers need an isolate runtime — on Cloudflare, a Worker Loader binding.',
+      }));
+    return this._probe;
   }
 
   async run(spec, node, ctx) {

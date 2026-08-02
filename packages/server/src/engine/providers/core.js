@@ -39,7 +39,7 @@ import {
   ApiKeyService, CapabilityProvider, ApiKeyCapabilityProvider,
   CollectionService,
   PluginService, PackageStore, StoragePackageStore, SqlitePluginInstallStore,
-  IndexerRuntime, InProcessIndexerRuntime, PluginIndexers,
+  IndexerRuntime, InProcessIndexerRuntime, WorkerLoaderIndexerRuntime, PluginIndexers,
   TaskRegistry, IssueRegistry,
   Vfs, TroveError,
   resolveAuthDiscovery,
@@ -611,10 +611,16 @@ export function coreProviders(config, lifecycleState) {
 
     // Server indexer sub-packages run through a pluggable runtime. The default is
     // the in-process (trusted) runner; a deployment swaps in an isolate runtime.
-    indexerRuntime: Provider.fromLazySingleton(() =>
-      (config.serverIndexers === false
-        ? null
-        : resolve(config.indexerRuntime, IndexerRuntime, () => new InProcessIndexerRuntime()))),
+    indexerRuntime: Provider.fromLazySingleton(() => {
+      if (config.serverIndexers === false) return null;
+      // `{ loader }` — a Worker Loader binding, which configFromEnv sets when the
+      // deployment declares one. Built here rather than there so core stays the only
+      // place that knows what a runtime is.
+      if (config.indexerRuntime?.loader && !(config.indexerRuntime instanceof IndexerRuntime)) {
+        return new WorkerLoaderIndexerRuntime(config.indexerRuntime);
+      }
+      return resolve(config.indexerRuntime, IndexerRuntime, () => new InProcessIndexerRuntime());
+    }),
 
     plugins: Provider.fromLazySingleton(
       async (deps) => {

@@ -66,6 +66,12 @@ export class PluginIndexers {
     return specs.length;
   }
 
+  /**
+   * Can indexers actually run on this deployment? Passed straight through to the
+   * runtime — PluginIndexers is the coordinator, not the thing that knows.
+   */
+  async probe() { return this.runtime?.probe?.() ?? { ok: true }; }
+
   /** Unregister + purge every indexer a record declared. */
   async deactivate(record) {
     for (const spec of record.indexers || []) {

@@ -15,6 +15,7 @@ export { parsePluginPackage, capabilityList, ALL_CAPABILITIES, serverIndexers, d
 export * from './identity.js';
 export { CONTRIBUTION_TYPES, contributionsOfType } from './contributions.js';
 export { IndexerRuntime, InProcessIndexerRuntime } from './runtime.js';
+export { WorkerLoaderIndexerRuntime } from './workerLoaderRuntime.js';
 export { clampContribution, DEFAULT_CAPS } from '../indexers/contribution.js';
 export { PluginIndexers, matchFromSelector } from './indexers.js';
 
@@ -79,6 +80,16 @@ export class PluginService {
     if (pkg.indexers.length && !this.indexers) {
       throw TroveError.unsupported('Server indexers are disabled on this deployment');
     }
+    // ...or when it HAS one that cannot run here — the in-process runner on workerd,
+    // which cannot import a `data:` URL. That case DEGRADES rather than refusing: a
+    // plugin is more than its indexer, and refusing the install would take the viewers,
+    // commands and everything else away over one part the deployment cannot host.
+    //
+    // What it must not do is what it used to: run anyway and fail once per file forever,
+    // with nothing said. So the reason is recorded ON the record — `indexersSkipped` —
+    // and travels to the client, which is what turns "my search is empty" into a sentence
+    // someone can act on. Asked once per install, not per node.
+    const probe = pkg.indexers.length ? (await this.indexers?.probe?.() ?? { ok: true }) : { ok: true };
 
     const version = pkg.manifest.version || '0';
     // CONTENT-addressed. The ref used to be `<account>/<pluginId>/<version>.zip`, written
@@ -112,21 +123,42 @@ export class PluginService {
     if (prev?.packageRef && prev.packageRef !== ref && !(await this.#refIsShared(prev.packageRef, account))) {
       await this.packages.delete(prev.packageRef).catch(() => {});
     }
-    // Register + backfill any server indexers this package ships.
-    if (this.indexers && pkg.indexers.length) {
+    // Register + backfill any server indexers this package ships — unless the probe
+    // just said this deployment cannot run them, in which case registering would only
+    // queue up a failure per file.
+    if (this.indexers && pkg.indexers.length && probe.ok) {
       try { await this.indexers.activate(record); }
       catch (err) { console.error(`activating indexers for ${record.pluginId} failed:`, err.message); }
+    } else if (!probe.ok) {
+      console.warn(`server indexers for ${record.pluginId} are not running: ${probe.reason}`);
     }
-    return this.#publicRecord(record);
+    return this.#annotate(this.#publicRecord(record));
+  }
+
+  /**
+   * Why this record's indexers are not running, or null when they are.
+   *
+   * DERIVED, not stored. The reason is a property of the DEPLOYMENT, not of the install:
+   * a drive that gains a Worker Loader binding should stop reporting "skipped" the moment
+   * it restarts, without anyone rewriting rows — and a drive that loses one should start.
+   * Storing it at install would freeze an answer that is only true until the next deploy.
+   *
+   * The probe caches its own result, so this costs nothing after the first call.
+   */
+  async #annotate(record) {
+    if (!record?.indexers?.length) return record;
+    const probe = await this.indexers?.probe?.() ?? { ok: true };
+    return probe.ok ? record : { ...record, indexersSkipped: probe.reason };
   }
 
   /** An account's installed plugins (secrets stripped). */
   async list(principal) {
-    return (await this.installs.list(accountOf(principal))).map((r) => this.#publicRecord(r));
+    const rows = (await this.installs.list(accountOf(principal))).map((r) => this.#publicRecord(r));
+    return Promise.all(rows.map((r) => this.#annotate(r)));
   }
   async get(principal, pluginId) {
     const r = await this.installs.get(accountOf(principal), pluginId);
-    return r ? this.#publicRecord(r) : null;
+    return r ? this.#annotate(this.#publicRecord(r)) : null;
   }
 
   /** Download the package blob (for a device to sync + enable). */
