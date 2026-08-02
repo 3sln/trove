@@ -6,11 +6,17 @@
 // upload proceeds, and the final part is short by a header and a tag per chunk.
 
 import { test, expect } from 'bun:test';
-import { UploadManager, CollectionService, MemoryKV, MemoryStorage, cipherSize, HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE } from '../src/index.js';
+import { createVfs, CollectionService, MemoryKV, MemoryStorage, cipherSize, HEADER_BYTES, TAG_BYTES, DEFAULT_CHUNK_SIZE } from '../src/index.js';
 
 const BOSS = { id: 'boss', roles: [] };
 
-/** A drive with one encrypted collection, and an UploadManager wired to it as Vfs does. */
+/**
+ * A drive with one encrypted collection.
+ *
+ * Through `createVfs`, deliberately: the manager's sealing policy used to be injected here
+ * as a hand-written copy of what Vfs injects, so this suite proved that COPY correct rather
+ * than the shipped rule. `new UploadManager` belongs in exactly one place.
+ */
 async function drive({ rules = { all: true }, storage = new MemoryStorage(), maxBytes = null } = {}) {
   const collections = new CollectionService({
     kv: new MemoryKV(), storageFactory: () => storage, admins: ['boss'],
@@ -20,17 +26,8 @@ async function drive({ rules = { all: true }, storage = new MemoryStorage(), max
     encryption: { enabled: true, rules },
   }, BOSS);
   const open = await collections.create({ name: 'Open', store: { driver: 'memory' } }, BOSS);
-  const uploads = new UploadManager({
-    storage,
-    encryptionFor: async (cid) => {
-      const encryption = await collections.encryptionFor(cid);
-      if (!encryption?.enabled) return null;
-      const key = await collections.dataKeyFor(cid);
-      return { encryption, dataKeyHex: Buffer.from(key).toString('hex') };
-    },
-    maxBytes,
-  });
-  return { collections, uploads, encrypted: c, open };
+  const vfs = await createVfs({ storage, collections, maxUploadBytes: maxBytes });
+  return { collections, vfs, uploads: vfs.uploads, encrypted: c, open };
 }
 
 test('the plan says encryption is happening and hands over nothing to do it with', async () => {
@@ -135,4 +132,24 @@ test('whether an item is encrypted is decided once and recorded', async () => {
   }, BOSS);
   const session = await d.uploads.sessions.get(plan.uploadId);
   expect(session.encrypted).toBe(true);
+});
+
+test('a collection that encrypts refuses the upload when its key is unavailable', async () => {
+  // The two implementations of "encrypt this item, and with which key" disagreed in the
+  // direction that matters. The upload path answered `null` on a key miss, which made the
+  // session PLAINTEXT in a collection someone set up to encrypt — and `#assertSealed`, the
+  // guard built to stop exactly that, is gated on `s.encrypted`, so it never ran.
+  // `writeFile` throws. There is one implementation now, and it is the one that throws.
+  //
+  // A ring with no key in it is what a record restored from a backup taken before the key
+  // existed looks like — the case the guard was written for.
+  const d = await drive();
+  const record = await d.collections.get(d.encrypted.id);
+  await d.collections.kv.set('collections', d.encrypted.id, { ...record, $keys: {} });
+
+  await expect(d.uploads.create({ collectionId: d.encrypted.id, name: 'notes.txt', size: 100 }))
+    .rejects.toThrow(/key is unavailable/);
+  // And the write path, which always said so, still does.
+  await expect(d.vfs.writeFile('notes.txt', 'plaintext', { collectionId: d.encrypted.id }))
+    .rejects.toThrow(/key is unavailable/);
 });

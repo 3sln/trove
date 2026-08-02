@@ -75,7 +75,7 @@ export class IndexingCoordinator {
     // with no scopes at all is that contributor withdrawing, so its facets go too,
     // rather than leaving an excerpt describing content that no longer exists.
     if (tags || metadata) await this.metadata.setContribution(nodeId, contributorId, { tags, metadata });
-    else if (!semanticTexts.length) await this.metadata.clearContribution?.(nodeId, contributorId);
+    else if (!semanticTexts.length) await this.metadata.clearContribution(nodeId, contributorId);
   }
 
   /** Clear this contributor's search entries for a node (an empty re-index). */
@@ -257,7 +257,7 @@ export class IndexingCoordinator {
     // can't count leaves this null, and the caller shows an indeterminate indicator —
     // which is the right answer. Inventing a total would produce a progress bar that
     // lies, and that is worse than a spinner.
-    const total = await this.metadata.countItems?.().catch(() => null) ?? null;
+    const total = await this.metadata.countItems().catch(() => null) ?? null;
     let indexed = 0;
     let failed = 0;
     let afterId = null;

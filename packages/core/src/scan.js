@@ -96,6 +96,9 @@ export class CollectionScanner {
     // outside: the scan adopts it AGAIN, resurrecting the deleted file under a new id
     // that shares the original's storage key. Emptying the trash then deletes the live
     // copy's bytes, leaving an item that lists, opens, and 404s forever.
+    // The one optional call left on a store method, and the interface says why: soft
+    // delete is documented as optional — a store that makes deletes permanent has no trash
+    // to enumerate. Every other declared method is called unguarded.
     const trashedKeys = await this.vfs.metadata.trashedStorageKeys?.(collectionId) ?? new Set();
 
     const result = {
@@ -215,28 +218,52 @@ export class CollectionScanner {
    * excluded: one of those with no metadata row is a leftover from a failed write, not
    * a file someone put there, and adopting it would surface `obj_9fc0…` as a document.
    */
+  /**
+   * What a record should say about an object, read from the OBJECT.
+   *
+   * Is this an encrypted object somebody copied in? The envelope says so, and says which
+   * key it wants, WITHOUT the key — which is the entire reason the header is readable.
+   * Without this the object is recorded as plaintext, and every read of it hands back raw
+   * ciphertext with no error: the drive shows a file, and opening it gives you an
+   * unreadable blob. Sideloading is a named use case here, so it has to be the case that
+   * works.
+   *
+   * ONE rule, and both callers ask it. They disagreed before: adoption read the envelope
+   * while refresh took `object.size`, so an encrypted item replaced in place — which is
+   * precisely the scenario this scanner exists for — recorded the size of the ENVELOPE
+   * (plaintext + 44 header + 16 tag per chunk) as the size of the file. Wrong from then on
+   * in listings, quotas and collectionStats, and it feeds rotation, where `node.size`
+   * bounds the read loop and is written into the new header.
+   *
+   * `size` is left undefined when the object reports none, so each caller can apply the
+   * fallback that makes sense for it. Costs one 44-byte read per object.
+   */
+  async #factsOf(collectionId, object) {
+    const envelope = await this.#envelopeOf(collectionId, object.key);
+    return {
+      // The size the file has, not the size the envelope occupies.
+      size: envelope ? envelope.plaintextSize : object.size,
+      etag: object.etag ?? null,
+      // Null when there is no envelope, deliberately: an encrypted object replaced by a
+      // plaintext one must stop claiming a key, or every read of it fails looking for a
+      // header that is not there.
+      encryption: envelope
+        ? { fingerprint: toHex(envelope.fingerprint), chunkSize: envelope.chunkSize }
+        : null,
+    };
+  }
+
   async #adopt(collectionId, object) {
     if (TROVE_KEY.test(object.key)) return null; // orphaned blob from an interrupted upload
     const name = await this.#uniqueName(collectionId, object.key);
-    // Is this an encrypted object somebody copied in?
-    //
-    // The envelope says so, and says which key it wants, WITHOUT the key — which is the
-    // entire reason the header is readable. Without this an adopted object is recorded as
-    // plaintext, and every read of it hands back raw ciphertext with no error: the drive
-    // shows a file, and opening it gives you an unreadable blob. Sideloading is a named
-    // use case here, so it has to be the case that works.
-    const envelope = await this.#envelopeOf(collectionId, object.key);
+    const facts = await this.#factsOf(collectionId, object);
     const node = await this.vfs.metadata.create({
       collectionId,
       name,
       storageKey: object.key,
-      // The size the file has, not the size the envelope occupies.
-      size: envelope ? envelope.plaintextSize : (object.size ?? 0),
-      etag: object.etag ?? null,
+      ...facts,
+      size: facts.size ?? 0,
       contentType: this.vfs.guessContentType(name),
-      encryption: envelope
-        ? { fingerprint: toHex(envelope.fingerprint), chunkSize: envelope.chunkSize }
-        : null,
       meta: { adopted: true, adoptedAt: Date.now() },
     });
     // Adopted files are indexed like any other, so they are findable immediately —
@@ -247,9 +274,10 @@ export class CollectionScanner {
 
   /** Re-read an item whose bytes were replaced in place. */
   async #refresh(node, object) {
+    const facts = await this.#factsOf(node.collectionId, object);
     const updated = await this.vfs.metadata.update(node.id, {
-      size: object.size ?? node.size,
-      etag: object.etag ?? null,
+      ...facts,
+      size: facts.size ?? node.size,
     });
     await this.vfs.indexing.indexNode(updated).catch(() => {});
     return updated;

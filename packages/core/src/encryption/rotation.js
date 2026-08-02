@@ -31,7 +31,7 @@
 // a subset is not observation, it is a guess — and the guess destroys data silently.
 
 import { TroveError } from '../errors.js';
-import { encryptStream, decodeHeader } from './envelope.js';
+import { encryptStream, decodeHeader, HEADER_BYTES } from './envelope.js';
 import { fromHex, fingerprint, toHex } from './keys.js';
 
 const NS = 'rotations';
@@ -285,14 +285,13 @@ export class RotationService {
    */
   async #moveSlice(node, newKey, newFingerprint, inflight, { deadline, now }) {
     const storage = await this.vfs.storageFor(node.collectionId);
-    const chunkSize = node.encryption.chunkSize;
-    const plaintextSize = node.size;
+    const { plaintextSize, chunkSize } = await this.#geometryOf(node, storage);
 
     // A store without multipart is a local one — filesystem, memory — where the whole
     // object is already within reach. There is nothing to check point against, and nothing
     // that needs it: the budget that makes this necessary is a network one.
     if (!storage.capabilities?.multipart) {
-      await this.#moveWhole(node, newKey, newFingerprint, storage, chunkSize);
+      await this.#moveWhole(node, newKey, newFingerprint, storage, { plaintextSize, chunkSize });
       return { done: true, inflight: null };
     }
 
@@ -378,13 +377,38 @@ export class RotationService {
     return { done: true, inflight: null };
   }
 
+  /**
+   * The geometry of the object as the OBJECT states it.
+   *
+   * The Vfs already answers the authority question and answers it this way: the item's
+   * record says which key sealed it and at what chunk size, and that is what makes a
+   * listing cheap — but it is a copy, and a copy can be stale (restored from a backup,
+   * adopted by a scan, written by another version).
+   *
+   * The two arms here disagreed. The multipart arm took `node.size`; the whole-object arm
+   * took the envelope's, so which answer a drive got depended on whether its store supports
+   * multipart. A stale-LARGE `node.size` makes every slice raise "Expected N bytes…
+   * received M", so the rotation can never reach `done` and the old key is never retired; a
+   * stale-SMALL one seals a header that decrypts to the wrong length forever.
+   *
+   * One 44-byte read against a multi-megabyte transfer.
+   */
+  async #geometryOf(node, storage) {
+    const head = await storage.get(node.storageKey, { range: { start: 0, end: HEADER_BYTES - 1 } });
+    const header = decodeHeader(new Uint8Array(await new Response(head.stream).arrayBuffer()));
+    return {
+      plaintextSize: header.plaintextSize ?? node.size,
+      chunkSize: header.chunkSize ?? node.encryption.chunkSize,
+    };
+  }
+
   /** The whole object in one put, for a store that cannot do multipart. */
-  async #moveWhole(node, newKey, newFingerprint, storage, chunkSize) {
+  async #moveWhole(node, newKey, newFingerprint, storage, { plaintextSize, chunkSize }) {
     const nextKey = rotatedKey(node.storageKey);
     const read = await this.vfs.readNode(node);
     const sealed = await encryptStream(newKey, read.stream, {
       fingerprint: newFingerprint,
-      plaintextSize: read.size ?? node.size,
+      plaintextSize,
       chunkSize,
     });
     await storage.put(nextKey, new Uint8Array(await new Response(sealed).arrayBuffer()), {

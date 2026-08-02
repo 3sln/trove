@@ -60,7 +60,7 @@ export class NavigateAction extends Action {
         nextCursor: res.nextCursor || null,
       });
       // Remember where they were, so the next visit opens there rather than guessing.
-      settings.set?.('explorer.lastCollection', collectionId);
+      settings.set('explorer.lastCollection', collectionId);
       explorer.set({ gate: null });
       // Explorer→context projection (collectionId/hasSelection) lives in bl/index.js
       // so it stays in sync with selection too — nothing to mirror here.

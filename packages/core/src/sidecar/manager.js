@@ -99,7 +99,7 @@ export class SidecarManager {
           // Out of retries. The comment is still in memory and still served, but it will
           // not survive a restart, and the person who wrote it has been told it saved.
           // That is a standing problem, which is exactly what the issue registry is for.
-          this.issues?.raise?.({
+          this.issues?.raise({
             kind: 'sidecar-flush',
             subject: nodeId,
             severity: 'error',

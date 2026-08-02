@@ -119,16 +119,15 @@ export class Vfs {
     this.uploads = new UploadManager({
       storageFor: (cid) => this.storageFor(cid),
       sessions: uploadSessions,
-      // What a collection encrypts and the key for it. Only the CollectionService knows,
-      // and only it is allowed to hand the key out — see collections/index.js.
-      encryptionFor: async (cid) => {
-        if (!this.collections?.encryptionFor) return null;
-        const encryption = await this.collections.encryptionFor(cid);
-        if (!encryption?.enabled) return null;
-        const key = await this.collections.dataKeyFor(cid);
-        if (!key) return null;
-        return { encryption, dataKeyHex: toHex(key) };
-      },
+      // ONE implementation of "does this item get sealed, and with what" — the same method
+      // `writeFile` uses, so a collection with per-item rules answers identically whichever
+      // way the bytes arrive, and both paths fail CLOSED when the key is missing.
+      sealingFor: (cid, name, contentType) => this.#sealingFor(cid, name, contentType),
+      // The key a fingerprint names, so an upload seals its later parts with the key it
+      // decided on rather than with whatever became current meanwhile. Only the
+      // CollectionService knows it, and only it is allowed to hand it out.
+      keyFor: async (cid, fingerprint) =>
+        (this.collections?.dataKeyFor ? this.collections.dataKeyFor(cid, fingerprint) : null),
       maxBytes: maxUploadBytes,
       partSize: uploadPartSize,
     });

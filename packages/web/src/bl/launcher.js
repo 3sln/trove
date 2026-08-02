@@ -16,6 +16,7 @@
 // carrying-a-handle problem that menu items had before they carried `actions`.
 
 import { parseTagQuery, filterLabel } from './tagQuery.js';
+import { iconForKind } from './fileType.js';
 import {
   ExecCommandAction, CloseSearchModalAction, OpenFileAction, SearchAction, FilterAction,
   SetLaunchQueryAction,
@@ -26,14 +27,6 @@ export function launcherMode(query) {
   const q = query || '';
   return q.startsWith('!') ? 'command' : q.includes('#') ? 'filter' : 'search';
 }
-
-const iconFor = (node) => {
-  const t = node?.contentType || '';
-  if (t.startsWith('image/')) return 'file-image';
-  if (t.startsWith('audio/')) return 'file-audio';
-  if (t.startsWith('video/')) return 'file-video';
-  return 'file-text';
-};
 
 /**
  * Everything you can do to a file, as descriptions.
@@ -80,7 +73,7 @@ export function trashMenuOf(node) {
  */
 function fileItem(node, { modal, pinnedIds, keys }) {
   return {
-    icon: iconFor(node),
+    icon: iconForKind(node),
     title: node.name,
     detail: node.contentType || '',
     node,

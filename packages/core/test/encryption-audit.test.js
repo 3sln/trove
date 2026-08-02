@@ -83,6 +83,32 @@ test('an encrypted object copied into the bucket is adopted as encrypted', async
   expect(await new Response((await d.vfs.readStream(node.id)).stream).text()).toBe('arrived from elsewhere');
 });
 
+test('replacing an encrypted object in place records the file size, not the envelope size', async () => {
+  // `#adopt` read the envelope for exactly this reason; `#refresh`, twenty lines later, took
+  // `object.size` — plaintext + 44 header + 16 tag per chunk for a sealed object. It needs
+  // an encrypted object replaced behind Trove's back, which is the scenario this scanner
+  // exists for. Wrong from then on in listings, quotas and collectionStats, and it feeds
+  // rotation, where `node.size` bounds the read loop and is written into the new envelope.
+  const d = await drive();
+  const done = await put(d, 'secret.txt', text('hello'));
+  expect(done.size).toBe(5);
+
+  const key = await d.collections.dataKeyFor(d.c.id);
+  const fp = fromHex(d.c.encryption.fingerprint);
+  const body = text('hello, at rather greater length than before');
+  const sealed = await encrypt(key, body, { fingerprint: fp, chunkSize: DEFAULT_CHUNK_SIZE });
+  expect(sealed.length).toBeGreaterThan(body.length);
+  await d.storage.put(done.storageKey, sealed, { contentType: 'text/plain' });
+
+  await new CollectionScanner({ vfs: d.vfs }).scan(d.c.id, {});
+  const after = await d.vfs.metadata.getById(done.id);
+  expect(after.size).toBe(body.length);
+  expect(after.encryption.fingerprint).toBe(d.c.encryption.fingerprint);
+  expect(await new Response((await d.vfs.readStream(done.id)).stream).text()).toBe(
+    'hello, at rather greater length than before',
+  );
+});
+
 test('an ordinary file copied in is still adopted as plaintext', async () => {
   const d = await drive();
   await d.storage.put('plain.txt', text('just a file'), { contentType: 'text/plain' });
@@ -152,4 +178,26 @@ test('a correctly sealed upload still completes', async () => {
   const done = await put(d, 'good.txt', text('hello'));
   expect(done.encryption).toBeTruthy();
   expect(await new Response((await d.vfs.readStream(done.id)).stream).text()).toBe('hello');
+});
+
+test('a rotation reads its geometry from the envelope, not from a stale record', async () => {
+  // The two arms of #moveSlice disagreed about who is authoritative for plaintext size, so
+  // which answer a drive got depended on whether its store supports multipart. A
+  // stale-LARGE `node.size` makes every slice raise "Expected N bytes… received M": the
+  // rotation never reaches `done`, so the old key is never retired and the job runs
+  // forever. The Vfs already settled this question the other way, and for a stated reason.
+  const d = await drive();
+  const done = await put(d, 'a.txt', text('the real contents'));
+  const before = d.c.encryption.fingerprint;
+  // A record that outlived its object: a restore from backup, a scan, another version.
+  await d.vfs.metadata.update(done.id, { size: 9_999 });
+
+  const rotation = new RotationService({ kv: d.kv, vfs: d.vfs, collections: d.collections });
+  await rotation.begin(d.c.id, BOSS);
+  let state = await rotation.step(d.c.id);
+  while (state.status === 'running') state = await rotation.step(d.c.id);
+
+  expect(state.failed).toBe(0);
+  expect(await d.collections.dataKeyFor(d.c.id, before)).toBe(null);
+  expect(await new Response((await d.vfs.readStream(done.id)).stream).text()).toBe('the real contents');
 });

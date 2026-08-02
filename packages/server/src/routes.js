@@ -263,7 +263,7 @@ export function createRouter() {
     // throws "Collection not found", and since reindex walks the whole metadata store,
     // every rebuild — including the one at boot — failed on them forever, raising a
     // retryable issue whose Retry re-ran the same failure. Refuse, and say what to do.
-    const n = await vfs.metadata.countItems?.(params.id);
+    const n = await vfs.metadata.countItems(params.id);
     if (n) {
       throw TroveError.conflict(
         `“${params.id}” still holds ${n.toLocaleString()} item${n === 1 ? '' : 's'}. `
@@ -356,7 +356,7 @@ export function createRouter() {
     // `stats` describes the COLLECTION; `items` is one page of it. Without this the
     // client can only report the page it happens to be holding, which on a drive with
     // more items than fit in a page is simply a wrong number on screen.
-    const stats = await vfs.metadata.collectionStats?.(collectionId).catch(() => null) ?? null;
+    const stats = await vfs.metadata.collectionStats(collectionId).catch(() => null) ?? null;
     // Space left on the backing store, when it can say. Null for object stores, which
     // have no such number — and a UI that showed a made-up gauge for S3 would be worse
     // than one that shows nothing.
@@ -723,7 +723,7 @@ export function createRouter() {
     await ctx.access.collection(collectionId, 'admin');
     requireHumanAdmin(ctx, 'estimate a key rotation');
     const record = await ctx.collections.get(collectionId);
-    const stats = await ctx.vfs.metadata.collectionStats?.(collectionId).catch(() => null);
+    const stats = await ctx.vfs.metadata.collectionStats(collectionId).catch(() => null);
     return estimateRotationCost(
       { driver: record.store?.driver, endpoint: record.store?.endpoint || record.store?.s3?.endpoint },
       { objects: stats?.items ?? 0, bytes: stats?.bytes ?? 0 },

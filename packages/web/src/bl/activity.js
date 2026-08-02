@@ -212,9 +212,9 @@ export class ActivityService {
       // until the next idle poll. A couple of bounded follow-ups cover that window
       // without turning this into a busy loop.
       this.#followUp();
-      this.platform.notifications?.info?.('Retrying — watch its progress in Activity');
+      this.platform.notifications.info('Retrying — watch its progress in Activity');
     } catch (err) {
-      this.platform.notifications?.error?.(`Couldn't retry: ${err.message}`);
+      this.platform.notifications.error(`Couldn't retry: ${err.message}`);
     }
   }
 
@@ -225,7 +225,7 @@ export class ActivityService {
       await this.api.dismissIssue(id);
     } catch (err) {
       this.#set({ issues: before }); // put it back rather than pretend
-      this.platform.notifications?.error?.(`Couldn't dismiss: ${err.message}`);
+      this.platform.notifications.error(`Couldn't dismiss: ${err.message}`);
     }
   }
 
@@ -243,10 +243,10 @@ export class ActivityService {
       const res = await this.api.reindex();
       await this.refreshTasks();
       this.togglePanel(true);
-      if (res.alreadyRunning) this.platform.notifications?.info?.('A rebuild is already running');
+      if (res.alreadyRunning) this.platform.notifications.info('A rebuild is already running');
       return res;
     } catch (err) {
-      this.platform.notifications?.error?.(`Couldn't rebuild the index: ${err.message}`);
+      this.platform.notifications.error(`Couldn't rebuild the index: ${err.message}`);
       throw err;
     }
   }
@@ -260,11 +260,11 @@ export class ActivityService {
       const res = await this.api.scanCollection(collectionId);
       await this.refreshTasks();
       this.togglePanel(true);
-      if (res.alreadyRunning) this.platform.notifications?.info?.('A scan of this collection is already running');
+      if (res.alreadyRunning) this.platform.notifications.info('A scan of this collection is already running');
       this.#followUp();
       return res;
     } catch (err) {
-      this.platform.notifications?.error?.(`Couldn't scan “${collectionId}”: ${err.message}`);
+      this.platform.notifications.error(`Couldn't scan “${collectionId}”: ${err.message}`);
       throw err;
     }
   }
@@ -284,19 +284,19 @@ export class ActivityService {
       this.togglePanel(true);
       const problems = (res.results || []).reduce((n, r) => n + (r.findings?.length || 0), 0);
       if (problems) {
-        this.platform.notifications?.warn?.(`Found ${problems} storage problem${problems === 1 ? '' : 's'} — see Activity`);
+        this.platform.notifications.warn(`Found ${problems} storage problem${problems === 1 ? '' : 's'} — see Activity`);
       } else if (!res.checked) {
-        this.platform.notifications?.info?.('There are no collections to check yet');
+        this.platform.notifications.info('There are no collections to check yet');
       } else if (!res.corsChecked) {
         // Honest about what was not checked. Reporting "all good" having skipped the check
         // that matters is how a diagnostic stops being believed.
-        this.platform.notifications?.info?.('Stores are reachable. Browser access was not checked — this drive has no public URL configured.');
+        this.platform.notifications.info('Stores are reachable. Browser access was not checked — this drive has no public URL configured.');
       } else {
-        this.platform.notifications?.success?.('Stores are reachable and allow browser access');
+        this.platform.notifications.success('Stores are reachable and allow browser access');
       }
       return res;
     } catch (err) {
-      this.platform.notifications?.error?.(`Couldn't check the stores: ${err.message}`);
+      this.platform.notifications.error(`Couldn't check the stores: ${err.message}`);
       throw err;
     }
   }

@@ -14,7 +14,7 @@
 // point of the contribution.
 
 import { dd } from '../../../runtime.js';
-import { icon, iconForNode } from '../../icon.js';
+import { icon } from '../../icon.js';
 import { groupHeader, menuButton, openRowMenu } from './parts.js';
 import { attachMedia } from '../../media.js';
 import { activate } from '../../activate.js';
@@ -88,7 +88,7 @@ function tile(it, active, { hover, select }, ui) {
       // the image fails — a deleted object, a format the browser won't decode, a 401 —
       // hiding the <img> uncovers exactly what the list would have shown, rather than
       // leaving the browser's broken-image glyph in a gallery.
-      icon(node ? iconForNode(node) : it.icon, { size: 26 }),
+      icon(it.icon, { size: 26 }),
       // The `src` is minted rather than built — a tile fetches without our Authorization
       // header, so the URL has to carry its own grant. Minting is batched (see
       // platform/mediaUrls.js), so a wall of tiles costs one request, not one each.

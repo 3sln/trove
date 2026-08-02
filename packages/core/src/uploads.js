@@ -19,7 +19,6 @@ import {
   HEADER_BYTES as ENVELOPE_HEAD,
 } from './encryption/envelope.js';
 import { fromHex, toHex } from './encryption/keys.js';
-import { shouldEncrypt } from './encryption/policy.js';
 
 export const DEFAULT_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
 const MIN_MULTIPART_PART = 5 * 1024 * 1024; // S3 floor (except final part)
@@ -147,14 +146,28 @@ export class UploadManager {
    * @param {object} [deps.sessions] session store (defaults in-memory)
    * @param {number} [deps.partSize]
    */
-  constructor({ storage, storageFor, sessions, encryptionFor, partSize = DEFAULT_PART_SIZE, maxBytes = null }) {
+  constructor({ storage, storageFor, sessions, sealingFor, keyFor, partSize = DEFAULT_PART_SIZE, maxBytes = null }) {
     // Either a single backend, or a resolver keyed by collectionId (collections).
     this.storageFor = storageFor ?? (async () => storage);
     this.sessions = sessions ?? new MemorySessionStore();
-    // What a collection encrypts, and the key to do it with:
-    // `(collectionId) => { encryption, dataKey } | null`. Absent means nothing is
-    // encrypted, which is what every existing deployment is.
-    this.encryptionFor = encryptionFor ?? (async () => null);
+    // Whether this item gets sealed and with what:
+    // `(collectionId, name, contentType) => { key, fingerprint, chunkSize } | null`.
+    //
+    // INJECTED rather than decided here, because there was a second implementation of the
+    // same question and the two disagreed in the direction that matters. This one used to
+    // ask for a collection-wide policy and apply `shouldEncrypt` itself, and a miss on the
+    // key answered `null` — which made the upload session PLAINTEXT in a collection set up
+    // to encrypt. `Vfs.#sealingFor`, the other implementation, throws. `#assertSealed` is
+    // the guard built to stop exactly this and it is gated on `s.encrypted`, so it never
+    // ran on the fail-open path. There is one implementation now and it fails closed.
+    //
+    // Absent means nothing is encrypted, which is what a Vfs-less deployment is.
+    this.sealingFor = sealingFor ?? (async () => null);
+    // The key a FINGERPRINT names, for sealing the remaining parts of an upload that has
+    // already decided. Not `sealingFor` again: that answers with whatever key is current,
+    // and a rotation starting mid-upload makes the current key a different one — parts
+    // sealed under it while the header names the old fingerprint decrypt as corruption.
+    this.keyFor = keyFor ?? (async () => null);
     this.partSize = partSize;
     this.maxBytes = maxBytes || null; // per-file quota (null = unbounded)
   }
@@ -197,9 +210,9 @@ export class UploadManager {
     // plus an authentication tag per chunk. Planning multipart boundaries against the
     // plaintext size is short by exactly that, which is the difference between a final part
     // that exists and one that does not.
-    const policy = await this.encryptionFor(collectionId);
-    const encrypting = !!policy && shouldEncrypt(policy.encryption, { name: req.name, contentType });
-    const chunkSize = policy?.encryption?.chunkSize || DEFAULT_CHUNK_SIZE;
+    const sealing = await this.sealingFor(collectionId, req.name, contentType);
+    const encrypting = !!sealing;
+    const chunkSize = sealing?.chunkSize || DEFAULT_CHUNK_SIZE;
     const storedSize = encrypting ? cipherSize(req.size, chunkSize) : req.size;
 
     // The per-file limit is checked against what will be STORED, and checked here rather
@@ -245,7 +258,7 @@ export class UploadManager {
       // may arrive in any order — see `#sealPart`. Generating it per part would reuse
       // nonces across the object, which AES-GCM does not survive.
       noncePrefix: encrypting ? toHex(crypto.getRandomValues(new Uint8Array(8))) : null,
-      keyFingerprint: encrypting ? policy.encryption.fingerprint : null,
+      keyFingerprint: encrypting ? toHex(sealing.fingerprint) : null,
       contentType,
       createdAt: Date.now(),
       strategy: null,
@@ -466,10 +479,16 @@ export class UploadManager {
     return prependBytes(header, sealed);
   }
 
-  /** The collection's key, for sealing. Never leaves this process. */
+  /**
+   * The key this SESSION decided on, for sealing. Never leaves this process.
+   *
+   * By fingerprint, not "whatever the collection encrypts with now": the fingerprint was
+   * pinned at negotiation because the collection's rules and its current key can both
+   * change while an upload is in flight, and half an object sealed under each is
+   * unreadable in a way nothing reports.
+   */
   async #dataKeyFor(s) {
-    const policy = await this.encryptionFor(s.collectionId);
-    const key = policy?.dataKeyHex ? fromHex(policy.dataKeyHex) : null;
+    const key = await this.keyFor(s.collectionId, s.keyFingerprint);
     if (!key) throw TroveError.internal('This collection is encrypted but its key is unavailable');
     return key;
   }
@@ -598,7 +617,11 @@ export class UploadManager {
    * @returns {Promise<{aborted: number, failed: number}>}
    */
   async sweepExpired(now = Date.now()) {
-    const ids = (await this.sessions.expired?.(now)) || [];
+    // Not `expired?.()`. Both session stores define it and it is part of the store
+    // interface — the optional call is the shape server/src/index.js records as having
+    // turned "evict idle documents" into a permanent no-op, because a name that stopped
+    // existing looked exactly like a name that was never required.
+    const ids = (await this.sessions.expired(now)) || [];
     let aborted = 0;
     let failed = 0;
     for (const id of ids) {
