@@ -30,7 +30,9 @@ on:
       - published
 
 permissions:
-  contents: read
+  # `write` because this uploads the built plugin zips onto the release itself — see the
+  # "Attach the plugins" step. The checkout is still of a tag, and nothing here pushes.
+  contents: write
   # Required for npm provenance. Drop this, and the --provenance flag below,
   # if the repository is ever made private: provenance only works for packages
   # published from a public repository.
@@ -241,6 +243,40 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Plugins are not npm packages. A plugin is a zip someone installs through the drive's
+      # own plugin dialog, so the only way to get one is to download a file — which means
+      # that unless the release carries it, "install the audiobook plugin" is "clone the
+      # repo and run the build". Attaching it makes that a link.
+      #
+      # Built AFTER the npm publishes deliberately: a plugin zip can be re-attached to a
+      # release at any time, an npm version cannot be republished. The step that is
+      # impossible to undo goes first, and this one cannot delay or fail it.
+      - name: Build the plugins
+        run: bun run build:plugins
+
+      # The zip, through the same parser the SERVER runs on upload. `bun test` checks the
+      # manifest against a zip built from the source tree; this checks the artifact people
+      # will actually be handed, which is the one a build change can break.
+      - name: Check the built plugins install
+        run: |
+          for zip in plugins/*/dist/*.zip; do
+            bun -e '
+              import { readFileSync } from "node:fs";
+              import { parsePluginPackage } from "./packages/core/src/plugins/package.js";
+              const pkg = await parsePluginPackage(new Uint8Array(readFileSync(Bun.argv[1])));
+              const names = pkg.contributions.map((c) => `${c.name}:${c.type}`).join(", ");
+              console.log(`ok ${pkg.manifest.name}@${pkg.manifest.version} — ${names}`);
+            ' "$zip"
+          done
+
+      - name: Attach the plugins to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        # --clobber so re-running the workflow on a release replaces the asset rather than
+        # failing on a name that is already there.
+        run: gh release upload "$TAG" plugins/*/dist/*.zip --clobber
+
       - name: Summarise
         env:
           TAG: ${{ github.event.release.tag_name }}
@@ -255,4 +291,8 @@ jobs:
             echo '```sh'
             echo "npm create @3sln/trove my-drive"
             echo '```'
+            echo ""
+            echo "Plugins attached to this release, installable through the drive's plugin dialog:"
+            echo ""
+            for zip in plugins/*/dist/*.zip; do echo "- \`$(basename "$zip")\`"; done
           } >> "$GITHUB_STEP_SUMMARY"
