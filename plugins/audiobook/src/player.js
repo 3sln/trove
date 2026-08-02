@@ -19,6 +19,7 @@
 import { activate } from 'trove';
 import { openBook, releaseBook, loadCover } from './book.js';
 import { Transport, chapterAt, clock } from './transport.js';
+import { canStream, streamUrl } from './stream.js';
 
 const el = (tag, className, text) => {
   const n = document.createElement(tag);
@@ -69,13 +70,38 @@ activate(async (ctx) => {
     //
     // A Blob is allowed. So a book that is already downloaded plays from its own bytes,
     // and one that is not offers to fetch them rather than pretending it can stream.
+    // THREE WAYS TO GET AUDIO, in the order that costs the listener least.
+    //
+    //   1. STREAM. The book is transmuxed to fragmented MP4 on the fly and fed to a
+    //      MediaSource — audio starts after a few hundred kilobytes, seeking to hour
+    //      eleven reads hour eleven, and nothing is stored. See stream.js.
+    //   2. A LOCAL BLOB, if the book was downloaded. No transmuxing, no network.
+    //   3. DOWNLOAD, when neither works — a codec MediaSource will not take, or a
+    //      container whose tables this cannot read. A download button is a worse
+    //      experience than streaming and a far better one than a play button that
+    //      silently does nothing, which is what shipped.
+    //
+    // None of them is a URL. The frame's CSP forbids that, deliberately.
     let src = null;
+    let stream = null;
     if (!book.tracks) {
-      const blob = await ctx.files.localBlob(file.id).catch(() => null);
-      if (blob) src = URL.createObjectURL(blob);
-      else {
-        // Not here yet. Draw the book — its cover, title and chapters are already known
-        // from the index — with a download in place of the transport.
+      const streamable = book.moov ? canStream(book.moov) : null;
+      if (streamable) {
+        const blob = await ctx.files.blob(file.id).catch(() => null);
+        if (blob) {
+          stream = streamUrl(streamable, async (start, end) => blob.slice(start, end).bytes(), {
+            onError: (err) => console.error('[audiobook] stream failed:', err?.message || err),
+          });
+          src = stream.url;
+        }
+      }
+      if (!src) {
+        const local = await ctx.files.localBlob(file.id).catch(() => null);
+        if (local) src = URL.createObjectURL(local);
+      }
+      if (!src) {
+        // Draw the book anyway — cover, title and chapters all came from the index — with
+        // a download in place of the transport.
         renderOffline(ctx, root, book, file, skip);
         return;
       }
@@ -87,7 +113,7 @@ activate(async (ctx) => {
     // behind. See the SDK's `files.offline`.
     if (keep) ctx.files.offline.start(file.id).catch(() => {});
 
-    render(ctx, root, book, src, skip, file);
+    render(ctx, root, book, src, skip, file, stream);
   });
 });
 
@@ -182,7 +208,7 @@ function chapterList(book) {
   return sel;
 }
 
-function render(ctx, root, book, src, skip, file) {
+function render(ctx, root, book, src, skip, file, stream) {
   root.innerHTML = '';
 
   const chapterLine = el('div', 'ab-chapter', '');
@@ -270,6 +296,9 @@ function render(ctx, root, book, src, skip, file) {
   ]);
 
   transport.open(book, src);
+  // The feeder needs the element to know where the playhead is: it appends ahead of
+  // playback and re-queues on a seek, so a paused book fetches nothing.
+  stream?.attach(transport.audio);
 
   // Dragging the bar must not be fought by the tick that redraws it.
   let scrubbing = false;
@@ -295,11 +324,11 @@ function render(ctx, root, book, src, skip, file) {
     times.textContent = total ? `${clock(at)} · ${clock(total - at)} left` : clock(at);
   }
 
-  wireOs(ctx, transport, book, skip, jump, src);
+  wireOs(ctx, transport, book, skip, jump, src, stream);
 }
 
 /** The OS transport controls, the dock, and giving both back on the way out. */
-async function wireOs(ctx, transport, book, skip, jump, src) {
+async function wireOs(ctx, transport, book, skip, jump, src, stream) {
   ctx.media.setMetadata({
     title: book.title,
     artist: book.author || '',
@@ -334,7 +363,8 @@ async function wireOs(ctx, transport, book, skip, jump, src) {
     // The cover's object URL, and the audio's. Both are this frame's, and nothing else
     // can free them — the audio one is the whole book held in memory.
     if (book.coverUrl?.startsWith('blob:')) URL.revokeObjectURL(book.coverUrl);
-    if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
+    if (stream) stream.dispose();
+    else if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
     // The object URLs an LPF minted over its own entries. Nothing else can free them, and
     // they are the whole book in memory.
     releaseBook(book);

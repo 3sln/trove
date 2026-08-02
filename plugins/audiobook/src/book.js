@@ -44,7 +44,18 @@ export async function openBook(ctx, file) {
   // An LPF still opens its zip regardless: its tracks are the audio, and playback needs the
   // entries themselves, not a description of them.
   const indexed = indexedBook(file);
-  if (indexed && !isLpf(file)) return indexed;
+  // The indexed record has everything to DRAW a book, but streaming needs the sample
+  // tables, which only live in `moov`. So the probe still runs for an m4b — a few
+  // kilobytes, no audio — and the record carries the result.
+  if (indexed && !isLpf(file)) {
+    const blob = await ctx.files.blob(file.id).catch(() => null);
+    if (blob) {
+      const read = async (start, end) => blob.slice(start, end).bytes();
+      const probe = await findMoov(read, blob.size, { window: WINDOW }).catch(() => ({ found: false }));
+      if (probe.found) indexed.moov = await read(probe.offset, probe.offset + probe.size).catch(() => null);
+    }
+    return indexed;
+  }
 
   const blob = await ctx.files.blob(file.id);
   if (isLpf(file)) return { ...(await openLpf(ctx, file, blob)), ...titlesFrom(indexed) };
@@ -112,6 +123,8 @@ async function openMp4(ctx, file, blob) {
 
   const moov = await read(probe.offset, probe.offset + probe.size);
   const meta = metadataFrom(moov);
+  // Kept for the streamer, which needs the sample tables this walk already has in hand.
+  const moovBytes = moov;
   const duration = movieDuration(moov);
 
   // `chpl` first: it is what almost every m4b in the wild uses, and it needs no second
@@ -122,8 +135,12 @@ async function openMp4(ctx, file, blob) {
 
   return {
     kind: 'm4b',
+    moov: moovBytes,
     title: meta.title || file.name,
     author: meta.author || null,
+    narrator: meta.narrator || null,
+    series: meta.series || null,
+    cover: null,
     duration,
     chapters: chapters?.length ? chapters : [{ time: 0, title: meta.title || file.name }],
     streamable: true,

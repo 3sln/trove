@@ -7,10 +7,11 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
-**Open: 025** — streaming a book that is not downloaded. Play, cover art, rate control,
-layout and recent thumbnails are all fixed; what remains is that an undownloaded book can
-only be fetched whole, because MediaSource takes fragmented MP4 and an m4b is progressive.
-Needs a transmuxer in the frame.
+**Nothing open.** 024 was the view switcher appearing where switching is not a choice.
+025 was the audiobook player: play did nothing (the sandbox CSP forbids loading media from
+a URL, by design), no cover art, no rate control, a layout written only for the docked
+case, and recent tiles that never drew a thumbnail. Closed by transmuxing to fragmented
+MP4 in the frame and feeding a MediaSource.
 
 023 was three defects found by opening one audiobook on a real drive:
 a plugin viewer that had never run (an undeclared capability), plugin indexers that could

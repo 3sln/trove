@@ -97,6 +97,33 @@ is the case where the size genuinely rides along. Nothing here can re-encode an 
 there is no decoder in an indexer isolate, so an oversized one is skipped rather than
 shrunk.
 
+## Streaming, and why it needs a transmuxer
+
+The viewer runs in a sandboxed frame whose CSP is `connect-src 'none'` and
+`media-src blob: data:` — deliberately, so a plugin cannot reach the network and cannot be
+an exfiltration side-channel. An `<audio src="https://…">` is therefore blocked outright,
+however the URL was minted. Audio has to arrive as bytes.
+
+That rules out the obvious approach and leaves MediaSource, which takes **fragmented** MP4:
+an init segment (`ftyp` + a `moov` carrying `mvex`) then `moof`+`mdat` media segments. An
+m4b is progressive — one `moov`, one enormous `mdat` — so `appendBuffer` on its bytes fails
+however they are ordered. Front-loading `moov` makes a file seekable without making it
+appendable.
+
+So `transmux.js` reads the sample tables once and builds fragments on demand. Nothing is
+re-encoded: a fragment's `mdat` is a **copy of the original bytes** for a run of samples,
+and only the boxes describing them are new — which is why it can run in a sandbox with no
+decoder in it, and why it works for codecs it has never heard of (`stsd` is copied
+verbatim).
+
+On the 185 MB book this was built against — 1,058,289 samples, 13.65 hours — the init
+segment is **572 bytes**, and starting playback six hours in reads **77 KB**.
+
+When a book cannot be streamed (a codec `MediaSource.isTypeSupported` refuses, tables this
+cannot read), the viewer offers a **download** and plays from a local Blob afterwards. That
+is deliberate: a download button is worse than streaming and far better than a play button
+that silently does nothing.
+
 ## Layout
 
 ```
@@ -108,6 +135,9 @@ src/mp4.js         pure: boxes, moov, chapters, metadata
 src/lpf.js         pure: publication.json, in every shape the spec allows
 src/zip.js         pure: a zip's central directory, read from the tail
 src/bookIndexer.js the indexer: the whole record, server-side, by range
+src/transmux.js    progressive MP4 -> fragmented MP4, for MediaSource
+src/stream.js      feeding a MediaSource from ranged reads
+src/loadCover.js   the cover, as bytes, because the CSP forbids a URL
 src/transport.js   playback as ONE timeline, whatever it is made of
 test/              the two pure modules, byte by byte
 ```
