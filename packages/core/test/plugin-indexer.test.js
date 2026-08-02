@@ -76,7 +76,7 @@ test('installed indexer auto-runs on upload and namespaces its contribution', as
   expect(fresh.tags.words).toBe(5);
 });
 
-test('installing an indexer backfills existing files', async () => {
+test('installing an indexer registers it, and a backfill catches up existing files', async () => {
   const { vfs, plugins } = await harness();
   // File exists BEFORE the indexer is installed → only the text indexer (which
   // doesn't match .demo) has run, so no plugin contribution yet.
@@ -84,8 +84,26 @@ test('installing an indexer backfills existing files', async () => {
   expect((await vfs.metadata.getById(node.id)).contributions[IDX]).toBeUndefined();
 
   await plugins.install({ principal, bytes: demoPackage() });
-  const after = await vfs.metadata.getById(node.id);
-  expect(after.contributions[IDX].tags.words).toBe(3);
+
+  // Install REGISTERS but no longer backfills: re-reading every matching file in a drive
+  // is not work an install request can finish, and on Workers the isolate goes before it
+  // gets far. The server schedules it as a task instead — see `beginBackfill`.
+  expect((await vfs.metadata.getById(node.id)).contributions[IDX]).toBeUndefined();
+  // ...and the indexer really is registered, which is what makes the backfill possible.
+  const indexer = vfs.indexers.get(IDX);
+  expect(indexer).toBeTruthy();
+
+  await vfs.backfillIndexer(indexer);
+  expect((await vfs.metadata.getById(node.id)).contributions[IDX].tags.words).toBe(3);
+});
+
+test('a newly installed indexer still runs on the NEXT upload without any backfill', async () => {
+  // The other half of the same change: registration is immediate, so a file written
+  // after the install is indexed on the way in and owes nothing to the catch-up pass.
+  const { vfs, plugins } = await harness();
+  await plugins.install({ principal, bytes: demoPackage() });
+  const node = await write(vfs, 'new.demo', 'one two three');
+  expect((await vfs.metadata.getById(node.id)).contributions[IDX].tags.words).toBe(3);
 });
 
 test('uninstalling an indexer purges its contributions everywhere', async () => {

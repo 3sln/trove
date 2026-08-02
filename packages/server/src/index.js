@@ -140,6 +140,47 @@ export async function createServer(config = {}) {
     }
   };
   const startReindex = async (opts) => (await beginReindex(opts)).done;
+
+  /**
+   * Re-run named indexers over the files they match — what a freshly installed plugin
+   * needs, and the reason it is a TASK rather than part of the install.
+   *
+   * Scoped to `indexerIds` rather than rebuilding the drive: installing one plugin should
+   * not re-embed every file for every other indexer. That is also why it does not take
+   * the drive-wide `reindex` claim a full rebuild takes — two different plugins
+   * backfilling at once are doing disjoint work.
+   */
+  const beginBackfill = async ({ indexerIds = [], reason, title } = {}) => {
+    const wanted = indexerIds.filter(Boolean);
+    if (!wanted.length) {
+      return { task: null, alreadyRunning: false, done: Promise.resolve({ indexed: 0 }) };
+    }
+    const begun = tasks.begin(
+      {
+        kind: 'index',
+        title: title || (wanted.length === 1 ? 'Indexing existing files' : `Indexing existing files for ${wanted.length} indexers`),
+        detail: reason || null,
+        unit: 'items',
+        cancellable: true,
+      },
+      async (task) => {
+        let indexed = 0;
+        for (const id of wanted) {
+          const indexer = vfs.indexers.get(id);
+          // A named indexer that is not registered is not an error worth failing the
+          // task over: the usual cause is a deployment that cannot run it, which has
+          // already said so through the plugin-indexers issue.
+          if (!indexer?.match) continue;
+          const r = await vfs.backfillIndexer(indexer, { shouldStop: () => task.cancelled || closing() });
+          indexed += r?.indexed ?? 0;
+          task.progress?.({ done: indexed });
+          if (task.cancelled || closing()) break;
+        }
+        return { indexed };
+      },
+    );
+    return { task: begun.task, alreadyRunning: false, done: begun.done };
+  };
   // Retrying an issue runs the same work as everything else, and reports it the same
   // way. The issue is not cleared here — it is cleared by the indexing that succeeds,
   // so a retry can't report success over a problem that is still there.
@@ -165,10 +206,25 @@ export async function createServer(config = {}) {
   lifecycleState.background = {
     beginScan: config.background?.beginScan || beginScan,
     beginReindex: config.background?.beginReindex || beginReindex,
+    beginBackfill: config.background?.beginBackfill || beginBackfill,
   };
   const routeBeginScan = lifecycleState.background.beginScan;
   const routeBeginReindex = lifecycleState.background.beginReindex;
+  const routeBeginBackfill = lifecycleState.background.beginBackfill;
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
+  // "I have added the binding — try again." Re-activating re-probes, which is the only
+  // honest way to answer: a button that merely dismissed the diagnostic would leave the
+  // drive exactly as unable to index as it was, with nothing saying so.
+  issues.handle('reactivate-indexers', async (issue) => {
+    const record = (await plugins?.installs?.all?.() ?? []).find((r) => r.pluginId === issue.retry.pluginId);
+    if (!record) return { ok: false };
+    await plugins.indexers?.activate(record, { backfill: false });
+    // Registered again? Then catch the existing files up, which is what the install
+    // would have scheduled had the deployment been able to run them at the time.
+    const ids = (record.indexers || []).map((i) => i.id).filter((id) => vfs.indexers.get(id));
+    if (ids.length) await routeBeginBackfill({ indexerIds: ids, reason: 'Retrying after the indexer runtime became available' });
+    return { ok: true };
+  });
   issues.handle('storage-check', (issue) => storageCheck.run({ origin: issue.retry?.origin || config.publicUrl || null }));
   // The one retry that matters most: the user has been told a comment saved and it exists
   // only in memory. The op was raised for years with no handler registered for it — and in
@@ -529,6 +585,7 @@ export async function createServer(config = {}) {
     // inside a Durable Object want. `begin*` goes wherever `config.background` says,
     // which for a front-line Worker isolate is the object rather than itself.
     startScan, startReindex, beginScan: routeBeginScan, beginReindex: routeBeginReindex,
+    beginBackfill: routeBeginBackfill,
     runMaintenance, checkStorage: (opts) => storageCheck.run(opts), rotation, mcp, auth, close };
 }
 

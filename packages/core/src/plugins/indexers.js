@@ -34,6 +34,14 @@ export class PluginIndexers {
    */
   async activate(record, { backfill = true } = {}) {
     const specs = record.indexers || [];
+    // The probe first, so a deployment that cannot run this plugin's indexers says so
+    // once, here, instead of failing per file — and so the saying of it is undone the
+    // moment the deployment can. A record with no indexers has nothing to diagnose.
+    if (specs.length) {
+      const probe = await this.probe();
+      await this.#diagnose(record, probe);
+      if (!probe.ok) return 0;
+    }
     // Retire anything this plugin used to declare and no longer does. Both this and
     // deactivate() iterated only the record in hand, so an indexer dropped by an
     // upgrade stayed registered — running code the user upgraded away from on every
@@ -71,6 +79,44 @@ export class PluginIndexers {
    * runtime — PluginIndexers is the coordinator, not the thing that knows.
    */
   async probe() { return this.runtime?.probe?.() ?? { ok: true }; }
+
+  /**
+   * Say — or stop saying — that this plugin's indexers are not running.
+   *
+   * A standing DIAGNOSTIC rather than a field nobody draws, because the symptom is an
+   * absence: a drive whose plugin indexers never ran looks exactly like a drive with
+   * nothing to index. The issues list is where the drive already admits to things it
+   * cannot do, and it carries a retry, so the answer to "why is my search empty" arrives
+   * in the same place as every other one.
+   *
+   * Raised and cleared at ACTIVATION, which happens on install and again at every boot —
+   * so a deployment that gains a Worker Loader binding drops the diagnostic on its next
+   * start, and one that loses it picks the diagnostic back up, with nobody rewriting a
+   * stored answer.
+   */
+  async #diagnose(record, probe) {
+    const issues = this.vfs?.issues;
+    if (!issues) return;
+    try {
+      if (probe.ok) {
+        await issues.clear('plugin-indexers', record.pluginId);
+        return;
+      }
+      await issues.raise({
+        kind: 'plugin-indexers',
+        subject: record.pluginId,
+        severity: 'warning',
+        title: `“${record.pluginId}” cannot index on this deployment — what it would add to search is missing`,
+        detail: probe.reason,
+        remedy: 'Bind a Worker Loader (`[[worker_loaders]]` in wrangler.toml) so plugin indexers can run in their own isolate.',
+        // Retrying re-activates, which re-probes: the honest way to ask again after the
+        // binding has been added, rather than a button that only clears the message.
+        retry: { op: 'reactivate-indexers', pluginId: record.pluginId },
+      });
+    } catch (err) {
+      console.error('could not record the plugin-indexer diagnostic:', err.message);
+    }
+  }
 
   /** Unregister + purge every indexer a record declared. */
   async deactivate(record) {

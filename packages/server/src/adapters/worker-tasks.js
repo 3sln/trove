@@ -85,6 +85,15 @@ export function createTaskHost(getServer) {
       return { task, alreadyRunning };
     }
 
+    async #beginBackfill(indexerIds, reason) {
+      const server = await this.#boot();
+      const { task, alreadyRunning, done } = await server.beginBackfill({ indexerIds, reason });
+      // Same shape as a reindex: nothing to resume from, so it either finishes in this
+      // object's lifetime or the files stay unindexed until something asks again.
+      if (!alreadyRunning) this.state.waitUntil?.(done.catch(() => null));
+      return { task, alreadyRunning };
+    }
+
     async #beginReindex(reason) {
       const server = await this.#boot();
       const { task, alreadyRunning, done } = await server.beginReindex({ reason });
@@ -102,6 +111,7 @@ export function createTaskHost(getServer) {
       const server = await this.#boot();
       switch (url.pathname) {
         case '/begin':
+          if (body.kind === 'backfill') return json(await this.#beginBackfill(body.indexerIds, body.reason));
           return json(body.kind === 'index'
             ? await this.#beginReindex(body.reason)
             : await this.#beginScan(body.collectionId || 'default', body.reason));
@@ -204,6 +214,7 @@ export function remoteBackground(namespace) {
     background: {
       beginScan: (collectionId, { reason } = {}) => begin({ kind: 'scan', collectionId, reason }),
       beginReindex: ({ reason } = {}) => begin({ kind: 'index', reason }),
+      beginBackfill: ({ indexerIds, reason } = {}) => begin({ kind: 'backfill', indexerIds, reason }),
     },
     maintain: (budgetMs) => stub()
       .fetch('https://trove.tasks/maintain', {

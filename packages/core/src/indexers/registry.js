@@ -64,9 +64,20 @@ export class IndexerRegistry {
   unregister(id) {
     this.indexers.delete(id);
   }
+  /**
+   * The redacted view — what `/api/indexers` answers with. Deliberately not the indexer
+   * itself: an indexer holds a `match` and an `index` that runs plugin code, and neither
+   * belongs in a response.
+   */
   list() {
     return [...this.indexers.values()].map((i) => ({ id: i.id, displayName: i.displayName || i.id }));
   }
+
+  /**
+   * The LIVE indexer, for a caller that means to run it — `backfillIndexer` after an
+   * install, which needs the real `match` and `index` that `list()` strips.
+   */
+  get(id) { return this.indexers.get(id) || null; }
   matching(node) {
     return [...this.indexers.values()].filter((i) => {
       try {

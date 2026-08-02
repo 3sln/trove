@@ -966,12 +966,28 @@ export function createRouter() {
   // Install: upload the raw package zip; grants via ?grants=files,storage. The server
   // re-parses + validates and gates on scope (admin for server indexers / shared
   // resources), then stores the blob (deduped by digest) + the install record.
-  r.post('/api/plugins/install', ['plugins'], async ({ plugins, principal, req, query }) => {
+  r.post('/api/plugins/install', ['plugins', 'backgroundWork'], async ({ plugins, principal, req, query, backgroundWork }) => {
     requirePlugins(plugins);
     requirePrincipal(principal);
     const bytes = await readBytesCapped(req, plugins.maxPackageBytes || 32 * 1024 * 1024);
     const grants = query.grants ? String(query.grants).split(',').map((s) => s.trim()).filter(Boolean) : undefined;
-    return { install: await plugins.install({ principal, bytes, grants }) };
+    const install = await plugins.install({ principal, bytes, grants });
+
+    // A new indexer only earns its keep over files that are ALREADY here, and re-reading
+    // them is not work an install request can finish — so it is scheduled, not awaited.
+    // Skipped when the deployment cannot run them: `indexersSkipped` says so, and a task
+    // that indexes nothing is worse than no task, because it reports success.
+    let backfill = null;
+    if (install.indexers?.length && !install.indexersSkipped) {
+      const { task } = await backgroundWork.beginBackfill({
+        indexerIds: install.indexers.map((i) => i.id),
+        reason: `Indexing existing files for ${install.pluginId}`,
+      });
+      backfill = task;
+    }
+    // The task rides back with the install so a client can watch it rather than
+    // discovering later that its drive is quietly re-indexing.
+    return { install, backfill };
   }, { cost: 'install' });
 
   // List this account's server-installed plugins (for cross-device sync).

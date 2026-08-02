@@ -57,9 +57,14 @@ test('installing a server indexer backfills existing files; uninstall purges', a
   let stat = await json(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions?.[IDX]).toBeUndefined();
 
-  // Admin installs it → activate() backfills synchronously within the request.
+  // Admin installs it. The install REGISTERS the indexer and schedules a backfill as a
+  // task — it no longer re-reads the drive inside the request, which is work a request
+  // cannot finish. The task rides back in the response so a caller can watch it.
   const inst = await handle(new Request('http://t/api/plugins/install', { method: 'POST', body: indexerPackage() }));
   expect(inst.status).toBe(200);
+  const installed = await inst.json();
+  expect(installed.backfill).toBeTruthy();
+  await waitForTask(handle, installed.backfill.id);
 
   stat = await json(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions[IDX].tags).toEqual({ indexed: true, words: 3 });
@@ -71,3 +76,14 @@ test('installing a server indexer backfills existing files; uninstall purges', a
   stat = await json(handle, 'GET', `/api/collections/default/items/resolve?id=${node.id}`);
   expect(stat.json.node.contributions?.[IDX]).toBeUndefined();
 });
+
+/** Poll a task to completion — the backfill is scheduled, so the assertion must wait. */
+async function waitForTask(handle, id) {
+  for (let i = 0; i < 100; i++) {
+    const r = await json(handle, 'GET', '/api/tasks');
+    const t = (r.json.tasks || []).find((x) => x.id === id);
+    if (!t || t.status !== 'running') return t;
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  throw new Error(`task ${id} did not finish`);
+}

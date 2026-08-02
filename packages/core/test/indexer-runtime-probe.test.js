@@ -227,3 +227,39 @@ test('the shim reads a range as an inclusive HTTP header, and honours maxBytes',
   // clamped by maxBytes (10), not by the node's size (100)
   expect(asked[1]).toBe('bytes=0-9');
 });
+
+test('a deployment that cannot index raises a diagnostic, and clears it when it can', async () => {
+  // The symptom is an ABSENCE — a drive whose plugin indexers never ran looks identical
+  // to one with nothing to index — so the only way anyone finds out is if the drive says
+  // so. And it has to stop saying so on its own, or every drive that later gains a
+  // Worker Loader binding keeps a permanent false warning.
+  const raised = new Map();
+  const issues = {
+    async raise(spec) { raised.set(`${spec.kind}:${spec.subject}`, spec); return spec; },
+    async clear(kind, subject) { raised.delete(`${kind}:${subject}`); },
+  };
+  const record = { account: 'a', pluginId: 'test.com/probe', digest: 'sha256:d', packageRef: 'r', indexers: [{ id: 'i1', entry: 'e.js' }] };
+
+  let canRun = false;
+  const runtime = { async probe() { return canRun ? { ok: true } : { ok: false, reason: 'no isolate runtime here' }; } };
+  const vfs = { issues, indexers: { register: () => () => {} }, async purgeIndexer() {}, async backfillIndexer() {} };
+  const { PluginIndexers } = await import('../src/plugins/indexers.js');
+  const coordinator = new PluginIndexers({ vfs, runtime, packages: { async get() { return { stream: null }; } } });
+
+  // Cannot run → the diagnostic is raised, and registration is not even attempted.
+  expect(await coordinator.activate(record, { backfill: false })).toBe(0);
+  const issue = raised.get('plugin-indexers:test.com/probe');
+  expect(issue).toBeTruthy();
+  expect(issue.detail).toBe('no isolate runtime here');
+  // It must be RETRYABLE and say what to do — an issue with neither is just a complaint.
+  expect(issue.retry.op).toBe('reactivate-indexers');
+  expect(issue.remedy).toMatch(/worker_loaders/);
+  // A warning, not an error: the drive works, one thing it could do is missing.
+  expect(issue.severity).toBe('warning');
+
+  // The binding appears (a deploy, a restart) → the next activation clears it, with
+  // nobody rewriting a stored answer.
+  canRun = true;
+  await coordinator.activate(record, { backfill: false }).catch(() => {});
+  expect(raised.get('plugin-indexers:test.com/probe')).toBeUndefined();
+});

@@ -127,7 +127,13 @@ export class PluginService {
     // just said this deployment cannot run them, in which case registering would only
     // queue up a failure per file.
     if (this.indexers && pkg.indexers.length && probe.ok) {
-      try { await this.indexers.activate(record); }
+      // REGISTER ONLY. The backfill used to run here, inline and awaited inside the
+      // install request, which is the same mistake `completeUpload` made at a larger
+      // scale: re-reading every matching file in a drive is not work a request can
+      // finish, and on Workers the isolate goes before it gets far. The caller schedules
+      // it instead — `beginBackfill`, which lands in the same Durable Object that owns
+      // scans and reindexes, and reports through the same task record.
+      try { await this.indexers.activate(record, { backfill: false }); }
       catch (err) { console.error(`activating indexers for ${record.pluginId} failed:`, err.message); }
     } else if (!probe.ok) {
       console.warn(`server indexers for ${record.pluginId} are not running: ${probe.reason}`);

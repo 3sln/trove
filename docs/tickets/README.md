@@ -7,10 +7,11 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
-**Open: 023** — indexing that actually runs. Three defects found by opening one audiobook
-on a real drive, all three now fixed and verified end to end in a real Worker runtime.
-What remains is the install-time backfill (still inline, still awaited inside the request)
-and drawing `indexersSkipped` where someone can see it.
+**Nothing open.** 023 was three defects found by opening one audiobook on a real drive:
+a plugin viewer that had never run (an undeclared capability), plugin indexers that could
+not run on Workers at all (a `data:` import workerd refuses), and upload-time indexing that
+did not survive the request. All three fixed and verified end to end against a real
+`worker_loaders` binding.
 
 **Nothing open.** 012–020 came from a multi-agent architecture audit (Aug 2026): eight
 lenses over the four packages, every finding put through an adversary whose job was to

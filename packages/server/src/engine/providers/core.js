@@ -225,6 +225,7 @@ export function coreProviders(config, lifecycleState) {
     backgroundWork: Provider.fromSingleton({
       beginScan: (collectionId, opts) => lifecycleState.background.beginScan(collectionId, opts),
       beginReindex: (opts) => lifecycleState.background.beginReindex(opts),
+      beginBackfill: (opts) => lifecycleState.background.beginBackfill(opts),
     }),
 
     /**
