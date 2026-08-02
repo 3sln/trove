@@ -31,15 +31,16 @@ test('the package parses the way the server parses it', async () => {
   const pkg = await parsePluginPackage(pack());
   expect(pkg.manifest.name).toBe('audiobook');
   expect(pkg.manifest.domain).toBe('3sln.com');
-  // The opener is what makes this plugin do anything at all: a contribution is DECLARED in
-  // the manifest and registered by the host before any plugin code runs, so a typo here is
-  // a plugin that installs and opens nothing.
-  expect(pkg.contributions.map((c) => `${c.name}:${c.type}`)).toEqual(['player:opener']);
+  // Contributions are DECLARED in the manifest and registered by the host before any
+  // plugin code runs, so a typo here is a plugin that installs and does nothing. Two: the
+  // opener a person sees, and the indexer that finds cover art on the server at upload.
+  expect(pkg.contributions.map((c) => `${c.name}:${c.type}`).sort())
+    .toEqual(['cover:indexer', 'player:opener']);
 });
 
 test('it asks for exactly the capabilities it can justify', async () => {
   const pkg = await parsePluginPackage(pack());
-  expect(pkg.capabilities.sort()).toEqual(['dock', 'files', 'media', 'ui']);
+  expect(pkg.capabilities.sort()).toEqual(['dock', 'files', 'indexer', 'media', 'ui']);
   // Not `network` — it talks to nothing but the drive — and not `storage`, because it keeps
   // no database of its own. A capability nobody can justify in one line is one the review
   // dialog should not be asking someone to grant.

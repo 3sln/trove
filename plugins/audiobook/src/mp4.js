@@ -48,8 +48,15 @@ export function readHeader(bytes, at = 0) {
   return { type: name, size, header: HEADER, toEnd: false };
 }
 
-/** Whether `name` is four printable ASCII characters — the cheap sanity check on a box. */
-export const plausibleType = (name) => /^[\x20-\x7e]{4}$/.test(name);
+/**
+ * Whether `name` looks like a box type — the cheap sanity check before trusting a header.
+ *
+ * Printable ASCII, plus `\xa9` in the FIRST position only: the iTunes metadata atoms are
+ * spelled `©nam`, `©ART`, `©alb`, and a plain ASCII test rejects every one of them. That
+ * cost the cover art on a real book — `findBox` walked into `ilst`, met `©nam` as the first
+ * item, decided it was not a box and gave up before reaching `covr`.
+ */
+export const plausibleType = (name) => /^[\x20-\x7e\xa9][\x20-\x7e]{3}$/.test(name);
 
 /**
  * Walk the top-level boxes of a whole buffer.
@@ -151,6 +158,65 @@ export async function findMoov(read, total, { window = 64 * 1024 } = {}) {
 function contents(moov) {
   const h = readHeader(moov, 0);
   return h && h.type === 'moov' ? moov.subarray(h.header) : moov;
+}
+
+/**
+ * Find a direct child of a box we can only read pieces of.
+ *
+ * The same trick `findMoov` uses, one level down: each child states its own size, so the
+ * next header's offset is known and can be fetched sixteen bytes at a time. It matters
+ * because `moov` is not small — 4.6 MB in the book this was built against, most of it the
+ * audio track's sample tables — while the cover art sits in a `udta` of 62 KB at the very
+ * end of it. Reading the whole box to reach the last child would pull megabytes through an
+ * indexer's memory cap for a few kilobytes of JPEG.
+ *
+ * @param {(start: number, end: number) => Promise<Uint8Array>} read half-open
+ * @returns {Promise<{offset: number, end: number}|null>} the child's PAYLOAD bounds
+ */
+export async function findChildRanged(read, start, end, want) {
+  let at = start;
+  for (let guard = 0; guard < 4096 && at + HEADER <= end; guard++) {
+    const head = await read(at, Math.min(at + LARGE_HEADER, end));
+    const h = readHeader(head, 0);
+    if (!h || !plausibleType(h.type)) return null;
+    const size = h.toEnd ? end - at : h.size;
+    if (h.type === want) return { offset: at + h.header, end: at + size };
+    if (size <= 0) return null;
+    at += size;
+  }
+  return null;
+}
+
+/**
+ * The cover image from a `udta` box's payload, as `{bytes, contentType}`.
+ *
+ * `covr` is an iTunes metadata item like any other, so it lives at
+ * `udta/meta/ilst/covr/data` — and `meta` is a FULL box, version and flags before its
+ * children, which is why a direct descent misses it by four bytes. The `data` box's type
+ * word says what the bytes are: 13 is JPEG, 14 is PNG. Anything else is a format nothing
+ * here can claim to know, so it is left alone rather than guessed at.
+ */
+export function coverFrom(udta) {
+  const ilst = findBox(udta, ['meta', 'ilst'])
+    || (() => {
+      const meta = findBox(udta, ['meta']);
+      return meta ? findBox(udta, ['ilst'], { at: meta.offset + 4, end: meta.end }) : null;
+    })();
+  if (!ilst) return null;
+  const covr = findBox(udta, ['covr'], { at: ilst.offset, end: ilst.end });
+  if (!covr) return null;
+  const data = findBox(udta, ['data'], { at: covr.offset, end: covr.end });
+  if (!data) return null;
+  // version/flags, then four reserved bytes, then the payload. The low byte of the first
+  // word is the well-known type.
+  const kind = u32(udta, data.offset) & 0xff;
+  const TYPES = { 13: 'image/jpeg', 14: 'image/png' };
+  const contentType = TYPES[kind];
+  if (!contentType) return null;
+  // The OFFSET as well as the bytes, relative to this buffer. A cover is tens of kilobytes
+  // sitting contiguously in the file already, so a caller that can range-read would rather
+  // point at it than carry a copy — see coverIndexer.js.
+  return { bytes: udta.subarray(data.offset + 8, data.end), contentType, at: data.offset + 8 };
 }
 
 /** Depth-first search for the first box of `path` (e.g. ['udta','chpl']). */

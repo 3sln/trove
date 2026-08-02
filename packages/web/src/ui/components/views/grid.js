@@ -15,8 +15,9 @@
 
 import { dd } from '../../../runtime.js';
 import { icon } from '../../icon.js';
+import { thumbnailOf } from '../../../bl/fileType.js';
 import { groupHeader, menuButton, openRowMenu } from './parts.js';
-import { attachMedia } from '../../media.js';
+import { attachMedia, attachThumbnail } from '../../media.js';
 import { activate } from '../../activate.js';
 
 const { div, span, img } = dd;
@@ -81,7 +82,11 @@ function columns() {
 
 function tile(it, active, { hover, select }, ui) {
   const node = it.node;
-  const pictorial = (node?.contentType || '').startsWith('image/');
+  // A contributed thumbnail beats the file itself. It is already a picture of the right
+  // size, it needs no minted URL, and for anything that is not an image it is the only
+  // picture there is — an audiobook's cover art comes this way. See bl/fileType.js.
+  const thumb = thumbnailOf(node);
+  const pictorial = !thumb && (node?.contentType || '').startsWith('image/');
   return div({ className: `grid-tile ${active ? 'active' : ''}`, title: it.detail ? `${it.title} — ${it.detail}` : it.title },
     div({ className: 'gt-media' },
       // The icon is drawn underneath, always. When the image loads it covers it; when
@@ -92,6 +97,14 @@ function tile(it, active, { hover, select }, ui) {
       // The `src` is minted rather than built — a tile fetches without our Authorization
       // header, so the URL has to carry its own grant. Minting is batched (see
       // platform/mediaUrls.js), so a wall of tiles costs one request, not one each.
+      // A contributed thumbnail needs no minted URL: it is either self-contained or a
+      // range inside a file this session may already hold. See ui/media.js.
+      thumb
+        ? img({ className: 'gt-img', alt: '', loading: 'lazy', decoding: 'async' }).on({
+          $attach: (dom) => { dom._detachThumb = attachThumbnail(dom, node, thumb, ui); },
+          $detach: (dom) => { dom._detachThumb?.(); dom._detachThumb = null; },
+        }).opaque()
+        : null,
       pictorial
         ? img({ className: 'gt-img', alt: '', loading: 'lazy', decoding: 'async' }).on({
           $attach: (dom) => {

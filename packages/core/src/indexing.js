@@ -181,6 +181,25 @@ export class IndexingCoordinator {
       maxBytes: this.maxIndexBytes,
       readBytes: async () => readAll((await readRange()).stream),
       readText: async () => new TextDecoder().decode(await readAll((await readRange()).stream)),
+      /**
+       * Read `[start, end)` — HALF-OPEN, like every other range in JavaScript, converted
+       * to HTTP's inclusive form at this one boundary.
+       *
+       * `readBytes` reads the FRONT of a file, which is the wrong end of every container
+       * that keeps its index at the back: an MP4 written by an encoder that did not know
+       * its final size puts `moov` last, and a zip's central directory is always last. An
+       * indexer for either could not reach what it needed at all.
+       *
+       * Bounded per call by the same `maxIndexBytes` cap, so an indexer walking a 4 GB
+       * book still cannot pull it through host memory — it just has to ask in pieces,
+       * which is what walking a box chain does anyway.
+       */
+      readRange: async (start = 0, end = node.size) => {
+        const from = Math.max(0, Math.min(start, node.size));
+        const to = Math.min(end, from + this.maxIndexBytes, node.size);
+        if (to <= from) return new Uint8Array(0);
+        return readAll((await storage.get(node.storageKey, { range: { start: from, end: to - 1 } })).stream);
+      },
       // A time-limited URL a remote/isolated indexer can fetch the bytes from. S3-class
       // backends presign; everything else gets a URL this server signed. Either way it
       // must be ABSOLUTE — whoever receives it is not in this browser and not on this

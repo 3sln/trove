@@ -112,3 +112,37 @@ export function attachMedia(el, node, ui, { op = 'media', onError } = {}) {
 function isMedia(el) {
   return typeof el?.play === 'function' && typeof el?.load === 'function';
 }
+
+/**
+ * Point an `<img>` at a contributed thumbnail — see bl/fileType.js for the two shapes.
+ *
+ * A `src` needs no help. A `range` is bytes inside the file, so they are fetched through
+ * `fileChunks`, which means a pinned book draws its cover with the network off and a book
+ * being kept offline contributes the read. The blob URL is revoked on detach: a wall of
+ * tiles that minted one each and never gave them back would hold every cover in memory for
+ * as long as the tab lived.
+ *
+ * @returns {() => void} detach
+ */
+export function attachThumbnail(el, node, thumb, ui) {
+  if (thumb?.src) {
+    el.src = thumb.src;
+    return () => {};
+  }
+  let url = null;
+  let live = true;
+  ui.platform.fileChunks.read(node.id, thumb.range)
+    .then(({ bytes }) => {
+      if (!live || !bytes?.length) return;
+      url = URL.createObjectURL(new Blob([bytes], { type: thumb.contentType || 'image/jpeg' }));
+      el.src = url;
+    })
+    // A cover that will not load is a tile with an icon on it, which is what the list shows
+    // anyway — not an error worth putting in front of anyone.
+    .catch(() => { el.style.display = 'none'; });
+  return () => {
+    live = false;
+    if (url) URL.revokeObjectURL(url);
+    url = null;
+  };
+}

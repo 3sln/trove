@@ -2,14 +2,15 @@
   "domain": "3sln.com",
   "name": "audiobook",
   "displayName": "Audiobook Player",
-  "version": "0.1.0",
-  "description": "Play M4B and LPF audiobooks from the drive, with chapters, a dock and OS transport controls.",
+  "version": "0.2.0",
+  "description": "Play M4B and LPF audiobooks from the drive, with chapters, cover art, a dock and OS transport controls.",
   "entry": "src/index.js",
   "capabilities": {
     "files": true,
     "ui": true,
     "media": true,
-    "dock": true
+    "dock": true,
+    "indexer": true
   },
   "contributes": {
     "player": {
@@ -18,10 +19,37 @@
       "priority": 60,
       "dock": true,
       "match": {
-        "ext": [".m4b", ".lpf", ".m4a", ".aac"],
-        "mime": ["audio/mp4", "audio/x-m4b", "application/lpf+zip", "audio/aac"]
+        "ext": [
+          ".m4b",
+          ".lpf",
+          ".m4a",
+          ".aac"
+        ],
+        "mime": [
+          "audio/mp4",
+          "audio/x-m4b",
+          "application/lpf+zip",
+          "audio/aac"
+        ]
       },
       "entry": "src/player.js"
+    },
+    "cover": {
+      "type": "indexer",
+      "title": "Audiobook cover art",
+      "match": {
+        "ext": [
+          ".m4b",
+          ".lpf",
+          ".m4a"
+        ],
+        "mime": [
+          "audio/mp4",
+          "audio/x-m4b",
+          "application/lpf+zip"
+        ]
+      },
+      "entry": "src/coverIndexer.js"
     }
   },
   "settings": [

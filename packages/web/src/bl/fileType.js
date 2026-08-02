@@ -43,6 +43,49 @@ export function iconForKind(node) {
   return ICONS[kindOf(node)] || 'file';
 }
 
+/**
+ * The key an indexer writes a tile picture under, and the ONE key the grid looks for.
+ *
+ * A preset name rather than a per-plugin registration, because a thumbnail is not a
+ * contribution TYPE — it is a fact about a file that any indexer may happen to know. The
+ * audiobook plugin extracts cover art from an m4b's `covr` atom and an LPF's manifest;
+ * a PDF indexer could write its first page under the same key and the grid would draw it
+ * with no change here.
+ *
+ * @see plugins/audiobook/src/coverIndexer.js
+ */
+export const THUMBNAIL_KEY = 'thumbnail';
+
+/**
+ * A picture to put on this node's tile, or null.
+ *
+ * Contributions are namespaced by contributor, and a view deliberately does not care WHICH
+ * one supplied it: the first that did wins, and a drive with two thumbnail indexers for one
+ * file type has a configuration problem rather than a rendering one.
+ *
+ * TWO SHAPES, because a thumbnail is either already somewhere or it is not:
+ *
+ *   { range: {start, end}, contentType }  the bytes live in the FILE — an m4b's cover art
+ *                                         sits in its `covr` atom — so the contribution
+ *                                         points at them. Eighty bytes on the wire instead
+ *                                         of a base64 copy on every listing.
+ *   { src }                               a self-contained URL, for the cases with nothing
+ *                                         to point at. Small by construction; see the
+ *                                         indexer's cap.
+ *
+ * @returns {{range?: {start: number, end: number}, src?: string, contentType?: string}|null}
+ */
+export function thumbnailOf(node) {
+  const contributions = node?.contributions;
+  if (!contributions) return null;
+  for (const contribution of Object.values(contributions)) {
+    const thumb = contribution?.metadata?.[THUMBNAIL_KEY];
+    if (typeof thumb?.src === 'string' && thumb.src) return thumb;
+    if (Number.isFinite(thumb?.range?.start) && Number.isFinite(thumb?.range?.end)) return thumb;
+  }
+  return null;
+}
+
 /** Whether a node holds indexable text (drives offline text extraction). */
 export function isTexty(node) {
   return kindOf(node) === 'text';

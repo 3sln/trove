@@ -18,6 +18,7 @@
 
 import { test, expect } from './testkit.js';
 import { Engine, Provider } from '@3sln/ngin';
+import { thumbnailOf } from '../src/bl/fileType.js';
 import { ContributionRegistry } from '../src/platform/contributions.js';
 import { cell } from '../src/runtime.js';
 import * as q from '../src/bl/queries.js';
@@ -187,4 +188,35 @@ test('a view may claim an arrow key, but never breaks one', () => {
   // Neither is nonsense, and a view that throws must not take the arrow keys with it.
   expect(viewMove({ move: () => 'down' }, 'ArrowDown', {})).toBe(null);
   expect(viewMove({ move: () => { throw new Error('nope'); } }, 'ArrowDown', {})).toBe(null);
+});
+
+// --- contributed thumbnails ----------------------------------------------------
+//
+// The grid draws a picture where there is one. For an image that is the file itself; for
+// anything else it is whatever an indexer contributed under the known key — an audiobook's
+// cover art arrives this way. See bl/fileType.js and plugins/audiobook.
+
+test('a contributed thumbnail is found whichever plugin contributed it', () => {
+  const node = (contributions) => ({ id: 'n1', name: 'book.m4b', contentType: 'audio/mp4', contributions });
+  // Namespaced by contributor, and the view does not care which one — a drive with two
+  // thumbnail indexers for one type has a configuration problem, not a rendering one.
+  const contributed = node({
+    'trove+contrib:3sln.com/audiobook/cover': { metadata: { thumbnail: { range: { start: 10, end: 20 }, contentType: 'image/jpeg' } } },
+  });
+  expect(thumbnailOf(contributed).range).toEqual({ start: 10, end: 20 });
+
+  // Both shapes are accepted: bytes that live in the file get pointed at, and a
+  // self-contained URL is taken as-is.
+  expect(thumbnailOf(node({ x: { metadata: { thumbnail: { src: 'data:image/png;base64,AAA' } } } })).src)
+    .toBe('data:image/png;base64,AAA');
+});
+
+test('a node with no thumbnail, or a malformed one, gets none', () => {
+  expect(thumbnailOf({ id: 'n1' })).toBe(null);
+  expect(thumbnailOf({ id: 'n1', contributions: {} })).toBe(null);
+  // Another indexer's metadata is not a thumbnail.
+  expect(thumbnailOf({ id: 'n1', contributions: { a: { metadata: { chapters: [] } } } })).toBe(null);
+  // A key that is present but says nothing usable must not put a broken image on a tile.
+  expect(thumbnailOf({ id: 'n1', contributions: { a: { metadata: { thumbnail: {} } } } })).toBe(null);
+  expect(thumbnailOf({ id: 'n1', contributions: { a: { metadata: { thumbnail: { range: { start: 1 } } } } } })).toBe(null);
 });

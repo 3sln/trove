@@ -49,6 +49,28 @@ your Audible account". The cheap and honest form, if it is ever wanted, is **con
 import** — a file becomes an m4b before it enters the drive — which keeps key handling out
 of the plugin and out of the drive entirely.
 
+## Cover art on the grid
+
+A second contribution, `type: "indexer"`, runs on the **server** once per upload and finds
+the book's cover. It never pulls the book through memory: an m4b keeps its art in a `covr`
+atom inside the `udta` at the end of `moov`, which is itself at the end of the file, and an
+LPF keeps it as a zip entry named by a manifest whose directory is also at the end. Both
+are three or four small ranged reads — on a real 185 MB audiobook, **7 reads and 0.12 MiB**.
+
+It writes one known key, `metadata.thumbnail`, which the grid view recognises. That key
+carries a **range**, not the image: a real Audible cover is ~57 KiB, or ~78 KiB base64'd,
+and contributions ride along on every list response — so carrying it would put four
+megabytes of pictures on the wire for a page of fifty books whether or not anything drew
+them. Pointing at bytes already in the file costs 86 bytes. The grid fetches them through
+`fileChunks` for the tiles actually on screen, which means a pinned book draws its cover
+with the network off.
+
+A data: URL is still emitted where there is nothing to point at — an LPF whose cover is
+deflated, so the stored bytes are not the image — and only under a hard cap, because that
+is the case where the size genuinely rides along. Nothing here can re-encode an image;
+there is no decoder in an indexer isolate, so an oversized one is skipped rather than
+shrunk.
+
 ## Layout
 
 ```
@@ -58,6 +80,8 @@ src/player.js      the opener: its own frame, its own document
 src/book.js        one shape out of two containers
 src/mp4.js         pure: boxes, moov, chapters, metadata
 src/lpf.js         pure: publication.json, in every shape the spec allows
+src/zip.js         pure: a zip's central directory, read from the tail
+src/coverIndexer.js  the indexer: cover art, server-side, by range
 src/transport.js   playback as ONE timeline, whatever it is made of
 test/              the two pure modules, byte by byte
 ```
@@ -70,6 +94,7 @@ level too deep.
 ## Capabilities, and why each one
 
 - `files` — read bytes by range, mint a media URL, keep a book offline.
+- `indexer` — contribute cover art under the thumbnail key the grid reads.
 - `ui` — draw.
 - `media` — the OS transport controls.
 - `dock` — keep playing while the user navigates away.

@@ -14,7 +14,7 @@
 import { test, expect } from 'bun:test';
 import {
   readHeader, topLevelBoxes, findMoov, findBox, movieTimescale, movieDuration,
-  chaptersFromChpl, chapterTrack, chapterTitle, metadataFrom,
+  chaptersFromChpl, chapterTrack, chapterTitle, metadataFrom, coverFrom, plausibleType,
 } from '../src/mp4.js';
 
 const enc = new TextEncoder();
@@ -237,4 +237,43 @@ test('the chapter track is the one tref/chap names, not merely the first text tr
 test('with no tref, the first text track is the honest guess', () => {
   const moov = box('moov', join(audioTrackBox(1, 0), chapterTrackBox({ id: 2, n: 2 })));
   expect(chapterTrack(moov).length).toBe(2);
+});
+
+// --- cover art -----------------------------------------------------------------
+
+test('the iTunes © atoms are recognised as boxes', () => {
+  // `©nam` begins with 0xa9, and an ASCII-only plausibility test rejects it — which made
+  // `findBox` give up on the FIRST item inside `ilst` and never reach `covr`. That cost the
+  // cover art on a real book while every other test stayed green.
+  expect(plausibleType('\xa9nam')).toBe(true);
+  expect(plausibleType('covr')).toBe(true);
+  // Still not anything: a high byte is legal in the first position only, which is the
+  // convention, and garbage must stay implausible or the tail scan loses its guard.
+  expect(plausibleType('na\xa9m')).toBe(false);
+  expect(plausibleType('\x00\x00\x00\x00')).toBe(false);
+});
+
+test('cover art is found past the © atoms, and reports where it is', () => {
+  const item = (key, payload) => box(key, payload);
+  // A `data` box: version/flags where the low byte is the well-known type (13 = JPEG),
+  // four reserved bytes, then the image.
+  const jpeg = [0xff, 0xd8, 1, 2, 3, 0xff, 0xd9];
+  const covr = item('covr', box('data', [...u32(13), ...u32(0), ...jpeg]));
+  const ilst = box('ilst', join(item('\xa9nam', box('data', [...u32(1), ...u32(0), ...enc.encode('Title')])), covr));
+  const meta = box('meta', join(Uint8Array.from(u32(0)), ilst));
+  const udta = new Uint8Array(box('udta', meta).slice(8));
+
+  const cover = coverFrom(udta);
+  expect(cover.contentType).toBe('image/jpeg');
+  expect([...cover.bytes]).toEqual(jpeg);
+  // `at` is what lets a caller point at the bytes in the file instead of copying them.
+  expect([...udta.subarray(cover.at, cover.at + jpeg.length)]).toEqual(jpeg);
+});
+
+test('a cover in a format we cannot name is left alone', () => {
+  // Type 27 is BMP. Claiming a content type we have not checked would put a broken image
+  // on a tile; reporting nothing puts the icon there, which is what the list shows anyway.
+  const covr = box('covr', box('data', [...u32(27), ...u32(0), 1, 2, 3]));
+  const meta = box('meta', join(Uint8Array.from(u32(0)), box('ilst', covr)));
+  expect(coverFrom(new Uint8Array(box('udta', meta).slice(8)))).toBe(null);
 });
