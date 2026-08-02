@@ -21,7 +21,7 @@
 // means the same thing it always did.
 
 import {
-  StorageBackend, MemoryStorage, S3Storage,
+  StorageBackend, MemoryStorage,
   StorageDriverRegistry, portableDrivers,
   MetadataStore, MemoryStore, SqliteStore,
   SearchService, EmbeddingProvider, LocalHashEmbedding, HttpEmbedding,

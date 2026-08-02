@@ -8,7 +8,7 @@ import {
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
-  shouldEncrypt, estimateRotationCost, describeRateLimits, DEFAULT_RATE_LIMITS,
+  estimateRotationCost, describeRateLimits, DEFAULT_RATE_LIMITS,
 } from '@3sln/trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@3sln/trove/core/plugins/identity.js';
 

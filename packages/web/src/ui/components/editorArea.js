@@ -13,7 +13,16 @@ import { NavigateBackAction, OpenInPanelAction, ShowDialogAction, ShowHomeAction
 
 const { div, span, button } = dd;
 
-const openerFns = new Map(); // `${panelId}:${openerId}` -> stable render fn
+/**
+ * `${panelId}:${openerId}` -> stable render fn.
+ *
+ * dodo identifies an alias by the FUNCTION, so a fresh one per render would rebuild it
+ * every pass and take the <audio> with it. Module scope is safe here in a way it was not
+ * for the keybindings region, and the difference is the key: a panel id is minted by
+ * `newId()` and is unique across every workbench on the page, so two shells cannot collide
+ * and hand each other's `ui` to a render. `pruneOpeners` bounds it to the live stack.
+ */
+const openerFns = new Map();
 
 export default function editorArea(state, ui) {
   const wb = state.wb;

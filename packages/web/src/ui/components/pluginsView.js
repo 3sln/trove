@@ -1,6 +1,6 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
-import { CloseDialogAction, ExecCommandAction, OpenPluginPanelAction, RefreshPluginAction, SetPluginSecretAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
+import { ExecCommandAction, OpenPluginPanelAction, RefreshPluginAction, SetPluginSecretAction, SetSettingAction, ShowDialogAction, UninstallPluginAction } from '../../bl/actions.js';
 import { describeTrust } from '../../bl/trust.js';
 
 const { div, span, p, button, h2, input, label } = dd;

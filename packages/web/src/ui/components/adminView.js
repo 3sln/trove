@@ -19,7 +19,6 @@
 import { dd } from '../../runtime.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import { grantsFor } from '../../bl/queries.js';
-import { icon } from '../icon.js';
 import { activate } from '../activate.js';
 import { bytes } from '../format.js';
 import { ExecCommandAction, SetGrantAction } from '../../bl/actions.js';

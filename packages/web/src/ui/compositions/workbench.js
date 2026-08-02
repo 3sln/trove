@@ -5,11 +5,11 @@
 // every QUERY at once — which is a different thing from what it used to know, when it
 // held the bag of services every component reached through.
 
-import { dd, derive, constant, watch } from '../../runtime.js';
+import { dd, derive, watch } from '../../runtime.js';
 import { region } from '../region.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import * as q from '../../bl/queries.js';
-import { CloseSearchModalAction, ExecCommandAction, NavigateAction } from '../../bl/actions.js';
+import { CloseSearchModalAction, NavigateAction } from '../../bl/actions.js';
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
 import launcher from '../components/launcher.js';

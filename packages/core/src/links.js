@@ -32,8 +32,10 @@ export const TROVE_SCHEME = 'trove:';
 // rather than storing kilobytes that will never match.
 const MAX_SELECTOR = 255;
 // How many distinct links one item may record. A document is a grouping, not a database
-// dump; past this the value is in the search index, not the link graph.
-export const MAX_LINKS_PER_ITEM = 500;
+// dump; past this the value is in the search index, not the link graph. Not exported: it
+// is the default for `extractTroveLinks`'s `limit`, and nothing outside chose a different
+// one — an exported cap nobody passes reads as a knob when it is a constant.
+const MAX_LINKS_PER_ITEM = 500;
 
 // Collection ids are slugs (see CollectionService); a name is anything but a slash,
 // since the pathname shorthand has to stop somewhere.

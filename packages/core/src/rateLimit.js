@@ -71,9 +71,8 @@ export class MemoryRateStore {
   }
 
   async bump(key, windowMs, now) {
-    if (this.buckets.size > this.maxEntries) {
-      for (const [k, b] of this.buckets) if (b.expiresAt <= now) this.buckets.delete(k);
-    }
+    // A cheap backstop between sweeps, for a burst that outruns the maintenance tick.
+    if (this.buckets.size > this.maxEntries) await this.sweep(now);
     const held = this.buckets.get(key);
     if (held && held.expiresAt > now) {
       held.count += 1;
@@ -81,6 +80,24 @@ export class MemoryRateStore {
     }
     this.buckets.set(key, { count: 1, expiresAt: now + windowMs });
     return 1;
+  }
+
+  /**
+   * Drop buckets whose window has passed. The same method the KV store has, and the same
+   * caller — periodic maintenance.
+   *
+   * It exists on BOTH stores so the caller does not have to ask which one it got. A
+   * `store.sweep?.()` there would be the optional-call shape this codebase records as
+   * having turned a sweep into a permanent no-op once already; and without a periodic
+   * sweep a long-lived process holds an expired bucket for every subject it has ever seen
+   * until the size backstop fires, which on a quiet drive is never.
+   *
+   * @returns {Promise<number>} how many went
+   */
+  async sweep(now = Date.now()) {
+    let dropped = 0;
+    for (const [k, b] of this.buckets) if (b.expiresAt <= now) { this.buckets.delete(k); dropped++; }
+    return dropped;
   }
 }
 

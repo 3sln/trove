@@ -455,10 +455,11 @@ export async function createServer(config = {}) {
     const out = { swept: false, purged: 0, scans: [], notified: 0, storage: 0 };
     await vfs.uploads.sweepExpired(Date.now());
     await sidecar.sweep();
-    // Rate-limit buckets, when they are in the shared store. One key per subject per class
-    // per window, and nothing else removes them — the window passing makes a bucket
-    // unreachable, not absent.
-    await rateLimiter?.store?.sweep?.().catch(() => {});
+    // Rate-limit buckets. One key per subject per class per window, and nothing else
+    // removes them — the window passing makes a bucket unreachable, not absent. The object
+    // guard is real (there is no limiter when limiting is off); the method is not optional,
+    // because both stores have one.
+    await rateLimiter?.store.sweep().catch(() => {});
     // Mentions are batched and drained on an interval — a timer, and a timer registered
     // during a request does not outlive it on Workers, where the adapter switches the
     // flusher off for exactly that reason. Nothing else called flush, so on that runtime
@@ -592,7 +593,7 @@ export const SAMPLE_CSP = [
  * Cloudflare's own rate limiting, configured outside the app — and refusing to boot over a
  * limit an operator may have handled elsewhere would be worse than saying it.
  */
-export function warnOnUnenforceableLimits(config = {}) {
+function warnOnUnenforceableLimits(config = {}) {
   const rl = config.rateLimit;
   if (!rl?.enabled || rl.store === 'kv') return;
   if (config.startFlusher !== false) return; // a long-lived process; memory counters are exact
@@ -610,9 +611,11 @@ export function warnOnUnenforceableLimits(config = {}) {
  *
  * Called from `createServer`, so it covers every adapter that exists and every one that
  * will. It was called by the adapters, and the Worker adapter — the one whose default
- * deploy is world-open on a public URL — was the one that did not call it.
+ * deploy is world-open on a public URL — was the one that did not call it. Not exported
+ * for the same reason: an export is a second way to reach this, and a second way is how
+ * one caller came to skip it.
  */
-export function warnOnOpenAccess(config = {}) {
+function warnOnOpenAccess(config = {}) {
   const anon = !config.identity || config.identity.driver === 'anonymous' || config.identity === 'anonymous';
   const open = config.collections !== false && config.defaultOpen !== false;
   if (anon && open) {

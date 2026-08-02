@@ -94,13 +94,20 @@
       return win;
     }
 
-    /** The bytes of this window. */
-    async bytes(opts) {
-      const r = await call('files:bytes', { id: this.id, start: this._start, end: this._end }, undefined);
+    /**
+     * The bytes of this window.
+     *
+     * A `signal` is checked BEFORE the call and not during it: an in-flight request over
+     * the port cannot be recalled, so the honest granularity is per read. `chunks()` is
+     * where cancelling actually bites, because there the reads are small and there are
+     * many of them.
+     */
+    async bytes({ signal } = {}) {
+      if (signal && signal.aborted) throw new Error('Aborted');
+      const r = await call('files:bytes', { id: this.id, start: this._start, end: this._end });
       // Every read refreshes the etag, because a file overwritten in place keeps its id
       // and anything cached off these bytes has to notice.
       if (r.etag) this.etag = r.etag;
-      if (opts && opts.signal && opts.signal.aborted) throw new Error('Aborted');
       return new Uint8Array(r.bytes);
     }
     async arrayBuffer() { return (await this.bytes()).buffer; }
@@ -109,8 +116,7 @@
     /** One window at a time, so a caller can walk a large file without holding it. */
     async *chunks({ size = 4 * 1024 * 1024, signal } = {}) {
       for (let at = 0; at < this.size; at += size) {
-        if (signal && signal.aborted) throw new Error('Aborted');
-        yield this.slice(at, Math.min(at + size, this.size)).bytes();
+        yield this.slice(at, Math.min(at + size, this.size)).bytes({ signal });
       }
     }
 

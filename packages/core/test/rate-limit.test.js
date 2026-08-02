@@ -114,3 +114,17 @@ test('a deployment says what it can actually enforce', async () => {
   expect(describeRateLimits({ enabled: true, store: 'kv', limits: DEFAULT_RATE_LIMITS, perProcess: false }).scope)
     .toBe('drive');
 });
+
+test('both stores sweep, so the caller never has to ask which one it got', async () => {
+  // `store.sweep?.()` would be the optional-call shape this codebase records as having
+  // turned a sweep into a permanent no-op once already. And without a periodic sweep, an
+  // in-memory store on a quiet drive holds an expired bucket for every subject it has ever
+  // seen until its size backstop fires, which may be never.
+  const memory = new MemoryRateStore();
+  await memory.bump('search:user:a:0', 1000, 0);
+  await memory.bump('search:user:b:0', 1000, 0);
+  expect(memory.buckets.size).toBe(2);
+  expect(await memory.sweep(500)).toBe(0);
+  expect(await memory.sweep(2000)).toBe(2);
+  expect(memory.buckets.size).toBe(0);
+});
