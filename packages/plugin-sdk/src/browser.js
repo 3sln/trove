@@ -14,18 +14,140 @@
   // protocol.js — this file is injected as text and cannot import it, so
   // protocol.test.js asserts the two stay in step.
   const SDK_PROTOCOL_VERSION = '1.0';
+
+  // --- events -----------------------------------------------------------------
+  //
+  // Every hook here used to be one assignment — `onDeactivate = fn`, `onDock = fn`,
+  // `mediaHandlers[action] = fn`. Register twice and the first silently vanished, with
+  // nothing to report it: the symptom is a timer or an object URL outliving its viewer,
+  // noticed much later as a leak. The audiobook player was losing one of two teardowns
+  // exactly that way.
+  //
+  // So the SDK's nodes are EventTargets and handlers are listeners. Registrations
+  // accumulate, removal is `removeEventListener`, and a plugin can compose without
+  // knowing what else is listening.
+  //
+  // Inlined rather than imported because this file is injected as TEXT into a sandboxed
+  // frame and has no module loader — see the header.
+  //
+  // Two things a plain CustomEvent cannot express, both needed:
+  //
+  //   waitUntil(p)    The host awaits some of these. `opener:open` must not resolve until
+  //                   the viewer has drawn, or "Opening…" is hidden over a blank frame.
+  //   respondWith(v)  A command has a return value that crosses back over the port. First
+  //                   answer wins; a second is a bug in the plugin, not something to pick
+  //                   between silently.
+  class TroveEvent extends Event {
+    constructor(type, detail) {
+      super(type, { cancelable: true });
+      this.detail = detail;
+      this._waits = [];
+      this._answered = false;
+      this._answer = undefined;
+    }
+    waitUntil(p) { this._waits.push(Promise.resolve(p)); }
+    respondWith(value) {
+      if (this._answered) return;
+      this._answered = true;
+      this._answer = value;
+      if (value && typeof value.then === 'function') this._waits.push(Promise.resolve(value).then((v) => { this._answer = v; }));
+    }
+  }
+
+  /**
+   * Dispatch, then wait for every `waitUntil`, then answer.
+   *
+   * A listener that throws is reported and does not stop the others — dispatch is where
+   * resources are released, and one bad handler must not strand the rest.
+   */
+  async function fire(target, type, detail) {
+    const ev = new TroveEvent(type, detail);
+    target.dispatchEvent(ev);
+    for (const r of await Promise.allSettled(ev._waits)) {
+      if (r.status === 'rejected') console.error('[trove] a "' + type + '" handler failed', r.reason);
+    }
+    return ev._answer;
+  }
+
+  /**
+   * An EventTarget that knows what is listening.
+   *
+   * The host needs that: it is how the manifest reports which commands a plugin actually
+   * implements, and how media claims an OS control on the first listener and releases it
+   * on the last.
+   */
+  function makeTarget(onFirst, onLast) {
+    const counts = new Map();
+    const target = new EventTarget();
+    const add = target.addEventListener.bind(target);
+    const remove = target.removeEventListener.bind(target);
+    target.types = () => [...counts.entries()].filter(([, n]) => n > 0).map(([t]) => t);
+    target.listening = (type) => (counts.get(type) || 0) > 0;
+    target.addEventListener = (type, fn, opts) => {
+      const n = (counts.get(type) || 0) + 1;
+      counts.set(type, n);
+      if (n === 1 && onFirst) onFirst(type);
+      return add(type, fn, opts);
+    };
+    target.removeEventListener = (type, fn, opts) => {
+      const n = Math.max(0, (counts.get(type) || 0) - 1);
+      counts.set(type, n);
+      if (n === 0 && onLast) onLast(type);
+      return remove(type, fn, opts);
+    };
+    return target;
+  }
+
+  /**
+   * `onThing(fn)` written over `addEventListener`.
+   *
+   * Kept because it reads well for the common case and is what every existing plugin
+   * says. What changed is that it no longer REPLACES: two calls mean two listeners, and
+   * it returns a disposer. A handler that returns a promise keeps the host waiting; one
+   * that returns a value answers.
+   */
+  function hook(target, type, args = (e) => [e.detail]) {
+    return (fn) => {
+      if (typeof fn !== 'function') return () => {};
+      const listener = (e) => {
+        // GUARDED here rather than relying on the host's EventTarget to isolate a throw.
+        // Browsers do report an uncaught listener error and carry on, but that is not
+        // uniform — Bun stops dispatch — and teardown is the one place where "the rest
+        // still ran" has to be a guarantee rather than a hope.
+        let out;
+        try {
+          out = fn(...args(e));
+        } catch (err) {
+          console.error('[trove] a "' + e.type + '" handler threw', err);
+          return;
+        }
+        if (out && typeof out.then === 'function') e.waitUntil(out);
+        if (out !== undefined) e.respondWith(out);
+      };
+      target.addEventListener(type, listener);
+      return () => target.removeEventListener(type, listener);
+    };
+  }
   let port = null, manifest = null, capabilities = [], storageScopes = {}, online = true, seq = 0, role = 'primary';
   const pending = new Map();
-  const commandHandlers = new Map();
-  const openerHandlers = new Map();
-  let onConnectivity = null, onSettingsChange = null, onDock = null;
+  // EVERY hook is an EventTarget registration — see above for why. `ctx` itself is
+  // the target for lifecycle and connectivity; commands, openers and media each get their
+  // own so an event type can be a command name or an action without colliding.
+  const bus = makeTarget();                // deactivate | connectivity | settingschange | dockchange
+  const commandTarget = makeTarget();      // type = the command's short name
+  const openerTarget = makeTarget();       // type = the opener's name, or '*'
+  // Media tells the HOST which actions to claim from the OS, so registration is observed:
+  // the first listener for an action claims it, the last one to go releases it.
+  const mediaTarget = makeTarget(
+    (action) => { call('media:action', { action, on: true }).catch(() => {}); },
+    (action) => { call('media:action', { action, on: false }).catch(() => {}); },
+  );
   // A LIST. It was one slot — `onDeactivate = fn` — so a second registration silently
   // discarded the first, and the plugin that lost one had no way to notice: the symptom
   // is a timer or an object URL that outlives the viewer. The audiobook player has two
   // teardowns (a download poller and the transport), which is not exotic; anything with
   // more than one resource has more than one.
-  const onDeactivateFns = [];
-  const mediaHandlers = {}; // action -> handler, for OS media-session controls
+
 
   const now = () => { try { return Date.now(); } catch { return 0; } };
 
@@ -173,7 +295,7 @@
     return {
       domain: manifest && manifest.domain, name: manifest && manifest.name,
       online, role, ts: now(),
-      handlers: [...commandHandlers.keys()],
+      handlers: commandTarget.types(),
     };
   }
   const announce = () => port && emit('manifest', buildManifest());
@@ -198,37 +320,32 @@
 
   function dispatch(method, params) {
     if (method === 'command:execute') {
-      const h = commandHandlers.get(params.id);
-      // Throw, like `opener:open` two lines down. Resolving `undefined` for an id with
-      // no handler told the host the command had RUN when nothing had.
-      if (!h) throw new Error(`No handler registered for command "${params.id}"`);
-      return h(...(params.args || []));
+      // Throw rather than resolve `undefined` for an id nobody implements: that told the
+      // host the command had RUN when nothing had.
+      if (!commandTarget.listening(params.id)) throw new Error(`No handler registered for command "${params.id}"`);
+      return fire(commandTarget, params.id, { args: params.args || [] });
     }
     if (method === 'opener:open') {
       // An opener frame boots at that opener's entry module and runs exactly one
       // opener, so an unkeyed onOpen(fn) handler is the normal case.
-      const f = openerHandlers.get(params.openerId) || openerHandlers.get('*');
-      if (!f) throw new Error('no opener ' + params.openerId);
-      return f(params.file, params.context);
+      const type = openerTarget.listening(params.openerId) ? params.openerId
+        : openerTarget.listening('*') ? '*' : null;
+      if (!type) throw new Error('no opener ' + params.openerId);
+      // AWAITED, and that is what `waitUntil` is for: `opener:open` must not resolve until
+      // the viewer has drawn, or the host hides "Opening…" over a blank frame.
+      return fire(openerTarget, type, { file: params.file, context: params.context, openerId: params.openerId });
     }
     if (method === 'manifest') return buildManifest();
     throw new Error('Unknown host call ' + method);
   }
   async function dispatchEvent(method, params) {
-    if (method === 'deactivate') {
-      // Every handler runs even if one throws: teardown is where resources are released,
-      // and one bad handler must not strand the rest.
-      for (const fn of onDeactivateFns.splice(0)) {
-        try { fn(); } catch (e) { console.error('[trove] a deactivate handler threw', e); }
-      }
-      return undefined;
-    }
-    if (method === 'connectivity') { online = !!params.online; try { onConnectivity && (await onConnectivity({ online })); } catch (e) { console.error(e); } announce(); }
-    if (method === 'settings:changed') { try { onSettingsChange && onSettingsChange(params.key, params.value); } catch (e) { console.error(e); } }
+    if (method === 'deactivate') return fire(bus, 'deactivate', {});
+    if (method === 'connectivity') { online = !!params.online; await fire(bus, 'connectivity', { online }); announce(); }
+    if (method === 'settings:changed') return fire(bus, 'settingschange', { key: params.key, value: params.value });
     // The OS/host fired a media transport control (play/pause/next/seek…).
-    if (method === 'media:action') { try { mediaHandlers[params.action] && mediaHandlers[params.action](params); } catch (e) { console.error(e); } }
+    if (method === 'media:action') return fire(mediaTarget, params.action, params);
     // The host docked or undocked this viewer (see ctx.dock).
-    if (method === 'dock:state') { try { onDock && onDock(params); } catch (e) { console.error(e); } }
+    if (method === 'dock:state') return fire(bus, 'dockchange', params);
   }
 
   function requireCap(cap) { if (!capabilities.includes(cap)) throw new Error('Plugin lacks capability "' + cap + '"'); }
@@ -283,7 +400,10 @@
       // for what it declared, addressed by id.
       commands: {
         /** Implement a command this plugin's manifest declares, by its short name. */
-        handle(name, handler) { commandHandlers.set(name, handler); return this; },
+        /** Implement a command this plugin's manifest declares, by its short name. */
+        handle(name, handler) { hook(commandTarget, name, (e) => e.detail.args)(handler); return this; },
+        addEventListener: (...a) => commandTarget.addEventListener(...a),
+        removeEventListener: (...a) => commandTarget.removeEventListener(...a),
         /**
          * Run a command. Its OWN commands by short name; anyone else's by full address
          * (a built-in like 'explorer.download', or a `trove+contrib:` URI) — and only
@@ -295,9 +415,13 @@
        *  optional — an opener frame runs exactly one opener. */
       onOpen(idOrHandler, maybeHandler) {
         const [id, handler] = typeof idOrHandler === 'function' ? ['*', idOrHandler] : [idOrHandler, maybeHandler];
-        openerHandlers.set(id, handler);
+        // A handler returning a promise keeps the host waiting — which is what holds
+        // "Opening…" on screen until the viewer has actually drawn. See `hook`.
+        hook(openerTarget, id, (e) => [e.detail.file, e.detail.context])(handler);
         return this;
       },
+      /** The opener target, for `addEventListener('*', e => e.waitUntil(…))`. */
+      openers: openerTarget,
       // NOTE: there is no onIndex(). Indexers run on the SERVER (in its isolate
       // runtime), not in this sandbox — indexing has to happen once per upload for the
       // drive, not in whichever tab is open. An indexer's entry module is plain ESM
@@ -348,7 +472,21 @@
         setMetadata: (m) => (requireCap('media'), call('media:metadata', m || {})),
         setPlaybackState: (state) => (requireCap('media'), call('media:playbackState', { state })),
         setPositionState: (p) => (requireCap('media'), call('media:position', p || {})),
-        setActionHandler: (action, handler) => { requireCap('media'); if (handler) mediaHandlers[action] = handler; else delete mediaHandlers[action]; return call('media:action', { action, on: !!handler }); },
+        /**
+         * @deprecated use `ctx.media.addEventListener(action, …)`.
+         *
+         * Additive now, and the RPC that claims the OS control moves with it: the first
+         * listener for an action claims it, the last one to go releases it. Passing null
+         * removes nothing in particular, so it is a no-op rather than a silent surprise.
+         */
+        setActionHandler: (action, handler) => {
+          requireCap('media');
+          if (!handler) return Promise.resolve({ ok: true });
+          hook(mediaTarget, action)(handler);
+          return Promise.resolve({ ok: true });
+        },
+        addEventListener: (...a) => (requireCap('media'), mediaTarget.addEventListener(...a)),
+        removeEventListener: (...a) => mediaTarget.removeEventListener(...a),
         clear: () => call('media:clear', {}),
       },
       // Dock — register this viewer to persist as a small floating frame when the
@@ -359,7 +497,10 @@
         enable: (opts) => (requireCap('dock'), call('dock:enable', opts || {})),
         disable: () => (requireCap('dock'), call('dock:disable', {})),
         close: () => call('dock:close', {}),
-        onChange: (fn) => { onDock = fn; },
+        /** @deprecated use `ctx.addEventListener('dockchange', …)`. Now additive. */
+        onChange: hook(bus, 'dockchange'),
+        addEventListener: (...a) => bus.addEventListener(...a),
+        removeEventListener: (...a) => bus.removeEventListener(...a),
       },
       // Network — there is no direct fetch in the sandbox; the host performs the
       // request, but ONLY to endpoints declared in the manifest's `network` list
@@ -509,15 +650,26 @@
         get: (key) => call('settings:get', { key }),
         getSecret: (key) => call('settings:getSecret', { key }),
         set: (key, value) => call('settings:set', { key, value }),
-        onChange: (fn) => { onSettingsChange = fn; },
+        /** @deprecated use `ctx.addEventListener('settingschange', …)`. Now additive. */
+        onChange: hook(bus, 'settingschange', (e) => [e.detail.key, e.detail.value]),
       },
-      onConnectivity: (fn) => { onConnectivity = fn; },
+      /** @deprecated use `ctx.addEventListener('connectivity', …)`. Now additive. */
+      onConnectivity: hook(bus, 'connectivity'),
       announce,
-      onDeactivate: (fn) => {
-        if (typeof fn === 'function') onDeactivateFns.push(fn);
-        // A disposer, so a caller that registers per-render can drop the previous one.
-        return () => { const i = onDeactivateFns.indexOf(fn); if (i >= 0) onDeactivateFns.splice(i, 1); };
-      },
+      /**
+       * @deprecated use `ctx.addEventListener('deactivate', …)`.
+       *
+       * Kept, and now additive: registering twice used to discard the first, which is
+       * how a viewer ended up leaking one of its two teardowns. Returns a disposer.
+       */
+      onDeactivate: hook(bus, 'deactivate'),
+
+      // The bus itself. `deactivate`, `connectivity`, `settingschange`, `dockchange` —
+      // and every one of them composes, which the `onX` forms above now do too because
+      // they are written over this.
+      addEventListener: (...a) => bus.addEventListener(...a),
+      removeEventListener: (...a) => bus.removeEventListener(...a),
+      dispatchEvent: (...a) => bus.dispatchEvent(...a),
     };
   }
 
