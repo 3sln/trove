@@ -55,6 +55,7 @@ export function streamUrl({ track, mime }, read, { onError } = {}) {
   let closed = false;
   let busy = false;
   let appendedTo = 0;      // samples appended so far, as an index
+  let durationSet = false; // whether the source has been told how long the book is
   let audio = null;        // set by `attach`, so the feeder knows where the playhead is
 
   const fail = (err) => { if (!closed) onError?.(err); };
@@ -64,7 +65,22 @@ export function streamUrl({ track, mime }, read, { onError } = {}) {
     try {
       buffer = media.addSourceBuffer(mime);
       buffer.mode = 'segments';
-      buffer.addEventListener('updateend', () => { busy = false; pump(); });
+      buffer.addEventListener('updateend', () => {
+        // THE DURATION HAS TO BE DECLARED. A MediaSource starts at NaN and only learns its
+        // length from `endOfStream()` — which for a book fed a window at a time would mean
+        // no duration until the last fragment. Everything downstream reads as broken in
+        // the meantime: the seek bar has no scale so its thumb pins to one end, the
+        // remaining-time label reads 0:00, and jumping to a chapter looks like jumping to
+        // the end of the book.
+        //
+        // The tables already say how long it is, so it is said here, once, as soon as
+        // there is a buffer to say it on. Setting it mid-update throws, hence `updating`.
+        if (!durationSet && !buffer.updating && media.readyState === 'open') {
+          try { media.duration = track.duration / track.timescale; durationSet = true; } catch { /* retried next updateend */ }
+        }
+        busy = false;
+        pump();
+      });
       buffer.addEventListener('error', () => fail(new Error('the decoder rejected a fragment')));
       appendInit();
     } catch (err) { fail(err); }

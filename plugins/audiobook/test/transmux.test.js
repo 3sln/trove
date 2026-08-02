@@ -256,3 +256,19 @@ test('trun flags are 0x000301, not a byte-order accident', () => {
   expect(n).toBe(2);
   expect(trun.end - trun.offset).toBe(4 + 4 + 4 + n * 8);
 });
+
+test('the track reports its own duration, so a stream can declare one', () => {
+  // A MediaSource starts at NaN and only learns its length from `endOfStream()`. A book
+  // fed a window at a time would therefore have no duration until the last fragment —
+  // and until then the seek bar has no scale, its thumb pins to one end, and jumping to
+  // a chapter looks like jumping to the end of the book. The tables already know, so
+  // `stream.js` declares it up front from this.
+  const f = progressive({ n: 100, delta: 1024, timescale: 1024 });
+  const t = audioTrack(f.moov);
+  expect(t.duration / t.timescale).toBe(100);
+  // And it agrees with the samples, which is what makes it safe to trust: a `duration`
+  // that disagreed with the fragments would put the end of the bar in the wrong place.
+  let summed = 0;
+  for (let i = 0; i < t.count; i++) summed += t.deltas[i];
+  expect(summed / t.timescale).toBe(100);
+});
