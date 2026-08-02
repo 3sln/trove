@@ -177,37 +177,32 @@ function pluginOpenerView(opener, node, ui) {
   // in the DOM would reload it). $attach hands .pv-host to mountViewer as the tracking
   // target; $detach lets it dock or tear down. `.opaque()` keeps dodo from reconciling
   // these (host-managed) nodes so their lifecycle hooks stay stable across re-renders.
-  // A .pv-status overlay shows a spinner until the plugin opens the file (the iframe
-  // is transparent while loading) and an error if it never does.
+  // The status overlay shows a spinner until the plugin opens the file (the iframe is
+  // transparent while loading) and an error if it never does. It is a CELL and a `watch`,
+  // the same shape `mediaWithError` above uses — it used to be functions stamped onto the
+  // status element (`el._ready`, `el._error`) and fetched back by the sibling with
+  // `el.parentElement?.querySelector('.pv-status')`. Every `?.` in that chain silently
+  // no-ops, so reordering or wrapping these two divs left the spinner up forever with
+  // nothing reporting it. `.pv-host` stays opaque and imperative because it genuinely is:
+  // re-parenting the iframe would reload it.
+  const status = cell({ ready: false, error: null });
   return div({ className: 'viewer plugin-viewer' },
-    div({ className: 'pv-status' }).on({
-      $attach: (el) => {
-        el.innerHTML = '<div class="loading"><div class="spinner"></div><span>Opening…</span></div>';
-        el._ready = () => { el.style.display = 'none'; };
-        el._error = (msg) => { el.style.display = 'grid'; el.innerHTML = ''; el.appendChild(errorEl(msg)); };
-      },
-    }).opaque(),
+    watch(status, (st) => {
+      if (st.ready) return null;
+      return div({ className: 'pv-status' }, st.error
+        ? div({ className: 'fallback' }, icon('warn', { size: 40 }), span(st.error))
+        : div({ className: 'loading' }, div({ className: 'spinner' }), span('Opening…')));
+    }),
     div({ className: 'pv-host' }).on({
       $attach: (el) => {
-        const status = el.parentElement?.querySelector('.pv-status');
         el._detach = ui.platform.plugins.mountViewer(opener.pluginId, el, node, opener.id, {
-          onReady: () => status?._ready?.(),
-          onError: (msg) => status?._error?.(msg || 'This viewer failed to load'),
+          onReady: () => status.setValue({ ready: true, error: null }),
+          onError: (msg) => status.setValue({ ready: false, error: msg || 'This viewer failed to load' }),
         });
       },
       $detach: (el) => { el._detach?.(); el._detach = null; },
     }).opaque(),
   );
-}
-
-// A plain DOM error node for the imperatively-managed .pv-status overlay.
-function errorEl(message) {
-  const wrap = document.createElement('div');
-  wrap.className = 'fallback';
-  const s = document.createElement('span');
-  s.textContent = message || 'Failed to open';
-  wrap.appendChild(s);
-  return wrap;
 }
 
 function errorView(message) {

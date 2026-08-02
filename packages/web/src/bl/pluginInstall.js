@@ -9,6 +9,7 @@
 import { parsePackage, fetchPackage, reviewSummary, displayName } from '../platform/pluginPackage.js';
 import { pluginId } from '@3sln/trove/core/plugins/identity.js';
 import { installPolicyFor } from './trust.js';
+import { InstallReviewedPluginAction } from './actions.js';
 
 /**
  * What an install touches. The parameter list below is the same set spelled out, so a lease
@@ -62,27 +63,21 @@ async function review({ notifications, overlay, plugins, social, workbench }, pk
     return;
   }
 
-  const summary = reviewSummary(pkg, trust);
+  // `installActions`, not an `onInstall` closure. Two docblocks state the invariant —
+  // "Nothing in a dialog spec is callable, which matters because the spec lives in
+  // workbench state" (actions.js) and "the dialog spec holds no functions" (overlays.js) —
+  // and this dialog was the sole violation. That closure cleared the overlay, moved the
+  // workbench, raised a notification and performed the network install, all after the
+  // dispatching action's lease had been released and none of it on the feed.
+  //
+  // The alternative was already here: pluginReview keeps its ticked grants in viewState and
+  // dispatches per toggle, so the action needs to carry only `pkg` and `trust` and can read
+  // the grants from the key the dialog already writes.
   overlay.set({ dialog: {
     kind: 'plugin-review',
-    summary,
+    summary: reviewSummary(pkg, trust),
     policy,
     isAdmin: !!social.get().admin,
-    onInstall: async (grants) => {
-      overlay.set({ dialog: null });
-      // Account installs upload the package + run a handshake that can take a while —
-      // switch to the plugins view (which shows the plugin's loading state) and hold a
-      // sticky "Installing…" toast so the user isn't left staring at nothing.
-      workbench.set({ activity: 'plugins', sidebarVisible: true });
-      const pending = notifications.info(`Installing “${label}”…`, { sticky: true });
-      try {
-        await plugins.install(pkg, { grants, trust });
-        notifications.dismiss(pending);
-        notifications.success(`Installed “${label}”`);
-      } catch (err) {
-        notifications.dismiss(pending);
-        notifications.error(`Install failed: ${err.message}`);
-      }
-    },
+    installActions: [new InstallReviewedPluginAction(pkg, trust, label)],
   } });
 }

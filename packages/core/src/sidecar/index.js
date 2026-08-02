@@ -47,6 +47,13 @@ export class SidecarService {
   flushAll() {
     return this.manager.flushAll();
   }
+  /**
+   * Try again to save what could not be saved — what the `sidecar-flush` issue's Retry
+   * button runs. Clears the issue for each document that lands.
+   */
+  retryPending() {
+    return this.manager.retryPending();
+  }
 
   // --- conversation ----------------------------------------------------------
 

@@ -79,6 +79,9 @@ export async function boot({ serverConfig = {}, seed, watchdogMs = 45_000, page:
   // its own viewport (and hasTouch/isMobile) so the app makes the same call a real
   // device would.
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, ...pageOpts });
+  // `window.__trove` is off in the shipped bundle — see createWorkbench's `debug`
+  // option. `addInitScript` runs before any page script, which is how automation asks.
+  await page.addInitScript(() => { window.__troveDebug = true; });
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console.error: ' + m.text()); });

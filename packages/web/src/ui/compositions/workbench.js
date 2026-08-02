@@ -13,7 +13,7 @@ import { CloseSearchModalAction, ExecCommandAction, NavigateAction } from '../..
 import activityBar from '../components/activityBar.js';
 import statusBar from '../components/statusBar.js';
 import launcher from '../components/launcher.js';
-import settingsView from '../components/settingsView.js';
+import settingsView, { keybindingRows, CAPTURE } from '../components/settingsView.js';
 import collectionGate from '../components/collectionGate.js';
 import pluginsView from '../components/pluginsView.js';
 import adminView from '../components/adminView.js';
@@ -142,14 +142,28 @@ export default function workbench({ engine, platform }) {
     // or auto-dismissing used to rebuild the entire shell — including every row of the
     // file list — to add a line in the corner.
     toasts: region(engine, { notif: q.notifications }, (s) => toasts(s, ui)),
-    activityPanel: region(engine, { act: q.activity }, (s) => activityPanel(s, ui)),
+    // `overlay` as well as `act`: the panel's open flag is overlay state like every other
+    // transient surface, and its contents are the poller's.
+    activityPanel: region(engine, { act: q.activity, overlay: q.overlay }, (s) => activityPanel(s, ui)),
+    // A region like its neighbours, and it has to be: it reads `plugins`, which the main
+    // snapshot does not contain — so `state.plugins` was permanently undefined, `|| []`
+    // swallowed it, and the panel header showed the raw plugin id where the display name
+    // belongs. It was the one component the region split left reading a key nobody
+    // supplies. Being a region also takes it off the main snapshot, which is the point.
+    pluginPanel: region(engine, { overlay: q.overlay, plugins: q.plugins },
+      (s) => pluginPanel(s, ui)),
     // Screens that are usually NOT on screen. Their state still invalidated the shell from
     // wherever they were: minting an API key or a plugin reporting in rebuilt the file
     // list. Each reads a couple of slices, so each is a cheap region.
     settingsView: region(engine, {
       settings: q.settings, settingsGroups: q.settingsGroups, keys: q.apiKeys,
       caps: q.capabilities, ex: q.explorer, assoc: q.openerAssociations,
-    }, (s) => settingsView(s, ui)),
+    }, (s) => settingsView(s, ui, regions)),
+    // The keybinding table is its own region so a chord capture does not re-render the
+    // whole settings screen. Built HERE, with every other region — at module scope it
+    // pinned the first engine it ever saw.
+    keybindings: region(engine, { bindings: q.keybindings, view: q.viewState },
+      (s) => keybindingRows(s.bindings || [], ui, s.view?.[CAPTURE] ?? null)),
     pluginsView: region(engine, { plugins: q.plugins, settings: q.settings },
       (s) => pluginsView(s, ui)),
     // Gathers what already exists rather than fetching anything new — see adminView.js.
@@ -196,7 +210,7 @@ function view(state, ui, regions) {
     regions.commandPalette(),
     dialog(state, ui),
     contextMenu(state, ui),
-    pluginPanel(state, ui),
+    regions.pluginPanel(),
     regions.toasts(),
     regions.transferTray(),
     regions.activityPanel(),

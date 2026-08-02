@@ -6,7 +6,7 @@
 
 import { Action } from '@3sln/ngin';
 import { runAction } from '../dispatch.js';
-import { PROMPT } from './viewState.js';
+import { PROMPT, PLUGIN_REVIEW } from './viewState.js';
 import { beginInstallFromUrl } from './pluginInstall.js';
 import { newId } from '@3sln/trove/core/util.js';
 import { matchesTagFilters } from './tagQuery.js';
@@ -589,14 +589,23 @@ export class SearchAction extends Action {
       return;
     }
     const mode = this.mode || settings.get('search.mode');
-    search.set({ query: this.query, mode, loading: true, error: null, resolved: null });
+    search.set({ query: this.query, mode, loading: true, error: null, resolved: null, filtered: false });
+    // The query itself is the sequence token, the same guard QuickOpenAction uses and for
+    // the same reason: keystrokes outrun the network, and a slower request for an earlier
+    // query must not land on top of a newer one's results. It matters most for the query
+    // that was CLEARED — pressing Escape inside the debounce window used to let
+    // `SearchAction('contract')` land after the clear, leaving "Searching for contract"
+    // over the home list.
+    const superseded = () => search.get().query !== this.query;
     const offline = r.offline;
     // Offline (or server unreachable) → search the pinned corpus locally.
     if (offline && !offline.get().online) {
       try {
         const results = await offline.searchOffline(q, { limit: 40 });
+        if (superseded()) return;
         search.set({ results, loading: false, ran: true, offline: true, resolved: null });
       } catch (err) {
+        if (superseded()) return;
         search.set({ results: [], loading: false, ran: true, offline: true, error: err.message });
       }
       return;
@@ -611,10 +620,13 @@ export class SearchAction extends Action {
       // content types. It can only name a view from this list.
       const views = contributions.ofType('view').map((v) => ({ id: v.id, title: v.title || v.id }));
       const res = await api.query(q, { mode, limit: 40, views });
+      if (superseded()) return;
       search.set({ results: res.results, resolved: res.resolved || null, loading: false, ran: true, offline: false });
     } catch (err) {
+      if (superseded()) return;
       if (offline) {
         const results = await offline.searchOffline(q, { limit: 40 });
+        if (superseded()) return;
         search.set({ results, loading: false, ran: true, offline: true, error: results.length ? null : err.message });
       } else {
         search.set({ loading: false, error: err.message, ran: true });
@@ -791,11 +803,11 @@ export class DismissNotificationAction extends Action {
 // discriminated blob would make every one of them read as "ShellAction" and give back
 // exactly the observability this is for.
 //
-// NOT here yet, deliberately: `showDialog` and `showContextMenu`. Both take callbacks —
-// a dialog carries `onConfirm`, a menu carries an item's `run` — so converting them
-// mechanically would post a closure through the engine and call it an action. They want
-// the outcome to be an ACTION TO DISPATCH rather than a function to call, which is a real
-// change at each call site rather than a swap. See docs/tickets/009.
+// `showDialog` and `showContextMenu` are here too, and the reason they arrived last is the
+// reason they are worth having: both used to take callbacks — a dialog carried `onConfirm`,
+// a menu carried an item's `run` — so converting them mechanically would have posted a
+// closure through the engine and called it an action. Every outcome is an ACTION TO
+// DISPATCH now, which is why nothing in a dialog spec or a menu item is callable.
 
 class ShellAction extends Action {
   static deps = ['workbench'];
@@ -967,9 +979,22 @@ class ActivityAction extends Action {
   static deps = ['activity'];
   async execute(r) { this.apply(r.activity); }
 }
-export class ToggleActivityPanelAction extends ActivityAction {
+/**
+ * Show or hide the activity panel.
+ *
+ * The FLAG is overlay state like every other transient surface; the REFRESH is the
+ * poller's. Opening has to refresh because polling backs off to 60s when nothing is
+ * running, so a panel opened on an idle drive would otherwise show a list up to a minute
+ * stale — which is exactly the moment someone is looking to find out what just happened.
+ */
+export class ToggleActivityPanelAction extends Action {
+  static deps = ['activity', 'overlay'];
   constructor(which) { super(); this.which = which; }
-  apply(s) { s.togglePanel(this.which); }
+  async execute({ activity, overlay }) {
+    const open = this.which ?? !overlay.get().activityPanel;
+    overlay.set({ activityPanel: open });
+    if (open) await activity.refresh();
+  }
 }
 export class CancelTaskAction extends ActivityAction {
   constructor(id) { super(); this.id = id; }
@@ -1332,6 +1357,41 @@ export class RenamePromptAction extends PromptAction {
   }
 }
 
+/**
+ * Install the package the review dialog is about, with the capabilities that were ticked.
+ *
+ * The dialog used to carry an `onInstall` closure that did all of this, which put an effect
+ * inside engine state — and ran it after the dispatching action's lease had been released,
+ * with nothing of it on the feed. Two docblocks assert that a dialog spec holds no
+ * functions; this is what makes that true.
+ *
+ * `pkg` and `trust` ride on the instance because they are what the review WAS; the grants
+ * are read from viewState, because they are what the user did to it while it was open.
+ */
+export class InstallReviewedPluginAction extends Action {
+  static deps = ['notifications', 'overlay', 'plugins', 'viewState', 'workbench'];
+
+  constructor(pkg, trust, label) { super(); this.pkg = pkg; this.trust = trust; this.label = label; }
+
+  async execute({ notifications, overlay, plugins, viewState, workbench }) {
+    const grants = [...(viewState.get()[PLUGIN_REVIEW]?.grants || [])];
+    overlay.set({ dialog: null });
+    // Account installs upload the package and run a handshake that can take a while —
+    // switch to the plugins view (which shows the plugin's loading state) and hold a sticky
+    // "Installing…" toast so the user isn't left staring at nothing.
+    workbench.set({ activity: 'plugins', sidebarVisible: true });
+    const pending = notifications.info(`Installing “${this.label}”…`, { sticky: true });
+    try {
+      await plugins.install(this.pkg, { grants, trust: this.trust });
+      notifications.dismiss(pending);
+      notifications.success(`Installed “${this.label}”`);
+    } catch (err) {
+      notifications.dismiss(pending);
+      notifications.error(`Install failed: ${err.message}`);
+    }
+  }
+}
+
 /** Fetch and review a plugin package from the URL that was typed. */
 export class InstallPluginFromUrlPromptAction extends PromptAction {
   static deps = ['notifications', 'overlay', 'plugins', 'social', 'viewState', 'workbench'];
@@ -1438,8 +1498,8 @@ export class SetActivityAction extends ShellAction {
  * once, here, rather than distributed over whoever owns each overlay.
  */
 export class CloseOverlaysAction extends Action {
-  static deps = ['activity', 'navigation', 'overlay', 'workbench'];
-  async execute({ activity, navigation, overlay, workbench }) {
+  static deps = ['navigation', 'overlay', 'workbench'];
+  async execute({ navigation, overlay, workbench }) {
     const o = overlay.get();
     const wb = workbench.get();
     if (o.contextMenu) return overlay.set({ contextMenu: null });
@@ -1453,7 +1513,7 @@ export class CloseOverlaysAction extends Action {
     // plugin panel deliberately: it opens BY ITSELF when a storage check finishes, and
     // Escape should not close what you opened on purpose in order to dismiss what
     // appeared on its own.
-    if (activity.get().open) return activity.togglePanel(false);
+    if (o.activityPanel) return overlay.set({ activityPanel: false });
     // Nothing floating: Escape pops the top viewer panel instead.
     if (navigation.get().stack.length > 1) navigation.back();
   }
@@ -1486,8 +1546,20 @@ export class VoiceSearchAction extends Action {
 
 /** Reindex the whole drive. Reports as a task rather than blocking — it takes minutes. */
 export class RebuildIndexAction extends Action {
-  static deps = ['activity'];
-  async execute({ activity }) { return activity.rebuildIndex().catch(() => {}); }
+  static deps = ['activity', 'api', 'engine', 'notifications'];
+  async execute({ activity, api, engine, notifications }) {
+    try {
+      const res = await api.reindex();
+      await activity.refreshTasks();
+      // "…and show the user" belongs to the action that decided to do the work, not to
+      // the service that holds the list. Three network verbs used to open the panel as a
+      // side effect of a fetch, from inside a resource.
+      engine.dispatch(new ToggleActivityPanelAction(true));
+      if (res.alreadyRunning) notifications.info('A rebuild is already running');
+    } catch (err) {
+      notifications.error(`Couldn't rebuild the index: ${err.message}`);
+    }
+  }
 }
 
 /**
@@ -1498,11 +1570,19 @@ export class RebuildIndexAction extends Action {
  * a scan error.
  */
 export class ScanCollectionAction extends Action {
-  static deps = ['activity', 'explorer', 'notifications'];
-  async execute({ activity, explorer, notifications }) {
+  static deps = ['activity', 'api', 'engine', 'explorer', 'notifications'];
+  async execute({ activity, api, engine, explorer, notifications }) {
     const id = explorer.get().collectionId;
     if (!id) return notifications.info('Open a collection first — a scan is per collection.');
-    return activity.scanCollection(id).catch(() => {});
+    try {
+      const res = await api.scanCollection(id);
+      await activity.refreshTasks();
+      engine.dispatch(new ToggleActivityPanelAction(true));
+      if (res.alreadyRunning) notifications.info('A scan of this collection is already running');
+      activity.followUp();
+    } catch (err) {
+      notifications.error(`Couldn't scan “${id}”: ${err.message}`);
+    }
   }
 }
 
@@ -1513,8 +1593,28 @@ export class ScanCollectionAction extends Action {
  * from here — the failure that makes every file open to a spinner.
  */
 export class CheckStorageAction extends Action {
-  static deps = ['activity'];
-  async execute({ activity }) { return activity.checkStorage().catch(() => {}); }
+  static deps = ['activity', 'api', 'engine', 'notifications'];
+  async execute({ activity, api, engine, notifications }) {
+    try {
+      const res = await api.checkStorage();
+      await activity.refresh();
+      engine.dispatch(new ToggleActivityPanelAction(true));
+      const problems = (res.results || []).reduce((n, r) => n + (r.findings?.length || 0), 0);
+      if (problems) {
+        notifications.warn(`Found ${problems} storage problem${problems === 1 ? '' : 's'} — see Activity`);
+      } else if (!res.checked) {
+        notifications.info('There are no collections to check yet');
+      } else if (!res.corsChecked) {
+        // Honest about what was not checked. Reporting "all good" having skipped the check
+        // that matters is how a diagnostic stops being believed.
+        notifications.info('Stores are reachable. Browser access was not checked — this drive has no public URL configured.');
+      } else {
+        notifications.success('Stores are reachable and allow browser access');
+      }
+    } catch (err) {
+      notifications.error(`Couldn't check the stores: ${err.message}`);
+    }
+  }
 }
 
 /** Ask for files, then upload them into the open collection. */
@@ -1842,10 +1942,23 @@ export class SetGrantAction extends Action {
 
 export class LoadRotationAction extends Action {
   static deps = ['api', 'explorer', 'notifications', 'rotation'];
+
+  /** @param {string} [collectionId] which collection; defaults to the open one */
+  constructor(collectionId = null) { super(); this.collectionId = collectionId; }
+
   async execute({ api, explorer, notifications, rotation }) {
-    const collectionId = explorer.get().collectionId;
+    const collectionId = this.collectionId || explorer.get().collectionId;
     if (!collectionId) return;
-    rotation.set({ collectionId, loading: true, error: null });
+    // CLEARED when the collection changes, not merely re-stamped. `rotation` is one slice
+    // for whichever collection the settings screen is looking at, and stamping the new id
+    // while leaving the previous collection's `rotation` and `estimate` in place meant a
+    // failed load — which sets only `{loading, error}` — left collection A's running
+    // progress on screen under B's fingerprint, indefinitely, with a Start/Stop button
+    // beside it.
+    const switching = rotation.get().collectionId !== collectionId;
+    rotation.set(switching
+      ? { collectionId, rotation: null, estimate: null, loading: true, error: null }
+      : { collectionId, loading: true, error: null });
     try {
       // Both together: the estimate is meaningless without knowing whether one is already
       // running, and a screen showing one without the other invites starting a second.

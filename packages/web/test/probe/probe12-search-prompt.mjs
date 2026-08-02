@@ -51,7 +51,7 @@ check('and it comes from the server, not the bundle',
 check('no syntax help above an untouched drive', (await count('.launch-help')) === 0);
 
 await h.page.fill('.launch-input', 'sailing');
-await h.page.waitForFunction(() => window.__trove.app.search.state.ran, null, { timeout: 5000 });
+await h.page.waitForFunction(() => window.__trove.app.search.get().ran, null, { timeout: 5000 });
 await h.page.waitForTimeout(200);
 check('a search that FOUND something gets results, not a lecture',
   (await count('.launch-item')) > 0 && (await count('.launch-help')) === 0);
@@ -60,8 +60,8 @@ check('a search that FOUND something gets results, not a lecture',
 // search returns the nearest thing to any query, so "gibberish" still matches something.
 await h.page.fill('.launch-input', '#zzznosuchtag');
 await h.page.waitForFunction(
-  () => window.__trove.app.search.state.ran && !window.__trove.app.search.state.loading
-    && window.__trove.app.search.state.results.length === 0,
+  () => window.__trove.app.search.get().ran && !window.__trove.app.search.get().loading
+    && window.__trove.app.search.get().results.length === 0,
   null, { timeout: 6000 });
 await h.page.waitForTimeout(200);
 check('a search that found NOTHING explains the syntax', (await count('.launch-help')) === 1);
@@ -98,8 +98,8 @@ check('and it no longer advertises a grammar this server does not parse', !/#/.t
 // search returns the nearest thing to any query, so "gibberish" still matches something.
 await h.page.fill('.launch-input', '#zzznosuchtag');
 await h.page.waitForFunction(
-  () => window.__trove.app.search.state.ran && !window.__trove.app.search.state.loading
-    && window.__trove.app.search.state.results.length === 0,
+  () => window.__trove.app.search.get().ran && !window.__trove.app.search.get().loading
+    && window.__trove.app.search.get().results.length === 0,
   null, { timeout: 6000 });
 await h.page.waitForTimeout(200);
 const customHelp = await h.page.locator('.launch-help').innerText();

@@ -1,15 +1,13 @@
 import { dd } from '../../runtime.js';
 import { eventToKey } from '../../platform/keybindings.js';
 import { icon } from '../icon.js';
-import { region } from '../region.js';
-import * as q from '../../bl/queries.js';
 import { rotationFor } from '../../bl/queries.js';
 import { watchQuery } from '../../bl/watchQuery.js';
 import { BeginRotationAction, CancelRotationAction, CopyTextAction, ExecCommandAction, PatchApiKeyDraftAction, RebindKeyAction, RememberOpenerAction, SetSettingAction, SetViewStateAction, ToggleApiKeyCapAction } from '../../bl/actions.js';
 
 const { div, h2, h3, p, span, select, option, input, label, button, ul, li, code } = dd;
 
-export default function settingsView(state, ui) {
+export default function settingsView(state, ui, regions) {
   const groups = state.settingsGroups || new Map();
   return div({ className: 'editor' },
     div({ className: 'stage' },
@@ -21,7 +19,7 @@ export default function settingsView(state, ui) {
         encryptionSection(state, ui),
         apiKeysSection(state, ui),
         openersSection(state.assoc, ui),
-        keybindingsSection(ui),
+        regions.keybindings(),
       ),
     ),
   );
@@ -483,7 +481,7 @@ function openersSection(rows, ui) {
 
 // Which shortcut is listening for its new chord. Transient, and still engine state: it
 // decides whether a row renders a `<kbd>` or "Press keys…". See bl/viewState.js.
-const CAPTURE = 'keybindingCapture';
+export const CAPTURE = 'keybindingCapture';
 
 // Its own region, over the keybindings view and the capture state.
 //
@@ -493,16 +491,15 @@ const CAPTURE = 'keybindingCapture';
 //
 // Rebinding dispatches with the binding ID. The component has never held a binding object,
 // only a description of one, which is the point.
-let kbRegion = null;
-function keybindingsSection(ui) {
-  // Built once. A fresh region per render would rebuild its alias every pass, and dodo
-  // identifies an alias by the function — see ui/region.js.
-  kbRegion ??= region(ui.engine, { bindings: q.keybindings, view: q.viewState },
-    (st) => keybindingRows(st.bindings || [], ui, st.view?.[CAPTURE] ?? null));
-  return kbRegion();
-}
+// Built once and PASSED IN, beside the other regions in ui/compositions/workbench.js. It
+// was built at module scope with `kbRegion ??= region(ui.engine, …)` — right that a region
+// must be built once, wrong about where: at module scope it captures the FIRST `ui` and
+// engine it ever sees and pins them for the module's life, which is the shape `watchQuery`
+// deliberately avoids by keying its cache on the engine. Folding it into the parent
+// settingsView region would also work and costs granularity — a chord capture would
+// re-render the whole settings screen — so it is handed down instead.
 
-function keybindingRows(bindings, ui, capturing) {
+export function keybindingRows(bindings, ui, capturing) {
   const setCapturing = (id) => ui.engine.dispatch(new SetViewStateAction(CAPTURE, id));
   const stop = () => setCapturing(null);
   const rebind = (bindingId, key) => ui.engine.dispatch(new RebindKeyAction(bindingId, key));

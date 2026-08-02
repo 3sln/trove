@@ -105,7 +105,7 @@ check('Back leaves the file and returns to the list', (await count('.launch-item
 
 // Back closes an overlay before it navigates — closing the thing on top is what "back"
 // means while something is on top.
-await page.evaluate(() => window.__trove.platform.workbench.openPalette('commands'));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.showCommandPalette'));
 await page.waitForSelector('.palette', { timeout: 3000 });
 await press('Backspace');
 await page.waitForTimeout(200);

@@ -23,7 +23,7 @@ const { page, close, goto, setFault } = await boot({
 await goto();
 
 const palette = () => page.evaluate(() => {
-  const se = window.__trove.app.search.state;
+  const se = window.__trove.app.search.get();
   return {
     names: (se.paletteFiles || []).map((r) => r.node.name),
     q: se.paletteQuery, error: se.paletteError,
@@ -36,7 +36,7 @@ const palette = () => page.evaluate(() => {
 // --- 1. Type immediately after switching modes, with no render in between ------
 // The switch and the keystroke happen back to back, which is the racy ordering the
 // walkthrough hit intermittently. Doing both without an await makes it deterministic.
-await page.evaluate(() => window.__trove.platform.workbench.openPalette('commands'));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.showCommandPalette'));
 await page.waitForSelector('.palette input', { timeout: 3000 });
 await page.locator('.palette input').fill('settings');
 await page.waitForTimeout(250);
@@ -45,11 +45,11 @@ await page.waitForTimeout(250);
 // still the one the commands-mode render created.
 await page.evaluate(() => {
   const el = document.querySelector('.palette input');
-  window.__trove.platform.workbench.openPalette('files');
+  window.__trove.platform.commands.execute('workbench.quickOpen');
   el.value = 'cooking';
   el.dispatchEvent(new Event('input', { bubbles: true }));
 });
-await page.waitForFunction(() => (window.__trove.app.search.state.paletteFiles || []).length > 0, { timeout: 6000 }).catch(() => {});
+await page.waitForFunction(() => (window.__trove.app.search.get().paletteFiles || []).length > 0, { timeout: 6000 }).catch(() => {});
 const raced = await palette();
 check('a keystroke racing the mode switch still runs a file search',
   raced.names.includes('cooking.txt'), JSON.stringify(raced));
@@ -58,7 +58,7 @@ check('what the field shows and what was searched agree',
 
 // --- 2. Reopening must not show the previous query's results -------------------
 await page.keyboard.press('Escape');
-await page.evaluate(() => window.__trove.platform.workbench.openPalette('files'));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.quickOpen'));
 await page.waitForTimeout(200);
 const reopened = await palette();
 check('a reopened palette shows no stale hits from the last query',
@@ -69,7 +69,7 @@ check('an empty query prompts rather than claiming nothing matched',
 // --- 3. A failed search says so, instead of "No files found" -------------------
 setFault('/api/search', true);
 await page.locator('.palette input').fill('cooking');
-await page.waitForFunction(() => window.__trove.app.search.state.paletteError, { timeout: 6000 }).catch(() => {});
+await page.waitForFunction(() => window.__trove.app.search.get().paletteError, { timeout: 6000 }).catch(() => {});
 const failed = await palette();
 check('a failed quick-open surfaces the error', !!failed.error, JSON.stringify(failed.error));
 check('a failed quick-open does NOT claim the drive has no match',
@@ -78,7 +78,7 @@ check('a failed quick-open does NOT claim the drive has no match',
 // --- 4. …and recovers on the next keystroke -----------------------------------
 setFault('/api/search', false);
 await page.locator('.palette input').fill('cooking ');
-await page.waitForFunction(() => (window.__trove.app.search.state.paletteFiles || []).length > 0, { timeout: 6000 }).catch(() => {});
+await page.waitForFunction(() => (window.__trove.app.search.get().paletteFiles || []).length > 0, { timeout: 6000 }).catch(() => {});
 const recovered = await palette();
 check('the next search clears the error and returns results',
   recovered.error === null && recovered.names.includes('cooking.txt'), JSON.stringify(recovered));

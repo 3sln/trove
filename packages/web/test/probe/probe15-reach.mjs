@@ -120,12 +120,12 @@ check('there is an Upload control on the desktop', uploadBtn.some((t) => /upload
 
 // `collections.switch` used to dispatch NavigateAction('/', cid) against a
 // single-argument constructor: it navigated to a collection literally named "/".
-const before = await page.evaluate(() => window.__trove.app.explorer.state.collectionId);
+const before = await page.evaluate(() => window.__trove.app.explorer.get().collectionId);
 await page.evaluate(() => window.__trove.platform.commands.execute('collections.switch', 'default'));
 await page.waitForTimeout(600);
-const nowAt = await page.evaluate(() => window.__trove.app.explorer.state.collectionId);
+const nowAt = await page.evaluate(() => window.__trove.app.explorer.get().collectionId);
 check('switching lands on the collection asked for', nowAt === 'default', `${before} → ${nowAt}`);
-const err = await page.evaluate(() => window.__trove.app.explorer.state.error);
+const err = await page.evaluate(() => window.__trove.app.explorer.get().error);
 check('and does not fail to load it', !err, err || 'no error');
 
 check('the status bar collection segment is a switcher', await page.$eval('.statusbar .seg[title]', (e) => e.title) !== null);

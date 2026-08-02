@@ -480,8 +480,11 @@ export class Vfs {
   async #note(kind, subject, title, err) {
     try {
       await this.issues?.raise({
+        // No `retryable`: `raise` builds a fixed field set and never reads one, and the
+        // route recomputes it from whether a handler is registered for `retry.op`. A field
+        // that is written, ignored and then contradicted is worse than no field.
         kind, subject, severity: 'warning', title,
-        detail: err?.message || String(err), retryable: false,
+        detail: err?.message || String(err),
       });
     } catch { /* the issue registry is itself best-effort here */ }
   }

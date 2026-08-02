@@ -42,7 +42,7 @@ check('an upload onto a taken name is renamed, not overwritten', dropped === 'ex
 // 2. Rename a file onto an existing name → error surfaced.
 const renameErr = await run(async () => {
   const app = window.__trove.app;
-  const beta = app.explorer.state.items.find((i) => i.name === 'beta.txt');
+  const beta = app.explorer.get().items.find((i) => i.name === 'beta.txt');
   try { await app.platform.api.rename(beta.id, 'alpha.txt'); return null; }
   catch (e) { return e.message; }
 });
@@ -51,9 +51,9 @@ check('rename onto an existing name is rejected by the server', !!renameErr, ren
 // 3. Delete a file while it is open in a viewer → no crash, viewer handles it.
 const opened = await run(async () => {
   const app = window.__trove.app;
-  const node = app.explorer.state.items.find((i) => i.name === 'alpha.txt');
+  const node = app.explorer.get().items.find((i) => i.name === 'alpha.txt');
   if (!node) return null;
-  app.platform.workbench.openFile(node, 'core.text', {});
+  app.test.open(node, 'core.text');
   return node.id;
 });
 await page.waitForTimeout(400);

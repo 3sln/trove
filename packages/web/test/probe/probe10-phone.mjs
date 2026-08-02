@@ -100,7 +100,7 @@ check('an icon\'s class lands where CSS can see it', iconClasses.junk === 0 && i
 // And it goes where it says.
 await page.getByText('Settings', { exact: false }).first().click();
 await page.waitForSelector('.settings', { timeout: 3000 }).catch(() => {});
-check('picking Settings opens Settings', await page.evaluate(() => window.__trove.platform.workbench.state.activity) === 'settings');
+check('picking Settings opens Settings', await page.evaluate(() => window.__trove.app.workbench.get().activity) === 'settings');
 check('and the sheet closed behind it', (await count('.sheet')) === 0);
 
 // --- 5. A file opens full-width, and so do its details ------------------------
@@ -111,7 +111,7 @@ await page.waitForSelector('.editor-area, .viewer-nav', { timeout: 5000 });
 const editor = await box('.editor-area, .viewer-nav');
 check('the opened file uses the full width', editor.width >= WIDTH - 2, `${Math.round(editor.width)}px`);
 
-await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(true));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
 await page.waitForSelector('.infopanel', { timeout: 3000 });
 const info = await box('.infopanel');
 // The desktop splits 1fr/340px. Doing that here would leave 50px for the file.
@@ -132,7 +132,7 @@ check('details close again, returning to the file', (await count('.infopanel')) 
 await page.setViewportSize({ width: HEIGHT, height: WIDTH });
 await page.waitForTimeout(150);
 check('rotating to landscape re-decides on the new width',
-  (await page.evaluate(() => window.__trove.platform.viewport.state.mode)) === 'desktop');
+  (await page.evaluate(() => window.__trove.platform.viewport.get().mode)) === 'desktop');
 check('and the chrome swaps completely, leaving nothing of the old shell',
   (await count('.activitybar')) === 1 && (await count('.phonebar')) === 0);
 await page.setViewportSize({ width: WIDTH, height: HEIGHT });

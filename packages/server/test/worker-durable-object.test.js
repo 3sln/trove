@@ -228,7 +228,7 @@ test('every task-shaped answer over HTTP survives the registry being remote', as
     kind: 'reindex-node',
     title: 'x could not be indexed',
     collectionId: 'default',
-    retry: { nodeId: 'nope' },
+    retry: { op: 'reindex-node', nodeId: 'nope' },
   });
   const retried = await json(`/api/issues/${issue.id}/retry`, { method: 'POST' });
   expect(retried.status).toBe(200);

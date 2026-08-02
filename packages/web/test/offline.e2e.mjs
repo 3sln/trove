@@ -45,6 +45,9 @@ async function main() {
 
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
   const context = await browser.newPage();
+  // `window.__trove` is off in the shipped bundle — see createWorkbench's `debug`
+  // option. `addInitScript` runs before any page script, which is how automation asks.
+  await context.addInitScript(() => { window.__troveDebug = true; });
   const page = context;
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -60,22 +63,22 @@ async function main() {
   // Pin the file (make available offline).
   await page.evaluate(async () => {
     const app = window.__trove.app;
-    const node = app.explorer.state.items.find((i) => i.name === 'expedition.md');
+    const node = app.explorer.get().items.find((i) => i.name === 'expedition.md');
     await app.offline.pin(node);
   });
-  await page.waitForFunction(() => window.__trove.app.offline.state.pins.length === 1, { timeout: 5000 });
-  check('file pinned for offline', await page.evaluate(() => window.__trove.app.offline.isPinned(window.__trove.app.explorer.state.items.find((i) => i.name === 'expedition.md').id)));
+  await page.waitForFunction(() => window.__trove.app.offline.get().pins.length === 1, { timeout: 5000 });
+  check('file pinned for offline', await page.evaluate(() => window.__trove.app.offline.isPinned(window.__trove.app.explorer.get().items.find((i) => i.name === 'expedition.md').id)));
 
   // Go offline.
   await page.context().setOffline(true);
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
-  await page.waitForFunction(() => window.__trove.app.offline.state.online === false);
+  await page.waitForFunction(() => window.__trove.app.offline.get().online === false);
   check('offline state detected', true);
 
   // Open the pinned file offline — bytes come from the cache via the SW.
   const text = await page.evaluate(async () => {
     const app = window.__trove.app;
-    const node = app.explorer.state.items.find((i) => i.name === 'expedition.md');
+    const node = app.explorer.get().items.find((i) => i.name === 'expedition.md');
     return app.platform.api.readText(node.id);
   });
   check('pinned file opens offline', /Antarctic Expedition/.test(text), text.slice(0, 30));
@@ -90,20 +93,20 @@ async function main() {
   // Comment offline → queued.
   await page.evaluate(async () => {
     const app = window.__trove.app;
-    const node = app.explorer.state.items.find((i) => i.name === 'expedition.md');
+    const node = app.explorer.get().items.find((i) => i.name === 'expedition.md');
     await app.social.loadSidecar(node.id);
     await app.social.comment('Reviewing this offline — looks great!');
   });
-  await page.waitForFunction(() => window.__trove.app.offline.state.queued === 1, { timeout: 4000 });
+  await page.waitForFunction(() => window.__trove.app.offline.get().queued === 1, { timeout: 4000 });
   check('offline comment is queued', true);
 
   // Back online → queue flushes, comment reaches the server.
   await page.context().setOffline(false);
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
-  await page.waitForFunction(() => window.__trove.app.offline.state.queued === 0, { timeout: 6000 });
+  await page.waitForFunction(() => window.__trove.app.offline.get().queued === 0, { timeout: 6000 });
   const serverHasComment = await page.evaluate(async () => {
     const app = window.__trove.app;
-    const node = app.explorer.state.items.find((i) => i.name === 'expedition.md');
+    const node = app.explorer.get().items.find((i) => i.name === 'expedition.md');
     const view = await app.platform.api.sidecar(node.id);
     return view.commentCount;
   });

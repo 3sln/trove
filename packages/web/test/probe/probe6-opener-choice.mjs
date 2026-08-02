@@ -43,7 +43,7 @@ check('a plugin opener is installed alongside the built-ins', !!PLUGIN_OPENER, S
 const assoc = () => page.evaluate(() => window.__trove.platform.settings.get('openers.associations') || {});
 // The panel stack lives in the workbench's NavigationService sub-service.
 const topOpener = () => page.evaluate(() => {
-  const s = window.__trove.platform.workbench.nav.state.stack;
+  const s = window.__trove.app.navigation.get().stack;
   const t = s[s.length - 1];
   return t && t.kind === 'file' ? t.openerId : null;
 });
@@ -83,7 +83,7 @@ check('switching to the plugin viewer changes the active opener',
 check('a one-off switch does not change the saved default', (await assoc())['.demo'] === 'core.text');
 
 // 5. Settings lists the association and can forget it.
-await page.evaluate(() => window.__trove.platform.workbench.setActivity('settings'));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.openSettings'));
 await page.waitForSelector('.settings', { timeout: 3000 });
 const hasRow = await page.locator('.settings .group', { hasText: 'Default Openers' }).locator('.setting', { hasText: '.demo' }).count();
 check('settings shows the .demo default opener', hasRow >= 1);

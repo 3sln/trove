@@ -168,6 +168,10 @@ export async function createServer(config = {}) {
   const routeBeginReindex = lifecycleState.background.beginReindex;
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
   issues.handle('storage-check', (issue) => storageCheck.run({ origin: issue.retry?.origin || config.publicUrl || null }));
+  // The one retry that matters most: the user has been told a comment saved and it exists
+  // only in memory. The op was raised for years with no handler registered for it — and in
+  // a shape `canRetry` rejected, so the button never rendered to reveal that.
+  issues.handle('sidecar-flush', () => sidecar.retryPending());
 
 
   issues.handle('reindex-node', (issue) => tasks.run(

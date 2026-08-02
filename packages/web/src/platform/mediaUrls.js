@@ -117,6 +117,16 @@ export class MediaUrlService {
       try {
         const res = await this.api.mintUrls(ids, op);
         const now = Date.now();
+        // Sweep before inserting. An expired entry can never be served again — `#fresh`
+        // only decides whether a HIT is usable — and nothing else ever removed one: the
+        // sole `invalidate` caller is a media element's error handler. Browsing a large
+        // collection mints per pictorial tile, so the map grew an entry per image, none
+        // reachable and none collectable for the life of the page. Two lines, and unlike
+        // the interning table in bl/intern.js, evicting here costs a re-mint rather than a
+        // duplicate realization.
+        for (const [key, entry] of this.cache) {
+          if (entry.expiresAt && entry.expiresAt < now) this.cache.delete(key);
+        }
         for (const [id, w] of waiting) {
           const got = res.urls?.[id];
           if (got) {

@@ -64,6 +64,9 @@ async function main() {
   const partner = `http://127.0.0.1:${elsewhere.address().port}`;
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  // `window.__trove` is off in the shipped bundle — see createWorkbench's `debug`
+  // option. `addInitScript` runs before any page script, which is how automation asks.
+  await page.addInitScript(() => { window.__troveDebug = true; });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
 
@@ -253,7 +256,7 @@ async function main() {
   // Open the .demo file → the opener mounts in its OWN sandboxed iframe, floated as a
   // fixed overlay over the .pv-host box (never re-parented — moving an <iframe> in the
   // DOM reloads it). The opener autoplays: sets the media session + enables dock.
-  await page.evaluate(([node, uri]) => window.__trove.platform.workbench.openFile(node, uri), [demoFile, demoUri('player')]);
+  await page.evaluate(([node, uri]) => window.__trove.test.open(node, uri), [demoFile, demoUri('player')]);
   await page.waitForSelector('.viewer.plugin-viewer .pv-host', { timeout: 4000 });
   await page.waitForFunction((id) => window.__trove.platform.plugins.plugins.get(id).frames.size === 1, DEMO_ID, { timeout: 5000 });
   check('viewer runs in its own iframe, separate from the background frame', await page.evaluate((id) => {
@@ -279,7 +282,7 @@ async function main() {
 
   // Navigate away while "playing" → the viewer floats into the dock instead of
   // being torn down. The SAME viewer frame stays alive (still responsive).
-  await page.evaluate(() => window.__trove.platform.workbench.showHome());
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.view.home'));
   await page.waitForFunction(() => {
     const d = document.querySelector('.viewer-dock');
     return d && getComputedStyle(d).display !== 'none';
@@ -303,7 +306,7 @@ async function main() {
     [...r.frames][0].channel.emit('media:action', { action: 'pause' });
   }, DEMO_ID);
   await page.waitForTimeout(150);
-  await page.evaluate(() => window.__trove.platform.workbench.showHome());
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.view.home'));
   await page.waitForFunction((id) => window.__trove.platform.plugins.plugins.get(id).frames.size === 0, DEMO_ID, { timeout: 4000 });
   check('with dock disabled, navigating away closes the viewer (frame destroyed)', await page.evaluate(() => {
     const d = document.querySelector('.viewer-dock');
@@ -311,10 +314,10 @@ async function main() {
   }));
 
   // Reopen (autoplay re-enables dock), dock, then the user closes the dock manually.
-  await page.evaluate(([node, uri]) => window.__trove.platform.workbench.openFile(node, uri), [demoFile, demoUri('player')]);
+  await page.evaluate(([node, uri]) => window.__trove.test.open(node, uri), [demoFile, demoUri('player')]);
   await page.waitForSelector('.viewer.plugin-viewer .pv-host', { timeout: 4000 });
   await page.waitForFunction(() => navigator.mediaSession.metadata && navigator.mediaSession.metadata.title === 'track.demo', { timeout: 4000 });
-  await page.evaluate(() => window.__trove.platform.workbench.showHome());
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.view.home'));
   await page.waitForFunction(() => { const d = document.querySelector('.viewer-dock'); return d && getComputedStyle(d).display !== 'none'; }, { timeout: 4000 });
   await page.evaluate(() => document.querySelector('.viewer-dock .vd-close').click());
   await page.waitForFunction((id) => window.__trove.platform.plugins.plugins.get(id).frames.size === 0, DEMO_ID, { timeout: 4000 });

@@ -50,10 +50,10 @@ check('and focuses the modal\'s own input, not the one behind it',
   await page.evaluate(() => document.activeElement === document.querySelector('.search-modal .launch-input')));
 
 // --- 3. With a file open over the launcher --------------------------------------
-await page.evaluate(() => window.__trove.platform.workbench.closeSearchModal());
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.closeOverlays'));
 await page.evaluate(() => {
   const t = window.__trove;
-  t.platform.workbench.openFile(t.app.explorer.state.items.find((i) => i.name === 'sailing.txt'), 'core/text');
+  t.test.open(t.app.explorer.get().items.find((i) => i.name === 'sailing.txt'), 'core/text');
 });
 await page.waitForTimeout(600);
 await page.evaluate(() => window.__trove.platform.commands.execute('search.voice'));
@@ -77,7 +77,7 @@ check('text dictated into the focused field searches the drive', names.includes(
 // --- 5. No microphone is offered without on-device recognition -------------------
 const offered = await page.evaluate(() => ({
   hasButton: !!document.querySelector('.launch-mic'),
-  supported: window.__trove.platform.voice.state.supported,
+  supported: window.__trove.platform.voice.get().supported,
   canListen: window.__trove.platform.voice.canListen(),
   // The gate: the on-device entry point, not merely the constructor.
   ctor: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
@@ -151,7 +151,6 @@ const legible = await page.evaluate(async () => {
   window.SpeechRecognition = Fake; window.webkitSpeechRecognition = Fake;
   const t = window.__trove;
   await t.platform.voice.refresh();
-  t.platform.workbench.touch();
   await new Promise((r) => setTimeout(r, 200));
   t.platform.voice.toggle({ onText: () => {} });
   await new Promise((r) => setTimeout(r, 250));

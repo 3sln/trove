@@ -10,30 +10,43 @@
 // and renaming breaks them. It has to say so clearly, and say WHY, because "nothing
 // happened" is the worst possible response to a click.
 
+import { Action } from '@3sln/ngin';
 import { parseTroveUri } from '@3sln/trove/core/links.js';
+import { runAction } from '../dispatch.js';
 import { OpenFileAction } from './actions.js';
 
 /**
  * Open what a `trove:` URI points at.
- * @param {object} ui       the workbench ui helper
- * @param {string} uri      the link as written in the document
- * @param {{from?: object}} [opts]  the item the link was followed FROM, for messages
+ *
+ * An ACTION, because it is a network stat, a choice between three failure messages, and an
+ * open. It was a plain function taking the UI bag — the only module in bl/ whose parameter
+ * was a UI-layer shape, reaching `ui.platform.api` and `ui.engine` to do all of that with
+ * no lease on anything and nothing of it on the feed. pluginHost.js states the rule for the
+ * same kind of edge: "Dispatched, not called: opening a file from a docked plugin frame is
+ * the same intent as opening one from the drive, and the engine should see both."
+ *
+ * The laziness the module header argues for is untouched — this still runs at click time,
+ * and where the work runs was never what that argument was about.
  */
-export async function openTroveLink(ui, uri, { from } = {}) {
-  const ref = parseTroveUri(uri);
-  const notify = ui.platform.notifications;
-  if (!ref) {
-    notify.warn(`"${uri}" isn’t a valid Trove link.`);
-    return null;
-  }
-  try {
-    const res = await ui.platform.api.stat(uri);
-    if (!res?.node) throw new Error('not found');
-    ui.engine.dispatch(new OpenFileAction(res.node));
-    return res.node;
-  } catch (err) {
-    notify.warn(describeBrokenLink(ref, err, from));
-    return null;
+export class OpenTroveLinkAction extends Action {
+  static deps = ['api', 'engine', 'notifications'];
+
+  /** @param {string} uri the link as written; @param {object} [from] the item it was in */
+  constructor(uri, from = null) { super(); this.uri = uri; this.from = from; }
+
+  async execute({ api, engine, notifications }) {
+    const ref = parseTroveUri(this.uri);
+    if (!ref) {
+      notifications.warn(`"${this.uri}" isn’t a valid Trove link.`);
+      return;
+    }
+    try {
+      const res = await api.stat(this.uri);
+      if (!res?.node) throw new Error('not found');
+      await runAction(engine, new OpenFileAction(res.node));
+    } catch (err) {
+      notifications.warn(describeBrokenLink(ref, err, this.from));
+    }
   }
 }
 

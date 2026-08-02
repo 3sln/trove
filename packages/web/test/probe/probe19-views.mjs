@@ -124,7 +124,7 @@ check('down means the tile below it, not the tile beside it',
 // work in a view that has no rows at all.
 check('and the highlighted tile is genuinely selected',
   (await page.evaluate(() => window.__trove.app.explorer.selectedNodes?.().length
-    ?? window.__trove.app.explorer.state.selected.length)) === 1);
+    ?? window.__trove.app.explorer.get().selected.length)) === 1);
 
 // --- 5. Left and right belong to the caret while there is a caret --------------
 await page.evaluate(() => {
@@ -163,7 +163,6 @@ const degraded = await page.evaluate(async () => {
     render: () => { throw new Error('this view is broken'); },
   });
   t.platform.settings.set('explorer.view', 'core.view.broken');
-  t.platform.workbench.touch();
   await new Promise((r) => setTimeout(r, 400));
   return {
     said: document.querySelector('.view-error')?.textContent || '',
@@ -181,7 +180,6 @@ const alone = await page.evaluate(async () => {
     t.platform.contributions.unregister(id);
   }
   t.platform.settings.set('explorer.view', undefined);
-  t.platform.workbench.touch();
   await new Promise((r) => setTimeout(r, 400));
   return {
     switcher: document.querySelectorAll('.view-switch').length,
@@ -232,7 +230,7 @@ await h.page.waitForSelector('.launch-item', { timeout: 8000 });
 
 const search = async (q) => {
   await h.page.fill('.launch-input', q);
-  await h.page.waitForFunction(() => window.__trove.app.search.state.ran && !window.__trove.app.search.state.loading,
+  await h.page.waitForFunction(() => window.__trove.app.search.get().ran && !window.__trove.app.search.get().loading,
     null, { timeout: 8000 });
   await h.page.waitForTimeout(400);
 };

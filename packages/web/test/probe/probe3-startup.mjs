@@ -31,7 +31,7 @@ check('an error toast is shown', (await page.locator('.toasts .toast.error').cou
 setFault('/api/items', false);
 await page.evaluate(() => window.__trove.platform.commands?.execute?.('explorer.refresh')).catch(() => {});
 await page.waitForTimeout(800);
-const recovered = await page.evaluate(() => (window.__trove.app.explorer.state.items || []).map((i) => i.name));
+const recovered = await page.evaluate(() => (window.__trove.app.explorer.get().items || []).map((i) => i.name));
 check('the collection loads after the server recovers', recovered.includes('hello.txt'), recovered.join(','));
 
 check('app did not white-screen (activity bar present)', (await page.locator('.activitybar .item').count()) >= 1);

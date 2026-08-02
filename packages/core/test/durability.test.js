@@ -63,7 +63,26 @@ test('a write-back that keeps failing becomes a standing problem', async () => {
   await new Promise((r) => setTimeout(r, 60));
   const raised = await issues.list();
   expect(raised.some((i) => i.kind === 'sidecar-flush')).toBe(true);
-  expect(raised.find((i) => i.kind === 'sidecar-flush').retry).toBe('sidecar-flush');
+  // `{ op, nodeId }`, and the assertion has to read `.op`. It pinned the bare string for a
+  // long time, which meant two pieces of evidence — this and the comment above the raise —
+  // said a Retry worked when `canRetry` reads `issue.retry.op` and answered false.
+  const flush = raised.find((i) => i.kind === 'sidecar-flush');
+  expect(flush.retry.op).toBe('sidecar-flush');
+  expect(flush.retry.nodeId).toBe('n1');
+  // And it is only reported retryable once something is registered to do it.
+  expect(issues.canRetry(flush)).toBe(false);
+  issues.handle('sidecar-flush', () => m.retryPending());
+  expect(issues.canRetry(flush)).toBe(true);
+});
+
+test('an issue whose retry is not { op } is refused at the raise', async () => {
+  // A bare string is silently un-retryable: `canRetry` reads `issue.retry.op`, so the
+  // button never renders and nothing says why. Caught where the mistake is made.
+  const issues = new IssueRegistry({ kv: new MemoryKV() });
+  await expect(issues.raise({ kind: 'x', title: 'y', retry: 'do-it' })).rejects.toThrow(/must be \{ op \}/);
+  await expect(issues.raise({ kind: 'x', title: 'y', retry: { nodeId: 'n1' } })).rejects.toThrow(/must be \{ op \}/);
+  // Absent is fine — most issues are not retryable.
+  expect((await issues.raise({ kind: 'x', title: 'y' })).retry).toBe(null);
 });
 
 test('shutdown reports what it could not save instead of exiting quietly', async () => {

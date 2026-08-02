@@ -21,7 +21,7 @@
 import { dd, mapCell } from '../../../runtime.js';
 import { icon } from '../../icon.js';
 import { parseTroveUri } from '@3sln/trove/core/links.js';
-import { openTroveLink } from '../../../bl/links.js';
+import { OpenTroveLinkAction } from '../../../bl/links.js';
 import { FileText } from '../../../bl/queries.js';
 import { watchQuery } from '../../../bl/watchQuery.js';
 
@@ -213,7 +213,7 @@ function link(href, label, node, ui) {
     return a({ className: 'md-link md-trove', href: '#', title: href }, label).on({
       click: (e) => {
         e.preventDefault();
-        openTroveLink(ui, href, { from: node });
+        ui.engine.dispatch(new OpenTroveLinkAction(href, node));
       },
     });
   }

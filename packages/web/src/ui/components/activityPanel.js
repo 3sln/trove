@@ -98,7 +98,7 @@ function issueRow(issue, ui) {
 
 export default function activityPanel(state, ui) {
   const act = state.act || { tasks: [], issues: [] };
-  if (!act.open) return null;
+  if (!state.overlay.activityPanel) return null;
   const running = act.tasks.filter((t) => t.status === 'running');
   const recent = act.tasks.filter((t) => t.status !== 'running');
 

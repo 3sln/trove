@@ -134,7 +134,7 @@ for (const [name, sel] of [
   check(`${name} shows focus`, !r.missing && r.changed, r.missing ? 'not found' : `outline=${r.outline} ${r.shadow}`);
 }
 
-await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(true));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
 await page.waitForSelector('.infopanel', { timeout: 4000 });
 await page.waitForTimeout(300);
 const btn = await focusEffect('.infopanel .btn');

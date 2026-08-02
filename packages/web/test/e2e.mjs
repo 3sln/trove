@@ -76,6 +76,9 @@ async function main() {
 
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  // `window.__trove` is off in the shipped bundle — see createWorkbench's `debug`
+  // option. `addInitScript` runs before any page script, which is how automation asks.
+  await page.addInitScript(() => { window.__troveDebug = true; });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -118,20 +121,20 @@ async function main() {
   // from the rendered document, not just from the API.
   check('a trove: link renders as a link', (await page.locator('.md-trove').count()) >= 1);
   await page.locator('.md-trove').first().click();
-  await page.waitForFunction(() => window.__trove.platform.workbench.nav.state.stack.some((p) => p.node?.name === 'sailing.txt'), { timeout: 4000 });
+  await page.waitForFunction(() => window.__trove.app.navigation.get().stack.some((p) => p.node?.name === 'sailing.txt'), { timeout: 4000 });
   check('following a trove: link opens the target item', true);
 
   // Backlinks: the info panel says what gathers this item up.
-  await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(true));
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
   // Wait on the DOM, not the store: the state lands a tick before the re-render.
   await page.waitForSelector('.ip-backlink', { timeout: 4000 }).catch(() => {});
   const back = await page.locator('.ip-backlink').allTextContents();
   check('backlinks show which document links here', back.some((t) => /welcome\.md/.test(t)), back.join(', '));
-  await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(false));
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
   // Pop back to welcome.md so the Back check below starts from one panel deep. Done
   // through the API: clicking Back here races the info-panel close re-render.
-  await page.evaluate(() => window.__trove.platform.workbench.nav.back());
-  await page.waitForFunction(() => window.__trove.platform.workbench.nav.state.activeFile?.name === 'welcome.md', { timeout: 3000 });
+  await page.evaluate(() => window.__trove.app.navigation.back());
+  await page.waitForFunction(() => window.__trove.app.navigation.get().activeFile?.name === 'welcome.md', { timeout: 3000 });
 
   // Back pops the stack → the launcher again.
   await page.locator('.viewer-nav .vn-back').click();
@@ -149,7 +152,7 @@ async function main() {
   await page.waitForSelector('.viewer.markdown .md', { timeout: 3000 });
   check('modal search opens an item and closes', (await page.locator('.search-modal').count()) === 0 && (await page.locator('.viewer-nav').count()) === 1);
 
-  await page.evaluate(() => window.__trove.platform.workbench.showHome());
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.view.home'));
 
   // Semantic search in the launcher.
   await page.waitForSelector('.launch-input', { timeout: 3000 });

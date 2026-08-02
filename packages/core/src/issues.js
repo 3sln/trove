@@ -76,6 +76,14 @@ export class IssueRegistry {
    */
   async raise(spec) {
     if (!spec?.kind || !spec?.title) throw TroveError.invalid('An issue needs a kind and a title');
+    // A `retry` that is not `{ op }` is silently un-retryable: `canRetry` reads
+    // `issue.retry.op`, so a bare string answers false, the route reports
+    // `retryable: false`, and no button ever renders. That happened — the sidecar-flush
+    // issue passed `retry: 'sidecar-flush'` and its own comment two lines above asserted a
+    // handler was registered for it. Caught at the raise, where the mistake is.
+    if (spec.retry != null && typeof spec.retry?.op !== 'string') {
+      throw TroveError.invalid('An issue\u2019s `retry` must be { op } — a bare string is not retryable');
+    }
     const id = issueId(spec.kind, spec.subject);
     const existing = await this.kv.get(NS, id);
     const at = this.now();

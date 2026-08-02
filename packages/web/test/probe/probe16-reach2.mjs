@@ -81,7 +81,7 @@ await page.evaluate(() => window.__trove.platform.commands.execute('workbench.cl
 
 await page.evaluate(() => {
   window.__trove.app.explorer.select([]);
-  window.__trove.platform.workbench.showHome();
+  window.__trove.platform.commands.execute('workbench.view.home');
 });
 await page.waitForTimeout(300);
 await page.evaluate(() => window.__trove.platform.commands.execute('explorer.copyLink'));
@@ -95,8 +95,8 @@ await page.setViewportSize({ width: 390, height: 844 });
 await page.evaluate(() => window.__trove.platform.commands.execute('workbench.closeOverlays'));
 await page.evaluate((name) => {
   const app = window.__trove.app;
-  const node = app.explorer.state.items.find((i) => i.name === name);
-  window.__trove.platform.workbench.openFile(node);
+  const node = app.explorer.get().items.find((i) => i.name === name);
+  window.__trove.test.open(node);
 }, LONG).catch(() => {});
 await page.waitForTimeout(400);
 // Fall back to opening it through the list if the direct call didn't take.
@@ -106,7 +106,7 @@ if (!(await page.$('.viewer-nav'))) {
   await page.click('.launch-item');
   await page.waitForTimeout(600);
 }
-await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(true));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
 await page.waitForSelector('.infopanel', { timeout: 4000 });
 await page.waitForTimeout(400);
 
@@ -149,7 +149,7 @@ await page.waitForTimeout(300);
 await page.evaluate(() => {
   const items = [];
   for (let i = 0; i < 24; i++) items.push({ label: `Entry number ${i}`, run: () => {} });
-  window.__trove.platform.workbench.showContextMenu(40, 40, items);
+  window.__trove.test.contextMenu(items, { x: 40, y: 40 });
 });
 await page.waitForSelector('.menu', { timeout: 3000 });
 const menu = await page.evaluate(() => {

@@ -21,7 +21,7 @@ await page.waitForSelector('.launch-item', { timeout: 5000 });
 const toasts = () => page.evaluate(() => window.__trove.platform.notifications.items.map((n) => n.message));
 const clearToasts = () => page.evaluate(() => window.__trove.platform.notifications.items.splice(0));
 const openIndex = async () => {
-  await page.evaluate(() => window.__trove.platform.workbench.showHome());
+  await page.evaluate(() => window.__trove.platform.commands.execute('workbench.view.home'));
   await page.waitForSelector('.launch-item', { timeout: 4000 });
   await page.locator('.launch-item', { hasText: 'index.md' }).first().click();
   await page.waitForSelector('.md-trove', { timeout: 4000 });
@@ -37,7 +37,7 @@ check('a link to a missing item names what it looked for',
   /never-existed\.md/.test(missing) && /renamed or deleted/.test(missing), missing);
 
 // --- 2. A link whose target was renamed out from under it --------------------
-const target = (await page.evaluate(() => window.__trove.app.explorer.state.items.map((i) => ({ id: i.id, name: i.name }))))
+const target = (await page.evaluate(() => window.__trove.app.explorer.get().items.map((i) => ({ id: i.id, name: i.name }))))
   .find((i) => i.name === 'target.md');
 await vfs.rename(target.id, 'renamed.md');
 await clearToasts();
@@ -52,27 +52,27 @@ await vfs.writeFile('target.md', '# Impostor', { contentType: 'text/markdown' })
 await clearToasts();
 await page.locator('.md-trove').first().click();
 await page.waitForTimeout(600);
-const nowOpen = await page.evaluate(() => window.__trove.platform.workbench.nav.state.activeFile?.name);
+const nowOpen = await page.evaluate(() => window.__trove.app.navigation.get().activeFile?.name);
 check('the link resolves by name, so a new item with that name is what it finds', nowOpen === 'target.md', String(nowOpen));
 
 // --- 3. Backlinks track a rename of the LINKING document ----------------------
-await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(true));
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
 await page.waitForSelector('.ip-backlink', { timeout: 4000 }).catch(() => {});
 check('backlinks list the document that points here',
   (await page.locator('.ip-backlink').allTextContents()).some((t) => /index\.md/.test(t)));
 
 // --- 4. A backlinks load failure must not read as "nothing links here" -------
 setFault('/api/items/backlinks', true);
-await page.evaluate(() => window.__trove.app.social.loadBacklinks(window.__trove.platform.workbench.nav.state.activeFile.id));
-await page.waitForFunction(() => window.__trove.app.social.state.backlinks?.loading === false, { timeout: 4000 }).catch(() => {});
+await page.evaluate(() => window.__trove.app.social.loadBacklinks(window.__trove.app.navigation.get().activeFile.id));
+await page.waitForFunction(() => window.__trove.app.social.get().backlinks?.loading === false, { timeout: 4000 }).catch(() => {});
 const panel = await page.locator('.infopanel').textContent();
 check('a failed backlinks load says so instead of claiming nothing links here',
   /couldn.t load links/i.test(panel) && !/nothing links here/i.test(panel), panel.slice(0, 160));
 setFault('/api/items/backlinks', false);
 
 // --- 5. Deleting a linked item leaves the linking document readable ----------
-await page.evaluate(() => window.__trove.platform.workbench.toggleInfoPanel(false));
-const impostor = (await page.evaluate(() => window.__trove.app.explorer.state.items.map((i) => ({ id: i.id, name: i.name }))))
+await page.evaluate(() => window.__trove.platform.commands.execute('workbench.toggleInfoPanel'));
+const impostor = (await page.evaluate(() => window.__trove.app.explorer.get().items.map((i) => ({ id: i.id, name: i.name }))))
   .find((i) => i.name === 'target.md');
 if (impostor) await vfs.remove(impostor.id);
 await openIndex();

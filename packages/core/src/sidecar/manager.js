@@ -27,10 +27,10 @@ export class SidecarManager {
     let e = this.hot.get(nodeId);
     if (e) {
       if (e.loading) await e.loading;
-      e.lastAccess = now();
+      e.lastAccess = Date.now();
       return e;
     }
-    e = { doc: null, dirty: false, timer: null, lastAccess: now() };
+    e = { doc: null, dirty: false, timer: null, lastAccess: Date.now() };
     this.hot.set(nodeId, e);
     e.loading = (async () => {
       e.doc = (await this.store.load(nodeId)) || this.store.emptyDoc(nodeId);
@@ -105,9 +105,12 @@ export class SidecarManager {
             severity: 'error',
             title: 'A comment or tag could not be saved',
             detail: `Changes to this item's conversation are held in memory only — ${err?.message || err}`,
-            // The op the server registers via issues.handle('sidecar-flush', …), which
-            // is what makes the Retry button appear and do the right thing.
-            retry: 'sidecar-flush',
+            // `{ op, nodeId }`, not a bare string: `canRetry` reads `issue.retry.op`, so
+            // the string form answered false and the Retry button never rendered — and if
+            // it had, `IssueRegistry.retry` would have thrown. Both halves were broken
+            // independently, on the one retry that matters most: the user has been told
+            // their comment saved and it exists only in memory.
+            retry: { op: 'sidecar-flush', nodeId },
           }).catch(() => {});
         }
       });
@@ -189,7 +192,7 @@ export class SidecarManager {
    * transient storage blip into silent data loss a minute later.
    */
   async sweep() {
-    const cutoff = now() - this.idleEvictMs;
+    const cutoff = Date.now() - this.idleEvictMs;
     for (const [id, e] of this.hot) {
       if (e.lastAccess >= cutoff || e.timer) continue;
       if (e.dirty) {
@@ -227,13 +230,5 @@ export class SidecarManager {
     }
     this.hot.clear();
     return result;
-  }
-}
-
-function now() {
-  try {
-    return Date.now();
-  } catch {
-    return 0;
   }
 }

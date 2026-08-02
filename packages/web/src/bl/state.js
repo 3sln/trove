@@ -118,6 +118,12 @@ export const overlayState = () => slice({
   dialog: null,
   contextMenu: null,
   pluginPanel: null,
+  // The activity panel. It lived inside ActivityService's state, beside `tasks` and
+  // `issues` — the one field there with no justification while its neighbours had five
+  // lines of it — which made CloseOverlaysAction lease a task/issue poller in order to
+  // close a panel, and broke form on the sixth rung of an Escape ladder whose other five
+  // go through here.
+  activityPanel: false,
 });
 
 /**

@@ -50,7 +50,7 @@ await page.waitForSelector('.launch-item, .grid-tile', { timeout: 8000 });
 // minting would be a round trip per tile bought for nothing.
 const unminted = await page.evaluate(async () => {
   const t = window.__trove;
-  const item = t.app.explorer.state.items.find((i) => i.name === 'alps.png');
+  const item = t.app.explorer.get().items.find((i) => i.name === 'alps.png');
   const got = await t.platform.mediaUrls.url(item.id);
   return { needed: t.platform.mediaUrls.needed, url: got.url, expiresAt: got.expiresAt };
 });
@@ -61,7 +61,7 @@ check('with no bearer token nothing is minted, and nothing expires',
 // --- 2. A minted URL fetches with no credentials at all ------------------------
 const minted = await page.evaluate(async () => {
   const t = window.__trove;
-  const item = t.app.explorer.state.items.find((i) => i.name === 'alps.png');
+  const item = t.app.explorer.get().items.find((i) => i.name === 'alps.png');
   const res = await t.platform.api.mintUrls([item.id], 'media');
   const url = res.urls[item.id].url;
   // A bare fetch: no Authorization header, no credentials — exactly what an <img src>
@@ -88,7 +88,7 @@ check('an edited expiry or a forged signature is refused',
 // --- 4. A batch is one request, however many tiles ------------------------------
 const batched = await page.evaluate(async () => {
   const t = window.__trove;
-  const ids = t.app.explorer.state.items.filter((i) => i.name.endsWith('.png')).map((i) => i.id);
+  const ids = t.app.explorer.get().items.filter((i) => i.name.endsWith('.png')).map((i) => i.id);
   let calls = 0;
   // Count the API call itself: the client captured `fetch` at construction, so patching
   // `window.fetch` here would count nothing and pass for the wrong reason.
@@ -112,7 +112,7 @@ check('a wall of tiles costs one mint request, not one each',
 // and the element must recover WITHOUT losing its place or stopping.
 const cycled = await page.evaluate(async () => {
   const t = window.__trove;
-  const item = t.app.explorer.state.items.find((i) => i.name === 'tone.wav');
+  const item = t.app.explorer.get().items.find((i) => i.name === 'tone.wav');
   const urls = t.platform.mediaUrls;
 
   // A deployment that mints, and a TTL short enough that "hours later" happens in two
@@ -162,7 +162,7 @@ check('and it is still playing afterwards, not silently paused',
 // A timer that outlives its element re-mints forever against a node nobody is looking at.
 const stopped = await page.evaluate(async () => {
   const t = window.__trove;
-  const item = t.app.explorer.state.items.find((i) => i.name === 'tone.wav');
+  const item = t.app.explorer.get().items.find((i) => i.name === 'tone.wav');
   let mints = 0;
   const urls = t.platform.mediaUrls;
   urls.url = async () => { mints++; return { url: t.platform.api.downloadUrl(item.id), expiresAt: Date.now() + 800 }; };
@@ -185,7 +185,7 @@ check('detaching stops the cycle rather than leaving a timer minting forever',
 // work exactly once and then leak the bytes forever.
 const keys = await page.evaluate(async () => {
   const t = window.__trove;
-  const item = t.app.explorer.state.items.find((i) => i.name === 'alps.png');
+  const item = t.app.explorer.get().items.find((i) => i.name === 'alps.png');
   const urls = t.platform.mediaUrls;
   const k1 = urls.cacheKey(item.id);
   urls.invalidate();

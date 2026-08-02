@@ -29,7 +29,10 @@
 import { dd, effect } from './runtime.js';
 import { createPlatform } from './platform/index.js';
 import { createApp } from './bl/index.js';
-import { NavigateAction, UploadFilesAction, OpenInitialCollectionAction, OpenSearchModalAction, OpenInPanelAction } from './bl/actions.js';
+import {
+  NavigateAction, UploadFilesAction, OpenInitialCollectionAction, OpenSearchModalAction,
+  OpenInPanelAction, ShowContextMenuAction,
+} from './bl/actions.js';
 import { parsePackage } from './platform/pluginPackage.js';
 import workbenchComposition from './ui/compositions/workbench.js';
 import { registerBuiltinOpeners } from './ui/components/openers/index.js';
@@ -48,6 +51,7 @@ import { attachMedia } from './ui/media.js';
  * @param {Array}   [options.views]     extra views: `{ id, title, icon?, match?, priority?, render, move? }`
  * @param {Array}   [options.settings]  extra setting schemas, for whatever those contribute
  * @param {boolean} [options.serviceWorker] register /sw.js (default true)
+ * @param {boolean} [options.debug]   install `window.__trove` (default off — see below)
  * @returns {{platform: object, engine: object, app: object}}
  */
 export function createWorkbench({
@@ -57,6 +61,14 @@ export function createWorkbench({
   views = [],
   settings = [],
   serviceWorker = true,
+  // OFF unless someone asks. `window.__trove` is the one place the entire resource graph —
+  // engine, platform, app, plus a direct `plugins.install` from raw bytes that goes around
+  // the review dialog — is reachable without a dispatch, and it shipped unconditionally in
+  // the production bundle. The global is how automation asks: Playwright's `addInitScript`
+  // sets it before any page script runs, and a developer can set it and reload. Nothing an
+  // attacker controls can set a global in this origin, and a person with our console open
+  // can already do all of it.
+  debug = globalThis.__troveDebug === true,
 } = {}) {
   const platform = createPlatform({ baseUrl });
   const { engine, app } = createApp(platform);
@@ -124,7 +136,13 @@ export function createWorkbench({
   // provider's decision to make, not a wrapper's around one synchronous call.
   engine.dispatch(new OpenInitialCollectionAction());
 
-  // Expose for debugging / e2e.
+  if (debug) installDebugHandle({ platform, engine, app });
+
+  return { platform, engine, app };
+}
+
+/** The automation handle. See the `debug` option — this is not installed by default. */
+function installDebugHandle({ platform, engine, app }) {
   window.__trove = {
     platform, engine, app,
     // Test/automation hook: install a package from raw zip bytes.
@@ -133,13 +151,17 @@ export function createWorkbench({
       assessTrust: (pkg) => platform.plugins.assessTrust(pkg),
       install: (pkg, opts) => platform.plugins.install(pkg, opts),
       NavigateAction,
+      // The intents that take a SUBJECT, and so have no command to execute. Everything
+      // else a probe wants is `platform.commands.execute(id)` — the same path a click
+      // takes. These dispatch rather than writing state, so the engine sees a probe's
+      // actions exactly as it sees a person's.
+      open: (node, openerId) => platform.dispatch(new OpenInPanelAction(node, openerId)),
+      contextMenu: (items, at) => platform.dispatch(new ShowContextMenuAction(items, at)),
       // Keeping a media element pointed at a URL that still works is the half of signed
       // URLs that only shows up over time, so it is drivable from a probe.
       attachMedia,
     },
   };
-
-  return { platform, engine, app };
 }
 
 /**

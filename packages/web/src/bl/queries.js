@@ -210,7 +210,9 @@ class RotationView extends Query {
   constructor(collectionId) {
     super();
     this.collectionId = collectionId;
-    this.bootAction = new LoadRotationAction();
+    // The id is PASSED, so the load stops depending on `explorer` happening to agree with
+    // the query's key — which is what makes the key mean anything at all.
+    this.bootAction = new LoadRotationAction(collectionId);
   }
 
   boot(r, { notify }) {
@@ -218,7 +220,7 @@ class RotationView extends Query {
     notify(cell.getValue());
     const off = cell.onDirty(() => notify(cell.getValue()));
     const timer = setInterval(() => {
-      if (r.rotation.get().rotation?.status === 'running') r.engine.dispatch(new LoadRotationAction());
+      if (r.rotation.get().rotation?.status === 'running') r.engine.dispatch(new LoadRotationAction(this.collectionId));
     }, 2500);
     hold(r, this, [off, () => clearInterval(timer)]);
   }

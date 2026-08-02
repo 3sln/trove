@@ -202,6 +202,9 @@ const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-san
 
 async function openAs(who) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  // `window.__trove` is off in the shipped bundle — see createWorkbench's `debug`
+  // option. `addInitScript` runs before any page script, which is how automation asks.
+  await context.addInitScript(() => { window.__troveDebug = true; });
   // The app reads the token from localStorage-backed auth; inject it before any script
   // runs so the very first API call is already authenticated.
   await context.addInitScript((t) => { window.localStorage.setItem('trove.token', t); }, USERS[who]);
@@ -215,15 +218,15 @@ async function openAs(who) {
 
 const alice = await openAs('alice');
 await alice.page.waitForTimeout(800);
-const aliceCollections = await alice.page.evaluate(() => window.__trove.app.explorer.state.collections.map((c) => c.id));
+const aliceCollections = await alice.page.evaluate(() => window.__trove.app.explorer.get().collections.map((c) => c.id));
 check('the UI offers alice both her collections', JSON.stringify([...aliceCollections].sort()) === JSON.stringify(['default', RESEARCH].sort()), aliceCollections.join(','));
 check('a signed-in user gets a profile chip', (await alice.page.locator('.principal').count()) === 1);
 
 const bob = await openAs('bob');
 await bob.page.waitForTimeout(800);
-const bobCollections = await bob.page.evaluate(() => window.__trove.app.explorer.state.collections.map((c) => c.id));
+const bobCollections = await bob.page.evaluate(() => window.__trove.app.explorer.get().collections.map((c) => c.id));
 check('the UI offers bob only his collection', JSON.stringify(bobCollections) === JSON.stringify([RESEARCH]), bobCollections.join(','));
-const bobItems = await bob.page.evaluate(() => window.__trove.app.explorer.state.items.map((i) => i.name));
+const bobItems = await bob.page.evaluate(() => window.__trove.app.explorer.get().items.map((i) => i.name));
 // Both halves matter. "Bob sees nothing" would satisfy the leak check while being a
 // completely broken drive — which is exactly what it was before the client learned to
 // land on a collection the user can actually read.
@@ -236,9 +239,9 @@ check('and nothing from the collection he cannot read',
 const nobody = await openAs('nobody');
 await nobody.page.waitForTimeout(1000);
 const nobodyState = await nobody.page.evaluate(() => ({
-  collections: window.__trove.app.explorer.state.collections.length,
-  error: window.__trove.app.explorer.state.error,
-  loading: window.__trove.app.explorer.state.loading,
+  collections: window.__trove.app.explorer.get().collections.length,
+  error: window.__trove.app.explorer.get().error,
+  loading: window.__trove.app.explorer.get().loading,
 }));
 check('a user with no access is not left on a spinner', nobodyState.loading === false, JSON.stringify(nobodyState));
 check('and is told something, rather than shown an empty drive that looks normal',

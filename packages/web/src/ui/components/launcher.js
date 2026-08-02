@@ -33,19 +33,33 @@ function promptFor(caps, { compact = false, modal = false } = {}) {
   return compact || modal ? base : `${base} · ! run a command`;
 }
 
-let searchTimer = null;
-function runSearch(ui, query) {
+// Debounce timers, one PER SURFACE. workbench.js mounts the home launcher and the modal
+// one together, and a single module slot meant typing in the modal cancelled the home
+// box's pending search — one keystroke in one component silently discarding another's.
+// A timer is not application state (the engine has no use for a pending timeout), but it
+// does belong to the surface that armed it.
+const timers = new Map();
+const arm = (key, fn, ms) => {
+  clearTimeout(timers.get(key));
+  timers.set(key, setTimeout(fn, ms));
+};
+
+function runSearch(ui, key, query) {
   // SearchAction owns search state; the launcher only dispatches (no direct .set).
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => ui.engine.dispatch(new SearchAction(query)), 240);
+  arm(key, () => ui.engine.dispatch(new SearchAction(query)), 240);
 }
-function clearSearch(ui) {
+function clearSearch(ui, key) {
+  // The pending timer FIRST. Typing then pressing Escape inside 240ms let the search for
+  // what was typed land after the clear — the results list stayed put (it reads the launch
+  // query) while the resolved bar said "Searching …" over the home list, and `pickView`
+  // could switch the view under it. SearchAction now also refuses a superseded answer, so
+  // this is belt and braces on a race that produced a visibly wrong screen.
+  clearTimeout(timers.get(key));
   ui.engine.dispatch(new SetLaunchQueryAction(''));
-  ui.engine.dispatch(new SearchAction('')); // empty query resets results/ran/error in the service
+  ui.engine.dispatch(new SearchAction('')); // empty query resets results/ran/error
 }
-function runFilter(ui, filters, text) {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => ui.engine.dispatch(new FilterAction(filters, text)), 200);
+function runFilter(ui, key, filters, text) {
+  arm(key, () => ui.engine.dispatch(new FilterAction(filters, text)), 200);
 }
 
 export default function launcher(state, ui, opts = {}) {
@@ -60,13 +74,15 @@ export default function launcher(state, ui, opts = {}) {
   const flat = groups.flatMap((g) => g.items);
   const idx = flat.length ? Math.min(state.wb.launch.index, flat.length - 1) : 0;
 
+  // Which surface this is, so the two launchers do not share one debounce slot.
+  const timerKey = modal ? 'modal' : 'home';
   const onInput = (e) => {
     const v = e.target.value;
     ui.engine.dispatch(new SetLaunchQueryAction(v));
     if (v.startsWith('!')) return; // command mode: no query dispatch
     const { text, filters } = parseTagQuery(v);
-    if (filters.length) runFilter(ui, filters, text); // drive-wide tag/property query
-    else runSearch(ui, text);
+    if (filters.length) runFilter(ui, timerKey, filters, text); // drive-wide tag/property query
+    else runSearch(ui, timerKey, text);
   };
   // Moving the highlight with the KEYBOARD is selecting, as far as the rest of the app
   // is concerned. Without this, `explorer.selectedNodes()` was permanently empty and
@@ -97,7 +113,7 @@ export default function launcher(state, ui, opts = {}) {
     else if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
     else if (e.key === 'Enter') { e.preventDefault(); activate(ui, flat[idx]); }
-    else if (e.key === 'Escape' && q) { e.preventDefault(); clearSearch(ui); }
+    else if (e.key === 'Escape' && q) { e.preventDefault(); clearSearch(ui, timerKey); }
     // The row under the highlight is the subject of the row menu, so the key that opens
     // one on every other list opens this one too — without making the user leave the
     // search box to reach it.
@@ -124,7 +140,7 @@ export default function launcher(state, ui, opts = {}) {
         placeholder: promptFor(state.caps, { compact: state.vp?.mode === 'phone', modal }) })
         .on({ input: onInput, keydown: onKey }),
       q ? button({ className: 'launch-clear', title: 'Clear' }, icon('close', { size: 14 }))
-        .on({ click: () => clearSearch(ui) }) : null,
+        .on({ click: () => clearSearch(ui, timerKey) }) : null,
       // Only where the browser can transcribe WITHOUT sending audio anywhere. A remote's
       // own mic needs no button from us — it dictates into this field once it is focused,
       // which is what `search.voice` is really for.

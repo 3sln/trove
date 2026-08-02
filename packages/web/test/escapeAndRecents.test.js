@@ -18,13 +18,11 @@ function shell({ overlay = {}, workbench = {}, activityOpen = false, depth = 1 }
   const closed = [];
   return {
     closed,
-    overlay: slice({ contextMenu: null, dialog: null, palette: null, pluginPanel: null, ...overlay }),
+    overlay: slice({
+      contextMenu: null, dialog: null, palette: null, pluginPanel: null,
+      activityPanel: activityOpen, ...overlay,
+    }),
     workbench: slice({ sheet: null, searchModal: false, ...workbench }),
-    activity: {
-      open: activityOpen,
-      get() { return { open: this.open }; },
-      togglePanel(open) { this.open = open; closed.push('activity'); },
-    },
     navigation: {
       get: () => ({ stack: Array.from({ length: depth }, () => ({ kind: 'file' })) }),
       back() { closed.push('back'); },
@@ -34,11 +32,11 @@ function shell({ overlay = {}, workbench = {}, activityOpen = false, depth = 1 }
 
 test('Escape closes the activity panel', async () => {
   // It floats over the page and has a close button like every other surface in the ladder,
-  // and was the only one Escape did not reach.
+  // and was the only one Escape did not reach. Its flag is overlay state now, so this rung
+  // reads like the other five instead of leasing a task poller to close a panel.
   const r = shell({ activityOpen: true });
   await new CloseOverlaysAction().execute(r);
-  expect(r.activity.open).toBe(false);
-  expect(r.closed).toEqual(['activity']);
+  expect(r.overlay.get().activityPanel).toBe(false);
 });
 
 test('Escape prefers a deliberately-opened panel over the activity panel', async () => {
@@ -47,7 +45,7 @@ test('Escape prefers a deliberately-opened panel over the activity panel', async
   const r = shell({ overlay: { pluginPanel: { id: 'p' } }, activityOpen: true });
   await new CloseOverlaysAction().execute(r);
   expect(r.overlay.get().pluginPanel).toBe(null);
-  expect(r.activity.open).toBe(true);
+  expect(r.overlay.get().activityPanel).toBe(true);
 });
 
 test('Escape still pops the panel stack once nothing is floating', async () => {

@@ -32,7 +32,7 @@ const { page, close, goto, vfs, errors, setFault } = await boot({
 await goto();
 await page.waitForSelector('.launch-item', { timeout: 5000 });
 
-const activity = () => page.evaluate(() => window.__trove.app.activity.state);
+const activity = () => page.evaluate(() => window.__trove.app.activity.get());
 const refresh = () => page.evaluate(() => window.__trove.app.activity.refresh());
 const openPanel = async () => {
   await page.evaluate(() => window.__trove.app.activity.togglePanel(true));
@@ -84,7 +84,7 @@ check('a retry that did not fix anything leaves the problem listed',
 // --- 6. Fixing the underlying cause clears it, without being asked to --------
 broken = false;
 await page.locator('.act-retry').first().click();
-await page.waitForFunction(() => window.__trove.app.activity.state.issues.length === 0, { timeout: 6000 })
+await page.waitForFunction(() => window.__trove.app.activity.get().issues.length === 0, { timeout: 6000 })
   .catch(() => {});
 check('the problem clears once the work actually succeeds', (await activity()).issues.length === 0);
 await page.waitForSelector('.sb-attention', { state: 'detached', timeout: 4000 }).catch(() => {});

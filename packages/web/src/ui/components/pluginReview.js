@@ -7,15 +7,16 @@
 import { dd } from '../../runtime.js';
 import { icon } from '../icon.js';
 import { bytes as fmtBytes } from '../format.js';
-import { draftFor } from '../../bl/viewState.js';
+import { draftFor, PLUGIN_REVIEW as KEY } from '../../bl/viewState.js';
 import { CloseDialogAction, SetViewStateAction } from '../../bl/actions.js';
+import { activate } from '../activate.js';
 import { describeTrust } from '../../bl/trust.js';
 
 const { div, span, button, h3, p, label, input } = dd;
 
 // The ticked capabilities, keyed to the dialog instance. Engine state — it decides which
-// boxes render checked. See bl/viewState.js.
-const KEY = 'pluginReview';
+// boxes render checked, and it is where InstallReviewedPluginAction reads the grants from.
+// See bl/viewState.js.
 
 export function pluginReview(d, ui, view) {
   const s = d.summary;
@@ -61,7 +62,9 @@ export function pluginReview(d, ui, view) {
         button({ className: 'btn' }, 'Cancel').on({ click: () => ui.engine.dispatch(new CloseDialogAction()) }),
         button({ className: `btn primary ${blocked ? 'disabled' : ''}`, disabled: blocked },
           icon('plug', { size: 15 }), 'Install')
-          .on({ click: () => !blocked && d.onInstall([...sel.grants]) }),
+          // The spec's own actions, run the way every other item's are. The install used
+          // to be a closure ON THE SPEC, which put an effect inside engine state.
+          .on({ click: () => !blocked && activate(ui, { actions: d.installActions }) }),
       ),
     ),
   );

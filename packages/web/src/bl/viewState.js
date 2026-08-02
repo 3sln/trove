@@ -43,6 +43,15 @@ export function draftFor(slice, key, ref, fallback) {
 export const PROMPT = 'promptValue';
 
 /**
+ * Where the plugin review's ticked capabilities live.
+ *
+ * Named here rather than privately in the component, because the action that performs the
+ * install READS it — the dialog is data, so what the user ticked has to be state the action
+ * can find rather than something a callback closes over.
+ */
+export const PLUGIN_REVIEW = 'pluginReview';
+
+/**
  * What has been typed into the open prompt, or its initial value.
  *
  * The prompt kept this in a `let` closed over by the render and mutated by the input
