@@ -18,8 +18,8 @@ import { TroveError } from '../errors.js';
  * What a collection stores about its encryption.
  *
  * The fingerprint is safe to show anyone who may see the collection: it names the key
- * without being it. The key itself is never part of this — it reaches a client through a
- * transfer plan, which is authorized per operation.
+ * without being it. The key itself is never part of this, and never reaches a client at
+ * all — see `#planEncryption`, which answers `sealedBy: 'server'`.
  *
  * @typedef {object} EncryptionConfig
  * @property {boolean} enabled
@@ -95,12 +95,19 @@ export function shouldEncrypt(encryption, { name = '', contentType = '' } = {}) 
 }
 
 /**
- * What a client is told about a collection's encryption.
+ * What a client is told about a collection's encryption: `{ enabled, fingerprint, rules }`.
  *
- * Enough to know that objects here are sealed and which key seals them; never the key.
- * There is no "locked" state and nothing to prompt for — a client that may read the
- * collection is handed the key with the transfer plan, because being allowed to read the
- * contents and being allowed to decrypt them are the same permission.
+ * Enough to know that objects here are sealed and which key seals them. There is no salt
+ * and no KDF material, because there is no passphrase — the key is generated, and this
+ * comment used to explain why handing out the KDF parameters was safe, describing a design
+ * that no longer exists in the subsystem where being wrong is most expensive.
+ *
+ * A fingerprint names a key without being it, which is the whole reason it is safe to
+ * publish: it is what lets a stored object say which key opens it, and a client say which
+ * key a collection is currently on, without either of them holding one.
+ *
+ * There is no "locked" state and nothing to prompt for. The drive seals and unseals; a
+ * client never decrypts, so there is nothing it needs beyond knowing that it happens.
  */
 export function describeEncryption(encryption) {
   if (!encryption?.enabled) return null;

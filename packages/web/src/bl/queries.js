@@ -7,10 +7,14 @@
 // observers", `boot`/`kill` bracket a query's life, and a lease holds the providers it needs
 // for exactly that long.
 //
-// This is step one of moving onto it (docs/tickets/009). Each query here wraps the service
-// that exists today, so nothing in the UI has to change yet and the two describe the same
-// state rather than competing to. The services are deleted in a later phase, at which point
-// these stop wrapping and simply hold.
+// That move is DONE. The state bags became slices (see bl/state.js) and most of these
+// queries now view a slice rather than wrapping a service — which is why the base class is
+// `CellQuery`: one cell, viewed, whatever is behind it. `ViewQuery` is the other shape,
+// composing several cells into an answer the UI actually asks for.
+//
+// Four resources stayed services because they cover something a state bag cannot — history
+// and recents, polling, a queue that replays on reconnect — and they answer `get()` and
+// `observe()` like everything else, so a query cannot tell which it is looking at.
 //
 // INSTANCE IDENTITY IS THE SHARING KEY. ngin keys live realizations by the query INSTANCE —
 // `#controllers` is a Map keyed on the object — and nothing anywhere looks at the class or
@@ -32,7 +36,10 @@
 import { Query } from '@3sln/ngin';
 import { queryOf } from './intern.js';
 import { selectedNodesOf, draftScopesOf, collectionMenuOf, collectionAdminOf } from './services.js';
-import { ExecCommandAction, LoadSidecarAction, ClearSidecarAction, LoadRotationAction, LoadGrantsAction, ShowCollectionAccessAction } from './actions.js';
+import {
+  ExecCommandAction, LoadSidecarAction, ClearSidecarAction, LoadRotationAction, LoadGrantsAction,
+  LoadApiKeysAction, ShowCollectionAccessAction,
+} from './actions.js';
 import { ASSOC_KEY, describeOpener } from './openers.js';
 import { rankCommands } from './match.js';
 import { statusFactsOf, driveConditionOf } from './status.js';
@@ -41,20 +48,22 @@ import { pickView } from './views.js';
 import { prettyKey } from '../platform/keybindings.js';
 
 /**
- * A live query over one of the existing cell-backed services.
+ * A live query over ONE cell — whatever holds it.
  *
- * The service exposes dodo's Cell protocol — `onDirty(fn)` to learn it changed, `getValue()`
- * to read it — and a query wants push. Bridging is two lines, so rather than write them per
- * service this takes the cell as a function of the leased `app`.
+ * Named for what it does rather than for what used to be behind it: most of these view a
+ * slice now, not a service, and `ServiceQuery` told a reader its dep was a service when
+ * usually it is not. `ViewQuery` below is the other shape, composing several cells.
  *
- * It reads the CELL, never the service's own `state` field. Most services keep both in step
- * (`this.state = {...}; this.cell.setValue(this.state)`) so the two usually agree, but not
- * all of them do — `settings`' cell holds `effective()`, the defaults merged with the
- * overrides, and there is no `state` field at all. The existing snapshot passes cells to
- * `derive`, which hands it their values; reading the same way is what makes these queries
- * and the snapshot describe the same state rather than two subtly different ones.
+ * The resource exposes dodo's Cell protocol — `onDirty(fn)` to learn it changed,
+ * `getValue()` to read it — and a query wants push. Bridging is two lines, so rather than
+ * write them per resource this takes the cell as a function of the leased one.
+ *
+ * It reads the CELL and nothing else. That is not a stylistic preference: `settings`' cell
+ * holds `effective()`, the defaults merged with the overrides, which no field anywhere
+ * holds. Reading the cell is what makes these queries and the shell's snapshot describe the
+ * same state rather than two subtly different ones.
  */
-class ServiceQuery extends Query {
+class CellQuery extends Query {
   /**
    * @param {string} dep the engine resource this views
    * @param {(resource: object) => {onDirty: Function, getValue: Function}} cellOf
@@ -66,12 +75,15 @@ class ServiceQuery extends Query {
    * @param {string} dep the engine resource this views
    * @param {(resource: object) => {onDirty: Function, getValue: Function}} cellOf
    * @param {(value: any, resource: object) => any} [project] shape the value into a view
+   * @param {{bootAction?: object}} [opts] dispatched when the first observer arrives — for
+   *   a value that has to be FETCHED before there is anything to view.
    */
-  constructor(dep, cellOf, project) {
+  constructor(dep, cellOf, project, { bootAction = null } = {}) {
     super();
     this.dep = dep;
     this.cellOf = cellOf;
     this.project = project;
+    if (bootAction) this.bootAction = bootAction;
   }
 
   /**
@@ -141,7 +153,7 @@ function release(resources, query) {
  * answer is the difference between a component knowing what is selected and a component
  * knowing how selection resolution works.
  */
-export const explorer = new ServiceQuery('explorer', (r) => r.observe(), (v) => ({
+export const explorer = new CellQuery('explorer', (r) => r.observe(), (v) => ({
   ...v,
   selectedNodes: selectedNodesOf(v),
   // The collection switcher's rows. In the view because it is a question about state, and
@@ -160,13 +172,13 @@ export const explorer = new ServiceQuery('explorer', (r) => r.observe(), (v) => 
   }),
 }));
 /** Query text, results, and the palette's file list. */
-export const search = new ServiceQuery('search', (r) => r.observe());
+export const search = new CellQuery('search', (r) => r.observe());
 /** Uploads and downloads in flight. */
-export const transfers = new ServiceQuery('transfers', (r) => r.observe());
+export const transfers = new CellQuery('transfers', (r) => r.observe());
 /** Running tasks and standing issues, both sides of the wire. */
-export const activity = new ServiceQuery('activity', (r) => r.observe());
+export const activity = new CellQuery('activity', (r) => r.observe());
 /** Conversations, tags and backlinks for the open item. */
-export const social = new ServiceQuery('social', (r) => r.observe());
+export const social = new CellQuery('social', (r) => r.observe());
 /**
  * Online state, pinned files, and the queue waiting to sync.
  *
@@ -174,7 +186,7 @@ export const social = new ServiceQuery('social', (r) => r.observe());
  * calling a method on the service to find out. A Set rather than a repeated scan: the
  * question is asked once per row.
  */
-export const offline = new ServiceQuery('offline', (r) => r.observe(),
+export const offline = new CellQuery('offline', (r) => r.observe(),
   (v) => ({ ...v, pinnedIds: new Set((v?.pins || []).map((p) => p.id)) }));
 /**
  * The open collection's key, and any rotation running over it.
@@ -246,22 +258,33 @@ class GrantsView extends Query {
   }
 }
 
-/** The admin API-key list, with the unsubmitted draft resolved into what it would grant. */
-export const apiKeys = new ServiceQuery('apiKeys', (r) => r.observe(),
-  (v) => ({ ...v, draftScopes: draftScopesOf(v) }));
+/**
+ * The admin API-key list, with the unsubmitted draft resolved into what it would grant.
+ *
+ * `bootAction`, like `rotationFor` and `grantsFor`: it loads when the settings region is
+ * first realized and the list is admin-only, so most sessions never ask. The alternative
+ * was what this section used to do — dispatch from inside a render behind a module-level
+ * "have I asked yet" flag, which is a render with a side effect, and module state the
+ * engine cannot see or reset. A second `createWorkbench` on the page (a documented
+ * embedding entry point) found the flag already true against a fresh slice and never
+ * loaded at all.
+ */
+export const apiKeys = new CellQuery('apiKeys', (r) => r.observe(),
+  (v) => ({ ...v, draftScopes: draftScopesOf(v) }),
+  { bootAction: new LoadApiKeysAction() });
 
 // --- the shell -----------------------------------------------------------------
 
 /** Which activity is showing, and the rest of the shell's own state. */
-export const workbench = new ServiceQuery('workbench', (r) => r.observe());
+export const workbench = new CellQuery('workbench', (r) => r.observe());
 /** The tab and panel stack. */
-export const navigation = new ServiceQuery('navigation', (r) => r.observe());
+export const navigation = new CellQuery('navigation', (r) => r.observe());
 /** Dialogs, menus and panels. */
-export const overlay = new ServiceQuery('overlay', (r) => r.observe());
+export const overlay = new CellQuery('overlay', (r) => r.observe());
 /** Toasts. */
-export const notifications = new ServiceQuery('notifications', (r) => r.observe());
+export const notifications = new CellQuery('notifications', (r) => r.observe());
 /** Settings, defaults merged with overrides. */
-export const settings = new ServiceQuery('settings', (r) => r.observe());
+export const settings = new CellQuery('settings', (r) => r.observe());
 /**
  * The settings SCHEMA, grouped by category, for the screen that edits them.
  *
@@ -269,24 +292,24 @@ export const settings = new ServiceQuery('settings', (r) => r.observe());
  * values keyed by setting name — adding a `groups` key to it would put a made-up entry in
  * among the real ones.
  */
-export const settingsGroups = new ServiceQuery('settings', (r) => r.observe(), (_v, r) => r.grouped());
+export const settingsGroups = new CellQuery('settings', (r) => r.observe(), (_v, r) => r.grouped());
 
 /** The when-clause keys: what is selected, what is open, what is focused. */
-export const context = new ServiceQuery('context', (r) => r.observe());
+export const context = new CellQuery('context', (r) => r.observe());
 /** Phone, desktop or TV. */
-export const viewport = new ServiceQuery('viewport', (r) => r.observe());
+export const viewport = new CellQuery('viewport', (r) => r.observe());
 /**
  * Whether this browser can transcribe on-device, and whether it is listening now.
  *
  * `canListen` is folded in: it is a question about the state, so a component should not
  * have to call the service to find out.
  */
-export const voice = new ServiceQuery('voice', (r) => r.observe(),
+export const voice = new CellQuery('voice', (r) => r.observe(),
   (v, r) => ({ ...v, canListen: !!r.canListen?.() }));
 /** Installed plugins; null where the plugin host is not installed. */
-export const plugins = new ServiceQuery('plugins', (r) => r?.observe?.());
+export const plugins = new CellQuery('plugins', (r) => r?.observe?.());
 /** What the UI is in the middle of doing: drafts, captures, ticked boxes. See viewState.js. */
-export const viewState = new ServiceQuery('viewState', (r) => r.observe());
+export const viewState = new CellQuery('viewState', (r) => r.observe());
 
 // --- view queries ---------------------------------------------------------------
 //
@@ -618,7 +641,7 @@ export const openerAssociations = new ViewQuery(REGISTRY_DEPS, registries, (r) =
  */
 export const sidecarFor = (nodeId) => Sidecar.of(nodeId);
 
-class Sidecar extends ServiceQuery {
+class Sidecar extends CellQuery {
   static of = queryOf(Sidecar);
 
   constructor(nodeId) {
@@ -689,4 +712,4 @@ function commandKeysOf(r) {
  * PENDING while the request was in flight. Both go away when the fetch belongs to the
  * provider: the cell already holds null, and reading a cell is all this does.
  */
-export const capabilities = new ServiceQuery('capabilities', (r) => r);
+export const capabilities = new CellQuery('capabilities', (r) => r);

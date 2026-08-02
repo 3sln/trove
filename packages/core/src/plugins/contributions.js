@@ -17,6 +17,19 @@
 // plugin, so its status item, its register and its command can't shadow each other,
 // and `trove+contrib:acme.com/docs/status` names exactly one thing in the world.
 //
+//
+// TWO SENSES OF "CONTRIBUTION", and this is one of them. Here it is an EXTENSION POINT a
+// package declares in its manifest and the host addresses by URI —
+// `trove+contrib:acme.com/docs/player`. The other sense lives in core/src/indexers/
+// contribution.js: per-node ENRICHMENT produced at runtime and addressed by contributorId,
+// which is what an `indexer` declared here goes on to emit. So a plugin declares a
+// contribution (this sense) which produces contributions (that one).
+//
+// The rule for telling them apart: this sense is DECLARED, static, and named by URI; that
+// sense is PRODUCED, per node, and named by contributor. Renaming the second was weighed
+// and declined — it is a wire rename on `node.contributions` and `/api/index/:indexerId`,
+// needing a dual-read window for a stored field, which is a lot of churn for a distinction
+// two sentences can carry.
 // Each contribution's `entry` (openers, indexers) points into the plugin's ONE module
 // tree — they are not nested sub-packages, so everything in a plugin shares modules
 // and code. What gets opened or indexed depends only on which entry module runs.

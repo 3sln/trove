@@ -8,6 +8,15 @@
 //   tags           filterable key/values, merged into the item's queryable tags
 //   metadata       arbitrary structured data (an audiobook's chapter index, …)
 //
+// TWO SENSES OF "CONTRIBUTION", and this is the other one. Here it is per-node ENRICHMENT
+// produced at runtime and addressed by `contributorId`. The first sense lives in
+// core/src/plugins/contributions.js: an EXTENSION POINT declared in a manifest and
+// addressed by URI. A plugin declares an `indexer` contribution (that sense) which at
+// runtime produces contributions (this one).
+//
+// The rule: that sense is DECLARED, static, and named by URI; this one is PRODUCED, per
+// node, and named by contributor.
+//
 // `clampContribution` does the whole contract in one pass: it accepts the legacy
 // `{ documents, facet }` spelling, decides the canonical shape, and applies the caps. It
 // was two functions, and the second — `normalizeContribution` — had grown its own copy of

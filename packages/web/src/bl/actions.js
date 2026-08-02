@@ -628,9 +628,14 @@ export class SearchAction extends Action {
 /**
  * Load the key list.
  *
- * Silent on failure rather than noisy: this fires when Settings opens, and a non-admin
- * opening Settings gets a 403 that is the correct answer, not an error worth a toast.
- * The section simply does not render.
+ * Silent on REFUSAL rather than noisy: this fires when Settings opens, and a non-admin
+ * opening Settings gets a 403 that is the correct answer, not an error worth a toast. That
+ * is `loaded` with an empty list — the section simply is not part of their settings screen.
+ *
+ * Any other failure sets `error` and leaves `loaded` alone, because they are different
+ * facts. Setting both meant one transient failure rendered the section blank with no
+ * message and no way back: `loaded` was true so the "not yet" branch passed, and the empty
+ * list was indistinguishable from a drive with no keys.
  */
 export class LoadApiKeysAction extends Action {
   static deps = ['api', 'apiKeys'];
@@ -641,7 +646,11 @@ export class LoadApiKeysAction extends Action {
       const res = await r.api.apiKeys();
       r.apiKeys.set({ keys: res.keys || [], loading: false, loaded: true, error: null });
     } catch (err) {
-      r.apiKeys.set({ loading: false, loaded: true, error: err?.message || 'Could not load API keys' });
+      if (err?.status === 403 || err?.code === 'forbidden') {
+        r.apiKeys.set({ keys: [], loading: false, loaded: true, error: null, forbidden: true });
+        return;
+      }
+      r.apiKeys.set({ loading: false, error: err?.message || 'Could not load API keys' });
     }
   }
 }

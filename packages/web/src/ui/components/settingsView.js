@@ -182,22 +182,28 @@ const CAPS = [
 
 const ANY = '*';
 
-/** One-shot guard so a render does not queue a second load while the first is in flight. */
-let keysRequested = false;
-
 function apiKeysSection(state, ui) {
   const keys = state.keys || {};
 
-  // Loaded lazily, when Settings is first opened — the list is admin-only and most
-  // sessions never need it, so it is not worth a request at boot.
-  if (!keysRequested && !keys.loaded && !keys.loading) {
-    keysRequested = true;
-    ui.engine.dispatch(new ExecCommandAction('keys.load'));
+  // Nothing to dispatch from here. The list is loaded by the query's `bootAction` — it
+  // arrives because something is LOOKING at it, which is what makes it lazy without a
+  // module-level flag and a render with a side effect. See bl/queries.js.
+  //
+  // A non-admin's 403 is the correct answer rather than an error: the section simply is
+  // not part of their settings screen.
+  if (keys.forbidden) return null;
+  if (keys.error) {
+    return div({ className: 'group' },
+      h3('API keys'),
+      // Said out loud. This used to render nothing at all on any failure, because the
+      // catch set `loaded` as well as `error` — so one dropped request left a blank space
+      // where the section belongs, with no message and no way to try again.
+      p({ className: 'sub' }, `Couldn’t load the key list: ${keys.error}`),
+      div({ className: 'keys-actions' },
+        button({ className: 'btn' }, 'Try again')
+          .on({ click: () => ui.engine.dispatch(new ExecCommandAction('keys.load')) })),
+    );
   }
-
-  // A non-admin gets a 403 here, which is the correct answer rather than an error worth
-  // showing. The section simply is not part of their settings screen.
-  if (keys.error && !keys.keys?.length) return null;
   if (!keys.loaded) return null;
 
   const collections = state.ex?.collections || [];

@@ -1,8 +1,15 @@
-// Assemble the ngin engine and the reactive services into one `app` context,
-// register commands and built-in openers, and expose everything the UI needs.
-// The engine holds a single `app` singleton provider so Actions can reach the
-// platform and services; the app object also carries the engine so Actions can
-// dispatch follow-up Actions (the choreographer pattern).
+// Assemble the ngin engine: one provider per named resource, then commands, the built-in
+// context keys, and the boot dispatches.
+//
+// There is no `app` provider. It existed, and it made the engine's state one opaque blob —
+// every query and every action leased the whole world, and a lease that always covers
+// everything tells you nothing about what a piece of work touches or how long it needs it.
+// It survived longest as the thing command handlers closed over, and went when they stopped
+// being closures (see bl/commands.js). `static deps = ['explorer']` means what it says now,
+// and web/test/leases.test.js checks that it stays true.
+//
+// `app` the OBJECT is still returned, because the shell and the e2e harness hold the
+// services directly — but nothing leases it.
 
 import { Engine, Provider } from '@3sln/ngin';
 import { cell } from '../runtime.js';

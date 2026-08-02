@@ -262,6 +262,12 @@
         // index(indexerId, nodeId, contribution) where contribution is
         // { semanticTexts?, tags?, metadata? }. Legacy (indexerId, nodeId, documents[], facet)
         // is still accepted when the 3rd arg is an array of documents.
+        //
+        // "Contribution" here is per-node ENRICHMENT — what an indexer says ABOUT a file,
+        // addressed by contributorId. It is a different noun from the `contributes` map in
+        // your manifest, which declares extension points addressed by URI. A plugin
+        // declares an `indexer` contribution (that sense) and it produces contributions
+        // (this sense).
         index: (indexerId, nodeId, contribution, facet) => {
           requireCap('indexer');
           var payload = Array.isArray(contribution) ? { documents: contribution, facet: facet } : (contribution || {});

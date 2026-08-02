@@ -111,7 +111,7 @@ export function createWorkbench({
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
   }
 
-  installDragAndDrop(engine, app);
+  installDragAndDrop(engine);
 
   // --- initial load ---------------------------------------------------------
   // Land on a collection the user can actually read — see OpenInitialCollectionAction.
@@ -174,7 +174,7 @@ function installDoubleShift(engine) {
 }
 
 // Dropping files anywhere on the window uploads them to the open collection.
-function installDragAndDrop(engine, app) {
+function installDragAndDrop(engine) {
   let dragDepth = 0;
   window.addEventListener('dragenter', (e) => {
     if (!e.dataTransfer?.types.includes('Files')) return;

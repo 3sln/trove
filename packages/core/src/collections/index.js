@@ -131,8 +131,8 @@ export class CollectionService {
    * The encryption settings for a collection, generating a key the first time.
    *
    * The key is generated, not derived from anything a user types. A passphrase would buy
-   * nothing: the server knows the key regardless — it hands it to clients and decrypts for
-   * indexers — so there is no protection to gain from the user holding it, and every cost
+   * nothing: the server knows the key regardless — it seals what arrives and decrypts what
+   * is read — so there is no protection to gain from the user holding it, and every cost
    * would still apply. A random 256-bit key cannot be forgotten, guessed, or shoulder-read,
    * and needs no prompt in front of the collection.
    *
@@ -164,9 +164,14 @@ export class CollectionService {
    * whole reason every object carries a fingerprint. Retiring a key is only safe once
    * nothing names it any more.
    *
-   * Server-side only. Callers are the transfer plans, which hand the right key to a client
-   * that may read the collection, and indexing, which decrypts to read content. Never
-   * reachable through `describe`.
+   * SERVER-SIDE ONLY, AND ITS RESULT MUST NEVER REACH A RESPONSE. That is the actual
+   * invariant and it was previously unstated — worse, contradicted, by comments describing
+   * a transfer plan that handed the key to a client. That trade came off (see
+   * `#planEncryption`, which answers `sealedBy: 'server'`): encrypted collections pass
+   * through the drive in both directions, and every call site of this is inside the server.
+   *
+   * Callers are sealing on the way in, decryption on the way out, indexing, and rotation.
+   * Not reachable through `describe`, which returns a fingerprint.
    *
    * @param {string} collectionId
    * @param {string} [fingerprint] which key; omitted means the current one
@@ -279,10 +284,10 @@ export class CollectionService {
       id: c.id, name: c.name, description: c.description || '',
       driver: c.store?.driver, system: !!c.system,
       capabilities: caps, createdAt: c.createdAt,
-      // Safe to hand to anyone who can see the collection: the salt, the KDF parameters
-      // and the fingerprint are what turn a passphrase into the key, and are useless
-      // without the passphrase. Null when the collection is not encrypted, so a client
-      // never has to ask a second question to find out.
+      // `{ enabled, fingerprint, rules }` and nothing more — see describeEncryption. Safe
+      // to hand to anyone who can see the collection, because a fingerprint names a key
+      // without being it. Null when the collection is not encrypted, so a client never has
+      // to ask a second question to find out.
       encryption: describeEncryption(c.encryption),
     };
   }

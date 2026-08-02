@@ -3,8 +3,9 @@
 // The threat model is the STORAGE HOST, and only that: the bucket holds ciphertext, so a
 // leaked bucket credential, a public-bucket misconfiguration, or a storage vendor who is
 // not the compute vendor learns sizes and timestamps and no content. The server holds the
-// key — it has to, in order to hand it to a client and to decrypt for an indexer — so this
-// is explicitly not end-to-end and does not pretend to be.
+// key — it has to, in order to seal what arrives, decrypt what is read, and decrypt for an
+// indexer — so this is explicitly not end-to-end and does not pretend to be. The key does
+// not leave the server: a client sends and receives plaintext through the drive.
 //
 // Which is why the key is GENERATED rather than derived from something a user types.
 // A passphrase would buy nothing here: the server knows the key either way, so there is no
@@ -15,7 +16,7 @@
 // passphrase a person would choose.
 //
 // Access to the key is therefore an ACCESS-CONTROL question, not a knowledge one: whoever
-// may read the collection may have the key, because they may already read its contents.
+// may read the collection may read its contents, and the drive decrypts on their behalf.
 //
 // If this ever becomes end-to-end, the change is confined to where the key comes from and
 // who is allowed it. The envelope, the fingerprint, and every stored object are unchanged.

@@ -86,6 +86,10 @@ export const searchState = () => slice({
  */
 export const apiKeysState = () => slice({
   keys: [], loading: false, loaded: false, error: null, minted: null, busy: null, draft: null,
+  // `forbidden` is not `error`. A non-admin's 403 is the correct answer to this request, so
+  // the section is simply absent for them; anything else is a failure worth reporting, with
+  // a way to try again. Conflating the two rendered a blank space for both.
+  forbidden: false,
 });
 
 /**
