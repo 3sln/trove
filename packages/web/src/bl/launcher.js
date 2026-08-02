@@ -16,7 +16,7 @@
 // carrying-a-handle problem that menu items had before they carried `actions`.
 
 import { parseTagQuery, filterLabel } from './tagQuery.js';
-import { iconForKind } from './fileType.js';
+import { iconForKind, titleOf } from './fileType.js';
 import {
   ExecCommandAction, CloseSearchModalAction, OpenFileAction, SearchAction, FilterAction,
   SetLaunchQueryAction,
@@ -87,10 +87,16 @@ export function trashMenuOf(node) {
  * pure function deferring pure work is data as much as the array it would have returned.
  */
 function fileItem(node, { modal, pinnedIds, keys }) {
+  // The TITLE if an indexer supplied one, the filename otherwise — and when they differ,
+  // the filename becomes the detail rather than the content type. It is the more useful
+  // of the two by a distance (nobody scans a list for "audio/mp4"), and it keeps the name
+  // on screen, in the tooltip and in front of anyone checking they have the right file.
+  const title = titleOf(node);
+  const named = title !== node.name;
   return {
     icon: iconForKind(node),
-    title: node.name,
-    detail: node.contentType || '',
+    title,
+    detail: named ? node.name : (node.contentType || ''),
     node,
     // From the modal search, `reset` starts a fresh viewer stack; then close it.
     actions: [

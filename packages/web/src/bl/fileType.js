@@ -75,6 +75,37 @@ export const THUMBNAIL_KEY = 'thumbnail';
  *
  * @returns {{range?: {start: number, end: number}, src?: string, contentType?: string}|null}
  */
+/**
+ * What to CALL this node on screen.
+ *
+ * A filename is what the file is stored as; a title is what it is. For an indexed book
+ * those are very different things —
+ *
+ *   All the Skills_ A Deck-Building LitRPG_ All the Skills, Book 1 [B0BLTLDSYM].m4b
+ *   All the Skills: A Deck-Building LitRPG
+ *
+ * — and the drive already knows the second, from the same contribution a tile reads for
+ * its thumbnail. Same rule as `thumbnailOf`: one known key, whichever contributor wrote
+ * it, because a view has no business knowing which plugin indexed a file.
+ *
+ * `metadata.title` is the GENERAL key and takes precedence: any indexer may write it, and
+ * it means "what this item is called". `metadata.book.title` is read as well because the
+ * audiobook indexer writes the whole book record under one key, and asking it to duplicate
+ * the title a level up would make two places to keep in step.
+ *
+ * The filename is never lost — see `fileItem`, which keeps it as the item's detail so it
+ * stays visible, searchable and in the tooltip. Renaming, sorting and search all still key
+ * on the name; this changes the label, not the identity.
+ */
+export function titleOf(node) {
+  for (const contribution of Object.values(node?.contributions || {})) {
+    const meta = contribution?.metadata;
+    const title = typeof meta?.title === 'string' ? meta.title : meta?.book?.title;
+    if (typeof title === 'string' && title.trim()) return title.trim();
+  }
+  return node?.name || '';
+}
+
 export function thumbnailOf(node) {
   // ALREADY RESOLVED, which is how a recents entry carries one. Recents are a snapshot in
   // localStorage rather than a reference — nothing re-reads the node — so the descriptor
