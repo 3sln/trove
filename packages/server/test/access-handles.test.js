@@ -43,7 +43,7 @@ const NODE_SURFACE = {
   // `mintUrl` is under `read` because minting a URL that carries its own grant is
   // DELEGATING the read you hold — to an <img src> or a <video src>, which cannot
   // present credentials. Anywhere else and a caller without read could hand one out.
-  read: ['backlinks', 'download', 'mintUrl', 'read', 'subscribe', 'unsubscribe', 'view'],
+  read: ['backlinks', 'canRedirect', 'mintUrl', 'read', 'subscribe', 'unsubscribe', 'view'],
   write: ['comment', 'contribute', 'deleteComment', 'editComment', 'react', 'removeTag', 'rename', 'setTag'],
   delete: ['remove', 'restore'],
 };

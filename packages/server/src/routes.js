@@ -3,7 +3,7 @@
 // a presigned URL when the backend supports it, otherwise stream through here.
 
 import {
-  readableCollectionIds, listFor, wholeDriveFor, collectionsEnabled, assertCap, describeFor, refuseGrant,
+  readableCollectionIds, listFor, wholeDriveFor, assertCap, describeFor, refuseGrant,
 } from './scope.js';
 import { Router, json, parseRange } from './router.js';
 import {
@@ -32,29 +32,17 @@ async function body(req) {
   }
 }
 
-// Read the body as text, aborting if it exceeds `max` bytes (checks Content-Length
-// first, then enforces while streaming in case the header lies or is absent).
-async function readCapped(req, max) {
-  const declared = Number(req.headers.get('content-length') || 0);
-  if (declared && declared > max) throw TroveError.invalid('Request body too large');
-  const reader = req.body?.getReader?.();
-  if (!reader) {
-    const text = await req.text();
-    if (text.length > max) throw TroveError.invalid('Request body too large');
-    return text;
-  }
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) { await reader.cancel().catch(() => {}); throw TroveError.invalid('Request body too large'); }
-    chunks.push(value);
-  }
-  return new TextDecoder().decode(concatBytes(chunks));
-}
-// Read a raw binary body (e.g. an uploaded plugin package), capped like readCapped —
+/**
+ * The text of a request body, capped.
+ *
+ * Decodes what `readBytesCapped` measured, rather than counting for itself. The two were
+ * separate loops and the cap meant different things in each: this one compared
+ * `text.length` — UTF-16 code units — against a limit expressed in BYTES, so a body of
+ * multibyte characters could be up to three times the cap and pass.
+ */
+const readCapped = async (req, max) => new TextDecoder().decode(await readBytesCapped(req, max));
+
+// Read a raw binary body (e.g. an uploaded plugin package) up to `max` bytes —
 // which means enforcing WHILE streaming, not after. Checking `.byteLength` on the result
 // of `arrayBuffer()` is a check that happens once the whole body is already resident, so
 // a chunked upload with no Content-Length could park 400 MB in the heap and only then be
@@ -172,7 +160,11 @@ export function createRouter() {
     }
   });
 
-  r.get('/api/capabilities', ['auth', 'collections', 'notifications', 'sidecar', 'vfs'], async (ctx) => {
+  // No `collections` in the leases: the handler reaches collections through
+  // `ctx.access.collection`, which comes from `leaseScope` rather than from the route
+  // table. A declaration that overstates what an endpoint touches is the same problem as
+  // one that understates it — the table exists to answer that question.
+  r.get('/api/capabilities', ['auth', 'notifications', 'sidecar', 'vfs'], async (ctx) => {
     const { vfs, config, sidecar, notifications, principal, query, auth, mcp } = ctx;
     // Storage is per-collection, so report the backend for the requested collection
     // (else the client picks the wrong upload strategy on a non-default collection).
@@ -246,19 +238,16 @@ export function createRouter() {
   });
 
   r.post('/api/collections', ['collections'], async (ctx) => {
-    requireCollections(ctx);
     refuseGrant(ctx, 'create collections');
     return { collection: await ctx.collections.create(await body(ctx.req), ctx.principal) };
   });
 
   r.post('/api/collections/:id', ['collections'], async (ctx) => {
-    requireCollections(ctx);
     refuseGrant(ctx, 'change a collection');
     return { collection: await ctx.collections.update(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
 
   r.delete('/api/collections/:id', ['collections', 'vfs'], async (ctx) => {
-    requireCollections(ctx);
     refuseGrant(ctx, 'delete a collection');
     const { collections, vfs, principal, params } = ctx;
     // A collection record is the only thing that knows where its items' BYTES live, so
@@ -287,7 +276,6 @@ export function createRouter() {
    * listing would carry it. Asking for it is an explicitly admin-gated act.
    */
   r.get('/api/collections/:id/grants', ['collections'], async (ctx) => {
-    requireCollections(ctx);
     refuseGrant(ctx, 'read a collection\u2019s access list');
     const c = await ctx.collections.assert(ctx.principal, ctx.params.id, 'admin');
     // Drive administrators come from the DEPLOYMENT (TROVE_ADMINS), not from this ACL, and
@@ -301,7 +289,6 @@ export function createRouter() {
   });
 
   r.post('/api/collections/:id/grants', ['collections'], async (ctx) => {
-    requireCollections(ctx);
     refuseGrant(ctx, 'change who can reach a collection');
     return { collection: await ctx.collections.setGrant(ctx.params.id, await body(ctx.req), ctx.principal) };
   });
@@ -423,9 +410,9 @@ export function createRouter() {
 
     // Ranged requests must proxy (we can't add Range to a bare redirect safely
     // for all clients), so only redirect for full-file GETs.
-    if (!range) {
-      const d = await node.download({ download: attach });
-      if (d.mode === 'redirect') return Response.redirect(d.url, 302);
+    if (!range && await node.canRedirect()) {
+      const { url } = await node.mintUrl({ op: 'download', download: attach });
+      return Response.redirect(url, 302);
     }
 
     const { stream, size, contentType, etag, range: served } = await node.read({ range });
@@ -708,7 +695,7 @@ export function createRouter() {
   // exists alongside the scheduled one: a bucket policy may legitimately name a single
   // origin, and the origin that matters is the one browsers are actually using to reach
   // the drive. A cron firing can only fall back to a configured TROVE_PUBLIC_URL.
-  r.post('/api/diagnostics/storage', ['collections', 'issues', 'storageCheck'], async (ctx) => {
+  r.post('/api/diagnostics/storage', ['collections', 'storageCheck'], async (ctx) => {
     await requireWholeDrive(ctx, 'check the backing stores');
     return ctx.storageCheck.run({ origin: publicOrigin(ctx.req, ctx.config) });
   });
@@ -767,7 +754,6 @@ export function createRouter() {
   // the caller owns. Returns the task, which is how the caller watches it.
   r.post('/api/reindex', ['backgroundWork', 'collections', 'tasks'], async (ctx) => {
     await requireWholeDrive(ctx, 'rebuild the search index');
-    if (!ctx.backgroundWork) throw TroveError.unsupported('Reindexing is not available on this deployment');
     // Two concurrent full rebuilds would double the work to reach the same place, so
     // `beginReindex` claims the drive first and says whether it got it. The claim is
     // shared state rather than this process's task list — the other rebuild may be in
@@ -822,7 +808,6 @@ export function createRouter() {
   // collection, because a scan can create items in it.
   r.post('/api/collections/:id/scan', ['backgroundWork', 'tasks'], async (ctx) => {
     await ctx.access.collection(ctx.params.id, 'write');
-    if (!ctx.backgroundWork) throw TroveError.unsupported('Scanning is not available on this deployment');
     const { task, alreadyRunning } = await ctx.backgroundWork.beginScan(ctx.params.id, { reason: 'Started manually' });
     if (alreadyRunning) {
       const local = (await ctx.tasks.list())
@@ -844,7 +829,7 @@ export function createRouter() {
     // which UI the client offers — the routes enforce regardless — but a `collections`
     // that went missing would tell every visitor they were an administrator, which is
     // a worse lie than an error.
-    admin: collectionsEnabled(ctx) ? ctx.collections.isAdmin(ctx.principal) : !!ctx.principal,
+    admin: ctx.collections.isAdmin(ctx.principal),
   }));
 
   // --- conversations, tags, sidecar (per file) -------------------------------
@@ -1149,29 +1134,14 @@ async function assertContributorOwned(ctx, contributorId) {
 }
 
 /**
- * Managing collections is only meaningful where there is an ACL layer to manage.
- *
- * From config, not from `ctx.collections` being null — the two agree today only
- * because the provider derives one from the other, and a build failure would make
- * "Collections are not enabled" a lie about a drive that has them.
- */
-function requireCollections(ctx) {
-  if (!collectionsEnabled(ctx)) throw TroveError.unsupported('Collections are not enabled');
-}
-
-/**
  * Gate an operation that acts on the whole drive rather than on anything the caller
  * owns — rebuilding the index, cancelling someone else's task. See
  * CollectionService.hasWholeDrive for why this isn't plain `isAdmin`.
  */
 async function requireWholeDrive(ctx, what) {
-  const allowed = collectionsEnabled(ctx) ? await wholeDriveFor(ctx) : !!(ctx.principal || ctx.grant);
-  if (!allowed) throw TroveError.forbidden(`You do not have permission to ${what}`);
+  if (!(await wholeDriveFor(ctx))) throw TroveError.forbidden(`You do not have permission to ${what}`);
 }
-const canWholeDrive = (ctx) =>
-  (collectionsEnabled(ctx)
-    ? wholeDriveFor(ctx)
-    : Promise.resolve(!!(ctx.principal || ctx.grant)));
+const canWholeDrive = (ctx) => wholeDriveFor(ctx);
 
 /**
  * Who may act on an issue: whoever may act on the thing it is about.
@@ -1206,7 +1176,7 @@ function requireHumanAdmin(ctx, action) {
     throw TroveError.forbidden(`An API key cannot ${action} — sign in as an administrator`);
   }
   requirePrincipal(ctx.principal);
-  const isAdmin = collectionsEnabled(ctx) ? ctx.collections.isAdmin(ctx.principal) : !!ctx.principal;
+  const isAdmin = ctx.collections.isAdmin(ctx.principal);
   if (!isAdmin) throw TroveError.forbidden(`You need to be an administrator to ${action}`);
 }
 

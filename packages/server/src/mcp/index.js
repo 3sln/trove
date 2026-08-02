@@ -17,18 +17,10 @@ import { TroveError, challengeHeaders, protectedResourceMetadata } from '@3sln/t
 import { McpServer, rpcError, JSONRPC_ERRORS } from './protocol.js';
 import { registerTroveTools } from './tools.js';
 import { mcpConfigFromEnv, mcpResourceUri } from './auth.js';
-import { crossSiteRefusal } from '../router.js';
+import { crossSiteRefusal, corsOriginFor } from '../router.js';
 import { leaseScope } from '../scope.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
-
-/** The CORS origin to echo, or null for "no cross-origin access" — same rule as the API. */
-function allowedOrigin(configured, reqOrigin) {
-  if (!configured) return null;
-  if (configured === '*') return '*';
-  const allowed = String(configured).split(',').map((s) => s.trim()).filter(Boolean);
-  return reqOrigin && allowed.includes(reqOrigin) ? reqOrigin : null;
-}
 
 export { McpServer, mcpConfigFromEnv, mcpResourceUri };
 
@@ -106,7 +98,7 @@ export function createMcpHandler({ vfs, collections, container, identity, config
       // unreadable to the attacker, but the deletions still happen. Agents are not
       // browsers and do not need CORS at all, so this follows the same
       // TROVE_CORS_ORIGIN allowlist the JSON API does, and stays off by default.
-      const origin = allowedOrigin(config?.corsOrigin, req.headers.get('origin'));
+      const origin = corsOriginFor(config?.corsOrigin, req.headers.get('origin'));
       if (!origin) return new Response(null, { status: 204 });
       return new Response(null, {
         status: 204,

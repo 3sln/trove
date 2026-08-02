@@ -82,6 +82,18 @@ export function isTroveUri(uri) {
 }
 
 /**
+ * The canonical string for one address. The ONE place the template lives.
+ *
+ * There were five hand-written copies of it, which is five chances to get the encoding or
+ * the separator subtly different — and `canonicalTroveUri`, whose whole docstring is
+ * "two links that address the same item by the same selector must produce the same
+ * string", was one of the copies rather than the source.
+ */
+export function formatTroveUri({ collection, by, value }) {
+  return `${TROVE_SCHEME}${collection}?${by}=${encodeURIComponent(value)}`;
+}
+
+/**
  * Build a `trove:` URI. `by` defaults to 'name' — the legible form, which is what
  * gets written into documents; pass 'id' for a link that must survive a rename.
  */
@@ -89,10 +101,10 @@ export function troveUri(node, by = 'name') {
   const collection = node?.collectionId || 'default';
   if (by === 'id') {
     if (!node?.id) throw TroveError.invalid('trove: link by id needs a node id');
-    return `${TROVE_SCHEME}${collection}?id=${encodeURIComponent(node.id)}`;
+    return formatTroveUri({ collection, by: 'id', value: node.id });
   }
   if (!node?.name) throw TroveError.invalid('trove: link by name needs a node name');
-  return `${TROVE_SCHEME}${collection}?name=${encodeURIComponent(node.name)}`;
+  return formatTroveUri({ collection, by: 'name', value: node.name });
 }
 
 /**
@@ -114,7 +126,7 @@ export function extractTroveLinks(text, { limit = MAX_LINKS_PER_ITEM } = {}) {
     const raw = m[0].replace(/[.,;:!?]+$/, '');
     const parsed = parseTroveUri(raw);
     if (!parsed) continue;
-    const canonical = `${TROVE_SCHEME}${parsed.collection}?${parsed.by}=${encodeURIComponent(parsed.value)}`;
+    const canonical = formatTroveUri(parsed);
     if (seen.has(canonical)) continue;
     seen.add(canonical);
     out.push({ uri: canonical, raw, ...parsed });
@@ -129,7 +141,7 @@ export function extractTroveLinks(text, { limit = MAX_LINKS_PER_ITEM } = {}) {
  */
 export function canonicalTroveUri(uri) {
   const p = parseTroveUri(uri);
-  return p ? `${TROVE_SCHEME}${p.collection}?${p.by}=${encodeURIComponent(p.value)}` : null;
+  return p ? formatTroveUri(p) : null;
 }
 
 /** Both canonical forms an item can be addressed by — what a backlink query looks for. */
@@ -220,7 +232,5 @@ export function parseShareUrl(url) {
 export function troveUriFromShareUrl(url) {
   const parsed = parseShareUrl(url);
   if (!parsed) return null;
-  return parsed.by === 'id'
-    ? `${TROVE_SCHEME}${parsed.collection}?id=${encodeURIComponent(parsed.value)}`
-    : `${TROVE_SCHEME}${parsed.collection}?name=${encodeURIComponent(parsed.value)}`;
+  return formatTroveUri(parsed);
 }

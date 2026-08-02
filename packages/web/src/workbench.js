@@ -114,19 +114,15 @@ export function createWorkbench({
   installDragAndDrop(engine, app);
 
   // --- initial load ---------------------------------------------------------
-  (async () => {
-    try {
-      // What the server can do is an engine query now — see bl/queries.js. It used to be
-      // assigned onto `platform` here and followed by `workbench.touch()`, a poke at an
-      // unrelated store purely to make the shell redraw, because writing a plain field
-      // invalidates nothing. The query has somewhere for the value to arrive, so the fetch
-      // belongs to it and this no longer has to announce it.
-    } catch (err) {
-      platform.notifications.error(`Cannot reach the Trove server: ${err.message}`);
-    }
-    // Land on a collection the user can actually read — see OpenInitialCollectionAction.
-    engine.dispatch(new OpenInitialCollectionAction());
-  })();
+  // Land on a collection the user can actually read — see OpenInitialCollectionAction.
+  //
+  // This was an async IIFE whose `try` block held only a comment, so its `catch` was not
+  // merely dead but a CLAIM: a reader looking for where boot verifies the server is
+  // reachable found "Cannot reach the Trove server" and it could never fire. The capability
+  // fetch it once guarded belongs to the `capabilities` provider now, whose rejection arm
+  // deliberately swallows — whether boot should report an unreachable server is that
+  // provider's decision to make, not a wrapper's around one synchronous call.
+  engine.dispatch(new OpenInitialCollectionAction());
 
   // Expose for debugging / e2e.
   window.__trove = {

@@ -162,7 +162,11 @@ export class Router {
 // Resolve the Access-Control-Allow-Origin value: null (no CORS) unless configured.
 // '*' echoes '*'; a configured origin is echoed only when the request matches it
 // (so credentials-mode requests get a specific origin, not a wildcard).
-function corsOriginFor(configured, reqOrigin) {
+//
+// Exported because the MCP endpoint needs the same answer. It kept its own copy, and two
+// parsers of one allowlist is how the API and the agent endpoint come to disagree about
+// which origins are trusted — mcp/index.js already imports `crossSiteRefusal` from here.
+export function corsOriginFor(configured, reqOrigin) {
   if (!configured) return null;
   if (configured === '*') return '*';
   const allowed = String(configured).split(',').map((s) => s.trim()).filter(Boolean);

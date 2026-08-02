@@ -49,7 +49,7 @@ export function createDriveEngine(config = {}, lifecycleState = { closing: false
 export const BACKBONE = [
   'storage', 'sqlite', 'metadata', 'kv', 'tasks', 'issues', 'notifications',
   'sidecar', 'collections', 'identity', 'auth', 'search', 'vfs', 'plugins',
-  'apiKeys', 'capabilities', 'rotation', 'lifecycle',
+  'apiKeys', 'capabilities', 'rotation', 'lifecycle', 'storageCheck',
 ];
 
 /** The shape `beginScan` has always returned, so no caller has to change. */

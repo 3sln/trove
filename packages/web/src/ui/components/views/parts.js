@@ -65,5 +65,5 @@ export function openRowMenu(anchor, it, ui, event, select) {
   // a detached node whose rect is all zeroes.
   const items = it.menu();
   select?.();
-  ui.engine.dispatch(new ShowContextMenuAction(x, y, items));
+  ui.engine.dispatch(new ShowContextMenuAction(items, { x, y }));
 }

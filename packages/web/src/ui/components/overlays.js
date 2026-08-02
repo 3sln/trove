@@ -293,17 +293,43 @@ function storeFields(driver, form, set) {
 }
 
 // ---- Context menu ----------------------------------------------------------
+// The menu's own geometry, in the one place that can measure it. `MENU_ROW` must match the
+// `.mi` height in the stylesheet; it used to be spelled out at the call sites too, so
+// changing the CSS made status-bar menus overlap their trigger while the clamp below
+// compensated by a different amount.
+const MENU_WIDTH = 220;
+const MENU_ROW = 34;
+const MENU_PAD = 20;
+
+/**
+ * Where a menu of `height` should sit, given a point, a rect to hang off, or nothing.
+ *
+ * Flipping and clamping are the same decision and belong together: anchoring ABOVE a
+ * trigger produces a negative top, which is exactly what the clamp is for.
+ */
+function placeMenu(at, height) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  // No anchor — a keyboard-invoked menu has no geometry to hang off, so it is centred.
+  if (!at) return { x: Math.round(w / 2 - MENU_WIDTH / 2), y: Math.round(h / 3) };
+  const wantX = at.rect ? at.rect.left : at.x;
+  const wantY = at.rect
+    ? (at.prefer === 'up' ? at.rect.top - 8 - height : at.rect.bottom + 8)
+    : at.y;
+  return {
+    x: Math.max(8, Math.min(wantX, w - MENU_WIDTH)),
+    y: Math.max(8, Math.min(wantY, h - height)),
+  };
+}
+
 export function contextMenu(state, ui) {
   const m = state.overlay.contextMenu;
   if (!m || !m.items?.length) return null;
-  // Clamp on both edges. Anchoring a menu ABOVE its trigger (the status bar opens
-  // upward) produces a negative top, and only the far edge used to be clamped.
   // The height is whatever the menu needs OR whatever the window allows, whichever is
   // smaller — past that the menu scrolls (see `.menu`), so pushing it further up buys
   // nothing and would just leave a gap at the bottom.
-  const wanted = Math.min(m.items.length * 34 + 20, window.innerHeight - 24);
-  const x = Math.max(8, Math.min(m.x, window.innerWidth - 220));
-  const y = Math.max(8, Math.min(m.y, window.innerHeight - wanted));
+  const wanted = Math.min(m.items.length * MENU_ROW + MENU_PAD, window.innerHeight - 24);
+  const { x, y } = placeMenu(m.at, wanted);
   return div({},
     div({ className: 'scrim', $styling: { background: 'transparent' } }).on({ click: () => ui.engine.dispatch(new CloseContextMenuAction()), contextmenu: (e) => { e.preventDefault(); ui.engine.dispatch(new CloseContextMenuAction()); } }),
     div({ className: 'menu', $styling: { left: x + 'px', top: y + 'px' } },

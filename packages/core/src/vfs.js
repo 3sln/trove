@@ -176,7 +176,12 @@ export class Vfs {
     if (!shouldEncrypt(encryption, { name, contentType })) return null;
     const key = await this.collections.dataKeyFor(collectionId);
     if (!key) throw TroveError.internal('This collection is encrypted but its key is unavailable');
-    return { key, fingerprint: fromHex(encryption.fingerprint), chunkSize: encryption.chunkSize || DEFAULT_CHUNK_SIZE };
+    // `DEFAULT_CHUNK_SIZE`, not `encryption.chunkSize`. A collection cannot choose one:
+    // `normalizeEncryption` emits exactly `{ enabled, fingerprint, rules }` and every
+    // writer of `c.encryption` goes through it, so the field was structurally always
+    // undefined and the `||` read as a knob that could be turned. The per-OBJECT chunk
+    // size is real and separate — the envelope writes it, and reads take it from there.
+    return { key, fingerprint: fromHex(encryption.fingerprint), chunkSize: DEFAULT_CHUNK_SIZE };
   }
 
   /** Resolve the storage backend for a collection. */
@@ -535,25 +540,25 @@ export class Vfs {
 
   // --- download --------------------------------------------------------------
 
-  async getDownload(id, { expiresIn, download, ciphertext = false } = {}) {
+  /**
+   * May the download route hand this object straight to the store?
+   *
+   * A PREDICATE rather than a second download implementation. `getDownload` used to
+   * encode the presign-or-proxy rule here while `mintUrl` encoded it two hundred lines
+   * away, and they disagreed: mintUrl presigned whenever the store COULD and never asked
+   * whether the object was sealed, so on any encrypted collection with a presigning store
+   * every thumbnail, preview and externally-handed URL pointed at CIPHERTEXT. That
+   * incident report is server/test/mint-url-encryption.test.js.
+   *
+   * An encrypted object is never redirected to. A redirect hands the caller raw ciphertext
+   * and most callers of a download URL can do nothing with it — an `<img src>`, a `<video
+   * src>`, a signed URL given to an external service. Proxying is the answer that is always
+   * correct.
+   */
+  async canRedirect(id) {
     const node = await this.resolve(id);
-    const storage = await this.storageFor(node.collectionId);
-    // An encrypted object is not redirected to by default. A redirect hands the caller raw
-    // ciphertext, and most callers of a download URL cannot do anything with it — an <img
-    // src>, a <video src>, a signed URL given to an external service. Proxying is the
-    // answer that is always correct, so it is the default; a client that holds the key and
-    // knows it can decrypt asks for `ciphertext` and gets the direct path back.
-    if (node.encryption && !ciphertext) return { mode: 'proxy', node };
-    if (storage.capabilities.presignDownload) {
-      const url = await storage.presignGet(node.storageKey, {
-        expiresIn, responseContentType: node.contentType,
-        downloadName: download ? node.name : undefined,
-      });
-      // Named on the way out so a client that asked for ciphertext knows which key opens
-      // what it is about to receive.
-      return { mode: 'redirect', url, node, encryption: node.encryption || null };
-    }
-    return { mode: 'proxy', node };
+    if (node.encryption) return false;
+    return !!(await this.storageFor(node.collectionId)).capabilities?.presignDownload;
   }
 
   /**
@@ -575,8 +580,9 @@ export class Vfs {
     const node = await this.resolve(id);
     if (!node.storageKey) throw TroveError.notFound('File content');
     const storage = await this.storageFor(node.collectionId);
-    // An ENCRYPTED object is never presigned to the store — the same rule `getDownload`
-    // already follows, and the one place it was missing. A bucket URL serves CIPHERTEXT,
+    // An ENCRYPTED object is never presigned to the store. This is now the ONE place that
+    // rule is written — `getDownload` held a second copy and this was the copy that was
+    // missing the guard, which is how it shipped. A bucket URL serves CIPHERTEXT,
     // and everything a minted URL exists for (an <img src>, a <video src>, cache.add(), a
     // URL handed to an external service) fetches bytes with nowhere to run decryption. So
     // every thumbnail and preview in an encrypted collection on a presigning store pointed

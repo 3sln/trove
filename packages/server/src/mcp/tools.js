@@ -21,7 +21,7 @@ import { toolText } from './protocol.js';
 // different words" for a collection the caller may not see, and the model burned turns
 // rephrasing what was really a 403. `ctx.access` is on the MCP ctx, so the assert path
 // was available all along.
-import { readableCollectionIds, listFor, collectionsEnabled } from '../scope.js';
+import { readableCollectionIds, listFor } from '../scope.js';
 
 // A file read has to fit in a context window and in memory. Past this the tool returns
 // the head and says so, which is far more useful than refusing or than silently
@@ -277,9 +277,6 @@ export function registerTroveTools(server) {
       + 'division of the drive — the closest thing here to a folder, except they do not nest.',
     inputSchema: { type: 'object', properties: {} },
     async run(_args, ctx) {
-      if (!collectionsEnabled(ctx)) {
-        return toolText(JSON.stringify({ collections: [{ id: 'default', capabilities: ['read', 'write', 'delete'] }] }, null, 2));
-      }
       const list = await listFor(ctx);
       return toolText(JSON.stringify({ collections: list }, null, 2), { structured: { collections: list } });
     },

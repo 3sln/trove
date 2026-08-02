@@ -23,15 +23,6 @@
 import { Provider } from '@3sln/ngin';
 import { TroveError } from '@3sln/trove/core';
 
-/**
- * The one place that decides whether this deployment enforces ACLs at all.
- *
- * From configuration, never from whether a service is present — those agree when
- * everything is wired correctly and diverge exactly when it is not, and the
- * second stops enforcing at the worst possible moment.
- */
-const enforcing = (config) => config?.collections !== false;
-
 /** Conversations are optional; a drive without them says so rather than crashing. */
 function requireSidecar(sidecar) {
   if (!sidecar) throw TroveError.unsupported('Conversations are not enabled on this server');
@@ -120,7 +111,10 @@ function nodeHandle(vfs, sidecar, node, held) {
   // much its content as its bytes are.
   if (permits('read')) {
     handle.read = (opts) => vfs.readStream(node.id, opts);
-    handle.download = (opts) => vfs.getDownload(node.id, opts);
+    // Two calls, deliberately: "may we redirect" and "mint the URL". `mintUrl` is where
+    // the expiry clamp and the encrypted-never-presigns rule live, so a download URL and
+    // an <img src> URL are produced by the same code rather than by two that agreed once.
+    handle.canRedirect = () => vfs.canRedirect(node.id);
     // Minting a URL that carries its own grant is an exercise of `read` — you are
     // delegating the read you hold, to something that cannot present credentials. So it
     // hangs off the read handle like everything else, and a caller without `read`
@@ -206,14 +200,13 @@ function collectionHandle(vfs, collectionId, held) {
  * never runs — when the node is missing or the capability is not held.
  */
 export class NodeAccessProvider extends Provider {
-  static deps = ['vfs', 'sidecar', 'collections', 'config', 'signedUrls'];
+  static deps = ['vfs', 'sidecar', 'collections', 'signedUrls'];
 
-  constructor({ vfs, sidecar, collections, config, signedUrls }) {
+  constructor({ vfs, sidecar, collections, signedUrls }) {
     super();
     this.vfs = vfs;
     this.sidecar = sidecar;
     this.collections = collections;
-    this.config = config;
     this.signedUrls = signedUrls;
   }
 
@@ -256,9 +249,6 @@ export class NodeAccessProvider extends Provider {
       return nodeHandle(vfs, sidecar, node, new Set(['read']));
     }
 
-    const config = await this.config.obtain();
-    if (!enforcing(config)) return nodeHandle(vfs, sidecar, node, requested(capability));
-
     // A key IS the grant, scoped to the node's own collection. Checked before the ACL
     // and never alongside it: a request bearing a key is the key's request, and falling
     // back to whatever principal happens to be attached would let a weak key borrow a
@@ -290,20 +280,17 @@ export class NodeAccessProvider extends Provider {
  * usage, starting an upload.
  */
 export class CollectionAccessProvider extends Provider {
-  static deps = ['vfs', 'collections', 'config'];
+  static deps = ['vfs', 'collections'];
 
-  constructor({ vfs, collections, config }) {
+  constructor({ vfs, collections }) {
     super();
     this.vfs = vfs;
     this.collections = collections;
-    this.config = config;
   }
 
   async obtain({ principal, grant = null, id = 'default', capability = 'read' } = {}) {
     assertCapability(capability);
     const vfs = await this.vfs.obtain();
-    const config = await this.config.obtain();
-    if (!enforcing(config)) return collectionHandle(vfs, id, requested(capability));
 
     // Same rule as the node path: a key's grant decides, alone, and refuses rather than
     // narrowing. This is the check that keeps a key scoped to `photos` out of `invoices`.
@@ -333,13 +320,12 @@ export class CollectionAccessProvider extends Provider {
  * grant was thrown away in every one. Here the session IS the handle.
  */
 export class UploadAccessProvider extends Provider {
-  static deps = ['vfs', 'collections', 'config'];
+  static deps = ['vfs', 'collections'];
 
-  constructor({ vfs, collections, config }) {
+  constructor({ vfs, collections }) {
     super();
     this.vfs = vfs;
     this.collections = collections;
-    this.config = config;
   }
 
   async obtain({ principal, grant = null, id } = {}) {
@@ -348,16 +334,13 @@ export class UploadAccessProvider extends Provider {
     // Resolving first is what makes the check possible at all: only the session knows
     // which collection the bytes are destined for.
     const session = await vfs.uploadStatus(id);
-    const config = await this.config.obtain();
-    if (enforcing(config)) {
-      // Re-checked on EVERY request of the upload, keys included — the point of this
-      // provider. A key revoked between `POST /api/uploads` and `complete` stops the
-      // upload, which it would not if the grant were only checked when it began.
-      if (grant) grantedCapabilities(grant, session.collectionId, 'write');
-      else {
-        const collections = await this.collections.obtain();
-        await collections.assert(principal, session.collectionId, 'write');
-      }
+    // Re-checked on EVERY request of the upload, keys included — the point of this
+    // provider. A key revoked between `POST /api/uploads` and `complete` stops the
+    // upload, which it would not if the grant were only checked when it began.
+    if (grant) grantedCapabilities(grant, session.collectionId, 'write');
+    else {
+      const collections = await this.collections.obtain();
+      await collections.assert(principal, session.collectionId, 'write');
     }
     return {
       id,

@@ -292,7 +292,9 @@ export class UploadManager {
       const wireSize = encrypting ? req.size : storedSize;
       const partCount = Math.max(1, Math.ceil(wireSize / this.partSize));
       // A part must hold a whole number of chunks, or the chunk a part boundary lands
-      // inside would be sealed twice under two different indices.
+      // inside would be sealed twice under two different indices. Reachable, unlike a
+      // per-collection chunk size: `partSize` really is injectable (`uploadPartSize`), and
+      // the chunk size is fixed, so this checks the half a deployment can get wrong.
       if (encrypting && this.partSize % chunkSize !== 0) {
         throw TroveError.internal(
           `Part size ${this.partSize} is not a multiple of the ${chunkSize}-byte chunk size`,

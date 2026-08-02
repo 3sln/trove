@@ -504,7 +504,6 @@ the same values as config fields instead.
 | `TROVE_AUTH_SERVER` | the JWT issuer | where refused clients are sent to sign in |
 | `TROVE_ADMINS` | — | comma-separated ids with whole-drive rights |
 | **collections** | | |
-| `TROVE_COLLECTIONS` | on | `false` for one open store with no ACLs |
 | `TROVE_DEFAULT_OPEN` | `true` | **set `false`** before exposing it |
 | `TROVE_COLLECTION_CREATOR_ROLES` | — | roles allowed to create collections |
 | **agents** | | |

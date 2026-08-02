@@ -1168,8 +1168,26 @@ export class SetViewStateAction extends Action {
  * the feed. See ui/activate.js.
  */
 export class ShowContextMenuAction extends OverlayAction {
-  constructor(x, y, items) { super(); this.x = x; this.y = y; this.items = items; }
-  apply(o) { o.set({ contextMenu: { x: this.x, y: this.y, items: this.items } }); }
+  /**
+   * @param {Array} items
+   * @param {{x?: number, y?: number, rect?: DOMRect, prefer?: 'up'|'down'}|null} [at]
+   *   A POINT (a right-click) or a rect to hang off (a button), not a resolved position.
+   *   Callers used to resolve it themselves — `r.top - 8 - items.length * 34`, a row height
+   *   hardcoded in two files that had to agree with the CSS and did not have to agree with
+   *   the overlay's clamp, which compensated by a different amount. Only the overlay can
+   *   measure, so only the overlay decides. Omit `at` for a keyboard-invoked menu.
+   */
+  constructor(items, at = null) {
+    super();
+    this.items = items;
+    // Flattened to plain numbers: a DOMRect is a live object with methods, and this lands
+    // in engine state, where nothing is callable.
+    this.at = at?.rect
+      ? { prefer: at.prefer || 'down', rect: { left: at.rect.left, top: at.rect.top, right: at.rect.right, bottom: at.rect.bottom } }
+      : (at ? { x: at.x, y: at.y } : null);
+  }
+
+  apply(o) { o.set({ contextMenu: { items: this.items, at: this.at } }); }
 }
 
 /**
@@ -1675,8 +1693,10 @@ export class SwitchCollectionAction extends Action {
       (id) => new ExecCommandAction('collections.switch', id),
       () => new ExecCommandAction('collections.create'));
     if (!items.length) return notifications.info('This drive has one collection.');
-    const w = typeof window === 'undefined' ? 800 : window.innerWidth;
-    engine.dispatch(new ShowContextMenuAction(Math.max(12, Math.round(w / 2) - 110), 120, items));
+    // No geometry: this comes from a command, not from a click, so the overlay centres it.
+    // The arithmetic that used to be here needed `window` and carried a `typeof window`
+    // guard precisely because layout has no business in the bl layer.
+    engine.dispatch(new ShowContextMenuAction(items));
   }
 }
 

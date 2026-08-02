@@ -53,14 +53,16 @@ export function leaseScope(container, principal, grant = null) {
 
 /**
  * The collections this caller may read, optionally narrowed to one they asked for.
- * `undefined` when collections are disabled, which means "don't scope" downstream.
  *
  * Every drive-wide query needs this, and it has to be applied INSIDE the query rather
  * than by filtering results: a LIMIT spent on rows the caller can't see would report
  * "no matches" while matches they can see sit just past the cut.
+ *
+ * Always a list. It used to answer `undefined` for "don't scope" on a drive with ACLs
+ * switched off, and there is no such drive: `collections: false` is refused by
+ * `configFromEnv` and again by the provider.
  */
 export async function readableCollectionIds(ctx, narrowTo) {
-  if (!collectionsEnabled(ctx)) return undefined;
   // A NAMED collection is asserted, not filtered. Filtering an unreadable id out of the
   // list answers "no results" for a collection the caller may not see — indistinguishable
   // from one that is simply empty, so a permissions problem reads as an indexing problem.
@@ -93,20 +95,8 @@ export const listFor = (ctx) =>
 export const wholeDriveFor = (ctx) =>
   (ctx.grant ? ctx.collections.grantHasWholeDrive(ctx.grant) : ctx.collections.hasWholeDrive(ctx.principal));
 
-/**
- * Whether this deployment has an ACL layer at all.
- *
- * Read from configuration, not from whether `ctx.collections` is truthy. The two
- * agree when everything is wired correctly, and diverge exactly when it is not —
- * and a security check that stands down because a service is missing is one that
- * stops enforcing at the worst possible moment. Configuration says whether to
- * enforce; the service does the enforcing, and if it is absent this throws.
- */
-export const collectionsEnabled = (ctx) => ctx.config?.collections !== false;
-
 /** Returns the collection record, so a caller that needs it does not assert twice. */
 export async function assertCap(ctx, collectionId, capability) {
-  if (!collectionsEnabled(ctx)) return ctx.collections.get(collectionId); // no ACL layer configured
   return ctx.grant
     ? ctx.collections.assertForGrant(ctx.grant, collectionId, capability)
     : ctx.collections.assert(ctx.principal, collectionId, capability);

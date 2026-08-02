@@ -9,7 +9,6 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [018](018-delete-the-dead-machinery.md) | Delete the dead machinery | ~400 unreachable lines, most of it advertised in module headers as live |
 | [019](019-the-prose-has-drifted-from-the-code.md) | The prose has drifted from the code | A wrong comment in this codebase is believed, because the right ones are so good |
 | [020](020-state-that-escapes-the-engine.md) | State that escapes the engine | Side channels the resource graph cannot see — `window.__trove` ships to production |
 | [021](021-nothing-limits-what-one-caller-can-cost.md) | Nothing limits what one caller can cost | No rate limiting anywhere — a leaked key or an open drive can spend CPU, bandwidth and embedding credit without bound |

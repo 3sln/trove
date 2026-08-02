@@ -11,6 +11,10 @@
 import { networkEndpoints, canExecuteCommand, displayName } from './pluginPackage.js';
 import { isAllowedUrl } from './pluginNet.js';
 import { isSourceModule } from './pluginModules.js';
+// pluginHost.js already imports actions to build this router, so this widens an existing
+// edge rather than creating one — and it removes the third seam assigned onto `platform`
+// after construction, which is the shape that makes the resource graph not the whole story.
+import { OpenPluginPanelAction } from '../bl/actions.js';
 import { contribUri, parseContribUri } from '@3sln/trove/core/plugins/identity.js';
 import { assertSafePluginSql } from '@3sln/trove/core/plugins/sql.js';
 
@@ -174,7 +178,7 @@ export class PluginRpcRouter {
       case 'ui:showPanel':
         cap('ui');
         record.hasUi = true;
-        this.platform.openPluginPanel(pid);
+        this.platform.dispatch(new OpenPluginPanelAction(pid));
         this.onChange();
         return { ok: true };
 

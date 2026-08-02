@@ -74,7 +74,6 @@ export function createPlatform({ baseUrl = '' } = {}) {
     viewport, spatialNav, voice,
     // The shell's own state is the engine's, not the platform's — createApp builds it and
     // hands back what the few imperative edges below still need.
-    openPluginPanel: null,
   };
   platform.mediaUrls = new MediaUrlService({ api: platform.api, settings });
   platform.plugins = new PluginHost(platform);

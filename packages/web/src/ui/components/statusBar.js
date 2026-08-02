@@ -122,8 +122,9 @@ export default function statusBar(state, ui) {
             { sep: true },
           ]);
           if (off.pins.length > 12) items.push({ label: `…and ${off.pins.length - 12} more`, actions: [] });
-          const r = e.currentTarget.getBoundingClientRect();
-          ui.engine.dispatch(new ShowContextMenuAction(r.left, r.top - 8 - items.length * 34, items));
+          ui.engine.dispatch(new ShowContextMenuAction(items, {
+            rect: e.currentTarget.getBoundingClientRect(), prefer: 'up',
+          }));
         } })
       : null,
     button({ className: 'seg', title: 'Switch collection' },
@@ -135,16 +136,17 @@ export default function statusBar(state, ui) {
         const items = ex.collectionMenu || [];
         // With nowhere else to go, the segment is a label, not a dead menu.
         if (items.length > 1 || ex.canCreateCollection) {
-          const r = e.currentTarget.getBoundingClientRect();
-          ui.engine.dispatch(new ShowContextMenuAction(r.left, r.top - 8 - items.length * 34, items));
+          ui.engine.dispatch(new ShowContextMenuAction(items, {
+            rect: e.currentTarget.getBoundingClientRect(), prefer: 'up',
+          }));
         } else ui.engine.dispatch(new ExecCommandAction('workbench.view.home'));
       } }),
     active.length
       ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
-        .on({ click: (e) => ui.engine.dispatch(new ShowContextMenuAction(e.clientX, e.clientY, active.map((t) => ({
+        .on({ click: (e) => ui.engine.dispatch(new ShowContextMenuAction(active.map((t) => ({
           label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
           actions: [new CancelTransferAction(t.id)],
-        })))) })
+        })), { x: e.clientX, y: e.clientY })) })
       : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${f.totalKnown ? totalItems : 'more'}` : '' },
         `${totalItems.toLocaleString()}${f.totalKnown || !f.partial ? '' : '+'} item${totalItems === 1 ? '' : 's'}`),
     ...left,

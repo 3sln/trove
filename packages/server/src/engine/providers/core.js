@@ -44,6 +44,7 @@ import {
   Vfs, TroveError,
   resolveAuthDiscovery,
   SignedUrls, resolveUrlSecret,
+  diagnoseStorage, STORAGE_ISSUE_CODES,
 } from '@3sln/trove/core';
 import { Provider } from '@3sln/ngin';
 import { need } from '../lazy.js';
@@ -198,12 +199,83 @@ export function coreProviders(config, lifecycleState) {
       beginReindex: (opts) => lifecycleState.background.beginReindex(opts),
     }),
 
-    // The storage self-check, late-bound for the same reason: it needs `collections` and
-    // `issues` from this container, so it is assembled in createServer and reached back
-    // into rather than built here.
-    storageCheck: Provider.fromSingleton({
-      run: (opts) => lifecycleState.storageCheck(opts),
-    }),
+    /**
+     * The storage self-check.
+     *
+     * The failure this exists for: a bucket with no CORS policy serves the SERVER fine and
+     * serves the browser nothing, so the drive looks healthy and every file opens to a
+     * spinner. See core/storage/diagnose.js for why the check has to be a real preflight.
+     *
+     * `origin` is the browser origin to check the policy against, and there is no guessing
+     * it: a policy may legitimately name one origin, so checking the wrong one would invent
+     * a problem. A request supplies its own; a cron firing has only `config.publicUrl`, and
+     * without either the CORS half is skipped rather than assumed.
+     *
+     * A PROVIDER, not a seam stamped onto `lifecycleState` after construction. The stated
+     * reason for that shape was "it needs `collections` and `issues` from this container",
+     * which is exactly what `fromLazySingleton` with deps is for — and unlike
+     * `backgroundWork`, whose comment names a real circularity (dispatching needs the
+     * engine that owns the container), there is none here.
+     */
+    storageCheck: Provider.fromLazySingleton(
+      async (deps) => {
+        const { collections, issues, config: cfg } = await need(deps, ['collections', 'issues', 'config']);
+        const KIND = 'storage';
+        return {
+          async run({ origin = null } = {}) {
+            // `all()`, not `list(null)`: this has no user, and asking what the anonymous
+            // principal may read means checking nothing at all on a drive that is not public.
+            const list = await collections.all().catch(() => []);
+            const results = [];
+            for (const c of list) {
+              let findings;
+              try {
+                const storage = await collections.storageFor(c.id);
+                findings = await diagnoseStorage({
+                  storage, origin, driver: c.store?.driver || null, fetchImpl: cfg.fetch,
+                });
+              } catch (err) {
+                // Failing to BUILD the store is itself the most severe version of
+                // unreachable — an unknown driver, or a config missing a required field,
+                // never gets far enough to be asked whether it can be read.
+                findings = [{
+                  code: 'storage-unreachable',
+                  severity: 'error',
+                  title: 'This collection\u2019s store could not be opened',
+                  detail: err?.message || String(err),
+                }];
+              }
+              const found = new Set(findings.map((f) => f.code));
+              for (const f of findings) {
+                await issues.raise({
+                  kind: KIND,
+                  subject: `${c.id}:${f.code}`,
+                  title: `${c.name || c.id}: ${f.title}`,
+                  detail: f.detail,
+                  remedy: f.remedy || null,
+                  severity: f.severity,
+                  collectionId: c.id,
+                  // Re-running the check IS the fix verification, so Retry rechecks against
+                  // the same origin the finding was made for. Checking a different one
+                  // would report a pass for a policy the affected browser still cannot use.
+                  retry: { op: 'storage-check', origin },
+                });
+              }
+              // Whatever is no longer true stops being listed. Without this, fixing the
+              // bucket leaves the warning up, and a problem list that outlives its problems
+              // is one people learn to scroll past.
+              for (const code of STORAGE_ISSUE_CODES) {
+                if (!found.has(code)) await issues.clear(KIND, `${c.id}:${code}`);
+              }
+              results.push({ collectionId: c.id, name: c.name || c.id, findings });
+            }
+            return { checked: results.length, corsChecked: !!origin, results };
+          },
+        };
+      },
+      null,
+      { deps: ['collections', 'issues', 'config'] },
+    ),
 
     storage: Provider.fromLazySingleton(
       () => resolve(config.storage ?? config.vfs?.storage, StorageBackend, (cfg) => buildStorage(cfg, config)),
@@ -525,13 +597,11 @@ export function coreProviders(config, lifecycleState) {
           indexers: r.indexerRuntime
             ? new PluginIndexers({ vfs: r.vfs, runtime: r.indexerRuntime, packages: r.packageStore })
             : null,
-          // Who may install a plugin. With no ACL layer configured there is no admin
-          // list to consult and any authenticated caller qualifies — decided from
-          // config, not from whether `collections` happens to be here, so a graph that
-          // failed to build cannot silently promote everyone.
-          isAdmin: (principal) => (config.collections === false
-            ? !!principal
-            : r.collections.isAdmin(principal)),
+          // Who may install a plugin. There is no "any authenticated caller qualifies"
+          // fallback: the arm that provided one required `collections: false`, which this
+          // provider refuses above and `configFromEnv` refuses again, so it could only ever
+          // have fired for a direct-container caller — where it handed out an open drive.
+          isAdmin: (principal) => r.collections.isAdmin(principal),
           maxPackageBytes: config.maxUploadBytes ?? undefined,
           strict: config.enforcePluginCaps === true,
         });

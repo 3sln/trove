@@ -1,10 +1,14 @@
 // What a minted URL may point at, once a collection is encrypted.
 //
 // `mintUrl` presigned straight to the store whenever the store COULD, and never asked
-// whether the object was sealed — while `getDownload`, two hundred lines away, has exactly
+// whether the object was sealed — while `getDownload`, two hundred lines away, had exactly
 // that guard. So on any encrypted collection with a presigning store, every thumbnail,
 // every preview and every URL handed to an external service pointed at CIPHERTEXT and
 // rendered nothing.
+//
+// There is one implementation now: `getDownload` is gone, and the download route asks
+// `canRedirect` and then mints through `mintUrl` — so the rule, and the expiry clamp that
+// only one of the two applied, are written once.
 //
 // A bucket URL is also a different origin, which is why nothing on our side could rescue
 // it: the bytes never came past us at all.

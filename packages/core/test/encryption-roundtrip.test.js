@@ -70,13 +70,19 @@ test('rules decide per item within one collection', async () => {
 test('a download is proxied rather than redirected, because a bare URL cannot decrypt', async () => {
   // An <img src>, a <video src> and a signed URL handed to an external service all get
   // bytes and have nowhere to run our code. Proxying is the answer that is always correct.
+  //
+  // Asked as a PREDICATE now. There were two implementations of the presign-or-proxy rule
+  // and they disagreed — see server/test/mint-url-encryption.test.js, which is the incident
+  // report — so the route asks whether a redirect is allowed and mints through the one
+  // place that knows, rather than through a second copy that also clamped differently.
   const d = await drive();
   const done = await put(d, d.secret.id, 'q.txt', text('hello'));
-  const dl = await d.vfs.getDownload(done.id);
-  expect(dl.mode).toBe('proxy');
-  // A client that holds the key can still ask for the direct path.
-  const direct = await d.vfs.getDownload(done.id, { ciphertext: true });
-  expect(direct.mode).toBe('proxy'); // MemoryStorage cannot presign; the gate is what matters
+  expect(await d.vfs.canRedirect(done.id)).toBe(false);
+  // And it is the SEALING that refuses, not the store's inability: a plaintext object on
+  // the same non-presigning store is refused too, so this needs a store that can presign
+  // to be a real distinction — which mint-url-encryption.test.js provides.
+  const plain = await d.vfs.writeFile('open.txt', 'hello', { collectionId: d.open.id });
+  expect(await d.vfs.canRedirect(plain.id)).toBe(false);
 });
 
 test('reading it back gives the file, not the envelope', async () => {

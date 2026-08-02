@@ -1,13 +1,18 @@
 // The per-file sidecar document — a small CRDT that holds everything mutable and
 // social about a file WITHOUT touching the file bytes: its conversation
-// (threaded comments + reactions), its tags, its per-indexer facet data (scoped
-// to the indexer that produced it), and who's subscribed to the thread.
+// (threaded comments + reactions), its tags, and who's subscribed to the thread.
+//
+// It does NOT hold indexer output. It advertised a per-indexer `facets` register for a
+// long time with no writer and no reader anywhere in core, server, web or the plugin SDK,
+// and there is no facet verb on the plugin RPC surface either — so the header was the
+// documentation someone extending an indexer would find first, and following it would land
+// data nothing queries. Indexer contributions live in the queryable metadata store, which
+// is what makes them show up in list/stat and drive tag filtering (see indexing.js).
 //
 // It's designed to live as cold JSON in object storage and be merged whenever
 // it's read-before-write, so two servers (or a stale hot copy vs the cold one)
 // converge without a lock or a conflict. Every field is a CRDT register:
 //   • tags   — LWW-Element-Set (add/remove wins by Lamport stamp)
-//   • facets — per-indexer LWW register
 //   • comments — grow-only map; body edit & deletion are LWW registers; reactions
 //     are an OR-map (per user, per emoji, LWW on/off)
 //   • subscribers — LWW register (subscribed / muted)
@@ -17,7 +22,7 @@
 export const SIDECAR_VERSION = 1;
 
 export function emptyDoc(nodeId) {
-  return { v: SIDECAR_VERSION, nodeId, clock: 0, tags: {}, facets: {}, comments: {}, subscribers: {} };
+  return { v: SIDECAR_VERSION, nodeId, clock: 0, tags: {}, comments: {}, subscribers: {} };
 }
 
 // A stamp orders and tie-breaks a write. Higher clock wins; equal clock → higher
@@ -96,12 +101,6 @@ export function removeTag(doc, name, { actor, at } = {}) {
   if (newer(s, cur)) doc.tags[name] = { present: false, value: cur?.value, ...s };
 }
 
-export function setFacet(doc, indexerId, data, { actor, at } = {}) {
-  const s = stamp(doc, actor ?? indexerId, at);
-  const cur = doc.facets[indexerId];
-  if (newer(s, cur)) doc.facets[indexerId] = { data, ...s };
-}
-
 export function subscribe(doc, userId, { muted = false, actor, at } = {}) {
   if (!userId) return;
   const s = stamp(doc, actor ?? userId, at);
@@ -120,10 +119,16 @@ export function unsubscribe(doc, userId, { actor, at } = {}) {
 export function mergeDoc(a, b) {
   if (!a) return structuredCloneSafe(b);
   if (!b) return structuredCloneSafe(a);
-  const out = { v: SIDECAR_VERSION, nodeId: a.nodeId || b.nodeId, clock: Math.max(a.clock || 0, b.clock || 0), tags: {}, facets: {}, comments: {}, subscribers: {} };
+  const out = { v: SIDECAR_VERSION, nodeId: a.nodeId || b.nodeId, clock: Math.max(a.clock || 0, b.clock || 0), tags: {}, comments: {}, subscribers: {} };
 
   for (const key of union(a.tags, b.tags)) out.tags[key] = pick(a.tags[key], b.tags[key]);
-  for (const key of union(a.facets, b.facets)) out.facets[key] = pick(a.facets[key], b.facets[key]);
+  // Documents written before the register was removed still carry one, and a merge that
+  // dropped half of a stored document would not be a merge. Guarded on presence so it
+  // costs nothing on the documents every writer produces now.
+  if (a.facets || b.facets) {
+    out.facets = {};
+    for (const key of union(a.facets, b.facets)) out.facets[key] = pick(a.facets[key], b.facets[key]);
+  }
   for (const key of union(a.subscribers, b.subscribers)) out.subscribers[key] = pick(a.subscribers[key], b.subscribers[key]);
 
   for (const id of union(a.comments, b.comments)) {
@@ -183,9 +188,8 @@ export function viewDoc(doc) {
     if (c.parentId && byId.has(c.parentId)) byId.get(c.parentId).replies.push(c);
     else roots.push(c);
   }
-  const facets = Object.fromEntries(Object.entries(doc.facets || {}).map(([k, v]) => [k, v.data]));
   const subscribers = Object.entries(doc.subscribers || {}).filter(([, s]) => s.subscribed).map(([id]) => id).sort();
-  return { nodeId: doc.nodeId, tags, comments: roots, commentCount: all.filter((c) => !c.deleted).length, facets, subscribers };
+  return { nodeId: doc.nodeId, tags, comments: roots, commentCount: all.filter((c) => !c.deleted).length, subscribers };
 }
 
 function summariseReactions(reactions = {}) {

@@ -11,7 +11,7 @@
 
 import { TroveError } from './errors.js';
 import { readAll } from './util.js';
-import { normalizeContribution, clampContribution, DEFAULT_CAPS } from './indexers/contribution.js';
+import { clampContribution, DEFAULT_CAPS } from './indexers/contribution.js';
 
 export class IndexingCoordinator {
   /**
@@ -61,7 +61,11 @@ export class IndexingCoordinator {
    * the one most exposed to untrusted code.
    */
   async #applyContribution(nodeId, contributorId, contribution) {
-    const { semanticTexts, tags, metadata } = normalizeContribution(clampContribution(contribution, this.caps));
+    // `clamp` alone. It already maps the legacy `documents`/`facet` keys itself, so
+    // `normalize` at this call site can never see one — all it contributed was three
+    // defaults, while contribution.js's header says both halves live there because they
+    // must not drift. They had already drifted into both functions.
+    const { semanticTexts = [], tags = null, metadata = null } = clampContribution(contribution, this.caps);
     // ALWAYS write the search half, including when it is empty. `indexDocuments` clears
     // this (node, contributor)'s prior docs before it writes, so passing [] is how you
     // say "this contributor has nothing to say about this node any more". Skipping the

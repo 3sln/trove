@@ -14,7 +14,7 @@ import { SocialService } from './social.js';
 import { OfflineService } from './offline.js';
 import { ActivityService } from './activity.js';
 import { registerCommands } from './commands.js';
-import { NavigateAction, LoadCollectionsAction, OpenInitialCollectionAction, OpenPluginPanelAction } from './actions.js';
+import { NavigateAction } from './actions.js';
 
 export function createApp(platform) {
   // Named slices, not services — see bl/state.js. Each is still its own provider, so a
@@ -148,10 +148,13 @@ export function createApp(platform) {
   // outside the engine, and one of them has to carry the intent in. Everything past this
   // point is an action on the feed.
   platform.commands.dispatch = (action) => engine.dispatch(action);
-  // The same seam for the two other places that originate outside the engine: a docked
-  // plugin frame opening a file, and the plugin RPC asking for its panel.
+  // The same seam for everything that originates outside the engine: a docked plugin frame
+  // opening a file, and the plugin RPC asking for its panel. ONE seam — there was a second,
+  // `openPluginPanel`, which was `dispatch` with one action pre-applied, declared
+  // differently (a field in the platform literal versus one materialising from nowhere) and
+  // guarded differently (`dispatch?.()` optional, `openPluginPanel()` not), so a reader
+  // looking for how the plugin layer reaches the engine had to find both.
   platform.dispatch = (action) => engine.dispatch(action);
-  platform.openPluginPanel = (pluginId) => engine.dispatch(new OpenPluginPanelAction(pluginId));
 
   registerCommands(app);
 
@@ -164,7 +167,10 @@ export function createApp(platform) {
   social.init();
   offline.init();
   activity.init();
-  engine.dispatch(new LoadCollectionsAction());
+  // NOT `LoadCollectionsAction` as well. `OpenInitialCollectionAction`, dispatched at boot
+  // by workbench.js, fetches and writes the same two fields on both its normal and its
+  // share-link path — so every cold start made two identical GETs to /api/collections and
+  // installed two writers for one fact.
 
   return { engine, app };
 }

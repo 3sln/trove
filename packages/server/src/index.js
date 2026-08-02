@@ -15,7 +15,6 @@ import {
   VectorStore, KeywordStore, IndexerRegistry,
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
-  diagnoseStorage, STORAGE_ISSUE_CODES,
 } from '@3sln/trove/core';
 import { createRouter, routeHelpers } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
@@ -76,6 +75,7 @@ export async function createServer(config = {}) {
   const {
     storage, sqlite: sqliteProvider, metadata, kv, tasks, issues, notifications,
     sidecar, collections, identity, auth, search, vfs, plugins, apiKeys, capabilities, rotation,
+    storageCheck,
   } = backbone.resources;
 
   // Aliased so the rest of this function reads as it did; the container's
@@ -167,68 +167,8 @@ export async function createServer(config = {}) {
   const routeBeginScan = lifecycleState.background.beginScan;
   const routeBeginReindex = lifecycleState.background.beginReindex;
   issues.handle('scan-collection', (issue) => startScan(issue.retry.collectionId, { reason: 'Retrying after a failed scan' }));
+  issues.handle('storage-check', (issue) => storageCheck.run({ origin: issue.retry?.origin || config.publicUrl || null }));
 
-  // --- storage self-check ----------------------------------------------------
-  // The failure this exists for: a bucket with no CORS policy serves the server fine and
-  // serves the browser nothing, so the drive looks healthy and every file opens to a
-  // spinner. See core/storage/diagnose.js for why the check has to be a real preflight.
-  //
-  // `origin` is the browser origin to check the policy against, and there is no guessing
-  // it: a policy may legitimately name one origin, so checking the wrong one would invent
-  // a problem. A request supplies its own; a cron firing has only `config.publicUrl`, and
-  // without either the CORS half is skipped rather than assumed.
-  const STORAGE_ISSUE_KIND = 'storage';
-  async function checkStorage({ origin = null } = {}) {
-    // `all()`, not `list(null)`: this has no user, and asking what the anonymous principal
-    // may read means checking nothing at all on a drive that is not public.
-    const list = collections ? await collections.all().catch(() => []) : [];
-    const results = [];
-    for (const c of list) {
-      let findings;
-      try {
-        const storage = await collections.storageFor(c.id);
-        findings = await diagnoseStorage({
-          storage, origin, driver: c.store?.driver || null, fetchImpl: config.fetch,
-        });
-      } catch (err) {
-        // Failing to BUILD the store is itself the most severe version of unreachable —
-        // an unknown driver or a config missing a required field never gets far enough
-        // to be asked whether it can be read.
-        findings = [{
-          code: 'storage-unreachable',
-          severity: 'error',
-          title: 'This collection’s store could not be opened',
-          detail: err?.message || String(err),
-        }];
-      }
-      const found = new Set(findings.map((f) => f.code));
-      for (const f of findings) {
-        await issues.raise({
-          kind: STORAGE_ISSUE_KIND,
-          subject: `${c.id}:${f.code}`,
-          title: `${c.name || c.id}: ${f.title}`,
-          detail: f.detail,
-          remedy: f.remedy || null,
-          severity: f.severity,
-          collectionId: c.id,
-          // Re-running the check IS the fix verification, so Retry rechecks against the
-          // same origin the finding was made for. Checking a different one would report
-          // a pass for a policy the affected browser still cannot use.
-          retry: { op: 'storage-check', origin },
-        });
-      }
-      // Whatever is no longer true stops being listed. Without this, fixing the bucket
-      // leaves the warning up, and a problem list that outlives its problems is one
-      // people learn to scroll past.
-      for (const code of STORAGE_ISSUE_CODES) {
-        if (!found.has(code)) await issues.clear(STORAGE_ISSUE_KIND, `${c.id}:${code}`);
-      }
-      results.push({ collectionId: c.id, name: c.name || c.id, findings });
-    }
-    return { checked: results.length, corsChecked: !!origin, results };
-  }
-  issues.handle('storage-check', (issue) => checkStorage({ origin: issue.retry?.origin || config.publicUrl || null }));
-  lifecycleState.storageCheck = checkStorage;
 
   issues.handle('reindex-node', (issue) => tasks.run(
     // Carries the issue's collection, so the person who can see the file can also see
@@ -438,7 +378,13 @@ export async function createServer(config = {}) {
         // locator — nothing recorded what a route used, so nothing stopped it
         // reaching for more.
         container: engine.container,
-        config, principal, grant, auth, mcp,
+        // `mcp` is the one exception, and it says so here rather than being engineered
+        // around: it is constructed AFTER the container, so a route that wanted it would
+        // need `backgroundWork`-style late binding for a single field. `auth` used to ride
+        // along too, and /api/capabilities — its only reader — already declares it as a
+        // dep, so it arrived twice by two mechanisms and the route table understated by
+        // one what that endpoint touches.
+        config, principal, grant, mcp,
       });
       // A route can refuse on its own (a token that verified but names nobody we know,
       // a session that expired between calls). Whatever refused, the answer to "so
@@ -511,7 +457,7 @@ export async function createServer(config = {}) {
     // Cheap (one preflight per collection) and the only thing that will ever notice a
     // bucket policy that was fine yesterday, so it runs on every firing rather than
     // waiting for someone to open the Activity panel and press a button.
-    out.storage = await checkStorage({ origin: config.publicUrl || null })
+    out.storage = await storageCheck.run({ origin: config.publicUrl || null })
       .then((r) => r.checked)
       .catch((e) => {
         console.error('[trove] storage check failed', e);
@@ -567,7 +513,7 @@ export async function createServer(config = {}) {
     // inside a Durable Object want. `begin*` goes wherever `config.background` says,
     // which for a front-line Worker isolate is the object rather than itself.
     startScan, startReindex, beginScan: routeBeginScan, beginReindex: routeBeginReindex,
-    runMaintenance, checkStorage, rotation, mcp, auth, close };
+    runMaintenance, checkStorage: (opts) => storageCheck.run(opts), rotation, mcp, auth, close };
 }
 
 /**

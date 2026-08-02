@@ -8,11 +8,15 @@
 //   tags           filterable key/values, merged into the item's queryable tags
 //   metadata       arbitrary structured data (an audiobook's chapter index, …)
 //
-// Both halves of the contract live here because they must not drift: `normalize`
-// decides what the shape IS, and `clamp` decides how large it may be. They used to sit
-// in different modules — normalize in the indexing coordinator, clamp inside the plugin
-// isolate runtime — which meant the size limits only applied to one of the three
-// producers. The caps are a property of the contribution, not of whoever made it.
+// `clampContribution` does the whole contract in one pass: it accepts the legacy
+// `{ documents, facet }` spelling, decides the canonical shape, and applies the caps. It
+// was two functions, and the second — `normalizeContribution` — had grown its own copy of
+// the legacy mapping, so both halves of a contract that exists here BECAUSE it must not
+// drift had drifted into both. At its only call site it could never see a legacy key,
+// because clamp had already mapped it; all it contributed was three defaults.
+//
+// The caps used to live in the plugin isolate runtime, which meant they applied to one of
+// the three producers. They are a property of the contribution, not of whoever made it.
 
 /** Output caps applied to every contribution, whatever produced it. */
 export const DEFAULT_CAPS = {
@@ -24,18 +28,6 @@ export const DEFAULT_CAPS = {
   maxTagValueChars: 2_048,
   maxMetadataBytes: 256 * 1024, // JSON-serialized metadata
 };
-
-/**
- * Normalize to the three canonical scopes, accepting the legacy `{ documents, facet }`
- * shape (documents→semanticTexts, facet→metadata).
- */
-export function normalizeContribution(c = {}) {
-  return {
-    semanticTexts: c.semanticTexts || c.documents || [],
-    tags: c.tags || null,
-    metadata: c.metadata || c.facet || null,
-  };
-}
 
 /**
  * Clamp a contribution to `caps`, dropping (not erroring on) whatever exceeds them.

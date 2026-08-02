@@ -1,5 +1,5 @@
 // SidecarService — the API surface over sidecar documents: conversations
-// (threaded comments, edits, reactions), tags, per-indexer facets, and thread
+// (threaded comments, edits, reactions), tags, and thread
 // subscriptions. It resolves the acting Principal into comment authorship,
 // extracts @mentions, auto-subscribes participants, and emits mention events to
 // a callback (wired to the notification batcher). Routes call these methods.
@@ -7,7 +7,7 @@
 import { SidecarStore } from './store.js';
 import { SidecarManager } from './manager.js';
 import {
-  addComment, editComment, deleteComment, react, setTag, removeTag, setFacet,
+  addComment, editComment, deleteComment, react, setTag, removeTag,
   subscribe, unsubscribe, viewDoc, extractMentions,
 } from './document.js';
 import { newId } from '../util.js';
@@ -106,14 +106,6 @@ export class SidecarService {
   async removeTag(nodeId, name, principal) {
     await this.manager.mutate(nodeId, (doc) => removeTag(doc, name, { actor: principal?.id }));
     return this.view(nodeId);
-  }
-
-  // --- facets (indexer-scoped) ----------------------------------------------
-
-  /** Write an indexer's facet into the sidecar, namespaced under indexerId. */
-  async setFacet(nodeId, indexerId, data) {
-    await this.manager.mutate(nodeId, (doc) => setFacet(doc, indexerId, data, { actor: indexerId }));
-    return { ok: true };
   }
 
   // --- subscriptions ---------------------------------------------------------

@@ -57,7 +57,10 @@ export class PluginHost {
       destroyFrame: (frame) => this.frames.destroy(frame),
       // Dispatched, not called: opening a file from a docked plugin frame is the same
       // intent as opening one from the drive, and the engine should see both.
-      openFile: (node, openerId) => this.platform.dispatch?.(new OpenInPanelAction(node, openerId)),
+      // Not `dispatch?.()`. An unwired seam here silently drops a docked frame's
+      // open-file, which is exactly the shape server/src/index.js records as having turned
+      // a sweep into a permanent no-op.
+      openFile: (node, openerId) => this.platform.dispatch(new OpenInPanelAction(node, openerId)),
       onChange: () => this.#emit(),
     });
     this.frames = new FrameManager({ media: this.media, dock: this.dock });
