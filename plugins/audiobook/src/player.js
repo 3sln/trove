@@ -50,7 +50,12 @@ activate(async (ctx) => {
       book = await openBook(ctx, file);
       // The cover, resolved once here rather than in two render paths. It costs one
       // ranged read of bytes already described by the index — no audio is touched.
-      book.coverUrl = await loadCover(ctx, file, book.cover);
+      // Two forms of the same picture: an object URL for the <img> in this frame, and a
+      // data: URL for the media session, which the HOST sets and which cannot load this
+      // frame's opaque-origin blobs. See loadCover.
+      const art = await loadCover(ctx, file, book.cover);
+      book.coverUrl = art?.url || null;
+      book.coverArtwork = art?.artwork || null;
     } catch (err) {
       root.innerHTML = '';
       root.appendChild(el('div', 'ab-error', err?.message || 'This book could not be opened.'));
@@ -457,7 +462,7 @@ async function wireOs(ctx, transport, book, skip, jump, src, stream) {
     album: book.series || (book.chapters.length > 1 ? `${book.chapters.length} chapters` : ''),
     // The lock screen draws this. It is the same object URL the panel shows, so the OS
     // and the app agree about what the book looks like.
-    artwork: book.coverUrl ? [{ src: book.coverUrl }] : undefined,
+    artwork: book.coverArtwork ? [{ src: book.coverArtwork }] : undefined,
   }).catch(() => {});
 
   const handlers = {

@@ -363,7 +363,20 @@ export class PluginRpcRouter {
   /** blob:/data: carry their own bytes; anything else must be a declared endpoint. */
   #artworkAllowed(record, src) {
     if (!src) return false;
-    if (/^(blob:|data:image\/)/i.test(src)) return true;
+    if (/^data:image\//i.test(src)) return true;
+    // A `blob:` URL from a plugin frame is ALWAYS unusable here, and accepting one was
+    // worse than refusing it: the frame runs on an opaque origin, so its object URLs are
+    // `blob:null/…`, and this page cannot load another origin's blob. The browser says
+    // "Not allowed to load local resource" against the HOST document — a message that
+    // names neither the plugin nor the artwork, for a lock-screen image that simply never
+    // appeared.
+    //
+    // There is no version of this that works: a frame cannot mint a URL in this origin.
+    // Artwork has to arrive as bytes, which `data:image/…` above is.
+    if (/^blob:/i.test(src)) {
+      console.warn(`[trove] ${record.id}: media artwork must be a data: URL — a blob: from a sandboxed frame is opaque-origin and cannot be loaded here`);
+      return false;
+    }
     return isAllowedUrl(networkEndpoints(record.manifest), src);
   }
 
