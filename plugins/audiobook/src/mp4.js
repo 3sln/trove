@@ -137,7 +137,23 @@ export async function findMoov(read, total, { window = 64 * 1024 } = {}) {
   return { found: false };
 }
 
-/** Depth-first search for the first box of `path` (e.g. ['moov','udta','chpl']). */
+/**
+ * The PAYLOAD of the `moov` box, given the box as `findMoov` describes it.
+ *
+ * Everything below takes `moov` as READ — header and all — because that is what a caller
+ * holds after `read(probe.offset, probe.offset + probe.size)`. The convention used to be
+ * unwritten, the unit tests happened to strip the header themselves, and the only
+ * production caller did not: so `findBox` walked a buffer whose single top-level box was
+ * `moov`, matched nothing, and every function here returned null on every real file while
+ * twelve tests passed. Accepting either form is the point — the strict version's failure
+ * mode is exactly the silence that hid this.
+ */
+function contents(moov) {
+  const h = readHeader(moov, 0);
+  return h && h.type === 'moov' ? moov.subarray(h.header) : moov;
+}
+
+/** Depth-first search for the first box of `path` (e.g. ['udta','chpl']). */
 export function findBox(bytes, path, { at = 0, end = bytes.length } = {}) {
   if (!path.length) return { offset: at, end };
   const [want, ...rest] = path;
@@ -162,7 +178,8 @@ export function findBox(bytes, path, { at = 0, end = bytes.length } = {}) {
  * Without it a chapter list is a list of numbers with no unit. 600 and 1000 are both
  * common and they differ by a factor of 1.67, so guessing is not an option.
  */
-export function movieTimescale(moov) {
+export function movieTimescale(box) {
+  const moov = contents(box);
   const mvhd = findBox(moov, ['mvhd']);
   if (!mvhd) return null;
   const version = moov[mvhd.offset];
@@ -181,7 +198,8 @@ export function movieTimescale(moov) {
  *
  * @returns {Array<{time: number, title: string}>|null} times in SECONDS
  */
-export function chaptersFromChpl(moov) {
+export function chaptersFromChpl(box) {
+  const moov = contents(box);
   const chpl = findBox(moov, ['udta', 'chpl']);
   if (!chpl) return null;
   let at = chpl.offset + 4; // version + flags
@@ -214,69 +232,136 @@ export function chaptersFromChpl(moov) {
  *
  * @returns {Array<{time: number, offset: number, length: number}>|null}
  */
-export function chapterTrack(moov) {
+export function chapterTrack(box) {
+  const moov = contents(box);
+  const traks = [];
   let cursor = 0;
   while (cursor + HEADER <= moov.length) {
     const h = readHeader(moov, cursor);
     if (!h || !plausibleType(h.type)) break;
     const size = h.toEnd ? moov.length - cursor : h.size;
-    if (h.type === 'trak') {
-      const track = { at: cursor + h.header, end: cursor + size };
-      const hdlr = findBox(moov, ['mdia', 'hdlr'], track);
-      // The handler type sits 8 bytes in: version/flags, then a 4-byte predefined field.
-      if (hdlr && type(moov, hdlr.offset + 8) === 'text') {
-        const times = sampleTimes(moov, track);
-        if (times) return times;
-      }
-    }
+    if (h.type === 'trak') traks.push({ at: cursor + h.header, end: cursor + size });
     if (size <= 0) break;
     cursor += size;
+  }
+
+  // The SPEC route: the audio track points at its chapter track by id, through
+  // `tref/chap`. Preferred over sniffing handlers because a file can carry more than one
+  // text track — subtitles are one too — and only the referenced one is the chapters.
+  const referenced = chapterTrackId(moov, traks);
+  if (referenced != null) {
+    const found = traks.find((t) => trackId(moov, t) === referenced);
+    const times = found && sampleTimes(moov, found);
+    if (times) return times;
+  }
+
+  // No `tref`, or it named a track that is not here. Fall back to the first text-handler
+  // track, which is what a file written by a simpler muxer looks like.
+  for (const trak of traks) {
+    const hdlr = findBox(moov, ['mdia', 'hdlr'], trak);
+    // The handler type sits 8 bytes in: version/flags, then a 4-byte predefined field.
+    if (hdlr && type(moov, hdlr.offset + 8) === 'text') {
+      const times = sampleTimes(moov, trak);
+      if (times) return times;
+    }
   }
   return null;
 }
 
-/** `stts` + `stsz` + `stco` for one track, as `{time, offset, length}` per sample. */
+/** The track id `tref/chap` names, from whichever track carries one. */
+function chapterTrackId(moov, traks) {
+  for (const trak of traks) {
+    const chap = findBox(moov, ['tref', 'chap'], trak);
+    // `chap` is a list of track ids; a book names one. More than one is legal and the
+    // first is the one a player shows.
+    if (chap && chap.offset + 4 <= chap.end) return u32(moov, chap.offset);
+  }
+  return null;
+}
+
+/** A track's own id, from `tkhd`. */
+function trackId(moov, trak) {
+  const tkhd = findBox(moov, ['tkhd'], trak);
+  if (!tkhd) return null;
+  const version = moov[tkhd.offset];
+  // version/flags, then creation and modification times — 32-bit each in v0, 64 in v1.
+  return u32(moov, tkhd.offset + 4 + (version === 1 ? 16 : 8));
+}
+
+/**
+ * Every sample of one track as `{time, offset, length}`.
+ *
+ * The offsets are the fiddly half, and getting them wrong is silent. A chunk holds one or
+ * more samples, `stsc` says how many, and `stco`/`co64` say where each chunk starts — so a
+ * sample's offset is its chunk's offset plus the sizes of the samples before it IN THAT
+ * CHUNK. This used to assume one sample per chunk and read `stco` directly, which is true
+ * of the book that prompted the fix and false in general: pack a book's sixty-four titles
+ * into one chunk — the obvious thing for a muxer to do with sixty-four tiny text samples —
+ * and it reported exactly one chapter.
+ */
 function sampleTimes(moov, track) {
   const mdhd = findBox(moov, ['mdia', 'mdhd'], track);
   const stts = findBox(moov, ['mdia', 'minf', 'stbl', 'stts'], track);
   const stsz = findBox(moov, ['mdia', 'minf', 'stbl', 'stsz'], track);
+  const stsc = findBox(moov, ['mdia', 'minf', 'stbl', 'stsc'], track);
+  // `co64` is the 64-bit form, and a book over 4 GB has one instead of `stco` — which for
+  // audiobooks is not exotic.
   const stco = findBox(moov, ['mdia', 'minf', 'stbl', 'stco'], track);
-  if (!mdhd || !stts || !stsz || !stco) return null;
+  const co64 = findBox(moov, ['mdia', 'minf', 'stbl', 'co64'], track);
+  if (!mdhd || !stts || !stsz || !(stco || co64)) return null;
 
   const version = moov[mdhd.offset];
   const timescale = u32(moov, mdhd.offset + 4 + (version === 1 ? 16 : 8));
   if (!timescale) return null;
 
-  // stts is run-length encoded: (count, delta) pairs.
-  const runs = u32(moov, stts.offset + 4);
+  // stts is run-length encoded: (count, delta) pairs, in the track's own timescale.
   const starts = [];
   let t = 0;
+  const runs = u32(moov, stts.offset + 4);
   for (let i = 0; i < runs; i++) {
     const at = stts.offset + 8 + i * 8;
     if (at + 8 > stts.end) break;
     const n = u32(moov, at);
     const delta = u32(moov, at + 4);
-    for (let k = 0; k < n; k++) { starts.push(t / timescale); t += delta; }
+    for (let k = 0; k < n && starts.length < 100_000; k++) { starts.push(t / timescale); t += delta; }
   }
 
   // A single `sampleSize` for every sample, or a per-sample table when it is zero.
   const fixed = u32(moov, stsz.offset + 4);
   const count = u32(moov, stsz.offset + 8);
   const sizes = [];
-  for (let i = 0; i < count; i++) {
-    sizes.push(fixed || u32(moov, stsz.offset + 12 + i * 4));
-  }
-  // One chunk per sample is the shape every chapter track uses, which is what lets an
-  // offset come straight from `stco` without walking `stsc`.
-  const chunks = u32(moov, stco.offset + 4);
-  const offsets = [];
-  for (let i = 0; i < chunks; i++) offsets.push(u32(moov, stco.offset + 8 + i * 4));
+  for (let i = 0; i < count; i++) sizes.push(fixed || u32(moov, stsz.offset + 12 + i * 4));
 
-  const n = Math.min(starts.length, sizes.length, offsets.length);
-  if (!n) return null;
+  const chunkCount = u32(moov, (co64 || stco).offset + 4);
+  const chunkOffset = (i) => (co64
+    ? u64(moov, co64.offset + 8 + i * 8)
+    : u32(moov, stco.offset + 8 + i * 4));
+
+  // (firstChunk, samplesPerChunk, descriptionIndex), run-length: an entry applies until
+  // the next entry's firstChunk. Absent means one per chunk, which is the safe reading.
+  const runsSc = stsc ? u32(moov, stsc.offset + 4) : 0;
+  const perChunk = (chunkIndex) => {
+    let n = 1;
+    for (let i = 0; i < runsSc; i++) {
+      const at = stsc.offset + 8 + i * 12;
+      if (at + 12 > stsc.end) break;
+      if (u32(moov, at) - 1 > chunkIndex) break;
+      n = u32(moov, at + 4);
+    }
+    return Math.max(1, n);
+  };
+
   const out = [];
-  for (let i = 0; i < n; i++) out.push({ time: starts[i], offset: offsets[i], length: sizes[i] });
-  return out;
+  let sample = 0;
+  for (let c = 0; c < chunkCount && sample < sizes.length; c++) {
+    let at = chunkOffset(c);
+    for (let k = 0; k < perChunk(c) && sample < sizes.length; k++) {
+      if (sample < starts.length) out.push({ time: starts[sample], offset: at, length: sizes[sample] });
+      at += sizes[sample];
+      sample++;
+    }
+  }
+  return out.length ? out : null;
 }
 
 /**
@@ -292,7 +377,8 @@ export function chapterTitle(bytes) {
 }
 
 /** The book's total duration in seconds, from `moov/mvhd`. */
-export function movieDuration(moov) {
+export function movieDuration(box) {
+  const moov = contents(box);
   const mvhd = findBox(moov, ['mvhd']);
   if (!mvhd) return null;
   const version = moov[mvhd.offset];
@@ -310,23 +396,24 @@ export function movieDuration(moov) {
  * with a copyright sign in the QuickTime convention, which is why they are matched by byte
  * rather than by an ASCII string.
  */
-export function metadataFrom(moov) {
+export function metadataFrom(box) {
+  const moov = contents(box);
   const ilst = findBox(moov, ['udta', 'meta', 'ilst']);
   // `meta` is a full box — version/flags before its children — so a direct descent lands
   // four bytes early. Retry from there rather than giving up.
-  const box = ilst || (() => {
+  const list = ilst || (() => {
     const meta = findBox(moov, ['udta', 'meta']);
     return meta ? findBox(moov, ['ilst'], { at: meta.offset + 4, end: meta.end }) : null;
   })();
-  if (!box) return {};
+  if (!list) return {};
 
   const WANT = { '\xa9nam': 'title', '\xa9ART': 'author', '\xa9alb': 'album', 'aART': 'author', '\xa9gen': 'genre' };
   const out = {};
-  let at = box.offset;
-  while (at + HEADER <= box.end) {
+  let at = list.offset;
+  while (at + HEADER <= list.end) {
     const h = readHeader(moov, at);
     if (!h) break;
-    const size = h.toEnd ? box.end - at : h.size;
+    const size = h.toEnd ? list.end - at : h.size;
     const field = WANT[h.type];
     if (field && !out[field]) {
       // Each item holds a `data` box: version/flags, then 4 reserved bytes, then the value.

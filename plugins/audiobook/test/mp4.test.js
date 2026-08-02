@@ -4,11 +4,17 @@
 // failures worth catching are the ENCODINGS: a 64-bit size, a to-EOF size, an index at the
 // end of the file rather than the front. A single real m4b exercises one of those and hides
 // the other two.
+//
+// What a constructed file cannot catch is a mismatch between the fixture's CONVENTION and
+// the caller's, and that is what happened: these tests passed `moov`'s payload while the
+// player passed the box as read, header and all, so every lookup returned null on every
+// real file and twelve green tests said otherwise. They pass the box now, exactly as
+// `read(probe.offset, probe.offset + probe.size)` hands it over.
 
 import { test, expect } from 'bun:test';
 import {
   readHeader, topLevelBoxes, findMoov, findBox, movieTimescale, movieDuration,
-  chaptersFromChpl, chapterTitle, metadataFrom,
+  chaptersFromChpl, chapterTrack, chapterTitle, metadataFrom,
 } from '../src/mp4.js';
 
 const enc = new TextEncoder();
@@ -115,7 +121,7 @@ test('something that is not an MP4 is refused before the walk', async () => {
 test('the timescale and duration come out of mvhd, in seconds', () => {
   // v0 mvhd: version/flags, created, modified, timescale, duration.
   const mvhd = box('mvhd', [...u32(0), ...u32(0), ...u32(0), ...u32(1000), ...u32(90_000)]);
-  const moov = box('moov', mvhd).subarray(8);
+  const moov = box('moov', mvhd);
   expect(movieTimescale(moov)).toBe(1000);
   expect(movieDuration(moov)).toBe(90);
 });
@@ -129,7 +135,7 @@ test('chpl chapters are read in 100-nanosecond units, not the movie timescale', 
     ...u64(0), ...title('One'),
     ...u64(600 * 10_000_000), ...title('Two'),
   ]);
-  const moov = box('moov', box('udta', chpl)).subarray(8);
+  const moov = box('moov', box('udta', chpl));
   expect(chaptersFromChpl(moov)).toEqual([
     { time: 0, title: 'One' },
     { time: 600, title: 'Two' },
@@ -150,7 +156,7 @@ test('title and author come out of ilst, through the full-box meta', () => {
   // `meta` is a FULL box — version and flags before its children — so a naive descent
   // lands four bytes early and finds nothing.
   const meta = box('meta', join(Uint8Array.from(u32(0)), ilst));
-  const moov = box('moov', box('udta', meta)).subarray(8);
+  const moov = box('moov', box('udta', meta));
   expect(metadataFrom(moov)).toMatchObject({ title: 'A Long Book', author: 'Someone' });
 });
 
@@ -159,4 +165,76 @@ test('findBox descends, and topLevelBoxes walks', () => {
   expect(topLevelBoxes(file).map((b) => b.type)).toEqual(['ftyp', 'moov', 'mdat']);
   expect(findBox(file, ['moov', 'udta', 'chpl'])).toBeTruthy();
   expect(findBox(file, ['moov', 'udta', 'nope'])).toBe(null);
+});
+
+// --- the chapter track ---------------------------------------------------------
+//
+// The path a real Audible-derived book actually uses. `All the Skills` (193 MB, 64
+// chapters) has no `chpl` at all: chapters are a text track, referenced from the audio
+// track by `tref/chap`, with the titles as length-prefixed samples at the front of `mdat`.
+// Every case below is one thing that book taught, or one thing it would have hidden.
+
+/** A minimal text track: `n` chapter samples, packed `perChunk` to a chunk. */
+function chapterTrackBox({ id = 2, n = 3, perChunk = 1, timescale = 1000, delta = 10_000, wide = false } = {}) {
+  const sizes = Array.from({ length: n }, (_, i) => 10 + i);
+  const chunks = Math.ceil(n / perChunk);
+  const offsets = Array.from({ length: chunks }, (_, c) => 1000 + c * 100);
+  const tkhd = box('tkhd', [...u32(0), ...u32(0), ...u32(0), ...u32(id)]);
+  const mdhd = box('mdhd', [...u32(0), ...u32(0), ...u32(0), ...u32(timescale), ...u32(n * delta)]);
+  const hdlr = box('hdlr', [...u32(0), ...u32(0), ...type4('text'), ...u32(0), ...u32(0), ...u32(0)]);
+  const stts = box('stts', [...u32(0), ...u32(1), ...u32(n), ...u32(delta)]);
+  const stsc = box('stsc', [...u32(0), ...u32(1), ...u32(1), ...u32(perChunk), ...u32(1)]);
+  const stsz = box('stsz', [...u32(0), ...u32(0), ...u32(n), ...sizes.flatMap(u32)]);
+  const table = wide
+    ? box('co64', [...u32(0), ...u32(chunks), ...offsets.flatMap(u64)])
+    : box('stco', [...u32(0), ...u32(chunks), ...offsets.flatMap(u32)]);
+  const stbl = box('stbl', join(stts, stsc, stsz, table));
+  return box('trak', join(tkhd, box('mdia', join(mdhd, hdlr, box('minf', stbl)))));
+}
+
+/** An audio track that points at `chapterId` through `tref/chap`. */
+function audioTrackBox(id, chapterId) {
+  const tkhd = box('tkhd', [...u32(0), ...u32(0), ...u32(0), ...u32(id)]);
+  const tref = box('tref', box('chap', u32(chapterId)));
+  const hdlr = box('hdlr', [...u32(0), ...u32(0), ...type4('soun'), ...u32(0), ...u32(0), ...u32(0)]);
+  return box('trak', join(tkhd, tref, box('mdia', hdlr)));
+}
+
+test('chapter samples packed into ONE chunk are all found', () => {
+  // The bug the real book would have exposed and a fixture did not: `stsc` was ignored and
+  // offsets came straight from `stco`, so N samples sharing a chunk reported ONE chapter.
+  // Sixty-four tiny text samples in one chunk is the obvious thing for a muxer to do.
+  const moov = box('moov', chapterTrackBox({ n: 5, perChunk: 5 }));
+  const got = chapterTrack(moov);
+  expect(got.length).toBe(5);
+  // And each sample sits after the ones before it IN its chunk, not at the chunk's start.
+  expect(got.map((s) => s.offset)).toEqual([1000, 1010, 1021, 1033, 1046]);
+  expect(got.map((s) => s.time)).toEqual([0, 10, 20, 30, 40]);
+});
+
+test('samples spread one per chunk still line up', () => {
+  const got = chapterTrack(box('moov', chapterTrackBox({ n: 3, perChunk: 1 })));
+  expect(got.map((s) => s.offset)).toEqual([1000, 1100, 1200]);
+});
+
+test('a book over 4 GB uses co64, and it is read', () => {
+  // Long audiobooks are exactly the files that cross 4 GB, so this is not an exotic case.
+  // Absent, the chapter track was not found at all and the book fell back to one chapter.
+  const got = chapterTrack(box('moov', chapterTrackBox({ n: 3, perChunk: 1, wide: true })));
+  expect(got.length).toBe(3);
+  expect(got[0].offset).toBe(1000);
+});
+
+test('the chapter track is the one tref/chap names, not merely the first text track', () => {
+  // A file can carry more than one text track — subtitles are one — and only the
+  // referenced one is the chapters. This is the route ffmpeg takes.
+  const subtitles = chapterTrackBox({ id: 2, n: 2, delta: 5000 });
+  const chapters = chapterTrackBox({ id: 3, n: 4, delta: 20_000 });
+  const moov = box('moov', join(audioTrackBox(1, 3), subtitles, chapters));
+  expect(chapterTrack(moov).length).toBe(4);
+});
+
+test('with no tref, the first text track is the honest guess', () => {
+  const moov = box('moov', join(audioTrackBox(1, 0), chapterTrackBox({ id: 2, n: 2 })));
+  expect(chapterTrack(moov).length).toBe(2);
 });
