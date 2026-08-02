@@ -15,7 +15,7 @@
 //   [[durable_objects.bindings]] name = "TASKS" class_name = "TroveTasks"
 //                                            -> owns scans and reindexes (see below)
 
-import { D1SqliteProvider } from '@3sln/trove/core';
+import { D1SqliteProvider, DurableObjectSqliteProvider, createPluginStore } from '@3sln/trove/core';
 import { createServer, configFromEnv } from '../index.js';
 import { createTaskHost, remoteBackground } from './worker-tasks.js';
 
@@ -42,14 +42,24 @@ async function getServer(env, buildVfs, { delegate = true } = {}) {
   // Worker falls back to in-memory everything, which looks like it works right up until
   // the isolate is recycled and the drive is empty. Bind `DB` and it persists.
   if (env.DB && !config.sqlite) {
-    config.sqlite = new D1SqliteProvider({
+    const d1 = new D1SqliteProvider({
       db: env.DB,
-      // Plugin storage. `scopes: { plugins: … }` named a key that is already a CORE key
-      // (the install-record store), so the binding was silently ignored and every
-      // /api/plugins/:id/sql call was a 501 — the real keys look like
-      // `pstore:<user>:plg:<pluginId>` and cannot be pre-bound at all.
+      // Plugin storage of last resort. `scopes: { plugins: … }` named a key that is
+      // already a CORE key (the install-record store), so the binding was silently
+      // ignored and every /api/plugins/:id/sql call was a 501 — the real keys look like
+      // `pstore:<user>:plg:<pluginId>` and cannot be pre-bound at all. One binding then
+      // holds every plugin's tables side by side, which is a compromise, not a design.
       pluginStore: env.PLUGIN_DB || null,
     });
+    // A DURABLE OBJECT PER SCOPE where one is available, which is what plugin storage
+    // actually wants: a DO is addressable by name, so each (user, plugin) is its own
+    // object with its own SQLite database, created on demand. That is the primitive D1
+    // does not have. Core stores — metadata, kv, installs, search — stay on D1: routing
+    // the whole drive through one single-threaded object would be a bottleneck, and they
+    // are one-per-deployment so they can simply be bound.
+    config.sqlite = env.PLUGIN_STORE
+      ? new DurableObjectSqliteProvider({ namespace: env.PLUGIN_STORE, core: d1 })
+      : d1;
     config.metadata = { driver: 'sqlite' };
   }
   // Cloudflare Vectorize binding → first-class vector store (no REST creds needed).
@@ -161,5 +171,14 @@ export default {
  *   new_sqlite_classes = ["TroveTasks"]
  */
 export const TroveTasks = createTaskHost((env) => getServer(env, undefined, { delegate: false }));
+
+/**
+ * One SQLite database per plugin scope, addressed by name.
+ *
+ * Export it alongside TroveTasks and declare it in wrangler.toml with a
+ * `new_sqlite_classes` migration; `PLUGIN_STORE` is then picked up above. Without the
+ * binding a drive falls back to the shared D1 store, which still works and isolates less.
+ */
+export const TrovePluginStore = createPluginStore();
 
 export { getServer };

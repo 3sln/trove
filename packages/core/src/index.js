@@ -82,6 +82,9 @@ export {
 export { SqliteDatabase, SqliteProvider, LocalSqliteProvider, assertSafePluginSql, stripSqlLiterals } from './sqlite.js';
 // SQLite on Cloudflare D1, so a Worker deployment has a metadata store that exists.
 export { D1SqliteProvider } from './sqlite-d1.js';
+// A Durable Object per plugin scope — what D1 cannot do, because a scope key embeds the
+// runtime principal and D1 cannot create a database on demand. See sqlite-do.js.
+export { DurableObjectSqliteProvider, createPluginStore, isPluginScope } from './sqlite-do.js';
 
 // Identity (BYO IdP — Cloudflare Access / Zero Trust / a proxy).
 export {

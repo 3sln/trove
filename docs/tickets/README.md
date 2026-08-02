@@ -7,21 +7,11 @@ One file per ticket, `NNN-short-name.md`. Numbers are allocated in order and not
 A ticket that is done is deleted in the commit that finishes it — git remembers, and a
 directory of closed tickets is a directory nobody reads.
 
-**Open: 027, 028, 031, 032** — "Select this item" and a bulk mode; LPF books getting three
-metadata fields where an m4b gets thirteen; a 520 MB book that opens onto a static
-"Reading the book's structure…" with no spinner and a blocked main thread; and whether
-uninstalling a plugin clears a default opener pointing at it.
-
-**Open: 026** — plugin storage on Workers must be a Durable Object, not a shared D1
-database. `D1SqliteProvider` cannot create a database on demand, so every plugin scope for
-every user lives side by side in one binding; the code says so itself and keeps it only
-because it is the strongest thing D1 allows.
-
-024 was the view switcher appearing where switching is not a choice.
-025 was the audiobook player: play did nothing (the sandbox CSP forbids loading media from
-a URL, by design), no cover art, no rate control, a layout written only for the docked
-case, and recent tiles that never drew a thumbnail. Closed by transmuxing to fragmented
-MP4 in the frame and feeding a MediaSource.
+**Nothing open.** 026–032 came out of one run of the drive on real files: plugin storage
+that shared one D1 binding across every user and plugin, a selection nobody could build,
+LPF books indexed to a third of an m4b, a transfers panel that could not be dismissed,
+grid tiles showing filenames over titles, a 500 MB book that opened onto a silent stall,
+and a check that uninstalling a plugin does not strand its default opener.
 
 023 was three defects found by opening one audiobook on a real drive:
 a plugin viewer that had never run (an undeclared capability), plugin indexers that could

@@ -356,6 +356,44 @@ create databases on demand and a scope key contains the user's id, so per-scope
 databases are not expressible here. Their tables sit side by side, which is weaker
 isolation than the file-per-scope a self-hosted run gets.
 
+#### Plugin storage
+
+A plugin with the `storage` capability gets an isolated SQLite database per scope — its
+own, and optionally one shared with the rest of its vendor's plugins. The scope key
+embeds the user *and* the plugin (`pstore:<principal>:plg:<pluginId>`), so it can never be
+pre-bound: **D1 cannot create a database on demand.**
+
+So a Worker deployment has two options, and they are not equivalent.
+
+**A Durable Object per scope** — bind `PLUGIN_STORE` to the `TrovePluginStore` class. A
+Durable Object is addressable by name, so each `(user, plugin)` becomes its own object with
+its own SQLite database, created on first use. The isolation is structural.
+
+```toml
+[[durable_objects.bindings]]
+name = "PLUGIN_STORE"
+class_name = "TrovePluginStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TroveTasks", "TrovePluginStore"]
+```
+
+and export it beside the fetch handler:
+
+```js
+export { default, TroveTasks, TrovePluginStore } from '@3sln/trove/server/adapters/worker.js';
+```
+
+**One shared D1** — bind `PLUGIN_DB` and every plugin's tables for every user live in it
+side by side. The keys stay distinct; the boundary is a naming convention rather than a
+wall. It works, and it is what you get without the Durable Object, and it is worth knowing
+which of the two you have.
+
+Core stores — metadata, KV, install records, the keyword index — stay on D1 either way.
+They are one per deployment, so they can simply be bound, and routing the whole drive
+through one single-threaded object would be a bottleneck rather than an isolation win.
+
 #### Work that outlives a request
 
 A Worker isolate is not a server: it may be discarded as soon as the response resolves,

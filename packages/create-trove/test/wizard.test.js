@@ -123,7 +123,7 @@ test('a workers project binds what it was told to bind', async () => {
   expect(toml).toContain('index_name = "trove"');
   expect(toml).toContain('[ai]');
   expect(toml).toContain('class_name = "TroveTasks"');
-  expect(toml).toContain('new_sqlite_classes = ["TroveTasks"]');
+  expect(toml).toContain('new_sqlite_classes = ["TroveTasks", "TrovePluginStore"]');
 
   // The built app is served out of the installed package — the reason there is no build
   // step in a scaffolded project at all.
@@ -131,7 +131,7 @@ test('a workers project binds what it was told to bind', async () => {
 
   // Both exports, or the DO class does not resolve and the deploy fails.
   expect(fileNamed(files, 'src/worker.js').contents)
-    .toContain("export { default, TroveTasks } from '@3sln/trove/server/adapters/worker.js'");
+    .toContain("export { default, TroveTasks, TrovePluginStore } from '@3sln/trove/server/adapters/worker.js'");
 });
 
 test('credentials never reach wrangler.toml', async () => {
@@ -438,4 +438,22 @@ test('the Worker Loader binding is rendered when asked for, and explained when n
   expect(toml).toContain('# [[worker_loaders]]');
   // Names the consequence, not just the feature.
   expect(toml).toMatch(/indexers are skipped/);
+});
+
+test('a plugin store Durable Object is bound, exported and migrated', async () => {
+  // Plugin storage on Workers needs a database per (user, plugin), created on demand.
+  // D1 cannot do that — a scope key embeds the runtime principal, so it can never be
+  // pre-bound — and the fallback is one shared binding holding every plugin's tables side
+  // by side. A Durable Object is addressable by name, which is the missing primitive.
+  const { files } = await plan([...WORKERS_SCRIPT, ['Bind a Worker Loader', true]], 'workers');
+  const toml = fileNamed(files, 'wrangler.toml').contents;
+  expect(toml).toContain('name = "PLUGIN_STORE"');
+  expect(toml).toContain('class_name = "TrovePluginStore"');
+  // A DO class must be BOTH declared and exported, or the binding fails to resolve at
+  // deploy time — and the failure names neither the class nor the binding.
+  expect(fileNamed(files, 'src/worker.js').contents)
+    .toContain('export { default, TroveTasks, TrovePluginStore }');
+  // Migrated with TroveTasks rather than in a second migration: both classes are new in
+  // the same generated project, and a second tag would be a migration with nothing to do.
+  expect(toml).toContain('new_sqlite_classes = ["TroveTasks", "TrovePluginStore"]');
 });

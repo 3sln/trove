@@ -184,11 +184,15 @@ function renderWorkers(plan, files, steps, secrets) {
     path: 'src/worker.js',
     contents: `// The Worker entry.
 //
+// Three exports matter: the default is the fetch handler, TroveTasks owns scans and
+// reindexes, and TrovePluginStore gives each plugin scope its own SQLite database. Each
+// Durable Object class must be exported HERE and declared in wrangler.toml, or the
+// binding fails to resolve at deploy time.
 // Both exports matter: the default export is the fetch handler, and TroveTasks is the
 // Durable Object class that owns scans and reindexes. Wrangler looks the DO class up by
 // name in this module, so re-exporting it here is what makes the binding resolve —
 // declaring it in wrangler.toml without this is a deploy-time error.
-export { default, TroveTasks } from '@3sln/trove/server/adapters/worker.js';
+export { default, TroveTasks, TrovePluginStore } from '@3sln/trove/server/adapters/worker.js';
 `,
   });
 
@@ -493,17 +497,30 @@ function wranglerToml(plan) {
     L.push('name = "TASKS"');
     L.push('class_name = "TroveTasks"');
     L.push('');
+    // One SQLite database per plugin scope, addressed by name. This is what makes plugin
+    // storage isolated on Workers: a scope key embeds the user and the plugin, so it can
+    // never be pre-bound, and D1 cannot create a database on demand. Without this a drive
+    // falls back to one shared D1 table holding every plugin's data side by side.
+    L.push('# One SQLite database per plugin scope. Without it every plugin\'s data shares');
+    L.push('# a single D1 binding — see "Plugin storage" in the README.');
+    L.push('[[durable_objects.bindings]]');
+    L.push('name = "PLUGIN_STORE"');
+    L.push('class_name = "TrovePluginStore"');
+    L.push('');
     L.push('[[migrations]]');
     L.push('tag = "v1"');
-    L.push('new_sqlite_classes = ["TroveTasks"]');
+    L.push('new_sqlite_classes = ["TroveTasks", "TrovePluginStore"]');
     L.push('');
   } else {
     L.push('# [[durable_objects.bindings]]   # optional: owns scans and reindexes');
     L.push('# name = "TASKS"');
     L.push('# class_name = "TroveTasks"');
+    L.push('# [[durable_objects.bindings]]   # one SQLite database per plugin scope');
+    L.push('# name = "PLUGIN_STORE"');
+    L.push('# class_name = "TrovePluginStore"');
     L.push('# [[migrations]]');
     L.push('# tag = "v1"');
-    L.push('# new_sqlite_classes = ["TroveTasks"]');
+    L.push('# new_sqlite_classes = ["TroveTasks", "TrovePluginStore"]');
     L.push('');
   }
 

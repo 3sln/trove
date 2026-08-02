@@ -144,6 +144,12 @@ export class D1SqliteProvider extends SqliteProvider {
     // the local provider's file-per-scope — the tables live side by side — but the keys
     // are still distinct per (user, plugin) and it is the strongest thing D1's model
     // allows. Stated here rather than discovered.
+    // ONE BINDING FOR EVERY PLUGIN SCOPE, and it is a compromise rather than a design.
+    // The tables live side by side: distinct names per (user, plugin), no boundary
+    // between them. `DurableObjectSqliteProvider` is the one that gets this right — a DO
+    // is addressable by name, so each scope is its own object with its own database, and
+    // creating one on demand is the thing D1 cannot do. Prefer it where a Durable Object
+    // is available; this stays for deployments that have only D1.
     if (this.pluginStore) return this.pluginStore;
     // Plugin scopes are an isolation boundary. Handing back the main database would
     // put a plugin's tables next to the drive's metadata, which is precisely what the
