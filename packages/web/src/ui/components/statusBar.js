@@ -95,6 +95,8 @@ export default function statusBar(state, ui) {
   const { totalItems, totalBytes } = f;
   const caps = state.caps;
   const active = f.uploading;
+  const transfers = state.tr?.items || [];
+  const trayHidden = !!state.vs?.transfersDismissed;
 
   // Plugin-contributed status slots. Already filtered and ordered by the query.
   const slots = state.statusItems || [];
@@ -141,12 +143,24 @@ export default function statusBar(state, ui) {
           }));
         } else ui.engine.dispatch(new ExecCommandAction('workbench.view.home'));
       } }),
-    active.length
-      ? button({ className: 'seg', title: 'Active uploads — click to cancel' }, div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }), span(`${active.length} uploading`))
-        .on({ click: (e) => ui.engine.dispatch(new ShowContextMenuAction(active.map((t) => ({
-          label: `Cancel ${t.name} (${Math.round((t.ratio || 0) * 100)}%)`, icon: 'close', danger: true,
-          actions: [new CancelTransferAction(t.id)],
-        })), { x: e.clientX, y: e.clientY })) })
+    // The way back to the tray, and the signal that something is happening.
+    //
+    // Shown whenever there is anything to LOOK AT, not only while something is active: a
+    // failed upload from two minutes ago is the case where someone most wants the panel
+    // back, and it used to disappear the moment the transfer stopped.
+    //
+    // A click toggles the panel rather than opening a cancel menu. Cancelling one transfer
+    // is a thing to do in the panel, next to the transfer; the status bar's job is to say
+    // "there is transfer activity" and to be the handle for it.
+    transfers.length
+      ? button({
+        className: `seg ${trayHidden ? '' : 'on'}`,
+        title: trayHidden ? 'Show transfers' : 'Hide transfers',
+        'aria-pressed': trayHidden ? 'false' : 'true',
+      },
+      active.length ? div({ className: 'spinner', $styling: { width: '11px', height: '11px' } }) : icon('upload', { size: 12 }),
+      span(active.length ? `${active.length} uploading` : `${transfers.length} transfer${transfers.length === 1 ? '' : 's'}`))
+        .on({ click: () => ui.engine.dispatch(new ExecCommandAction('workbench.transfers.toggle')) })
       : span({ className: 'seg', title: ex.nextCursor ? `Showing ${items.length} of ${f.totalKnown ? totalItems : 'more'}` : '' },
         `${totalItems.toLocaleString()}${f.totalKnown || !f.partial ? '' : '+'} item${totalItems === 1 ? '' : 's'}`),
     ...left,

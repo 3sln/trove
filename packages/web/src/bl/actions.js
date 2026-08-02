@@ -1187,6 +1187,24 @@ function selectNode(explorer, node) {
  * render to install a default. The default is derived now (see `draftFor`), so this only
  * ever runs because a person did something.
  */
+/**
+ * Show or hide the transfer tray.
+ *
+ * A toggle rather than two commands because that is what the status-bar handle and a
+ * keybinding both want, and because "show" on an already-open tray should be a no-op
+ * rather than an error.
+ *
+ * Reads the current value to invert it, which is why this is its own action and not a
+ * `SetViewStateAction` at the call site: a caller that had to read state first would need
+ * the slice, and the status bar has it only by coincidence.
+ */
+export class ToggleTransferTrayAction extends Action {
+  static deps = ['viewState'];
+  async execute({ viewState }) {
+    viewState.set({ transfersDismissed: !viewState.get()?.transfersDismissed });
+  }
+}
+
 export class SetViewStateAction extends Action {
   static deps = ['viewState'];
   constructor(key, value) { super(); this.key = key; this.value = value; }

@@ -26,7 +26,7 @@ import {
   RebuildIndexAction, ScanCollectionAction, CheckStorageAction, ToggleActivityPanelAction,
   LoadApiKeysAction, RevokeApiKeyAction, MintApiKeyFromDraftAction,
   StartApiKeyDraftAction, CancelApiKeyDraftAction, ClearMintedApiKeyAction,
-  OpenPaletteAction, SetActivityAction, CloseOverlaysAction, ShowHomeAction,
+  OpenPaletteAction, SetActivityAction, CloseOverlaysAction, ShowHomeAction, ToggleTransferTrayAction,
   ShowDialogAction, SwitchCollectionAction, ToggleDetailsAction,
   ToggleInboxAction, EnablePushAction,
   InstallPluginFromUrlPromptAction, PickAndInstallPluginAction,
@@ -55,6 +55,8 @@ export function registerCommands(app) {
   cmd('workbench.view.admin', 'Show Administration', () => new SetActivityAction('admin'), { category: 'View', icon: 'gear' });
   cmd('workbench.openSettings', 'Open Settings', () => new SetActivityAction('settings'), { category: 'Preferences', icon: 'gear' });
   cmd('workbench.closeOverlays', 'Close', () => new CloseOverlaysAction(), { palette: false });
+  // Hiding the tray stops nothing — it is a view of the transfers, not the transfers.
+  cmd('workbench.transfers.toggle', 'Toggle Transfers Panel', () => new ToggleTransferTrayAction(), { category: 'View', icon: 'upload' });
   cmd('search.voice', 'Search by Voice', () => new VoiceSearchAction(), { category: 'View', icon: 'search' });
 
   // --- background work + standing problems -----------------------------------

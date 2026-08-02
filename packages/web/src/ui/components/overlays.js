@@ -372,7 +372,24 @@ export function toasts(state, ui) {
 // ---- Transfer tray ---------------------------------------------------------
 export function transferTray(state, ui) {
   const items = state.tr.items;
-  if (!items.length) return null;
+  if (!items.length) {
+    // The list is empty, so a dismissal from the last batch has served its purpose. Clear
+    // it here rather than leaving it set: otherwise the next upload — a fresh decision by
+    // the user, minutes or hours later — inherits a choice they made about transfers that
+    // no longer exist, and the tray silently never appears again.
+    if (state.vs?.transfersDismissed) ui.engine.dispatch(new SetViewStateAction('transfersDismissed', false));
+    return null;
+  }
+  // DISMISSABLE, running transfers or not. This is a view of the work, not the work:
+  // closing it cancels nothing, and it used to sit over the drive for the whole of a large
+  // upload — which is exactly when someone wants to keep using the drive. "Clear finished"
+  // was the only control and by definition cannot remove something still running.
+  //
+  // The dismissal is remembered until the transfer list empties (see `transfersDismissed`
+  // in viewState). A NEW transfer does not force it back open: undoing a choice someone
+  // just made is worse than being quiet, and the status bar still shows that something is
+  // happening and offers the way back in.
+  if (state.vs?.transfersDismissed) return null;
   return div({ className: 'tray' },
     div({ className: 'head' },
       icon('upload', { size: 14 }),
@@ -380,6 +397,8 @@ export function transferTray(state, ui) {
       div({ className: 'actions' },
         button({ className: 'iconbtn', title: 'Clear finished' }, icon('check', { size: 14 }))
           .on({ click: () => ui.engine.dispatch(new ClearFinishedTransfersAction()) }),
+        button({ className: 'iconbtn', title: 'Hide transfers (they keep going)' }, icon('close', { size: 14 }))
+          .on({ click: () => ui.engine.dispatch(new SetViewStateAction('transfersDismissed', true)) }),
       ),
     ),
     div({ className: 'items' },

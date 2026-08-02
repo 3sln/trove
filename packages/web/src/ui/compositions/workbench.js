@@ -125,6 +125,8 @@ export default function workbench({ engine, platform }) {
     // than by the status bar and imported from there by the phone chrome, which is what it
     // was — a business-layer derivation living in a component. See bl/status.js.
     facts: q.statusFacts,
+    // Whether the transfer tray is dismissed — the status bar is the way back to it.
+    vs: q.viewState,
   };
   // A query boots asynchronously — it awaits a container lease first — so a region is
   // PENDING for the first frame or two and `watch` renders its placeholder. For a bar with
@@ -137,7 +139,7 @@ export default function workbench({ engine, platform }) {
     // Both render nothing when there is nothing to show, so an absent first frame is what
     // they would have drawn anyway.
     phoneSheet: region(engine, chrome, (s) => phoneSheet(s, ui)),
-    transferTray: region(engine, { tr: q.transfers }, (s) => transferTray(s, ui)),
+    transferTray: region(engine, { tr: q.transfers, vs: q.viewState }, (s) => transferTray(s, ui)),
     // Both read one slice each, and both change often enough to matter: a toast arriving
     // or auto-dismissing used to rebuild the entire shell — including every row of the
     // file list — to add a line in the corner.
