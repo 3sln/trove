@@ -124,7 +124,9 @@ function render(ctx, root, book, src, skip) {
 
   kids(root, [
     el('div', 'ab-title', book.title),
-    book.author ? el('div', 'ab-author', book.author) : null,
+    book.author || book.narrator
+      ? el('div', 'ab-author', [book.author, book.narrator && `read by ${book.narrator}`].filter(Boolean).join(' · '))
+      : null,
     chapterLine,
     bar,
     times,

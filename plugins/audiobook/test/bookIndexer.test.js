@@ -8,7 +8,7 @@
 import { test, expect } from 'bun:test';
 import { zipSync, strToU8 } from 'fflate';
 import { centralDirectory, readEntry, locateEntry, entryFor } from '../src/zip.js';
-import { index } from '../src/coverIndexer.js';
+import { index } from '../src/bookIndexer.js';
 
 const JPEG = new Uint8Array([0xff, 0xd8, ...new Array(200).fill(7), 0xff, 0xd9]);
 
@@ -94,12 +94,16 @@ test('a stored cover is POINTED at; a deflated one is carried', async () => {
   expect(b.metadata.thumbnail.range).toBeUndefined();
 });
 
-test('a book with no cover contributes nothing rather than failing', async () => {
+test('a book with no cover contributes no thumbnail rather than failing', async () => {
   // An indexer that threw would mark the node failed and raise a standing issue about a
   // missing picture. A book without cover art is still a book.
   const bytes = zipSync({ 'publication.json': strToU8('{"name":"No art","readingOrder":[]}') });
   const node = { id: 'itm', name: 'book.lpf', contentType: 'application/lpf+zip', size: bytes.length };
-  expect(await index(node, { readRange: reader(bytes).read })).toEqual({});
+  const out = await index(node, { readRange: reader(bytes).read });
+  // Still a contribution — the title is worth having — but no thumbnail key, which is the
+  // one the grid keys off. A grid tile falls back to its icon rather than drawing nothing.
+  expect(out.metadata?.thumbnail).toBeUndefined();
+  expect(out.metadata?.book?.title).toBe('No art');
   // And so is something that is not an audiobook at all.
   const junk = new Uint8Array(1024);
   expect(await index({ id: 'x', name: 'x.m4b', size: junk.length }, { readRange: reader(junk).read })).toEqual({});

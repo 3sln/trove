@@ -14,7 +14,7 @@
 import { test, expect } from 'bun:test';
 import {
   readHeader, topLevelBoxes, findMoov, findBox, movieTimescale, movieDuration,
-  chaptersFromChpl, chapterTrack, chapterTitle, metadataFrom, coverFrom, plausibleType,
+  chaptersFromChpl, chaptersRanged, chapterTrack, chapterTitle, metadataFrom, coverFrom, plausibleType,
 } from '../src/mp4.js';
 
 const enc = new TextEncoder();
@@ -160,6 +160,43 @@ test('title and author come out of ilst, through the full-box meta', () => {
   expect(metadataFrom(moov)).toMatchObject({ title: 'A Long Book', author: 'Someone' });
 });
 
+test('the narrator is ©nrt, and ©wrt is not mistaken for the author', () => {
+  const item = (key, value) => box(key, box('data', [...u32(1), ...u32(0), ...enc.encode(value)]));
+  // What the real book carries: `©wrt` ("writer") holds the NARRATOR's name, not the
+  // author's — Audible's tagging, and taking the obvious field would credit the book to
+  // the person who read it.
+  const ilst = box('ilst', join(
+    item('\xa9nam', 'All the Skills'),
+    item('\xa9ART', 'Honour Rae'),
+    item('\xa9nrt', 'Luke Daniels'),
+    item('\xa9wrt', 'Luke Daniels'),
+  ));
+  const moov = box('moov', box('udta', box('meta', join(Uint8Array.from(u32(0)), ilst))));
+  const meta = metadataFrom(moov);
+  expect(meta).toMatchObject({ author: 'Honour Rae', narrator: 'Luke Daniels' });
+  expect(meta.author).not.toBe('Luke Daniels');
+});
+
+test('series and part come out of the ---- freeform atoms', () => {
+  // A freeform atom is three children: who defined it, what it is called, and the value.
+  // The NAME is what identifies it — the four-byte type is `----` for every one of them,
+  // so a reader that keys on the type alone sees one indistinguishable blob.
+  const freeform = (name, value) => box('----', join(
+    box('mean', [...u32(0), ...enc.encode('com.apple.iTunes')]),
+    box('name', [...u32(0), ...enc.encode(name)]),
+    box('data', [...u32(1), ...u32(0), ...enc.encode(value)]),
+  ));
+  const ilst = box('ilst', join(
+    freeform('SERIES', 'All the Skills'),
+    freeform('PART', '1'),
+    freeform('LANGUAGE', 'English'),
+  ));
+  const moov = box('moov', box('udta', box('meta', join(Uint8Array.from(u32(0)), ilst))));
+  // `part` comes back as a NUMBER: it is what orders a series on a shelf, and "10" sorts
+  // before "2" as a string.
+  expect(metadataFrom(moov)).toMatchObject({ series: 'All the Skills', part: 1, language: 'English' });
+});
+
 test('findBox descends, and topLevelBoxes walks', () => {
   const file = join(box('ftyp'), box('moov', box('udta', box('chpl'))), box('mdat'));
   expect(topLevelBoxes(file).map((b) => b.type)).toEqual(['ftyp', 'moov', 'mdat']);
@@ -175,10 +212,10 @@ test('findBox descends, and topLevelBoxes walks', () => {
 // Every case below is one thing that book taught, or one thing it would have hidden.
 
 /** A minimal text track: `n` chapter samples, packed `perChunk` to a chunk. */
-function chapterTrackBox({ id = 2, n = 3, perChunk = 1, timescale = 1000, delta = 10_000, wide = false } = {}) {
-  const sizes = Array.from({ length: n }, (_, i) => 10 + i);
+function chapterTrackBox({ id = 2, n = 3, perChunk = 1, timescale = 1000, delta = 10_000, wide = false,
+  sizes = Array.from({ length: n }, (_, i) => 10 + i), at = 1000, stride = 100 } = {}) {
   const chunks = Math.ceil(n / perChunk);
-  const offsets = Array.from({ length: chunks }, (_, c) => 1000 + c * 100);
+  const offsets = Array.from({ length: chunks }, (_, c) => at + c * stride);
   const tkhd = box('tkhd', [...u32(0), ...u32(0), ...u32(0), ...u32(id)]);
   const mdhd = box('mdhd', [...u32(0), ...u32(0), ...u32(0), ...u32(timescale), ...u32(n * delta)]);
   const hdlr = box('hdlr', [...u32(0), ...u32(0), ...type4('text'), ...u32(0), ...u32(0), ...u32(0)]);
@@ -276,4 +313,44 @@ test('a cover in a format we cannot name is left alone', () => {
   const covr = box('covr', box('data', [...u32(27), ...u32(0), 1, 2, 3]));
   const meta = box('meta', join(Uint8Array.from(u32(0)), box('ilst', covr)));
   expect(coverFrom(new Uint8Array(box('udta', meta).slice(8)))).toBe(null);
+});
+
+// --- the ranged chapter walk ---------------------------------------------------
+//
+// What the INDEXER uses. `chaptersRanged` never has the file in hand — it is given a reader
+// and the moov's position, and has to reach the same answer `chaptersFromChpl`/`chapterTrack`
+// reach from a buffer, without pulling a 185 MB book through a server's memory.
+
+/** A file whose moov holds a chapter track, plus the titles out in `mdat`. */
+function rangedFile({ chpl = false } = {}) {
+  const titles = join(...['One', 'Two', 'Three'].map((t) => join(
+    Uint8Array.from([0, t.length]), enc.encode(t),
+  )));
+  const mdatAt = 8; // `mdat` first, so the sample offsets are real file offsets
+  const mdat = box('mdat', titles);
+  const inner = chpl
+    ? box('udta', box('chpl', [...u32(0), ...u32(1), ...u64(0), 4, ...enc.encode('Only')]))
+    : join(audioTrackBox(1, 2), chapterTrackBox({
+      id: 2, n: 3, perChunk: 3, at: mdatAt, sizes: [5, 5, 7],
+    }));
+  const moov = box('moov', inner);
+  return { bytes: join(mdat, moov), moov: { offset: mdat.length, size: moov.length } };
+}
+
+test('the ranged walk finds a chapter track without holding the file', async () => {
+  const { bytes, moov } = rangedFile();
+  let reads = 0, got = 0;
+  const read = async (start, end) => { reads++; got += end - start; return bytes.subarray(start, end); };
+  const chapters = await chaptersRanged(read, moov);
+  expect(chapters.map((c) => c.title)).toEqual(['One', 'Two', 'Three']);
+  // The point of the exercise: a handful of small reads, not the file. `mdat` here holds
+  // only titles, but in a real book it is every byte of audio.
+  expect(reads).toBeLessThan(12);
+  expect(got).toBeLessThan(bytes.length * 2);
+});
+
+test('the ranged walk prefers chpl, and stops there', async () => {
+  const { bytes, moov } = rangedFile({ chpl: true });
+  const read = async (start, end) => bytes.subarray(start, end);
+  expect((await chaptersRanged(read, moov)).map((c) => c.title)).toEqual(['Only']);
 });

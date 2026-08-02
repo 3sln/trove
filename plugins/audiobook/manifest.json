@@ -2,7 +2,7 @@
   "domain": "3sln.com",
   "name": "audiobook",
   "displayName": "Audiobook Player",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Play M4B and LPF audiobooks from the drive, with chapters, cover art, a dock and OS transport controls.",
   "entry": "src/index.js",
   "capabilities": {
@@ -34,9 +34,9 @@
       },
       "entry": "src/player.js"
     },
-    "cover": {
+    "book": {
       "type": "indexer",
-      "title": "Audiobook cover art",
+      "title": "Audiobook metadata, chapters and cover art",
       "match": {
         "ext": [
           ".m4b",
@@ -49,7 +49,7 @@
           "application/lpf+zip"
         ]
       },
-      "entry": "src/coverIndexer.js"
+      "entry": "src/bookIndexer.js"
     }
   },
   "settings": [

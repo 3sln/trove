@@ -35,10 +35,52 @@ const isLpf = (file) => /\.lpf$/i.test(file.name || '') || (file.contentType || 
  *   streamable: boolean, why: string|null, tracks?: Array<object>}>}
  */
 export async function openBook(ctx, file) {
+  // INDEXED FIRST. The book indexer already walked this container on the server, once, at
+  // upload — so the title, chapters and cover are on the node before anyone opens it, and
+  // reading them costs nothing. Parsing here is the fallback for a file uploaded before the
+  // plugin was installed, or on a drive whose indexers have not run.
+  //
+  // An LPF still opens its zip regardless: its tracks are the audio, and playback needs the
+  // entries themselves, not a description of them.
+  const indexed = indexedBook(file);
+  if (indexed && !isLpf(file)) return indexed;
+
   const blob = await ctx.files.blob(file.id);
-  if (isLpf(file)) return openLpf(ctx, file, blob);
+  if (isLpf(file)) return { ...(await openLpf(ctx, file, blob)), ...titlesFrom(indexed) };
   return openMp4(ctx, file, blob);
 }
+
+/**
+ * What the indexer already found, if it ran.
+ *
+ * Contributions are namespaced by contributor and the viewer does not care which one wrote
+ * this — the same indifference the grid has about thumbnails. A record with no chapters is
+ * not usable as a book, so it falls through to parsing rather than opening a book that
+ * claims to have none.
+ */
+function indexedBook(file) {
+  for (const contribution of Object.values(file?.contributions || {})) {
+    const meta = contribution?.metadata;
+    if (!meta?.book || !meta.chapters?.length) continue;
+    return {
+      kind: 'm4b',
+      title: meta.book.title || file.name,
+      author: meta.book.author || null,
+      narrator: meta.book.narrator || null,
+      series: meta.book.series || null,
+      duration: meta.book.duration || null,
+      chapters: meta.chapters,
+      streamable: true,
+      why: null,
+    };
+  }
+  return null;
+}
+
+/** The names an indexed record knows that an LPF's own manifest may not. */
+const titlesFrom = (indexed) => (indexed
+  ? { narrator: indexed.narrator, series: indexed.series }
+  : {});
 
 /**
  * The M4B path.

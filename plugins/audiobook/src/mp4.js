@@ -266,8 +266,23 @@ export function movieTimescale(box) {
  */
 export function chaptersFromChpl(box) {
   const moov = contents(box);
-  const chpl = findBox(moov, ['udta', 'chpl']);
+  const udta = findBox(moov, ['udta']);
+  // `findBox` answers `{offset, end}` and takes `{at, end}`, which is a trap worth naming:
+  // handing its own result straight back reads as obviously correct and searches from zero.
+  return udta ? chplFrom(moov, { at: udta.offset, end: udta.end }) : null;
+}
+
+/**
+ * The same list, from a `udta` payload the caller already holds.
+ *
+ * Split out because the ranged path reads `udta` on its own — it is where the metadata
+ * lives too — and re-deriving the path from `moov` would mean reading megabytes to reach
+ * bytes already in hand.
+ */
+export function chplFrom(bytes, bounds) {
+  const chpl = findBox(bytes, ['chpl'], bounds);
   if (!chpl) return null;
+  const moov = bytes;
   let at = chpl.offset + 4; // version + flags
   // Some writers emit a reserved byte before the count and some do not; the count is a
   // 32-bit value either way, and a sane one is small, so the shape is decidable.
@@ -456,38 +471,154 @@ export function movieDuration(box) {
 }
 
 /**
- * `©nam`, `©ART`, `©alb` and friends from `moov/udta/meta/ilst`.
+ * Everything `moov/udta/meta/ilst` says about the book.
  *
- * Enough for a lock screen: a title, an author, a series. The four-character keys begin
- * with a copyright sign in the QuickTime convention, which is why they are matched by byte
- * rather than by an ASCII string.
+ * The mapping is measured, not guessed — dumped from a real Audible-derived m4b, because
+ * the atoms that carry the interesting fields are not the ones a reader would predict:
+ *
+ *   ©nam  title            ©ART / aART  author        ©nrt  NARRATOR
+ *   ©alb  album            ©gen  genre                ©pub  publisher
+ *   ©day  year             ©des / ©cmt  description   cprt  copyright
+ *
+ * And the ones with no atom of their own arrive as `----` freeform items, each carrying its
+ * own name: SERIES, PART, SUBTITLE, LANGUAGE. That is where a series lives, so a reader
+ * looking only at the four-character atoms finds no series at all.
+ *
+ * `©wrt` is deliberately not read as the author. On the book this was built against it held
+ * the NARRATOR — a tagger's choice, not a convention — so trusting it would credit the
+ * wrong person on half a library.
  */
 export function metadataFrom(box) {
   const moov = contents(box);
-  const ilst = findBox(moov, ['udta', 'meta', 'ilst']);
-  // `meta` is a full box — version/flags before its children — so a direct descent lands
-  // four bytes early. Retry from there rather than giving up.
-  const list = ilst || (() => {
-    const meta = findBox(moov, ['udta', 'meta']);
-    return meta ? findBox(moov, ['ilst'], { at: meta.offset + 4, end: meta.end }) : null;
-  })();
-  if (!list) return {};
+  const ilst = findBox(moov, ['udta', 'meta', 'ilst'])
+    || (() => {
+      const meta = findBox(moov, ['udta', 'meta']);
+      return meta ? findBox(moov, ['ilst'], { at: meta.offset + 4, end: meta.end }) : null;
+    })();
+  if (!ilst) return {};
 
-  const WANT = { '\xa9nam': 'title', '\xa9ART': 'author', '\xa9alb': 'album', 'aART': 'author', '\xa9gen': 'genre' };
+  const NAMED = {
+    '\xa9nam': 'title', '\xa9ART': 'author', aART: 'author', '\xa9alb': 'album',
+    '\xa9gen': 'genre', '\xa9pub': 'publisher', '\xa9day': 'year', '\xa9nrt': 'narrator',
+    '\xa9des': 'description', '\xa9cmt': 'description', cprt: 'copyright', asin: 'asin',
+  };
+  // Freeform names, upper-cased by the taggers that write them.
+  const FREEFORM = {
+    SERIES: 'series', PART: 'part', SUBTITLE: 'subtitle', LANGUAGE: 'language',
+    AUDIBLE_ASIN: 'asin', PUBLISHER: 'publisher',
+  };
+
   const out = {};
-  let at = list.offset;
-  while (at + HEADER <= list.end) {
+  const text = (bounds) => new TextDecoder().decode(moov.subarray(bounds.offset + 8, bounds.end)).trim();
+  let at = ilst.offset;
+  while (at + HEADER <= ilst.end) {
     const h = readHeader(moov, at);
     if (!h) break;
-    const size = h.toEnd ? list.end - at : h.size;
-    const field = WANT[h.type];
-    if (field && !out[field]) {
-      // Each item holds a `data` box: version/flags, then 4 reserved bytes, then the value.
-      const data = findBox(moov, ['data'], { at: at + h.header, end: at + size });
-      if (data) out[field] = new TextDecoder().decode(moov.subarray(data.offset + 8, data.end)).trim();
+    const size = h.toEnd ? ilst.end - at : h.size;
+    const inner = { at: at + h.header, end: at + size };
+
+    if (h.type === '----') {
+      // `----` holds `mean` (a reverse-DNS namespace), `name` (the key) and `data`. The
+      // name box is a FULL box, so its text starts four bytes in.
+      const nameBox = findBox(moov, ['name'], inner);
+      const dataBox = findBox(moov, ['data'], inner);
+      if (nameBox && dataBox) {
+        const key = FREEFORM[new TextDecoder().decode(moov.subarray(nameBox.offset + 4, nameBox.end)).trim().toUpperCase()];
+        if (key && !out[key]) out[key] = text(dataBox);
+      }
+    } else {
+      const field = NAMED[h.type];
+      // First writer wins: `©des` and `©cmt` both describe, and the first one present is
+      // the longer, more deliberate of the two on every file seen.
+      if (field && !out[field]) {
+        const dataBox = findBox(moov, ['data'], inner);
+        if (dataBox) out[field] = text(dataBox);
+      }
     }
     if (size <= 0) break;
     at += size;
   }
+  // A part number is a number. Everything else stays the string it was written as.
+  if (out.part) out.part = Number(out.part) || out.part;
   return out;
+}
+
+/**
+ * The chapter list, read by RANGE — never holding `moov`.
+ *
+ * `moov` is 4.6 MB on a real audiobook and almost all of it is the audio track's sample
+ * tables, which nothing here wants. So the walk stays at the header level: children of
+ * `moov` by size, then the FRONT of each track (where `tkhd` and `tref` both live) to learn
+ * which track ids exist and which one the chapters are, then that one track whole — six
+ * kilobytes — and finally one span of `mdat` covering every title.
+ *
+ * @param {(start: number, end: number) => Promise<Uint8Array>} read half-open
+ * @param {{offset: number, size: number}} moov as `findMoov` reports it
+ * @returns {Promise<Array<{time: number, title: string}>|null>}
+ */
+export async function chaptersRanged(read, moov) {
+  const end = moov.offset + moov.size;
+  // `chpl` first: it is inside `udta`, which is small and already worth reading for the
+  // metadata, so it costs nothing extra when it is there.
+  const udtaBounds = await findChildRanged(read, moov.offset + 8, end, 'udta');
+  if (udtaBounds) {
+    const udta = await read(udtaBounds.offset, udtaBounds.end);
+    const chpl = chplFrom(udta, { at: 0, end: udta.length });
+    if (chpl?.length) return chpl;
+  }
+
+  // Track headers only. `tkhd` and `tref` sit at the front of a `trak`, before `mdia`, so
+  // a few kilobytes names every track and says which is the chapters.
+  const traks = [];
+  let at = moov.offset + 8;
+  for (let guard = 0; guard < 256 && at + HEADER <= end; guard++) {
+    const head = await read(at, Math.min(at + LARGE_HEADER, end));
+    const h = readHeader(head, 0);
+    if (!h || !plausibleType(h.type)) break;
+    const size = h.toEnd ? end - at : h.size;
+    if (h.type === 'trak') traks.push({ start: at, size });
+    if (size <= 0) break;
+    at += size;
+  }
+  if (!traks.length) return null;
+
+  const FRONT = 8 * 1024;
+  let wanted = null;
+  const ids = new Map();
+  for (const trak of traks) {
+    const front = await read(trak.start, trak.start + Math.min(FRONT, trak.size));
+    // Both lookups are relative to this buffer, so the trak's own header is at 0.
+    const inner = { at: 8, end: front.length };
+    const tkhd = findBox(front, ['tkhd'], inner);
+    if (tkhd) {
+      const version = front[tkhd.offset];
+      ids.set(u32(front, tkhd.offset + 4 + (version === 1 ? 16 : 8)), trak);
+    }
+    const chap = findBox(front, ['tref', 'chap'], inner);
+    if (chap && wanted == null && chap.offset + 4 <= chap.end) wanted = u32(front, chap.offset);
+  }
+
+  // A chapter track is titles and timings — kilobytes. Anything large is not one, and
+  // reading it would be the whole audio track.
+  const MAX_TRACK = 1024 * 1024;
+  const candidates = wanted != null && ids.has(wanted) ? [ids.get(wanted)] : traks;
+  for (const trak of candidates) {
+    if (trak.size > MAX_TRACK) continue;
+    const bytes = await read(trak.start, trak.start + trak.size);
+    const samples = chapterTrack(bytes);
+    if (samples?.length) return titlesFor(read, samples);
+  }
+  return null;
+}
+
+/** The titles, in one read spanning every sample rather than one request per chapter. */
+async function titlesFor(read, samples) {
+  const from = Math.min(...samples.map((s) => s.offset));
+  const to = Math.max(...samples.map((s) => s.offset + s.length));
+  if (!(to > from) || to - from > 1024 * 1024) return null;
+  const bytes = await read(from, to);
+  return samples.map((s, i) => ({
+    time: s.time,
+    title: chapterTitle(bytes.subarray(s.offset - from, s.offset - from + s.length)) || `Chapter ${i + 1}`,
+  }));
 }

@@ -33,9 +33,10 @@ test('the package parses the way the server parses it', async () => {
   expect(pkg.manifest.domain).toBe('3sln.com');
   // Contributions are DECLARED in the manifest and registered by the host before any
   // plugin code runs, so a typo here is a plugin that installs and does nothing. Two: the
-  // opener a person sees, and the indexer that finds cover art on the server at upload.
+  // opener a person sees, and the indexer that reads the book's metadata, chapters and
+  // cover on the server at upload.
   expect(pkg.contributions.map((c) => `${c.name}:${c.type}`).sort())
-    .toEqual(['cover:indexer', 'player:opener']);
+    .toEqual(['book:indexer', 'player:opener']);
 });
 
 test('it asks for exactly the capabilities it can justify', async () => {

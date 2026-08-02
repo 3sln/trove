@@ -8,7 +8,9 @@ controls through the media session.
 bun plugins/build.mjs audiobook
 ```
 
-Then install `dist/audiobook-0.1.0.zip` through the plugin dialog, like any other plugin.
+Then install the `dist/audiobook-*.zip` it writes through the plugin dialog, like any other plugin —
+or download the zip attached to any [release](https://github.com/3sln/trove/releases), which
+the publish workflow builds and uploads.
 
 ## What it reads, and what it does not
 
@@ -49,15 +51,39 @@ your Audible account". The cheap and honest form, if it is ever wanted, is **con
 import** — a file becomes an m4b before it enters the drive — which keeps key handling out
 of the plugin and out of the drive entirely.
 
-## Cover art on the grid
+## What the indexer reads, and why the player then reads nothing
 
-A second contribution, `type: "indexer"`, runs on the **server** once per upload and finds
-the book's cover. It never pulls the book through memory: an m4b keeps its art in a `covr`
-atom inside the `udta` at the end of `moov`, which is itself at the end of the file, and an
-LPF keeps it as a zip entry named by a manifest whose directory is also at the end. Both
-are three or four small ranged reads — on a real 185 MB audiobook, **7 reads and 0.12 MiB**.
+A second contribution, `type: "indexer"`, runs on the **server** once per upload and reads
+the whole book *record*: title, author, narrator, series and part, genre, publisher, year,
+description, the full chapter list, and the cover. It never pulls the book through memory:
+an m4b keeps all of it in `moov` — metadata in the `udta` at the end, chapters in a `chpl`
+atom or a text track whose titles sit at the front of `mdat` — and an LPF keeps its
+manifest and cover as zip entries named by a directory at the end of the file. Both are a
+handful of small ranged reads: on a real 185 MB audiobook, **20 reads and 0.20 MiB** for
+all of it, producing a 4.2 KB contribution.
 
-It writes one known key, `metadata.thumbnail`, which the grid view recognises. That key
+This is the reason `book.js` opens a book without parsing one. The record is already on the
+node before anyone clicks it, so opening is a property read; the container walk stays as
+the fallback for a file that predates the plugin. It is also what makes the metadata
+*searchable* — author, narrator, series, genre, publisher, year and language are emitted as
+**tags**, so "everything Luke Daniels reads" is a filter rather than a scan.
+
+### Series, which lives in two places
+
+A tagger that knows about series writes a freeform `SERIES` atom. Most do not, and put the
+series in the **album** field instead — which is the common case in the wild, so album is
+the fallback. Not blindly, though: the book this was built against has its album set to the
+title with `(Unabridged)` appended, and taking that as a series would file every such book
+in a series of one named after itself. So album is compared against the title with that
+suffix stripped, and only used when it is genuinely something else.
+
+Audible's tagging has a second trap the tests pin down: `©wrt` ("writer") holds the
+**narrator's** name, not the author's. The narrator is `©nrt`.
+
+### Cover art on the grid
+
+The cover goes under one known key, `metadata.thumbnail`, which the grid view recognises.
+That key
 carries a **range**, not the image: a real Audible cover is ~57 KiB, or ~78 KiB base64'd,
 and contributions ride along on every list response — so carrying it would put four
 megabytes of pictures on the wire for a page of fifty books whether or not anything drew
@@ -81,7 +107,7 @@ src/book.js        one shape out of two containers
 src/mp4.js         pure: boxes, moov, chapters, metadata
 src/lpf.js         pure: publication.json, in every shape the spec allows
 src/zip.js         pure: a zip's central directory, read from the tail
-src/coverIndexer.js  the indexer: cover art, server-side, by range
+src/bookIndexer.js the indexer: the whole record, server-side, by range
 src/transport.js   playback as ONE timeline, whatever it is made of
 test/              the two pure modules, byte by byte
 ```
@@ -94,7 +120,8 @@ level too deep.
 ## Capabilities, and why each one
 
 - `files` — read bytes by range, mint a media URL, keep a book offline.
-- `indexer` — contribute cover art under the thumbnail key the grid reads.
+- `indexer` — contribute the book's record: tags, chapters, and cover art under the
+  thumbnail key the grid reads.
 - `ui` — draw.
 - `media` — the OS transport controls.
 - `dock` — keep playing while the user navigates away.
