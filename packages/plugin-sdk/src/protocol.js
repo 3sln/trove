@@ -49,6 +49,10 @@ export const METHODS = {
     bytes: 'files:bytes',
     // A minted URL for a media element. See pluginRpc.js for why this one host URL crosses.
     mediaUrl: 'files:mediaUrl',
+    // Is the whole file here, and can I have it? The pair a viewer needs because the
+    // frame's CSP forbids loading media from a URL — see pluginFrames.js.
+    hasLocal: 'files:hasLocal',
+    localBlob: 'files:localBlob',
     offline: {
       start: 'files:offline:start', status: 'files:offline:status',
       cancel: 'files:offline:cancel', remove: 'files:offline:remove',

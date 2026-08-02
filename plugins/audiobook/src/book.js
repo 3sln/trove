@@ -21,6 +21,7 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import { findMoov, chaptersFromChpl, chapterTrack, chapterTitle, movieDuration, metadataFrom } from './mp4.js';
 import { parsePublication, chaptersFrom, manifestEntry, resolveHref } from './lpf.js';
+export { loadCover } from './loadCover.js';
 
 /** How much of the head and tail to read while looking for structure. */
 const WINDOW = 64 * 1024;
@@ -63,6 +64,9 @@ function indexedBook(file) {
     const meta = contribution?.metadata;
     if (!meta?.book || !meta.chapters?.length) continue;
     return {
+      // The cover, as the indexer left it: either a range into the file or a data: URL.
+      // Resolved to something drawable by `loadCover` once there is an SDK to read with.
+      cover: meta.thumbnail || null,
       kind: 'm4b',
       title: meta.book.title || file.name,
       author: meta.book.author || null,

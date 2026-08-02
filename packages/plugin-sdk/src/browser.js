@@ -395,6 +395,35 @@
         mediaUrl: (id, opts) => (requireCap('files'), call('files:mediaUrl', Object.assign({ id }, opts))),
 
         /**
+         * Is the whole file already in this browser?
+         *
+         * Cheap — it reads bookkeeping, not bytes — so ask it before deciding what to
+         * draw. `{ local, loaded, total, ratio, filling }`: enough to show a progress
+         * bar for a download already under way instead of offering to start it again.
+         */
+        hasLocal: (id) => (requireCap('files'), call('files:hasLocal', { id })),
+
+        /**
+         * The whole file as a Blob, or null when it is not stored locally.
+         *
+         * THE WAY MEDIA WORKS IN HERE. This frame's CSP is `connect-src 'none'` and
+         * `media-src blob: data:` — deliberately, so a plugin cannot reach the network
+         * and cannot be an exfiltration side-channel. An `<audio src="https://…">` is
+         * therefore blocked outright, and no amount of URL minting changes that. A Blob
+         * is allowed, so a downloaded file plays by being handed over.
+         *
+         * Null when the file is incomplete rather than a partial Blob: half an MP4 is
+         * not a shorter MP4, and a caller handed one would fail like a decoder bug
+         * instead of like a missing download. Pair it with `offline.start` and
+         * `hasLocal` to get from "not here" to "here".
+         */
+        localBlob: async (id) => {
+          requireCap('files');
+          const { blob } = await call('files:localBlob', { id });
+          return blob || null;
+        },
+
+        /**
          * Keeping a file, which is a DIFFERENT act from reading one.
          *
          * Ranging over a file stores nothing. `start(id)` is someone asking to have it

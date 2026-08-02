@@ -6,6 +6,7 @@
 // activity to 'home' and closing the modal search when a file opens).
 
 import { cell } from '../runtime.js';
+import { thumbnailOf } from '../bl/fileType.js';
 
 const RECENTS_KEY = 'trove.recents';
 const RECENTS_MAX = 12;
@@ -126,7 +127,7 @@ export class NavigationService {
    */
   updateTabNode(node) {
     const recents = this.#state.recents.map((r) => (r.id === node.id
-      ? { ...r, name: node.name, contentType: node.contentType || r.contentType }
+      ? { ...r, name: node.name, contentType: node.contentType || r.contentType, ...(thumbnailOf(node) ? { thumbnail: thumbnailOf(node) } : {}) }
       : r));
     if (recents.some((r, i) => r !== this.#state.recents[i])) {
       this.#set({ recents });
@@ -160,7 +161,20 @@ export class NavigationService {
 
   #pushRecent(node) {
     if (!node) return;
-    const entry = { id: node.id, name: node.name, contentType: node.contentType || '', collectionId: node.collectionId };
+    // The THUMBNAIL rides along, and it has to, because a recent entry is a snapshot
+    // rather than a reference: nothing later re-reads the node, so a tile drawn from
+    // this object sees whatever is stored here and nothing else. Without it a recently
+    // opened book showed a generic icon while the very same file two rows below showed
+    // its cover — the one difference being which group drew it.
+    //
+    // Only the descriptor, not the image. It is a range into the file (~80 bytes), so a
+    // dozen of them is under a kilobyte of localStorage; storing the whole contribution
+    // would put four kilobytes per book in there for no gain.
+    const thumbnail = thumbnailOf(node);
+    const entry = {
+      id: node.id, name: node.name, contentType: node.contentType || '', collectionId: node.collectionId,
+      ...(thumbnail ? { thumbnail } : {}),
+    };
     const recents = [entry, ...this.#state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
     this.#set({ recents });
     saveRecents(recents);

@@ -165,6 +165,39 @@ export class PluginRpcRouter {
         return { bytes: r.bytes.buffer, etag: r.etag, total: r.total };
       }
 
+      // Is the whole file already HERE, in this browser?
+      //
+      // The question a viewer has to ask before deciding what to draw, and it is cheap on
+      // purpose: `status` reads bookkeeping, not bytes, so a plugin can ask on every open
+      // without pulling a hundred megabytes to find out the answer is no.
+      case 'files:hasLocal': {
+        cap('files');
+        const st = this.platform.fileChunks.status(params.id);
+        return { local: !!st.done, loaded: st.loaded, total: st.total, ratio: st.ratio, filling: st.filling };
+      }
+
+      // The whole file as a real Blob, or null.
+      //
+      // This exists because of the frame's CSP: `media-src blob: data:` and
+      // `connect-src 'none'`, deliberately, so a viewer CANNOT load a media URL — see
+      // pluginFrames.js. A Blob it can. So a downloaded book plays by handing the frame
+      // the bytes it already paid for, rather than by punching a hole in the sandbox.
+      //
+      // Null rather than a partial when the file is incomplete: half an MP4 is not a
+      // shorter MP4, and a viewer that got one would fail in a way that looks like a
+      // decoder bug instead of a missing download.
+      case 'files:localBlob': {
+        cap('files');
+        const st = this.platform.fileChunks.status(params.id);
+        if (!st.done || !st.total) return { blob: null };
+        const r = await this.platform.fileChunks.read(params.id, { start: 0, end: st.total });
+        // A Blob crosses by structured clone WITHOUT copying its bytes — the handle is
+        // refcounted — which is why this is a Blob and not the ArrayBuffer `files:bytes`
+        // transfers. Transferring would detach the buffer the offline store is holding.
+        const node = await this.platform.api.stat(params.id).catch(() => null);
+        return { blob: new Blob([r.bytes], { type: node?.node?.contentType || 'application/octet-stream' }) };
+      }
+
       // Keeping a file offline, which is a DIFFERENT act from reading it — see
       // fileChunks.js. Until `start` is called, ranging over a file stores nothing.
       case 'files:offline:start': return cap('files'), this.platform.fileChunks.start(params.id);

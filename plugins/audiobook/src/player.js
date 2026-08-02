@@ -17,7 +17,7 @@
 //      stereo. Handlers are registered once and released when the frame goes.
 
 import { activate } from 'trove';
-import { openBook, releaseBook } from './book.js';
+import { openBook, releaseBook, loadCover } from './book.js';
 import { Transport, chapterAt, clock } from './transport.js';
 
 const el = (tag, className, text) => {
@@ -47,6 +47,9 @@ activate(async (ctx) => {
     let book;
     try {
       book = await openBook(ctx, file);
+      // The cover, resolved once here rather than in two render paths. It costs one
+      // ranged read of bytes already described by the index — no audio is touched.
+      book.coverUrl = await loadCover(ctx, file, book.cover);
     } catch (err) {
       root.innerHTML = '';
       root.appendChild(el('div', 'ab-error', err?.message || 'This book could not be opened.'));
@@ -56,17 +59,24 @@ activate(async (ctx) => {
     // A single-file book streams from a MINTED url: the browser issues its own range
     // requests, so seeking is free and nothing is buffered ahead of what is played. An LPF
     // already holds object URLs over its own entries — see book.js.
+    // WHERE THE AUDIO COMES FROM, and why it is not a URL.
+    //
+    // This frame's CSP is `connect-src 'none'` and `media-src blob: data:`, on purpose:
+    // a viewer must not be able to reach the network, so it cannot be an exfiltration
+    // side-channel. `<audio src="https://…/api/items/download?id=…">` is therefore
+    // BLOCKED — which is exactly what shipped, and what "pressing play does nothing"
+    // was. The console said so all along, inside a frame nothing could read.
+    //
+    // A Blob is allowed. So a book that is already downloaded plays from its own bytes,
+    // and one that is not offers to fetch them rather than pretending it can stream.
     let src = null;
     if (!book.tracks) {
-      try {
-        src = (await ctx.files.mediaUrl(file.id)).url;
-        // Which URL the frame was handed, and whether it is same-origin with this
-        // document. It never is — the frame runs on an OPAQUE origin — and saying so
-        // here is what makes the media error below legible instead of mysterious.
-        console.info('[audiobook] media url:', { url: String(src).slice(0, 120), frameOrigin: String(location.origin) });
-      } catch (err) {
-        root.innerHTML = '';
-        root.appendChild(el('div', 'ab-error', `This book cannot be played: ${err.message}`));
+      const blob = await ctx.files.localBlob(file.id).catch(() => null);
+      if (blob) src = URL.createObjectURL(blob);
+      else {
+        // Not here yet. Draw the book — its cover, title and chapters are already known
+        // from the index — with a download in place of the transport.
+        renderOffline(ctx, root, book, file, skip);
         return;
       }
     }
@@ -77,11 +87,102 @@ activate(async (ctx) => {
     // behind. See the SDK's `files.offline`.
     if (keep) ctx.files.offline.start(file.id).catch(() => {});
 
-    render(ctx, root, book, src, skip);
+    render(ctx, root, book, src, skip, file);
   });
 });
 
-function render(ctx, root, book, src, skip) {
+/**
+ * The book, with a download where the transport would be.
+ *
+ * Not an error state: everything on screen — cover, title, narrator, chapter list — came
+ * from the index without reading a byte of audio, so there is a real book here. What is
+ * missing is the audio, and the honest thing is to say so and offer to get it, rather
+ * than draw a play button that cannot work.
+ */
+function renderOffline(ctx, root, book, file, skip) {
+  root.innerHTML = '';
+  const status = el('div', 'ab-note', 'This book is not on this device yet.');
+  const bar = el('div', 'ab-dl');
+  const fill = el('div', 'ab-dl-fill');
+  bar.appendChild(fill);
+  const get = el('button', 'ab-btn ab-get', 'Download to play');
+  get.title = 'Fetch this book so it can be played here';
+
+  let polling = null;
+  const stop = () => { if (polling) clearInterval(polling); polling = null; };
+  const paint = (s) => {
+    fill.style.width = `${Math.round((s.ratio || 0) * 100)}%`;
+    if (s.local) {
+      stop();
+      status.textContent = 'Ready — reopening…';
+      // Reopen through the ordinary path now that the bytes are here, so there is exactly
+      // one place that knows how to build a player.
+      ctx.files.localBlob(file.id).then((blob) => {
+        if (blob) render(ctx, root, book, URL.createObjectURL(blob), skip, file);
+      }).catch(() => {});
+    } else if (s.filling) {
+      status.textContent = s.total
+        ? `Downloading… ${Math.round((s.ratio || 0) * 100)}%`
+        : 'Downloading…';
+    }
+  };
+
+  get.addEventListener('click', () => {
+    get.disabled = true;
+    status.textContent = 'Downloading…';
+    ctx.files.offline.start(file.id).catch(() => {});
+    // Polled rather than pushed: `offline.status` is the only signal the SDK offers, and
+    // a two-second tick is cheap next to the transfer it is watching.
+    polling = setInterval(() => ctx.files.hasLocal(file.id).then(paint).catch(() => {}), 2000);
+  });
+
+  kids(root, [
+    coverOf(book),
+    el('div', 'ab-title', book.title),
+    byline(book),
+    status,
+    bar,
+    get,
+    book.chapters.length > 1 ? chapterList(book) : null,
+  ]);
+
+  // Already downloading from a previous visit? Then show that, not an offer to start.
+  ctx.files.hasLocal(file.id).then((s) => {
+    if (!s.filling && !s.local) return;
+    get.disabled = true;
+    polling = setInterval(() => ctx.files.hasLocal(file.id).then(paint).catch(() => {}), 2000);
+    paint(s);
+  }).catch(() => {});
+
+  ctx.onDeactivate(stop);
+}
+
+/** The cover, drawn from the range the indexer recorded. */
+function coverOf(book) {
+  if (!book.coverUrl) return null;
+  const img = el('img', 'ab-cover');
+  img.src = book.coverUrl;
+  img.alt = '';
+  return img;
+}
+
+/** "Author · read by Narrator", with whichever halves exist. */
+function byline(book) {
+  const parts = [book.author, book.narrator && `read by ${book.narrator}`].filter(Boolean);
+  return parts.length ? el('div', 'ab-author', parts.join(' · ')) : null;
+}
+
+/** The chapter list as a read-only rundown, for the state with no transport to drive. */
+function chapterList(book) {
+  const sel = el('select', 'ab-chapters');
+  for (const [i, c] of book.chapters.entries()) {
+    sel.appendChild(el('option', null, `${i + 1}. ${c.title}`));
+  }
+  sel.disabled = true;
+  return sel;
+}
+
+function render(ctx, root, book, src, skip, file) {
   root.innerHTML = '';
 
   const chapterLine = el('div', 'ab-chapter', '');
@@ -126,11 +227,33 @@ function render(ctx, root, book, src, skip) {
   }
   chapters.addEventListener('change', () => transport.seek(Number(chapters.value)));
 
+  // Playback rate. A primary control for an audiobook rather than a nicety — most people
+  // who listen to books do not listen at 1× — and the transport and media session already
+  // carry it, so the only thing missing was somewhere to press.
+  const rate = el('select', 'ab-rate');
+  for (const r of [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3]) {
+    const o = el('option', null, `${r}×`);
+    o.value = String(r);
+    if (r === 1) o.selected = true;
+    rate.appendChild(o);
+  }
+  rate.title = 'Playback speed';
+  rate.addEventListener('change', () => {
+    transport.rate = Number(rate.value);
+    // The OS draws its own progress from the rate as well as the position, so a book at
+    // 1.5× drifts visibly on the lock screen unless this is re-reported.
+    paint(transport.position());
+  });
+
   kids(root, [
-    el('div', 'ab-title', book.title),
-    book.author || book.narrator
-      ? el('div', 'ab-author', [book.author, book.narrator && `read by ${book.narrator}`].filter(Boolean).join(' · '))
-      : null,
+    kids(el('div', 'ab-head'), [
+      coverOf(book),
+      kids(el('div', 'ab-headings'), [
+        el('div', 'ab-title', book.title),
+        byline(book),
+        book.series ? el('div', 'ab-series', book.series) : null,
+      ]),
+    ]),
     chapterLine,
     bar,
     times,
@@ -140,6 +263,7 @@ function render(ctx, root, book, src, skip) {
       play,
       button('↻', `Forward ${skip}s`, () => transport.seek(transport.position() + skip)),
       button('⏭', 'Next chapter', () => jump(1)),
+      rate,
     ]),
     book.chapters.length > 1 ? chapters : null,
     book.why ? el('div', 'ab-note', book.why) : null,
@@ -171,15 +295,18 @@ function render(ctx, root, book, src, skip) {
     times.textContent = total ? `${clock(at)} · ${clock(total - at)} left` : clock(at);
   }
 
-  wireOs(ctx, transport, book, skip, jump);
+  wireOs(ctx, transport, book, skip, jump, src);
 }
 
 /** The OS transport controls, the dock, and giving both back on the way out. */
-async function wireOs(ctx, transport, book, skip, jump) {
+async function wireOs(ctx, transport, book, skip, jump, src) {
   ctx.media.setMetadata({
     title: book.title,
     artist: book.author || '',
-    album: book.chapters.length > 1 ? `${book.chapters.length} chapters` : '',
+    album: book.series || (book.chapters.length > 1 ? `${book.chapters.length} chapters` : ''),
+    // The lock screen draws this. It is the same object URL the panel shows, so the OS
+    // and the app agree about what the book looks like.
+    artwork: book.coverUrl ? [{ src: book.coverUrl }] : undefined,
   }).catch(() => {});
 
   const handlers = {
@@ -204,6 +331,10 @@ async function wireOs(ctx, transport, book, skip, jump) {
 
   ctx.onDeactivate(() => {
     transport.destroy();
+    // The cover's object URL, and the audio's. Both are this frame's, and nothing else
+    // can free them — the audio one is the whole book held in memory.
+    if (book.coverUrl?.startsWith('blob:')) URL.revokeObjectURL(book.coverUrl);
+    if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
     // The object URLs an LPF minted over its own entries. Nothing else can free them, and
     // they are the whole book in memory.
     releaseBook(book);
@@ -224,7 +355,23 @@ function injectStyle() {
   s.textContent = `
     :root { color-scheme: dark; }
     body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #e8e8ea; background: transparent; }
-    .ab { display: grid; gap: 6px; padding: 12px 14px; background: rgba(20,21,25,.92); border-radius: 10px; }
+    /* The panel is as tall as the pane it is given, so the card centres in it rather than
+       clinging to the top edge with a field of black beneath — which is what the docked
+       styling did when it was asked to fill a viewer. Docked, the max-width and the
+       centring both stop mattering because the frame is only a few hundred pixels wide. */
+    .ab { display: grid; gap: 8px; align-content: start; padding: 16px;
+          background: rgba(20,21,25,.92); border-radius: 10px;
+          max-width: 560px; margin: 0 auto; }
+    .ab-head { display: flex; gap: 12px; align-items: flex-start; }
+    .ab-headings { display: grid; gap: 2px; min-width: 0; }
+    .ab-cover { width: 88px; height: 88px; object-fit: cover; border-radius: 6px;
+                background: #2a2c34; flex: none; }
+    .ab-series { color: #8f929c; font-size: 11px; }
+    .ab-rate { background: #2a2c34; color: inherit; border: 0; border-radius: 6px;
+               padding: 6px; font-size: 12px; cursor: pointer; }
+    .ab-get { justify-self: start; }
+    .ab-dl { height: 4px; border-radius: 2px; background: #2a2c34; overflow: hidden; }
+    .ab-dl-fill { height: 100%; width: 0; background: #6ea8fe; transition: width .3s; }
     .ab-title { font-weight: 600; font-size: 14px; }
     .ab-author, .ab-times, .ab-note { color: #a2a4ad; font-size: 12px; }
     .ab-chapter { font-size: 12px; }
@@ -241,6 +388,10 @@ function injectStyle() {
        and are not what someone glancing at it wants. */
     body[data-docked="yes"] .ab-chapters,
     body[data-docked="yes"] .ab-note { display: none; }
+    /* Docked, the card is the whole strip and the cover shrinks to a thumbnail. */
+    body[data-docked="yes"] .ab { max-width: none; padding: 10px 12px; gap: 6px; }
+    body[data-docked="yes"] .ab-cover { width: 40px; height: 40px; }
+    body[data-docked="yes"] .ab-series { display: none; }
   `;
   document.head.appendChild(s);
 }

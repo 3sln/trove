@@ -76,6 +76,14 @@ export const THUMBNAIL_KEY = 'thumbnail';
  * @returns {{range?: {start: number, end: number}, src?: string, contentType?: string}|null}
  */
 export function thumbnailOf(node) {
+  // ALREADY RESOLVED, which is how a recents entry carries one. Recents are a snapshot in
+  // localStorage rather than a reference — nothing re-reads the node — so the descriptor
+  // is stored on the entry itself and this is where it comes back in. Same shape, so a
+  // view cannot tell the two apart, which is the point.
+  const stored = node?.thumbnail;
+  if (typeof stored?.src === 'string' && stored.src) return stored;
+  if (Number.isFinite(stored?.range?.start) && Number.isFinite(stored?.range?.end)) return stored;
+
   const contributions = node?.contributions;
   if (!contributions) return null;
   for (const contribution of Object.values(contributions)) {
