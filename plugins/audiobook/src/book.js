@@ -92,14 +92,8 @@ export async function openBook(ctx, file) {
   // An LPF still opens its zip regardless: its tracks are the audio, and playback needs the
   // entries themselves, not a description of them.
   const indexed = indexedBook(file);
-  // The indexed record has everything to DRAW a book, but streaming needs the sample
-  // tables, which only live in `moov`. So the probe still runs for an m4b — a few
-  // kilobytes, no audio — and the record carries the result.
   if (indexed && !isLpf(file)) {
-    // Swallowing this was a mistake worth naming: the probe failed for a reason the
-    // player then reported as "this book's index could not be read", which is true and
-    // useless. The reason reaches the screen now.
-    // NOT READ HERE. An indexed book already has everything needed to draw it — cover,
+    // NOTHING IS READ HERE. An indexed book already has everything needed to draw it — cover,
     // title, narrator, chapters — so opening one should cost nothing, and it used to.
     // Probing for `moov` on open was a regression: a `moov` is megabytes, and pulling it
     // before anyone has pressed play made opening a large book slower than it had ever

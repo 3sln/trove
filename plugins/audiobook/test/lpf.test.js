@@ -105,3 +105,70 @@ test('a book zipped one level too deep still opens', () => {
 test('a manifest that is not JSON says so, in terms of the file', () => {
   expect(() => parsePublication('<html>')).toThrow(/publication\.json is not valid JSON/);
 });
+
+// --- the rest of the manifest -------------------------------------------------
+//
+// An LPF book reached the index with a title, an author and a duration — three fields
+// where an m4b produces thirteen, and one tag where an m4b produces seven. The format
+// carried the rest all along; `parsePublication` was dropping it before the indexer saw
+// it. The promise the shared record makes is that a reader cannot tell which container a
+// book came from, and three fields against thirteen breaks it where it shows most: no
+// narrator means the player's byline has no "read by".
+
+test('a full publication manifest yields the same fields an m4b does', () => {
+  const pub = parsePublication(JSON.stringify({
+    name: 'The Quick and the Kept',
+    author: 'A. Author',
+    readBy: ['N. Narrator', 'S. Second'],
+    publisher: { name: 'Podium Audio' },
+    inLanguage: 'en',
+    datePublished: '2022-11-08',
+    description: 'A book about things.',
+    genre: ['Epic', 'Adventure'],
+    abridged: false,
+    belongsTo: { name: 'All the Skills', position: 3 },
+    duration: 'PT10H',
+    readingOrder: [{ url: 'a.mp3', duration: 'PT1H' }],
+  }));
+
+  expect(pub.title).toBe('The Quick and the Kept');
+  expect(pub.authors).toEqual(['A. Author']);
+  // Two narrators is normal for a dual-cast book, and both belong on the byline.
+  expect(pub.narrator).toBe('N. Narrator, S. Second');
+  expect(pub.publisher).toBe('Podium Audio');
+  expect(pub.language).toBe('en');
+  expect(pub.year).toBe('2022');          // the year is what a shelf sorts by, not the date
+  expect(pub.description).toBe('A book about things.');
+  expect(pub.genre).toBe('Epic, Adventure');
+  expect(pub.abridged).toBe(false);
+  expect(pub.series).toBe('All the Skills');
+  expect(pub.part).toBe(3);
+});
+
+test('the series entry that states a position is the one that means "book 3 of"', () => {
+  // A book can belong to several things — a series and a collection — and only one of
+  // them is what a reader means. Picking the first would file it under the wrong one.
+  const pub = parsePublication(JSON.stringify({
+    name: 'x',
+    belongsTo: [{ name: 'Some Collection' }, { name: 'All the Skills', position: 2 }],
+    readingOrder: ['a.mp3'],
+  }));
+  expect(pub.series).toBe('All the Skills');
+  expect(pub.part).toBe(2);
+});
+
+test('a manifest with none of it says null rather than inventing', () => {
+  const pub = parsePublication(JSON.stringify({ name: 'Bare', readingOrder: ['a.mp3'] }));
+  expect(pub.title).toBe('Bare');
+  for (const k of ['narrator', 'publisher', 'language', 'year', 'description', 'genre', 'series', 'part', 'abridged']) {
+    expect(pub[k]).toBe(null);
+  }
+});
+
+test('a non-numeric position is not passed off as one', () => {
+  const pub = parsePublication(JSON.stringify({
+    name: 'x', belongsTo: { name: 'S', position: 'three' }, readingOrder: ['a.mp3'],
+  }));
+  expect(pub.series).toBe('S');
+  expect(pub.part).toBe(null);
+});

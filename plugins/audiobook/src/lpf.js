@@ -73,6 +73,12 @@ export function parsePublication(text) {
       title: oneOf(e.name),
     }));
 
+  // A `belongsTo` entry names the series and, with `position`, which book in it. The key
+  // is sometimes an object, sometimes a list of them, and the useful one is whatever has
+  // a position — a book can belong to several things (a series, a collection) and only
+  // one of them is what a reader means by "book 3 of".
+  const series = seriesOf(doc.belongsTo ?? doc.isPartOf);
+
   return {
     title: oneOf(doc.name),
     authors: listOf(doc.author ?? doc.creator),
@@ -81,7 +87,46 @@ export function parsePublication(text) {
     duration: parseDuration(doc.duration) ?? sumDurations(tracks),
     cover: coverOf(doc),
     tracks,
+
+    // THE REST OF THE MANIFEST. It was being dropped on the floor, so an LPF book reached
+    // the index with a title, an author and a duration — three fields where an m4b
+    // produces thirteen, and one tag where an m4b produces seven. The format already
+    // carries all of this; nothing was reading it.
+    //
+    // `readBy` is the audiobook vocabulary's own word for the narrator, which is the field
+    // people most notice missing: without it the player's byline has no "read by".
+    narrator: listOf(doc.readBy).join(', ') || null,
+    publisher: oneOf(doc.publisher),
+    language: oneOf(doc.inLanguage),
+    // `datePublished` is a date; the year is what a shelf sorts and filters by.
+    year: yearOf(doc.datePublished ?? doc.dateModified),
+    description: oneOf(doc.description ?? doc.abstract),
+    genre: listOf(doc.genre).join(', ') || null,
+    abridged: typeof doc.abridged === 'boolean' ? doc.abridged : null,
+    series: series.name,
+    part: series.position,
   };
+}
+
+/** The series a book belongs to, and its place in it. */
+function seriesOf(value) {
+  if (value == null) return { name: null, position: null };
+  const items = Array.isArray(value) ? value : [value];
+  // Prefer the entry that states a position: that is the one that means "book 3 of", as
+  // against a collection something merely sits in.
+  const best = items.find((i) => i && typeof i === 'object' && i.position != null) ?? items[0];
+  const position = Number(best?.position);
+  return {
+    name: oneOf(best),
+    position: Number.isFinite(position) ? position : null,
+  };
+}
+
+/** A four-digit year out of whatever shape a date arrived in. */
+function yearOf(value) {
+  const s = oneOf(value);
+  const m = s && /(\d{4})/.exec(s);
+  return m ? m[1] : null;
 }
 
 const sumDurations = (tracks) =>

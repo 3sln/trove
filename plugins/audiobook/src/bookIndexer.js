@@ -177,9 +177,21 @@ async function fromLpf(node, ctx) {
   // An LPF's tracks ARE its chapters — see lpf.js. Laid onto one timeline here so a reader
   // of the contribution cannot tell which container it came from.
   const chapters = chaptersFrom(pub.tracks).map(({ time, title }) => ({ time, title }));
+  // The SAME RECORD an m4b produces, so a reader of the contribution cannot tell which
+  // container it came from. It was three fields against thirteen, which broke that promise
+  // where it shows most: an LPF book had no narrator, so the player's byline had no
+  // "read by" and none of `#series:`, `#genre:`, `#publisher:` or `#language:` found it.
   const book = {
     title: pub.title || undefined,
     author: pub.authors[0] || undefined,
+    narrator: pub.narrator || undefined,
+    series: pub.series || undefined,
+    part: pub.part ?? undefined,
+    genre: pub.genre || undefined,
+    publisher: pub.publisher || undefined,
+    year: pub.year || undefined,
+    language: pub.language || undefined,
+    description: pub.description || undefined,
     duration: pub.duration || undefined,
   };
   return { cover: await lpfCover(read, entries, manifestPath, pub), book, chapters };

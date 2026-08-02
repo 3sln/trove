@@ -108,3 +108,62 @@ test('a book with no cover contributes no thumbnail rather than failing', async 
   const junk = new Uint8Array(1024);
   expect(await index({ id: 'x', name: 'x.m4b', size: junk.length }, { readRange: reader(junk).read })).toEqual({});
 });
+
+test('an LPF book is indexed as fully as an m4b', async () => {
+  // The promise the shared record makes: a reader of the contribution cannot tell which
+  // container it came from. An LPF used to arrive with three fields and one tag against
+  // an m4b's thirteen and seven — so it was missing from `#narrator:`, `#series:`,
+  // `#genre:`, `#publisher:`, `#year:` and `#language:`, and the player's byline had no
+  // "read by". Everything here was already in the manifest; nothing was reading it.
+  const manifest = {
+    conformsTo: 'https://www.w3.org/TR/audiobooks/',
+    name: 'The Quick and the Kept',
+    author: 'Honour Rae',
+    readBy: 'Luke Daniels',
+    publisher: 'Podium Audio',
+    inLanguage: 'en',
+    datePublished: '2022-11-08',
+    genre: ['Epic', 'Sword & Sorcery'],
+    belongsTo: { name: 'All the Skills', position: 2 },
+    duration: 'PT2H',
+    readingOrder: [
+      { url: 'audio/01.mp3', duration: 'PT1H', name: 'Chapter One' },
+      { url: 'audio/02.mp3', duration: 'PT1H', name: 'Chapter Two' },
+    ],
+    resources: [{ url: 'cover.jpg', rel: 'cover', encodingFormat: 'image/jpeg' }],
+  };
+  const zip = zipSync({
+    'publication.json': strToU8(JSON.stringify(manifest)),
+    'cover.jpg': Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]),
+    'audio/01.mp3': new Uint8Array(64),
+    'audio/02.mp3': new Uint8Array(64),
+  }, { level: 0 });
+
+  const node = { id: 'i', name: 'book.lpf', contentType: 'application/lpf+zip', size: zip.length };
+  const out = await index(node, { readRange: reader(zip).read });
+
+  expect(out.metadata.book).toEqual({
+    title: 'The Quick and the Kept',
+    author: 'Honour Rae',
+    narrator: 'Luke Daniels',
+    series: 'All the Skills',
+    part: 2,
+    genre: 'Epic, Sword & Sorcery',
+    publisher: 'Podium Audio',
+    year: '2022',
+    language: 'en',
+    duration: 7200,
+  });
+  // The same seven tags an m4b produces — this is what makes a book findable.
+  expect(Object.keys(out.tags).sort()).toEqual(
+    ['author', 'genre', 'language', 'narrator', 'publisher', 'series', 'year'],
+  );
+  // An LPF's tracks ARE its chapters, laid onto one timeline.
+  expect(out.metadata.chapters).toEqual([
+    { time: 0, title: 'Chapter One' },
+    { time: 3600, title: 'Chapter Two' },
+  ]);
+  // Stored (level 0), so the cover is pointed at rather than carried.
+  expect(out.metadata.thumbnail.contentType).toBe('image/jpeg');
+  expect(out.metadata.thumbnail.range.end - out.metadata.thumbnail.range.start).toBe(8);
+});
