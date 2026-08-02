@@ -23,10 +23,14 @@ const settle = () => new Promise((r) => setTimeout(r, 5));
 /** The smallest thing shaped like one of the cell-backed services. */
 function service(initial) {
   const c = cell(initial);
+  let held = initial;
+  // `get`/`observe`/`set` and nothing else — the same surface a slice has, and now the
+  // same surface the four remaining services have. A double with a public `state` field
+  // was the second door those services still had.
   return {
-    state: initial,
+    get: () => held,
     observe: () => c,
-    set(next) { this.state = next; c.setValue(next); },
+    set(next) { held = next; c.setValue(next); },
   };
 }
 
@@ -117,8 +121,8 @@ test('one realization is shared by every observer of the same instance', async (
     static deps = ['app'];
     boot({ app }, { notify }) {
       boots++;
-      notify(app.explorer.state);
-      this.off = app.explorer.observe().onDirty(() => notify(app.explorer.state));
+      notify(app.explorer.get());
+      this.off = app.explorer.observe().onDirty(() => notify(app.explorer.get()));
     }
     kill() { this.off?.(); }
   }
@@ -140,7 +144,7 @@ test('a fresh instance is a second realization, which is why instances are share
   let boots = 0;
   class Counted extends Query {
     static deps = ['app'];
-    boot({ app }, { notify }) { boots++; notify(app.explorer.state); }
+    boot({ app }, { notify }) { boots++; notify(app.explorer.get()); }
     kill() {}
   }
   const explorer = service({ n: 0 });
@@ -557,13 +561,13 @@ test('the explorer view resolves the selection, so nothing has to ask how', asyn
 test('the clear is scoped to its node, because kill and boot are not ordered', async () => {
   // Switching from A to B can kill A's query AFTER B's has booted. An unscoped clear would
   // then wipe the sidecar B just asked for — the same race the loading path already guards.
-  const social = { state: { sidecar: { nodeId: 'B' } }, loadSidecar(id) { this.cleared = id; } };
+  const social = { get: () => ({ sidecar: { nodeId: 'B' } }), loadSidecar(id) { this.cleared = id; } };
   const engine = engineWith({ social });
 
   // A's query dies while B is on screen: nothing is cleared.
   await engine.dispatch(new ClearSidecarAction('A')).next(['complete', 'error']);
   expect(social.cleared).toBe(undefined);
-  expect(social.state.sidecar.nodeId).toBe('B');
+  expect(social.get().sidecar.nodeId).toBe('B');
 
   // B's own query dying does clear it.
   await engine.dispatch(new ClearSidecarAction('B')).next(['complete', 'error']);

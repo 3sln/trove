@@ -2,6 +2,9 @@
 // (bytes, range-aware) and direct part uploads (raw body). Downloads redirect to
 // a presigned URL when the backend supports it, otherwise stream through here.
 
+import {
+  readableCollectionIds, listFor, wholeDriveFor, collectionsEnabled, assertCap, describeFor, refuseGrant,
+} from './scope.js';
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
@@ -1146,59 +1149,6 @@ async function assertContributorOwned(ctx, contributorId) {
 }
 
 /**
- * The collections this caller may read, optionally narrowed to one they asked for.
- * `undefined` when collections are disabled, which means "don't scope" downstream.
- *
- * Every drive-wide query needs this, and it has to be applied INSIDE the query rather
- * than by filtering results: a LIMIT spent on rows the caller can't see would report
- * "no matches" while matches they can see sit just past the cut.
- */
-async function readableCollectionIds(ctx, narrowTo) {
-  if (!collectionsEnabled(ctx)) return undefined;
-  // A NAMED collection is asserted, not filtered. Filtering an unreadable id out of the
-  // list answers "no results" for a collection the caller may not see — indistinguishable
-  // from one that is simply empty, so a permissions problem reads as an indexing problem.
-  // `access.collection` throws the 403 that says what actually happened.
-  if (narrowTo) {
-    await ctx.access.collection(narrowTo, 'read');
-    return [narrowTo];
-  }
-  return (await listFor(ctx)).map((c) => c.id);
-}
-
-// --- who is asking ------------------------------------------------------------
-//
-// On a key request `ctx.principal` is NULL and the authority lives on `ctx.grant`, so
-// handing the principal to CollectionService asks about the anonymous caller instead of
-// about the key. That failed in both directions: on a locked drive a correctly-scoped
-// key got `list(null) === []` and 403s from search, tags, backlinks, tasks and issues,
-// while on a `defaultOpen` drive the `anyone` grant let a key scoped to one collection
-// read and write every one of them through those same routes. engine/providers/access.js
-// was the only place that had it right.
-//
-// One helper per question, so "does this surface understand API keys" has one answer
-// rather than one per call site. Never a union of the two: a request bearing a key is
-// the key's request, and falling back to whatever session is attached is how a weak
-// credential borrows a strong one.
-
-const listFor = (ctx) =>
-  (ctx.grant ? ctx.collections.listForGrant(ctx.grant) : ctx.collections.list(ctx.principal));
-
-const wholeDriveFor = (ctx) =>
-  (ctx.grant ? ctx.collections.grantHasWholeDrive(ctx.grant) : ctx.collections.hasWholeDrive(ctx.principal));
-
-/**
- * Whether this deployment has an ACL layer at all.
- *
- * Read from configuration, not from whether `ctx.collections` is truthy. The two
- * agree when everything is wired correctly, and diverge exactly when it is not —
- * and a security check that stands down because a service is missing is one that
- * stops enforcing at the worst possible moment. Configuration says whether to
- * enforce; the service does the enforcing, and if it is absent this throws.
- */
-const collectionsEnabled = (ctx) => ctx.config?.collections !== false;
-
-/**
  * Managing collections is only meaningful where there is an ACL layer to manage.
  *
  * From config, not from `ctx.collections` being null — the two agree today only
@@ -1207,32 +1157,6 @@ const collectionsEnabled = (ctx) => ctx.config?.collections !== false;
  */
 function requireCollections(ctx) {
   if (!collectionsEnabled(ctx)) throw TroveError.unsupported('Collections are not enabled');
-}
-
-/** Returns the collection record, so a caller that needs it does not assert twice. */
-async function assertCap(ctx, collectionId, capability) {
-  if (!collectionsEnabled(ctx)) return ctx.collections.get(collectionId); // no ACL layer configured
-  return ctx.grant
-    ? ctx.collections.assertForGrant(ctx.grant, collectionId, capability)
-    : ctx.collections.assert(ctx.principal, collectionId, capability);
-}
-
-/** The `describe` that matches whoever asked, so the reported capabilities are theirs. */
-const describeFor = (ctx, c) =>
-  (ctx.grant ? ctx.collections.describeForGrant(c, ctx.grant) : ctx.collections.describe(c, ctx.principal));
-
-/**
- * Refuse a request that arrived on an API key.
- *
- * For the collection-ADMINISTRATION verbs, whose authority CollectionService reads from
- * the principal alone. A key request has no principal, so those methods judge it as the
- * anonymous caller — allowing everything on a `defaultOpen` drive and nothing on a locked
- * one. Rather than teach create/update/remove/setGrant about grants, keys stay out: a key
- * that can rewrite a collection's ACL can grant itself whatever it lacks, which is the
- * self-escalation shape `requireHumanAdmin` refuses for the same reason.
- */
-function refuseGrant(ctx, action) {
-  if (ctx.grant) throw TroveError.forbidden(`An API key cannot ${action} — sign in instead`);
 }
 
 /**

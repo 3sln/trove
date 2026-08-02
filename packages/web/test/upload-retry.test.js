@@ -69,7 +69,7 @@ test('a failed transfer offers a retry, and it reuses the same row', async () =>
   transfers.start('x1', 'notes.txt', 100, controller, { retry: () => { attempts++; } });
   transfers.finish('x1', 'error', 'Upload session not found');
 
-  const row = transfers.state.items.find((t) => t.id === 'x1');
+  const row = transfers.get().items.find((t) => t.id === 'x1');
   expect(row.status).toBe('error');
   expect(row.retryable).toBe(true);
 
@@ -77,7 +77,7 @@ test('a failed transfer offers a retry, and it reuses the same row', async () =>
   expect(attempts).toBe(1);
   // One row, not two. A retry is another attempt at the thing already asked for, and a
   // tray that grew an entry per attempt would report one upload as four.
-  expect(transfers.state.items.length).toBe(1);
+  expect(transfers.get().items.length).toBe(1);
 });
 
 test('restarting puts the row back in flight and clears the last failure', async () => {
@@ -87,7 +87,7 @@ test('restarting puts the row back in flight and clears the last failure', async
   transfers.finish('x1', 'error', 'boom');
 
   transfers.restart('x1', { abort() {} });
-  const row = transfers.state.items.find((t) => t.id === 'x1');
+  const row = transfers.get().items.find((t) => t.id === 'x1');
   expect(row.status).toBe('active');
   expect(row.error).toBe(null);
   // Progress resets: the bytes from the failed attempt are not evidence about this one.
@@ -101,7 +101,7 @@ test('a transfer with no way to be retried does not claim it can be', async () =
   const transfers = new TransfersService();
   transfers.start('x1', 'notes.txt', 100, { abort() {} });
   transfers.finish('x1', 'error', 'boom');
-  expect(transfers.state.items[0].retryable).toBe(false);
+  expect(transfers.get().items[0].retryable).toBe(false);
   expect(transfers.retry('x1')).toBe(null);
 });
 
@@ -121,7 +121,7 @@ test('dismissing a transfer releases the File it was holding', async () => {
   transfers.finish('x1', 'error', 'boom');
   transfers.dismiss('x1');
   expect(transfers.retry('x1')).toBe(null);
-  expect(transfers.state.items.length).toBe(0);
+  expect(transfers.get().items.length).toBe(0);
 });
 
 test('clearing finished transfers releases theirs too', async () => {
@@ -130,6 +130,6 @@ test('clearing finished transfers releases theirs too', async () => {
   transfers.start('b', 'b.txt', 10, { abort() {} }, { retry: () => {} });
   transfers.finish('a', 'error', 'boom');
   transfers.clearDone();
-  expect(transfers.state.items.map((t) => t.id)).toEqual(['b']);
+  expect(transfers.get().items.map((t) => t.id)).toEqual(['b']);
   expect(transfers.retry('a')).toBe(null);
 });

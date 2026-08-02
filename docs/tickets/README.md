@@ -9,7 +9,6 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [017](017-second-front-doors-disagree.md) | Second front doors disagree | HTTP vs MCP, Workers vs Node/Bun — the runtime pair already caused the rotation stall |
 | [018](018-delete-the-dead-machinery.md) | Delete the dead machinery | ~400 unreachable lines, most of it advertised in module headers as live |
 | [019](019-the-prose-has-drifted-from-the-code.md) | The prose has drifted from the code | A wrong comment in this codebase is believed, because the right ones are so good |
 | [020](020-state-that-escapes-the-engine.md) | State that escapes the engine | Side channels the resource graph cannot see — `window.__trove` ships to production |

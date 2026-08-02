@@ -8,12 +8,14 @@
 import { cell } from '../runtime.js';
 
 export class SocialService {
+  #state;
+
   constructor(platform, offline = null) {
     // How a comment or tag written while disconnected reaches the server later.
     this.offline = offline;
     this.platform = platform;
     this.api = platform.api;
-    this.state = {
+    this.#state = {
       me: null,
       notifications: { items: [], unread: 0 },
       inboxOpen: false,
@@ -24,16 +26,28 @@ export class SocialService {
       posting: false,
       replyTo: null, // { id, author } when composing a reply
     };
-    this.cell = cell(this.state);
+    this.cell = cell(this.#state);
     this._pollTimer = null;
+  }
+
+  /**
+   * The value, for whoever is about to decide something from it.
+   *
+   * The same door every slice offers. Actions read `.state` and queries read `.cell`, and
+   * the two are only equal by habit — bl/state.js says so, and says a resource has one
+   * value and one way to read it. `state` is also a public field on a service, which is one
+   * typo from `social.state.sidecar = null` bypassing the cell and notifying nothing.
+   */
+  get() {
+    return this.#state;
   }
 
   observe() {
     return this.cell;
   }
   #set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
+    this.#state = { ...this.#state, ...patch };
+    this.cell.setValue(this.#state);
   }
 
   async init() {
@@ -60,14 +74,14 @@ export class SocialService {
   }
 
   toggleInbox(open) {
-    const next = open ?? !this.state.inboxOpen;
+    const next = open ?? !this.#state.inboxOpen;
     this.#set({ inboxOpen: next });
-    if (next && this.state.notifications.unread) this.markAllRead();
+    if (next && this.#state.notifications.unread) this.markAllRead();
   }
   async markAllRead() {
     try {
       await this.api.markNotificationsRead();
-      this.#set({ notifications: { ...this.state.notifications, unread: 0, items: this.state.notifications.items.map((i) => ({ ...i, read: true })) } });
+      this.#set({ notifications: { ...this.#state.notifications, unread: 0, items: this.#state.notifications.items.map((i) => ({ ...i, read: true })) } });
     } catch { /* ignore */ }
   }
 
@@ -83,10 +97,10 @@ export class SocialService {
       // same guard loadBacklinks already had. Without it, opening A then quickly opening
       // B let A resolve last, so `state.sidecar.nodeId` became A while B was on screen
       // and comment()/addTag()/removeTag() all wrote to A.
-      if (this.state.sidecar?.nodeId !== nodeId) return;
+      if (this.#state.sidecar?.nodeId !== nodeId) return;
       this.#set({ sidecar: { ...view, loading: false } });
     } catch (err) {
-      if (this.state.sidecar?.nodeId !== nodeId) return;
+      if (this.#state.sidecar?.nodeId !== nodeId) return;
       this.#set({ sidecar: { nodeId, loading: false, error: err.message, tags: [], comments: [] } });
     }
   }
@@ -102,26 +116,26 @@ export class SocialService {
     try {
       const res = await this.api.backlinks(nodeId);
       // A slower request for a previously-open item must not land on this one.
-      if (this.state.backlinks?.nodeId !== nodeId) return;
+      if (this.#state.backlinks?.nodeId !== nodeId) return;
       this.#set({ backlinks: { nodeId, items: res.items || [], loading: false, error: null } });
     } catch (err) {
-      if (this.state.backlinks?.nodeId !== nodeId) return;
+      if (this.#state.backlinks?.nodeId !== nodeId) return;
       this.#set({ backlinks: { nodeId, items: [], loading: false, error: err.message } });
     }
   }
   async #reload() {
-    if (this.state.sidecar?.nodeId) await this.loadSidecar(this.state.sidecar.nodeId);
+    if (this.#state.sidecar?.nodeId) await this.loadSidecar(this.#state.sidecar.nodeId);
   }
 
   setReplyTo(target) {
     this.#set({ replyTo: target });
   }
   async comment(body) {
-    const nodeId = this.state.sidecar?.nodeId;
+    const nodeId = this.#state.sidecar?.nodeId;
     if (!nodeId || !body.trim()) return;
-    const parentId = this.state.replyTo?.id || null;
+    const parentId = this.#state.replyTo?.id || null;
     // Offline → queue the op; it replays (CRDT-merges) on reconnect.
-    if (this.offline && !this.offline.state.online) {
+    if (this.offline && !this.offline.get().online) {
       await this.offline.queueOp({ method: 'POST', path: `/api/items/${encodeURIComponent(nodeId)}/comments`, body: { body, parentId } });
       this.#set({ replyTo: null });
       this.platform.notifications.info('Offline — your comment will post when you reconnect.');
@@ -139,14 +153,14 @@ export class SocialService {
     }
   }
   async deleteComment(cid) {
-    const nodeId = this.state.sidecar?.nodeId;
+    const nodeId = this.#state.sidecar?.nodeId;
     await this.api.deleteComment(nodeId, cid).catch((e) => this.platform.notifications.error(e.message));
     await this.#reload();
   }
   async react(cid, emoji) {
-    const nodeId = this.state.sidecar?.nodeId;
-    const comment = findComment(this.state.sidecar?.comments || [], cid);
-    const on = !(comment?.reactions?.[emoji] || []).includes(this.state.me?.id);
+    const nodeId = this.#state.sidecar?.nodeId;
+    const comment = findComment(this.#state.sidecar?.comments || [], cid);
+    const on = !(comment?.reactions?.[emoji] || []).includes(this.#state.me?.id);
     try {
       await this.api.reactComment(nodeId, cid, emoji, on);
     } catch (err) {
@@ -155,9 +169,9 @@ export class SocialService {
     await this.#reload();
   }
   async addTag(name, value) {
-    const nodeId = this.state.sidecar?.nodeId;
+    const nodeId = this.#state.sidecar?.nodeId;
     if (!name.trim()) return;
-    if (this.offline && !this.offline.state.online) {
+    if (this.offline && !this.offline.get().online) {
       await this.offline.queueOp({ method: 'POST', path: `/api/items/${encodeURIComponent(nodeId)}/tags`, body: { name: name.trim(), value } });
       this.platform.notifications.info('Offline — tag will sync when you reconnect.');
       return;
@@ -166,9 +180,9 @@ export class SocialService {
     await this.#reload();
   }
   async removeTag(name) {
-    const nodeId = this.state.sidecar?.nodeId;
+    const nodeId = this.#state.sidecar?.nodeId;
     // Offline → queue like addTag so the removal isn't silently lost.
-    if (this.offline && !this.offline.state.online) {
+    if (this.offline && !this.offline.get().online) {
       await this.offline.queueOp({ method: 'DELETE', path: `/api/items/${encodeURIComponent(nodeId)}/tags/${encodeURIComponent(name)}` });
       this.platform.notifications.info('Offline — tag removal will sync when you reconnect.');
       return;
@@ -184,7 +198,7 @@ export class SocialService {
   // --- web push --------------------------------------------------------------
 
   async #detectPush() {
-    if (!this.state.pushSupported) return;
+    if (!this.#state.pushSupported) return;
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       const sub = await reg?.pushManager?.getSubscription();
@@ -193,7 +207,7 @@ export class SocialService {
   }
 
   async enablePush() {
-    if (!this.state.pushSupported) {
+    if (!this.#state.pushSupported) {
       this.platform.notifications.warn('Push notifications are not supported in this browser.');
       return;
     }

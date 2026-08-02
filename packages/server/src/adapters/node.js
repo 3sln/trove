@@ -11,7 +11,7 @@ import http from 'node:http';
 import fs, { readFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { Readable } from 'node:stream';
-import { createServer, configFromEnv, warnOnOpenAccess } from '../index.js';
+import { createServer, configFromEnv } from '../index.js';
 // This runtime HAS a filesystem, so it registers the filesystem driver. Imported from
 // storage/filesystem.js rather than the package barrel: that import is what pulls in
 // node:fs, and the Workers adapter deliberately never makes it — so there, Filesystem is
@@ -84,7 +84,6 @@ async function writeWebResponse(res, webRes) {
 
 const hasWeb = !!WEB_DIST;
 const envConfig = configFromEnv();
-warnOnOpenAccess(envConfig);
 const { handle, close } = await createServer({
   ...envConfig,
   storageDrivers: [filesystemDriver()],

@@ -24,19 +24,33 @@ const FILES_CACHE = 'trove-files-v1';
 const embed = new LocalHashEmbedding({ dimensions: 256 });
 
 export class OfflineService {
+  #state;
+
   constructor(platform) {
     this.platform = platform;
     this.api = platform.api;
     this.db = null;
-    this.state = { online: navigator.onLine, pins: [], queued: 0, syncing: false };
-    this.cell = cell(this.state);
+    this.#state = { online: navigator.onLine, pins: [], queued: 0, syncing: false };
+    this.cell = cell(this.#state);
   }
+  /**
+   * The value, for whoever is about to decide something from it.
+   *
+   * The same door every slice offers. Actions read `.state` and queries read `.cell`, and
+   * the two are only equal by habit — bl/state.js says so, and says a resource has one
+   * value and one way to read it. `state` is also a public field on a service, which is one
+   * typo from `social.state.sidecar = null` bypassing the cell and notifying nothing.
+   */
+  get() {
+    return this.#state;
+  }
+
   observe() {
     return this.cell;
   }
   #set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
+    this.#state = { ...this.#state, ...patch };
+    this.cell.setValue(this.#state);
   }
 
   async init() {
@@ -48,10 +62,10 @@ export class OfflineService {
     // `navigator.onLine` only reflects that an interface is up — on a captive portal or
     // dead uplink it's `true` while the server is unreachable, which would leave us
     // falsely "online" with every request silently failing. Confirm real reachability.
-    if (this.state.online && !(await this.api.reachable())) this.#set({ online: false });
+    if (this.#state.online && !(await this.api.reachable())) this.#set({ online: false });
     // Tell the plugin host our initial connectivity so it can probe plugins.
-    this.platform.plugins?.setOnline?.(this.state.online);
-    if (this.state.online) this.flushQueue();
+    this.platform.plugins?.setOnline?.(this.#state.online);
+    if (this.#state.online) this.flushQueue();
   }
 
   async #onOnline() {
@@ -110,7 +124,7 @@ export class OfflineService {
   }
 
   async unpin(id) {
-    const pin = this.state.pins.find((p) => p.id === id);
+    const pin = this.#state.pins.find((p) => p.id === id);
     if (pin && 'caches' in window) {
       const cache = await caches.open(FILES_CACHE);
       // The same stable key `pin` stored under — never a freshly minted URL.
@@ -157,7 +171,7 @@ export class OfflineService {
   }
 
   async flushQueue() {
-    if (!this.state.online || this.state.syncing) return;
+    if (!this.#state.online || this.#state.syncing) return;
     // Claim the sync BEFORE any await — two 'online' events (or init + an event) can
     // fire concurrently, and a check-then-act guard after an await let both pass and
     // replay the queue twice (double-posting). Setting syncing synchronously here makes
@@ -189,7 +203,7 @@ export class OfflineService {
       this.#set({ syncing: false });
       // Be honest: only claim success for what actually applied, and surface drops.
       if (dropped) this.platform.notifications.warn(`${dropped} offline change${dropped > 1 ? 's' : ''} couldn't be applied and ${dropped > 1 ? 'were' : 'was'} discarded.`);
-      if (synced && this.state.queued === 0) this.platform.notifications.info(`${synced} offline change${synced > 1 ? 's' : ''} synced.`);
+      if (synced && this.#state.queued === 0) this.platform.notifications.info(`${synced} offline change${synced > 1 ? 's' : ''} synced.`);
     }
   }
 }

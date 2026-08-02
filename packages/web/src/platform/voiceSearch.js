@@ -17,6 +17,8 @@ import { cell } from '../runtime.js';
 import { canTranscribeLocally, localAvailability, installLocal, listen } from './voice.js';
 
 export class VoiceSearchService {
+  #state;
+
   /**
    * @param {object} deps
    * @param {object} deps.notifications
@@ -25,21 +27,27 @@ export class VoiceSearchService {
     this.notifications = notifications;
     this.settings = settings;
     this.session = null;
-    this.state = { supported: canTranscribeLocally(), status: 'unknown', listening: false };
-    this.cell = cell(this.state);
+    this.#state = { supported: canTranscribeLocally(), status: 'unknown', listening: false };
+    this.cell = cell(this.#state);
+  }
+
+  /** The value, for whoever is about to decide something from it. See bl/state.js: one
+   *  value, one way to read it — a public `state` field is a second, writable door. */
+  get() {
+    return this.#state;
   }
 
   observe() {
     return this.cell;
   }
   #set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
+    this.#state = { ...this.#state, ...patch };
+    this.cell.setValue(this.#state);
   }
 
   /** Ask once whether an on-device language pack is ready, and remember the answer. */
   async refresh() {
-    if (!this.state.supported) return 'unavailable';
+    if (!this.#state.supported) return 'unavailable';
     const status = await localAvailability(this.#lang());
     this.#set({ status });
     return status;
@@ -51,7 +59,7 @@ export class VoiceSearchService {
 
   /** Can we offer a microphone button right now? */
   canListen() {
-    return this.state.supported && (this.state.status === 'available' || this.state.status === 'downloadable');
+    return this.#state.supported && (this.#state.status === 'available' || this.#state.status === 'downloadable');
   }
 
   /**
@@ -66,9 +74,9 @@ export class VoiceSearchService {
     // Focus AFTER the surface has rendered — the input does not exist yet on the frame
     // that opened it.
     await this.focusInput();
-    if (!this.state.supported) return { listening: false, reason: 'unsupported' };
+    if (!this.#state.supported) return { listening: false, reason: 'unsupported' };
 
-    const status = this.state.status === 'unknown' ? await this.refresh() : this.state.status;
+    const status = this.#state.status === 'unknown' ? await this.refresh() : this.#state.status;
     if (status === 'downloadable') {
       // Pressing the button IS the consent to fetch it; nothing downloads before that.
       this.notifications?.info('Downloading the on-device voice model — this happens once.');
@@ -125,7 +133,7 @@ export class VoiceSearchService {
   openSearchSurface() {
     const wb = this.workbench;
     if (!wb) return;
-    const onLauncher = wb.state.activity === 'home' && !wb.nav?.state?.activeTabId;
+    const onLauncher = wb.state.activity === 'home' && !wb.nav?.get?.().activeTabId;
     if (onLauncher) wb.closeSearchModal?.();
     else wb.openSearchModal();
   }

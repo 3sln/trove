@@ -213,3 +213,42 @@ test('every key written to a slice is declared in its initializer', () => {
   }
   expect(bad).toEqual([]);
 });
+
+// No resource keeps a public, writable copy of its value.
+//
+// bl/state.js names the problem and claimed it fixed: "TWO DOORS. Actions read `.state` and
+// queries read `.cell`, and the two are only equal by habit… A slice has one value and one
+// way to read it." Five reads in actions.js still went through `.state`, because the four
+// resources that stayed services never got a `get()` — and `state` was a PUBLIC field, one
+// typo from `social.state.sidecar = null` writing the value while notifying nobody.
+//
+// Two halves, because the resources are two shapes. A class whose cell carries one plain
+// value holds it privately and answers `get()`, which is what makes SLICE_API the contract
+// for slices and services alike. A keyed registry is not that shape — `context.get(key)`,
+// `settings.get(key)` and `contributions.get(uri)` are reads OF something rather than reads
+// of everything — so for those only the first half applies. Adding a no-arg `get()` beside
+// a keyed one would be a worse ambiguity than the one being removed.
+test('no resource keeps a public, writable copy of its value', () => {
+  const classes = new Map();
+  for (const file of sources()) {
+    const raw = read(file);
+    for (const m of code(raw).matchAll(/export class ([A-Za-z_$][\w$]*)\s*\{/g)) {
+      const open = m.index + m[0].length - 1;
+      classes.set(`${file}:${m[1]}`, raw.slice(open, matchBracket(raw, open)));
+    }
+  }
+  // If the class scan breaks this would pass by checking nothing.
+  expect([...classes.keys()].some((k) => k.endsWith(':OfflineService'))).toBe(true);
+
+  const bad = [];
+  for (const [name, body] of classes) {
+    const cellBacked = /\bobserve\s*\(\s*\)\s*\{/.test(body);
+    if (cellBacked && /\bthis\.state\s*=/.test(body)) {
+      bad.push(`${name} writes a public this.state beside its cell — use #state`);
+    }
+    if (/#state\b/.test(body) && !/(^|\s)get\s*\(\s*\)\s*\{/m.test(body)) {
+      bad.push(`${name} holds #state but offers no get()`);
+    }
+  }
+  expect(bad).toEqual([]);
+});

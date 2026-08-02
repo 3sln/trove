@@ -51,10 +51,12 @@ export function selectedNodesOf(state) {
  * fact is how they drift.
  */
 export class TransfersService {
+  #state;
+
   /** @param {import('./activity.js').ActivityService} [activity] */
   constructor(activity = null) {
-    this.state = { items: [] }; // { id, name, direction, ratio, loaded, total, status, error, retryable }
-    this.cell = cell(this.state);
+    this.#state = { items: [] }; // { id, name, direction, ratio, loaded, total, status, error, retryable }
+    this.cell = cell(this.#state);
     this._controllers = new Map();
     this.activity = activity;
     this._tasks = new Map(); // transfer id -> activity task handle
@@ -67,11 +69,17 @@ export class TransfersService {
     // and the alternative is asking the user to find the file and drag it in again.
     this._retries = new Map();
   }
+  /** The value, for whoever is about to decide something from it. See bl/state.js: one
+   *  value, one way to read it — a public `state` field is a second, writable door. */
+  get() {
+    return this.#state;
+  }
+
   observe() {
     return this.cell;
   }
   #emit() {
-    this.cell.setValue(this.state);
+    this.cell.setValue(this.#state);
   }
   /**
    * @param {{retry?: () => Promise<any>}} [opts] how to run this transfer again, if it can be
@@ -79,8 +87,8 @@ export class TransfersService {
   start(id, name, total, controller, { retry = null } = {}) {
     this._controllers.set(id, controller);
     if (retry) this._retries.set(id, retry);
-    this.state = {
-      items: [...this.state.items, {
+    this.#state = {
+      items: [...this.#state.items, {
         id, name, direction: 'up', ratio: 0, loaded: 0, total, status: 'active', error: null,
         // Surfaced in state so the tray renders from a snapshot rather than interrogating
         // the service — it is a fact about the row, like `status`.
@@ -109,7 +117,7 @@ export class TransfersService {
   retry(id) {
     const again = this._retries.get(id);
     if (!again) return null;
-    const item = this.state.items.find((t) => t.id === id);
+    const item = this.#state.items.find((t) => t.id === id);
     if (!item || item.status === 'active') return null;
     return again();
   }
@@ -117,9 +125,9 @@ export class TransfersService {
   /** Put an existing row back into flight — see `retry`. */
   restart(id, controller) {
     this._controllers.set(id, controller);
-    const item = this.state.items.find((t) => t.id === id);
-    this.state = {
-      items: this.state.items.map((t) => (t.id === id
+    const item = this.#state.items.find((t) => t.id === id);
+    this.#state = {
+      items: this.#state.items.map((t) => (t.id === id
         ? { ...t, status: 'active', error: null, ratio: 0, loaded: 0 }
         : t)),
     };
@@ -130,12 +138,12 @@ export class TransfersService {
     this.#task(id, item?.name || 'file', item?.total || null);
   }
   progress(id, { loaded, total, ratio }) {
-    this.state = { items: this.state.items.map((t) => (t.id === id ? { ...t, loaded, total, ratio } : t)) };
+    this.#state = { items: this.#state.items.map((t) => (t.id === id ? { ...t, loaded, total, ratio } : t)) };
     this.#emit();
     this._tasks.get(id)?.progress({ done: loaded, total: total || null });
   }
   finish(id, status = 'done', error = null) {
-    this.state = { items: this.state.items.map((t) => (t.id === id ? { ...t, status, error, ratio: status === 'done' ? 1 : t.ratio } : t)) };
+    this.#state = { items: this.#state.items.map((t) => (t.id === id ? { ...t, status, error, ratio: status === 'done' ? 1 : t.ratio } : t)) };
     this._controllers.delete(id);
     this.#emit();
     const task = this._tasks.get(id);
@@ -152,17 +160,17 @@ export class TransfersService {
     this.finish(id, 'cancelled');
   }
   dismiss(id) {
-    this.state = { items: this.state.items.filter((t) => t.id !== id) };
+    this.#state = { items: this.#state.items.filter((t) => t.id !== id) };
     this._retries.delete(id);
     this.#emit();
   }
   clearDone() {
-    const kept = this.state.items.filter((t) => t.status === 'active');
+    const kept = this.#state.items.filter((t) => t.status === 'active');
     const keptIds = new Set(kept.map((t) => t.id));
     // Drop the retry thunks of the rows that just left, so a dismissed upload does not
     // hold its File alive for the rest of the session.
     for (const id of [...this._retries.keys()]) if (!keptIds.has(id)) this._retries.delete(id);
-    this.state = { items: kept };
+    this.#state = { items: kept };
     this.#emit();
   }
 }

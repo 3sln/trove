@@ -32,10 +32,12 @@ const ACTIVE_MS = 1000; // while something is running, we want a live-feeling ba
 const IDLE_MS = 60_000; // otherwise just enough to notice a task someone else started
 
 export class ActivityService {
+  #state;
+
   constructor(platform) {
     this.platform = platform;
     this.api = platform.api;
-    this.state = {
+    this.#state = {
       tasks: [], // merged: local first, then the server mirror
       issues: [],
       issuesLoading: false,
@@ -48,19 +50,31 @@ export class ActivityService {
       issuesError: null,
       open: false, // the activity panel
     };
-    this.cell = cell(this.state);
+    this.cell = cell(this.#state);
     this._local = new Map(); // id -> local task (this browser owns these)
     this._server = [];
     this._timer = null;
     this._pollMs = null;
   }
 
+  /**
+   * The value, for whoever is about to decide something from it.
+   *
+   * The same door every slice offers. Actions read `.state` and queries read `.cell`, and
+   * the two are only equal by habit — bl/state.js says so, and says a resource has one
+   * value and one way to read it. `state` is also a public field on a service, which is one
+   * typo from `social.state.sidecar = null` bypassing the cell and notifying nothing.
+   */
+  get() {
+    return this.#state;
+  }
+
   observe() {
     return this.cell;
   }
   #set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
+    this.#state = { ...this.#state, ...patch };
+    this.cell.setValue(this.#state);
   }
   #merge() {
     this.#set({ tasks: [...this._local.values(), ...this._server] });
@@ -219,7 +233,7 @@ export class ActivityService {
   }
 
   async dismissIssue(id) {
-    const before = this.state.issues;
+    const before = this.#state.issues;
     this.#set({ issues: before.filter((i) => i.id !== id) });
     try {
       await this.api.dismissIssue(id);
@@ -302,12 +316,12 @@ export class ActivityService {
   }
 
   togglePanel(open) {
-    this.#set({ open: open ?? !this.state.open });
-    if (this.state.open) this.refresh();
+    this.#set({ open: open ?? !this.#state.open });
+    if (this.#state.open) this.refresh();
   }
 
   get running() {
-    return this.state.tasks.filter((t) => t.status === 'running');
+    return this.#state.tasks.filter((t) => t.status === 'running');
   }
 
   /**

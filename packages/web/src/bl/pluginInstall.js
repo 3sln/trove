@@ -67,7 +67,7 @@ async function review({ notifications, overlay, plugins, social, workbench }, pk
     kind: 'plugin-review',
     summary,
     policy,
-    isAdmin: !!social.state.admin,
+    isAdmin: !!social.get().admin,
     onInstall: async (grants) => {
       overlay.set({ dialog: null });
       // Account installs upload the package + run a handshake that can take a while —

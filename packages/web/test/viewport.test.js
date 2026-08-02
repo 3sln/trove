@@ -31,10 +31,10 @@ test('a narrow window is a phone whether or not it is a phone', () => {
   // beside a panel — so it gets the phone's answer. Keying off touch instead would leave
   // a 380px browser window rendering chrome that doesn't fit.
   const vp = new ViewportService({ window: fakeWindow({ width: 380 }), settings: settingsStub() });
-  expect(vp.state.mode).toBe('phone');
+  expect(vp.get().mode).toBe('phone');
 
   const touchLaptop = new ViewportService({ window: fakeWindow({ width: 1400, coarse: true }), settings: settingsStub() });
-  expect(touchLaptop.state.mode).toBe('desktop');
+  expect(touchLaptop.get().mode).toBe('desktop');
 });
 
 test('a television is only believed when the screen is big enough to be one', () => {
@@ -48,15 +48,15 @@ test('a television is only believed when the screen is big enough to be one', ()
     window: fakeWindow({ width: 1920, height: 1080, ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0)' }),
     settings: settingsStub(),
   });
-  expect(tv.state.mode).toBe('tv');
+  expect(tv.get().mode).toBe('tv');
 });
 
 test('what the user chose beats what we guessed', () => {
   // The whole reason this is a setting: a browser on a set-top box usually looks like a
   // large desktop, and someone driving it with a remote must be able to say so.
   const vp = new ViewportService({ window: fakeWindow({ width: 1920 }), settings: settingsStub('tv') });
-  expect(vp.state.mode).toBe('tv');
-  expect(vp.state.forced).toBe(true);
+  expect(vp.get().mode).toBe('tv');
+  expect(vp.get().forced).toBe(true);
 });
 
 test('?ui= beats even the setting, so a shell can be checked from any machine', () => {
@@ -64,10 +64,10 @@ test('?ui= beats even the setting, so a shell can be checked from any machine', 
     window: fakeWindow({ width: 1920, url: 'http://x/?ui=phone' }),
     settings: settingsStub('desktop'),
   });
-  expect(vp.state.mode).toBe('phone');
+  expect(vp.get().mode).toBe('phone');
   // Nonsense in the URL falls through to the normal decision rather than breaking the app.
   const junk = new ViewportService({ window: fakeWindow({ width: 1920, url: 'http://x/?ui=fridge' }), settings: settingsStub() });
-  expect(junk.state.mode).toBe('desktop');
+  expect(junk.get().mode).toBe('desktop');
 });
 
 test('resizing across the boundary republishes; jiggling inside it does not', async () => {
@@ -84,7 +84,7 @@ test('resizing across the boundary republishes; jiggling inside it does not', as
   win.innerWidth = 390;
   vp.refresh();
   expect(seen).toEqual(['desktop', 'phone', 'phone']); // width changed each time
-  expect(vp.state.mode).toBe('phone');
+  expect(vp.get().mode).toBe('phone');
 
   // No change at all: no event. A re-render per resize event would be one per frame while
   // a window is being dragged.

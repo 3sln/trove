@@ -524,7 +524,7 @@ export class FilterAction extends Action {
       return;
     }
     search.set({ query: this.text, loading: true, error: null, filtered: true });
-    if (r.offline && !r.offline.state.online) {
+    if (r.offline && !r.offline.get().online) {
       const items = (r.explorer.get().items || []).filter((n) => matchesTagFilters(n, this.filters));
       search.set({ results: items.map((node) => ({ node })), loading: false, ran: true, filtered: true, offline: true });
       return;
@@ -592,7 +592,7 @@ export class SearchAction extends Action {
     search.set({ query: this.query, mode, loading: true, error: null, resolved: null });
     const offline = r.offline;
     // Offline (or server unreachable) → search the pinned corpus locally.
-    if (offline && !offline.state.online) {
+    if (offline && !offline.get().online) {
       try {
         const results = await offline.searchOffline(q, { limit: 40 });
         search.set({ results, loading: false, ran: true, offline: true, resolved: null });
@@ -1460,9 +1460,9 @@ export class CloseOverlaysAction extends Action {
     // plugin panel deliberately: it opens BY ITSELF when a storage check finishes, and
     // Escape should not close what you opened on purpose in order to dismiss what
     // appeared on its own.
-    if (activity.state?.open) return activity.togglePanel(false);
+    if (activity.get().open) return activity.togglePanel(false);
     // Nothing floating: Escape pops the top viewer panel instead.
-    if (navigation.state.stack.length > 1) navigation.back();
+    if (navigation.get().stack.length > 1) navigation.back();
   }
 }
 
@@ -1778,7 +1778,7 @@ export class ClearSidecarAction extends Action {
   static deps = ['social'];
   constructor(nodeId) { super(); this.nodeId = nodeId; }
   async execute({ social }) {
-    if (social.state.sidecar?.nodeId === this.nodeId) social.loadSidecar(null);
+    if (social.get().sidecar?.nodeId === this.nodeId) social.loadSidecar(null);
   }
 }
 

@@ -58,6 +58,14 @@ export async function createServer(config = {}) {
   // from it and /api/capabilities describes it, so the form a user sees and the set of
   // things the server can actually construct cannot drift apart.
   config = { ...config, storageRegistry: storageRegistry(config) };
+  // Here, not in the adapters. Three of the four called it and the Worker one did not —
+  // and a default `wrangler deploy` satisfies the condition exactly: `configFromEnv`
+  // leaves identity anonymous when TROVE_AUTH is unset and `defaultOpen` defaults true, so
+  // the drive went up world-readable and world-writable on a public URL with a clean log,
+  // while the identical config under Bun printed the warning. No adapter can forget it
+  // from here. It fires per isolate cold start rather than per process, which is noisier
+  // only for the deployments that really are open to everyone.
+  warnOnOpenAccess(config);
   const lifecycleState = { closing: false, background: null };
   const engine = createDriveEngine(config, lifecycleState);
 
@@ -263,31 +271,24 @@ export async function createServer(config = {}) {
     return out;
   }
 
-  // Periodic maintenance. Both of these caches are otherwise unbounded: abandoned
-  // upload sessions (a client that starts an upload and never finishes) accumulate in
-  // the session store forever, and sidecar documents stay resident after their last
-  // access. Each has a sweep that had nothing calling it — this is that caller.
+  // Periodic maintenance for a runtime whose timers survive the request.
+  //
+  // The BODY is `runMaintenance`, the same function the Worker's cron calls, because this
+  // is where the two schedulers drift. `stepRotations`'s docblock already demanded it —
+  // "One function, both callers, so the next thing added to periodic work cannot land in
+  // one scheduler and not the other" — and two things had since landed in one and not the
+  // other: `checkStorage`, so a bucket whose CORS or credentials changed went unnoticed on
+  // the runtime Trove is actually self-hosted on until someone opened Activity and pressed
+  // a button, and `notifications.flush()`.
+  //
+  // `scan: false` keeps the opt-in split below. Everything else — the unbounded upload
+  // session and sidecar caches, trash retention, mention delivery, the storage preflight,
+  // and finishing a rotation someone started — happens on every firing on every runtime.
   let maintenance = null;
   if (config.startFlusher !== false && config.maintenanceIntervalMs !== 0) {
     const everyMs = config.maintenanceIntervalMs ?? 5 * 60 * 1000;
-    // Trash retention. This is the only thing in Trove that destroys data on a timer,
-    // so it is opt-outable (TROVE_TRASH_DAYS=0 keeps the trash forever) and it says what
-    // it removed. 30 days is the same grace period the drives people are used to give.
-    const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     maintenance = setInterval(() => {
-      Promise.resolve(vfs.uploads.sweepExpired(Date.now()))
-        // NOT `sidecar.sweep?.()` — that name did not exist on SidecarService, and the
-        // optional call turned "evict idle documents" into a no-op for the process's
-        // whole lifetime. It exists now, and the `?.` is gone so a rename shows up.
-        .then(() => sidecar.sweep())
-        .then(() => (trashMs > 0 ? vfs.purgeTrash({ before: Date.now() - trashMs }) : null))
-        .then((r) => { if (r?.purged) console.log(`[trove] purged ${r.purged} item(s) from the trash after ${config.trashRetentionDays ?? 30} days`); })
-        // A rotation started through the API finishes on its own here. Unlike a scan this
-        // is NOT opt-in: it only touches collections someone has explicitly put into
-        // rotation, and leaving one half-moved is worse than the work of finishing it.
-        .then(() => (collections ? collections.all().catch(() => []) : []))
-        .then((targets) => stepRotations(targets, Math.max(1000, Math.floor(everyMs / 4))))
-        .then((moved) => { for (const m of moved) if (m.moved) console.log(`[trove] rotation ${m.collectionId}: ${m.moved} moved, ${m.status}`); })
+      runMaintenance({ scan: false, budgetMs: Math.max(4000, Math.floor(everyMs / 4)) })
         .catch((e) => console.error('maintenance sweep failed', e));
     }, everyMs);
     maintenance.unref?.();
@@ -298,16 +299,18 @@ export async function createServer(config = {}) {
   // metered API and real load on a NAS. A deployment that shares its bucket with other
   // tools wants this on; one where Trove is the only writer doesn't need it at all, and
   // can scan on demand instead.
+  //
+  // The same function again, with scanning on. It repeats the sweeps that the maintenance
+  // tick also does — all of them idempotent, and concurrent drains collapse — which is a
+  // smaller price than a third hand-written body of periodic work. What it is NOT allowed
+  // to do is pick its own collection list: this used to walk `collections.list(null)`,
+  // "what may the anonymous principal read", so on any drive that is not open to the
+  // public the scheduled scan silently scanned nothing whatsoever.
   let scanTimer = null;
   if (config.startFlusher !== false && config.scanIntervalMs) {
     scanTimer = setInterval(() => {
       if (tasks.list().some((t) => t.kind === 'scan' && t.status === 'running')) return; // still going
-      Promise.resolve(collections ? collections.list(null).catch(() => []) : [])
-        .then(async (list) => {
-          for (const c of list) {
-            await startScan(c.id, { reason: 'Scheduled' }).catch(() => {});
-          }
-        })
+      runMaintenance({ scan: true, budgetMs: Math.max(4000, Math.floor(config.scanIntervalMs / 2)) })
         .catch((e) => console.error('scheduled scan failed', e));
     }, config.scanIntervalMs);
     scanTimer.unref?.();
@@ -516,8 +519,14 @@ export async function createServer(config = {}) {
       });
     const trashMs = (config.trashRetentionDays ?? 30) * 86400_000;
     if (trashMs > 0) out.purged = (await vfs.purgeTrash({ before: Date.now() - trashMs }))?.purged || 0;
+    // Said out loud, on every runtime. This is the only thing in Trove that destroys data
+    // on a timer, so it is opt-outable (TROVE_TRASH_DAYS=0 keeps the trash forever) and it
+    // reports what it removed.
+    if (out.purged) {
+      console.log(`[trove] purged ${out.purged} item(s) from the trash after ${config.trashRetentionDays ?? 30} days`);
+    }
     out.swept = true;
-    if (!scan) return out;
+
     // `all()` rather than `list(null)`. Maintenance has no user, and `list(null)` answers
     // "what may the anonymous principal read" — which on any drive that is not open to the
     // public is nothing, so the scheduled scan silently scanned no collection whatsoever.
@@ -528,17 +537,25 @@ export async function createServer(config = {}) {
     if (!targets.length) return out;
     // Share the budget across collections so one huge bucket can't starve the rest.
     const each = Math.max(1000, Math.floor(budgetMs / targets.length));
-    for (const c of targets) {
-      const r = await startScan(c.id, { reason: 'Scheduled', deadlineMs: each }).catch((e) => ({ error: e.message }));
-      out.scans.push({ collectionId: c.id, ...r });
+    if (scan) {
+      for (const c of targets) {
+        const r = await startScan(c.id, { reason: 'Scheduled', deadlineMs: each }).catch((e) => ({ error: e.message }));
+        out.scans.push({ collectionId: c.id, ...r });
+      }
     }
 
-    // A rotation that has been started finishes on its own — see `stepRotations`, which
-    // the interval scheduler shares so the two cannot drift apart.
+    // A rotation that has been started finishes on its own, and NOT gated on `scan`.
+    // Scanning is opt-in because it costs money on a bucket nobody asked us to walk; a
+    // rotation only touches collections someone explicitly put into rotation, and leaving
+    // one half-moved is worse than the work of finishing it. Tying the two together is how
+    // `POST /rotate` came to mint a key, report "running", and move nothing forever.
     //
     // Last, and out of what the scans left, because a rotation is elective and a scan is
     // how the drive notices files that changed underneath it.
     out.rotated = await stepRotations(targets, each);
+    for (const m of out.rotated) {
+      if (m.moved) console.log(`[trove] rotation ${m.collectionId}: ${m.moved} moved, ${m.status}`);
+    }
     return out;
   }
 
@@ -604,7 +621,11 @@ export const SAMPLE_CSP = [
 /**
  * Warn (once, to the console) when a configuration is world-open — anonymous auth
  * plus the default collection granting everyone every capability. Safe on
- * localhost, dangerous when exposed. Called by the runnable adapters at startup.
+ * localhost, dangerous when exposed.
+ *
+ * Called from `createServer`, so it covers every adapter that exists and every one that
+ * will. It was called by the adapters, and the Worker adapter — the one whose default
+ * deploy is world-open on a public URL — was the one that did not call it.
  */
 export function warnOnOpenAccess(config = {}) {
   const anon = !config.identity || config.identity.driver === 'anonymous' || config.identity === 'anonymous';

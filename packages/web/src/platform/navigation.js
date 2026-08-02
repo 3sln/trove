@@ -11,26 +11,40 @@ const RECENTS_KEY = 'trove.recents';
 const RECENTS_MAX = 12;
 
 export class NavigationService {
+  #state;
+
   constructor() {
-    this.state = {
+    this.#state = {
       stack: [{ kind: 'search' }], // [{kind:'search'}, {kind:'file', id, node, openerId}, …]
       activeTabId: null, // top file panel id (or null)
       activeFile: null, // top file panel node (or null)
       recents: loadRecents(),
     };
-    this.cell = cell(this.state);
+    this.cell = cell(this.#state);
+  }
+
+  /**
+   * The value, for whoever is about to decide something from it.
+   *
+   * The same door every slice offers. Actions read `.state` and queries read `.cell`, and
+   * the two are only equal by habit — bl/state.js says so, and says a resource has one
+   * value and one way to read it. `state` is also a public field on a service, which is one
+   * typo from `social.state.sidecar = null` bypassing the cell and notifying nothing.
+   */
+  get() {
+    return this.#state;
   }
 
   observe() {
     return this.cell;
   }
   #set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.cell.setValue(this.state);
+    this.#state = { ...this.#state, ...patch };
+    this.cell.setValue(this.#state);
   }
 
   #top() {
-    return this.state.stack[this.state.stack.length - 1];
+    return this.#state.stack[this.#state.stack.length - 1];
   }
   /** The active file panel (top of the stack, if it's a file). */
   activeTab() {
@@ -61,25 +75,25 @@ export class NavigationService {
     if (reset) {
       stack = [{ kind: 'search' }, panel];
     } else {
-      const at = this.state.stack.findIndex((p) => p.kind === 'file' && p.id === node.id);
+      const at = this.#state.stack.findIndex((p) => p.kind === 'file' && p.id === node.id);
       if (at >= 0) {
         // Already open — jump back to it, but adopt the (possibly new) opener so
         // reopening with a different one actually switches the viewer.
-        stack = this.state.stack.slice(0, at + 1);
+        stack = this.#state.stack.slice(0, at + 1);
         stack[at] = panel;
       } else {
-        stack = [...this.state.stack, panel];
+        stack = [...this.#state.stack, panel];
       }
     }
     this.#pushRecent(node);
     this.#applyStack(stack);
   }
   back() {
-    if (this.state.stack.length <= 1) return;
+    if (this.#state.stack.length <= 1) return;
     try { history.back(); } catch { this.pop(); }
   }
   pop() {
-    if (this.state.stack.length > 1) this.#applyStack(this.state.stack.slice(0, -1), { history: false });
+    if (this.#state.stack.length > 1) this.#applyStack(this.#state.stack.slice(0, -1), { history: false });
   }
   /**
    * The node is GONE — drop it from everywhere this service holds a copy.
@@ -94,12 +108,12 @@ export class NavigationService {
    * round — a tile that leads nowhere is worse than one that is missing.
    */
   forget(id) {
-    const recents = this.state.recents.filter((r) => r.id !== id);
-    if (recents.length !== this.state.recents.length) {
+    const recents = this.#state.recents.filter((r) => r.id !== id);
+    if (recents.length !== this.#state.recents.length) {
       this.#set({ recents });
       saveRecents(recents);
     }
-    const stack = this.state.stack.filter((p) => !(p.kind === 'file' && p.id === id));
+    const stack = this.#state.stack.filter((p) => !(p.kind === 'file' && p.id === id));
     this.#applyStack(stack.length ? stack : [{ kind: 'search' }], { history: false });
   }
   /**
@@ -111,14 +125,14 @@ export class NavigationService {
    * list, which reads as the rename half-failing.
    */
   updateTabNode(node) {
-    const recents = this.state.recents.map((r) => (r.id === node.id
+    const recents = this.#state.recents.map((r) => (r.id === node.id
       ? { ...r, name: node.name, contentType: node.contentType || r.contentType }
       : r));
-    if (recents.some((r, i) => r !== this.state.recents[i])) {
+    if (recents.some((r, i) => r !== this.#state.recents[i])) {
       this.#set({ recents });
       saveRecents(recents);
     }
-    const stack = this.state.stack.map((p) => (p.kind === 'file' && p.id === node.id ? { ...p, node } : p));
+    const stack = this.#state.stack.map((p) => (p.kind === 'file' && p.id === node.id ? { ...p, node } : p));
     this.#applyStack(stack, { history: false });
   }
 
@@ -127,7 +141,7 @@ export class NavigationService {
     const top = this.#top();
     const n = top?.node;
     const entry = {
-      troveDepth: this.state.stack.length,
+      troveDepth: this.#state.stack.length,
       node: n ? { id: n.id, name: n.name, contentType: n.contentType, collectionId: n.collectionId } : null,
       openerId: top?.openerId || null,
     };
@@ -137,17 +151,17 @@ export class NavigationService {
   onPopState(e) {
     const s = e?.state || {};
     const depth = s.troveDepth || 1;
-    if (depth <= this.state.stack.length) {
-      this.#applyStack(this.state.stack.slice(0, depth), { history: false });
+    if (depth <= this.#state.stack.length) {
+      this.#applyStack(this.#state.stack.slice(0, depth), { history: false });
     } else if (s.node) {
-      this.#applyStack([...this.state.stack, { kind: 'file', id: s.node.id, node: s.node, openerId: s.openerId }], { history: false });
+      this.#applyStack([...this.#state.stack, { kind: 'file', id: s.node.id, node: s.node, openerId: s.openerId }], { history: false });
     }
   }
 
   #pushRecent(node) {
     if (!node) return;
     const entry = { id: node.id, name: node.name, contentType: node.contentType || '', collectionId: node.collectionId };
-    const recents = [entry, ...this.state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
+    const recents = [entry, ...this.#state.recents.filter((r) => r.id !== node.id)].slice(0, RECENTS_MAX);
     this.#set({ recents });
     saveRecents(recents);
   }

@@ -364,6 +364,17 @@ test('an agent is exactly as privileged as the person whose token it holds', asy
   expect(searched.text).not.toContain('secret.txt');
   expect(searched.text).not.toContain('swordfish');
 
+  // Naming the forbidden collection is REFUSED, not answered "no results". MCP kept its
+  // own copy of the readable-collection rule and it FILTERED where routes.js asserts —
+  // and routes.js spells out why right above the same function: "a permissions problem
+  // reads as an indexing problem". On this surface that is worse than confusing, it is
+  // expensive: the model is told "No files matched… Try different words" and rephrases,
+  // repeatedly, against a 403 that will never change.
+  const named = await callTool(handle, 'search_files', { query: 'combination', collection: priv.id }, { token: bob });
+  expect(named.isError).toBe(true);
+  expect(named.text).not.toMatch(/No files matched/);
+  expect(named.text).not.toContain('swordfish');
+
   // What he can read, he can read.
   const allowed = await callTool(handle, 'read_file', { file: 'public.txt', collection: shared.id }, { token: bob });
   expect(allowed.isError).toBe(false);

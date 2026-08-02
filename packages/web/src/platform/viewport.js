@@ -29,6 +29,8 @@ export function looksLikeTv(ua = '', width = 0) {
 }
 
 export class ViewportService {
+  #state;
+
   /**
    * @param {object} [deps]
    * @param {Window} [deps.window] the window to measure and listen to
@@ -40,9 +42,15 @@ export class ViewportService {
     // A URL override outranks the setting: it is how someone checks the phone layout on
     // a laptop, and how the e2e suite drives each shell without a device farm.
     this.urlOverride = readUrlOverride(win);
-    this.state = this.#measure();
-    this.cell = cell(this.state);
+    this.#state = this.#measure();
+    this.cell = cell(this.#state);
     this._onResize = () => this.refresh();
+  }
+
+  /** The value, for whoever is about to decide something from it. See bl/state.js: one
+   *  value, one way to read it — a public `state` field is a second, writable door. */
+  get() {
+    return this.#state;
   }
 
   observe() {
@@ -58,7 +66,7 @@ export class ViewportService {
      // stopped returning something with `.subscribe` it would have become a silent
      // no-op and the viewport would have stopped following its own setting.
     if (this.settings) effect(this.settings.observe(), () => this.refresh());
-    this.#publish(this.state);
+    this.#publish(this.#state);
     return this;
   }
 
@@ -69,10 +77,10 @@ export class ViewportService {
 
   refresh() {
     const next = this.#measure();
-    const same = next.mode === this.state.mode && next.width === this.state.width
-      && next.height === this.state.height && next.coarse === this.state.coarse;
+    const same = next.mode === this.#state.mode && next.width === this.#state.width
+      && next.height === this.#state.height && next.coarse === this.#state.coarse;
     if (same) return;
-    this.state = next;
+    this.#state = next;
     this.#publish(next);
     this.cell.setValue(next);
   }

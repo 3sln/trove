@@ -15,6 +15,13 @@
 import { TroveError } from '@3sln/trove/core';
 import { troveUri } from '@3sln/trove/core/links.js';
 import { toolText } from './protocol.js';
+// The one implementation of "what may this caller reach", shared with the HTTP routes.
+// This file had its own, and it FILTERED a named collection out of the readable list
+// where routes.js asserts it — so `search_files` answered "No files matched… Try
+// different words" for a collection the caller may not see, and the model burned turns
+// rephrasing what was really a 403. `ctx.access` is on the MCP ctx, so the assert path
+// was available all along.
+import { readableCollectionIds, listFor, collectionsEnabled } from '../scope.js';
 
 // A file read has to fit in a context window and in memory. Past this the tool returns
 // the head and says so, which is far more useful than refusing or than silently
@@ -30,28 +37,6 @@ looking for something, search for it — do not try to construct a path.
 
 Files reference each other with trove: URIs (trove:default?name=notes.md). Search matches
 meaning as well as words, so a description of the content works as a query.`;
-
-/**
- * Whether this deployment has an ACL layer at all — from configuration, never from
- * whether `ctx.collections` happens to be there. The two agree while everything is
- * wired correctly and diverge exactly when it is not, and here the failure mode is an
- * agent quietly reading every collection in the drive.
- */
-const enforcing = (ctx) => ctx.config?.collections !== false;
-
-/**
- * Collections this principal can read, or undefined when there is no ACL layer.
- *
- * `undefined` means "do not scope the query", which is only correct when there is
- * nothing to scope BY. Search and backlinks reach across collections by design, so an
- * unscoped query hands back names, ids and `trove:` URIs from collections the caller
- * cannot read.
- */
-async function readable(ctx, narrowTo) {
-  if (!enforcing(ctx)) return undefined;
-  const ids = (await ctx.collections.list(ctx.principal)).map((c) => c.id);
-  return narrowTo ? ids.filter((id) => id === narrowTo) : ids;
-}
 
 /**
  * A file, and the operations this agent may perform on it.
@@ -148,7 +133,7 @@ export function registerTroveTools(server) {
     },
     async run({ query, collection, limit }, ctx) {
       if (!query?.trim()) throw TroveError.invalid('query is required');
-      const collectionIds = await readable(ctx, collection);
+      const collectionIds = await readableCollectionIds(ctx, collection);
       const { results, resolved } = await ctx.vfs.query(query, {
         limit: Math.min(Math.max(1, limit || 10), MAX_RESULTS),
         collectionIds,
@@ -292,10 +277,10 @@ export function registerTroveTools(server) {
       + 'division of the drive — the closest thing here to a folder, except they do not nest.',
     inputSchema: { type: 'object', properties: {} },
     async run(_args, ctx) {
-      if (!enforcing(ctx)) {
+      if (!collectionsEnabled(ctx)) {
         return toolText(JSON.stringify({ collections: [{ id: 'default', capabilities: ['read', 'write', 'delete'] }] }, null, 2));
       }
-      const list = await ctx.collections.list(ctx.principal);
+      const list = await listFor(ctx);
       return toolText(JSON.stringify({ collections: list }, null, 2), { structured: { collections: list } });
     },
   });
@@ -322,7 +307,7 @@ export function registerTroveTools(server) {
       // Scoped, exactly like the HTTP route. Backlinks reach ACROSS collections by
       // design — that is what makes them useful — so an unscoped query hands back the
       // names, ids and trove: URIs of files inside collections the caller cannot read.
-      const collectionIds = await readable(ctx);
+      const collectionIds = await readableCollectionIds(ctx);
       const backlinks = await handle.backlinks({ limit: 20, collectionIds })
         // Distinguishable from "nothing links here", which in a drive with no folders is
         // a load-bearing fact an agent will reason from.
@@ -340,7 +325,7 @@ export function registerTroveTools(server) {
   // something invented for MCP — one name for a file across the whole system.
   server.resources({
     async list(params, ctx) {
-      const ids = await readable(ctx);
+      const ids = await readableCollectionIds(ctx);
       const out = [];
       for (const cid of ids || ['default']) {
         const page = await (await ctx.access.collection(cid, 'read')).list({ limit: 100 });

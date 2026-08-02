@@ -59,7 +59,7 @@ export class SpatialNavigationService {
   /** Follow the viewport: arrows are remapped only while the TV layout is showing. */
   install() {
     if (this.viewport) effect(this.viewport.observe(), (vp) => this.setActive(vp.mode === 'tv'));
-    this.setActive(this.viewport?.state?.mode === 'tv');
+    this.setActive(this.viewport?.get().mode === 'tv');
     return this;
   }
 
