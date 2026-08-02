@@ -957,6 +957,33 @@ kbd {
 .launch-item:hover .launch-more, .launch-item.active .launch-more, .launch-more:focus-visible { opacity: 1; }
 .launch-more:hover { background: var(--bg-active); color: var(--text); }
 .launch-more:focus-visible { outline: none; color: var(--text); background: var(--bg-active); box-shadow: 0 0 0 2px var(--focus-halo); }
+/* IN SELECTION MODE the same control is this item's checkbox, so it is always visible —
+   a checkbox that appears on hover is one you cannot see the state of, which is the only
+   thing a checkbox is for. */
+.launch-more.check { opacity: 1; color: var(--text-faint); }
+.launch-more.check.on { color: var(--accent); }
+.launch-more.check:hover { color: var(--text); }
+
+/* The bar over a selection. Above the results, because it is about the set. */
+.sel-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 8px; border-radius: 10px;
+  background: var(--bg-active); border: 1px solid var(--border);
+}
+.sel-count { font-weight: 600; font-size: 13px; min-width: 8ch; }
+.sel-actions { display: flex; align-items: center; gap: 6px; flex: 1; flex-wrap: wrap; }
+.sel-act, .sel-done {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.sel-act:hover:not(:disabled), .sel-done:hover { background: var(--bg-active); }
+/* Disabled rather than hidden while nothing is picked: the actions are what the mode is
+   FOR, and hiding them would leave a bar that looks broken instead of one that is waiting. */
+.sel-act:disabled { opacity: .45; cursor: default; }
+.sel-act.danger:not(:disabled) { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.sel-done { margin-left: auto; }
+
 /* On a touch screen there is no hover to reveal it, so it is simply always there. */
 @media (hover: none) { .launch-more { opacity: 1; } }
 .launch-kind { flex: none; color: var(--text-faint); font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px; }

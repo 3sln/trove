@@ -14,7 +14,7 @@ const slice = (initial) => {
   return { get: () => v, set: (p) => { v = { ...v, ...p }; } };
 };
 
-function shell({ overlay = {}, workbench = {}, activityOpen = false, depth = 1 } = {}) {
+function shell({ overlay = {}, workbench = {}, activityOpen = false, depth = 1, bulk = false } = {}) {
   const closed = [];
   return {
     closed,
@@ -23,6 +23,7 @@ function shell({ overlay = {}, workbench = {}, activityOpen = false, depth = 1 }
       activityPanel: activityOpen, ...overlay,
     }),
     workbench: slice({ sheet: null, searchModal: false, ...workbench }),
+    explorer: slice({ bulk, selection: bulk ? ['itm_1'] : [], selectionNodes: bulk ? [{ id: 'itm_1' }] : null }),
     navigation: {
       get: () => ({ stack: Array.from({ length: depth }, () => ({ kind: 'file' })) }),
       back() { closed.push('back'); },
@@ -108,4 +109,24 @@ test('forgetting a file that was never opened changes nothing', async () => {
   const before = nav.get().recents;
   nav.forget('never-opened');
   expect(nav.get().recents).toBe(before); // same array — no write, no save
+});
+
+test('Escape leaves selection mode before it pops a panel', async () => {
+  // A mode you cannot leave with Escape is one people get stuck in. Below the floating
+  // surfaces — a context menu opened while selecting closes first — and above popping the
+  // stack, because leaving the mode is the smaller and more likely intent of the two.
+  const r = shell({ bulk: true, depth: 2 });
+  await new CloseOverlaysAction().execute(r);
+  expect(r.explorer.get().bulk).toBe(false);
+  // The selection goes with it: a mode you have left must not still be acting on things
+  // you can no longer see selected.
+  expect(r.explorer.get().selection).toEqual([]);
+  expect(r.closed).toEqual([]);   // the panel survives — one Escape, one effect
+});
+
+test('a floating surface still outranks selection mode', async () => {
+  const r = shell({ bulk: true, overlay: { contextMenu: { x: 0, y: 0 } } });
+  await new CloseOverlaysAction().execute(r);
+  expect(r.overlay.get().contextMenu).toBe(null);
+  expect(r.explorer.get().bulk).toBe(true);
 });

@@ -12,7 +12,7 @@ import { activate } from '../../activate.js';
 
 const { div, span } = dd;
 
-export function listView({ groups, index, handlers, ui }) {
+export function listView({ groups, index, handlers, state, ui }) {
   let gi = -1;
   return div({ className: 'launch-view view-list' },
     ...groups.map((group) => div({ className: 'launch-group' },
@@ -23,14 +23,14 @@ export function listView({ groups, index, handlers, ui }) {
           return itemRow(it, at === index, {
             hover: () => handlers.hover(at),
             select: () => handlers.select(at),
-          }, ui);
+          }, ui, state);
         }))
         : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
     )),
   );
 }
 
-function itemRow(it, active, { hover, select }, ui) {
+function itemRow(it, active, { hover, select }, ui, state) {
   return div({ className: `launch-item ${active ? 'active' : ''}` },
     icon(it.icon, { size: 15 }),
     span({ className: 'name' }, it.title),
@@ -39,7 +39,7 @@ function itemRow(it, active, { hover, select }, ui) {
     // Everything you can do to a file, on the file. Rename, download, copy link and
     // delete were all commands with no way to reach them: the palette's versions act on
     // "the selection", and until the highlight became a selection there never was one.
-    menuButton(it, ui, select),
+    menuButton(it, ui, select, state),
   // One `.on()` call: a second replaces the handler map rather than merging into it,
   // which is how adding `contextmenu` silently removed `click` and stopped every file
   // in the drive from opening.

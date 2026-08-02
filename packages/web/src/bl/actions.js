@@ -1181,6 +1181,52 @@ function selectNode(explorer, node) {
 }
 
 /**
+ * Start selecting, with this item picked.
+ *
+ * The entry point selection mode never had: there was a `selection` in state and actions
+ * that read it, but nothing a person could press to build one — so it only ever held the
+ * row the pointer happened to be over.
+ */
+export class SelectThisItemAction extends Action {
+  static deps = ['explorer'];
+  constructor(node) { super(); this.node = node; }
+  async execute({ explorer }) {
+    if (!this.node?.id) return;
+    explorer.set({ bulk: true, selection: [this.node.id], selectionNodes: [this.node] });
+  }
+}
+
+/** Add or remove one item. The checkbox. */
+export class ToggleItemSelectedAction extends Action {
+  static deps = ['explorer'];
+  constructor(node) { super(); this.node = node; }
+  async execute({ explorer }) {
+    if (!this.node?.id) return;
+    const cur = explorer.get();
+    const nodes = (cur.selectionNodes || []).filter((n) => n.id !== this.node.id);
+    // Toggling off is the same list minus this one; toggling on appends, so the order a
+    // person built the selection in survives — it is the order the bar's actions run in.
+    const next = nodes.length === (cur.selectionNodes || []).length ? [...nodes, this.node] : nodes;
+    explorer.set({ bulk: true, selection: next.map((n) => n.id), selectionNodes: next });
+  }
+}
+
+/**
+ * Leave selection mode.
+ *
+ * Clears the selection with it. A mode you have left should not still be acting on things
+ * you cannot see selected, and the alternative — a hidden selection that a later command
+ * silently operates on — is the worse of the two surprises.
+ */
+export class ExitSelectionModeAction extends Action {
+  static deps = ['explorer'];
+  async execute({ explorer }) {
+    if (!explorer.get().bulk) return;
+    explorer.set({ bulk: false, selection: [], selectionNodes: null });
+  }
+}
+
+/**
  * Write one slice of view state — a draft, a capture, a set of ticked boxes.
  *
  * Components used to call the store directly, and two of them did it DURING their own
@@ -1494,6 +1540,24 @@ function subjectOf({ explorer, navigation, notifications }, node = null) {
   return found;
 }
 
+/**
+ * The subjectS — every selected node, or the one thing in hand.
+ *
+ * `subjectOf` takes the FIRST of a selection, which is right for a verb that can only mean
+ * one thing (rename, open with) and quietly wrong for one that can mean several. Once
+ * selection mode let a person pick six files, "Download" and "Keep offline" through
+ * `subjectOf` would have acted on one of them and reported nothing about the other five.
+ */
+function subjectsOf({ explorer, navigation, notifications }, node = null) {
+  if (node) return [node];
+  const selected = selectedNodesOf(explorer.get());
+  if (selected.length) return selected;
+  const open = navigation.activeTab()?.node;
+  if (open) return [open];
+  notifications.info('Pick a file first — highlight one in the list, or open it.');
+  return [];
+}
+
 /** Open the command palette, or quick-open, depending on the mode. */
 export class OpenPaletteAction extends OverlayAction {
   constructor(mode = 'commands', query = '') { super(); this.mode = mode; this.query = query; }
@@ -1516,8 +1580,8 @@ export class SetActivityAction extends ShellAction {
  * once, here, rather than distributed over whoever owns each overlay.
  */
 export class CloseOverlaysAction extends Action {
-  static deps = ['navigation', 'overlay', 'workbench'];
-  async execute({ navigation, overlay, workbench }) {
+  static deps = ['navigation', 'overlay', 'workbench', 'explorer'];
+  async execute({ navigation, overlay, workbench, explorer }) {
     const o = overlay.get();
     const wb = workbench.get();
     if (o.contextMenu) return overlay.set({ contextMenu: null });
@@ -1532,6 +1596,11 @@ export class CloseOverlaysAction extends Action {
     // Escape should not close what you opened on purpose in order to dismiss what
     // appeared on its own.
     if (o.activityPanel) return overlay.set({ activityPanel: false });
+    // Selection mode is a mode, and a mode you cannot leave with Escape is one people get
+    // stuck in. Below the floating surfaces — a context menu opened while selecting should
+    // close first — and above popping a panel, because leaving the mode is the smaller and
+    // more likely intent when both are available.
+    if (explorer.get().bulk) return explorer.set({ bulk: false, selection: [], selectionNodes: null });
     // Nothing floating: Escape pops the top viewer panel instead.
     if (navigation.get().stack.length > 1) navigation.back();
   }
@@ -1738,8 +1807,14 @@ export class DownloadSubjectAction extends Action {
   static deps = ['api', 'explorer', 'navigation', 'notifications'];
   constructor(node = null) { super(); this.node = node; }
   async execute(r) {
-    const target = subjectOf(r, this.node);
-    if (!target?.id) return;
+    const targets = subjectsOf(r, this.node).filter((t) => t?.id);
+    // Sequential, deliberately: a browser rate-limits and eventually blocks a burst of
+    // simultaneous downloads, and six files that half-arrive is worse than six that take
+    // a moment longer.
+    for (const target of targets) await this.#one(r, target);
+  }
+
+  async #one(r, target) {
     try {
       const { url, revoke } = await r.api.download(target.id, target.name);
       triggerDownload(url, target.name);
@@ -1757,9 +1832,9 @@ export class PinAction extends Action {
   static deps = ['explorer', 'navigation', 'notifications', 'offline'];
   constructor(node = null, pinned = true) { super(); this.node = node; this.pinned = pinned; }
   async execute(r) {
-    const target = subjectOf(r, this.node);
-    if (!target?.id) return;
-    return this.pinned ? r.offline.pin(target) : r.offline.unpin(target.id);
+    // Every selected file, not the first of them — see `subjectsOf`.
+    const targets = subjectsOf(r, this.node).filter((t) => t?.id);
+    for (const t of targets) await (this.pinned ? r.offline.pin(t) : r.offline.unpin(t.id));
   }
 }
 

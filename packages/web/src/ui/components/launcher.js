@@ -9,7 +9,7 @@ import { icon } from '../icon.js';
 import { ExecCommandAction, FilterAction, MoveLaunchAction, SearchAction, SelectLaunchAction, SetLaunchIndexAction, SetLaunchQueryAction } from '../../bl/actions.js';
 import { parseTagQuery, filterLabel } from '../../bl/tagQuery.js';
 import { renderView, viewSwitcher, viewMove } from './views/index.js';
-import { openRowMenu } from './views/parts.js';
+import { openRowMenu, selectionBar } from './views/parts.js';
 import { activate } from '../activate.js';
 
 const { div, span, input, button } = dd;
@@ -160,6 +160,8 @@ export default function launcher(state, ui, opts = {}) {
     // WHAT is on screen (these groups, this highlight); the view says how it looks. That
     // split is why a gallery is a contribution rather than another branch in here.
     div({ className: 'launch-body' },
+      // Above the results, because it is about the set rather than about a row.
+      selectionBar(state, ui),
       renderView(view, { groups, index: idx, handlers: { hover: hoverAt, select: selectAt }, state, ui }),
       searchHelp(content.help, ui),
     ),

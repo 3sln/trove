@@ -18,7 +18,7 @@
 import { parseTagQuery, filterLabel } from './tagQuery.js';
 import { iconForKind, titleOf } from './fileType.js';
 import {
-  ExecCommandAction, CloseSearchModalAction, OpenFileAction, SearchAction, FilterAction,
+  ExecCommandAction, SelectThisItemAction, CloseSearchModalAction, OpenFileAction, SearchAction, FilterAction,
   SetLaunchQueryAction,
 } from './actions.js';
 
@@ -53,7 +53,14 @@ export function modeShowsItems(mode) {
  */
 export function fileMenuOf(node, { pinned = false, keys = {} } = {}) {
   const kbd = (id) => keys[id] || undefined;
+  // First, because it changes what the rest of the list means: after this, actions apply
+  // to everything picked rather than to this one file.
+  const selectThis = {
+    icon: 'check', label: 'Select this item',
+    actions: [new SelectThisItemAction(node)],
+  };
   return [
+    selectThis,
     { label: 'Open', icon: 'file-text', actions: [new ExecCommandAction('explorer.open', node)] },
     { label: 'Download', icon: 'download', actions: [new ExecCommandAction('explorer.download', node)] },
     // Labelled by destination rather than by format: one goes in a document, the other

@@ -22,7 +22,7 @@ import { activate } from '../../activate.js';
 
 const { div, span, img } = dd;
 
-export function gridView({ groups, index, handlers, ui }) {
+export function gridView({ groups, index, handlers, state, ui }) {
   let gi = -1;
   return div({ className: 'launch-view view-grid' },
     ...groups.map((group) => div({ className: 'launch-group' },
@@ -33,7 +33,7 @@ export function gridView({ groups, index, handlers, ui }) {
           return tile(it, at === index, {
             hover: () => handlers.hover(at),
             select: () => handlers.select(at),
-          }, ui);
+          }, ui, state);
         }))
         : div({ className: 'launch-empty' }, group.empty || 'Nothing here.'),
     )),
@@ -80,7 +80,7 @@ function columns() {
   return n || 1;
 }
 
-function tile(it, active, { hover, select }, ui) {
+function tile(it, active, { hover, select }, ui, state) {
   const node = it.node;
   // A contributed thumbnail beats the file itself. It is already a picture of the right
   // size, it needs no minted URL, and for anything that is not an image it is the only
@@ -118,7 +118,7 @@ function tile(it, active, { hover, select }, ui) {
         }).opaque()
         : null,
       it.badge ? span({ className: 'gt-badge' }, it.badge) : null,
-      menuButton(it, ui, select),
+      menuButton(it, ui, select, state),
     ),
     div({ className: 'gt-name' }, it.title),
   ).on({

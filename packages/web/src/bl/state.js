@@ -49,6 +49,10 @@ export function slice(initial = {}) {
 export const explorerState = (settings) => slice({
   items: [], loading: false, error: null,
   selection: [], sort: settings.get('explorer.sort'), order: settings.get('explorer.sortOrder'),
+  // Whether the list is in SELECTION MODE. It lives here rather than in `viewState`
+  // because it is a property of the selection it governs, not a transient overlay: the
+  // selection is already here, and splitting the two would let them disagree.
+  bulk: false,
   // No collection until one is chosen or created. `gate` is 'create' | 'choose' | null —
   // when set, it is the ONLY thing the workbench shows, because every request needs a
   // collection and there is nothing sensible to render without one.
