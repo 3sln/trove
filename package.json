@@ -1,6 +1,6 @@
 {
   "name": "@3sln/trove",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "type": "module",
   "description": "Trove — a self-hostable, plugin-extensible Google Drive. Semantic search, pluggable storage (S3 / filesystem / NAS), and a VS Code-style contribution system with sandboxed plugins.",
   "repository": {
