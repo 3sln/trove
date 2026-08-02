@@ -15,6 +15,7 @@ import {
   VectorStore, KeywordStore, IndexerRegistry,
   accessHost, TroveError,
   protectedResourceMetadata, challengeHeaders, publicOrigin,
+  DEFAULT_RATE_LIMITS, RATE_CLASSES, describeRateLimits,
 } from '@3sln/trove/core';
 import { createRouter, routeHelpers } from './routes.js';
 import { createDriveEngine, scanStarter, BACKBONE } from './engine/index.js';
@@ -65,6 +66,7 @@ export async function createServer(config = {}) {
   // from here. It fires per isolate cold start rather than per process, which is noisier
   // only for the deployments that really are open to everyone.
   warnOnOpenAccess(config);
+  warnOnUnenforceableLimits(config);
   const lifecycleState = { closing: false, background: null };
   const engine = createDriveEngine(config, lifecycleState);
 
@@ -75,7 +77,7 @@ export async function createServer(config = {}) {
   const {
     storage, sqlite: sqliteProvider, metadata, kv, tasks, issues, notifications,
     sidecar, collections, identity, auth, search, vfs, plugins, apiKeys, capabilities, rotation,
-    storageCheck,
+    storageCheck, rateLimiter,
   } = backbone.resources;
 
   // Aliased so the rest of this function reads as it did; the container's
@@ -269,7 +271,7 @@ export async function createServer(config = {}) {
   // channel cannot shadow a built-in route by claiming its path.
   for (const channel of notifications?.channels || []) {
     for (const route of channel.routes?.(routeHelpers) || []) {
-      router.add(route.method, route.path, route.deps || [], route.handler);
+      router.add(route.method, route.path, route.deps || [], route.handler, { cost: route.cost || 'write' });
     }
   }
 
@@ -287,7 +289,12 @@ export async function createServer(config = {}) {
     ? externalEvaluation({ ...config.accessEvaluation, team: config.accessEvaluation.team || config.identity?.access?.team })
     : null;
   for (const route of accessPolicy?.routes?.(routeHelpers) || []) {
-    router.add(route.method, route.path, route.deps || [], route.handler);
+    // `evaluate` by default for a contributed public route: this is the one endpoint a
+    // stranger reaches with no credential at all, and each call is a JWKS fetch or cache
+    // read and an RSA verify. Refusing to ANSWER an unattributable caller is the right
+    // security property and does nothing about the cost of asking.
+    router.add(route.method, route.path, route.deps || [], route.handler,
+      { cost: route.cost || (route.public ? 'evaluate' : 'write') });
     if (route.public) publicPaths.add(route.path);
   }
 
@@ -299,7 +306,7 @@ export async function createServer(config = {}) {
   // MCP: the same drive, the same identity, spoken to by an agent instead of a browser.
   // Null when switched off, and then nothing below routes to it.
   const mcp = createMcpHandler({
-    vfs, collections, identity, config, auth,
+    vfs, collections, identity, config, auth, rateLimiter,
     // So an agent's tool call obtains the same authorized handles an HTTP route does.
     container: engine.container,
     version: config.version || '0.0.1',
@@ -388,7 +395,7 @@ export async function createServer(config = {}) {
         // along too, and /api/capabilities — its only reader — already declares it as a
         // dep, so it arrived twice by two mechanisms and the route table understated by
         // one what that endpoint touches.
-        config, principal, grant, mcp,
+        config, principal, grant, mcp, rateLimiter,
       });
       // A route can refuse on its own (a token that verified but names nobody we know,
       // a session that expired between calls). Whatever refused, the answer to "so
@@ -448,6 +455,10 @@ export async function createServer(config = {}) {
     const out = { swept: false, purged: 0, scans: [], notified: 0, storage: 0 };
     await vfs.uploads.sweepExpired(Date.now());
     await sidecar.sweep();
+    // Rate-limit buckets, when they are in the shared store. One key per subject per class
+    // per window, and nothing else removes them — the window passing makes a bucket
+    // unreachable, not absent.
+    await rateLimiter?.store?.sweep?.().catch(() => {});
     // Mentions are batched and drained on an interval — a timer, and a timer registered
     // during a request does not outlive it on Workers, where the adapter switches the
     // flusher off for exactly that reason. Nothing else called flush, so on that runtime
@@ -567,6 +578,30 @@ export const SAMPLE_CSP = [
   "script-src 'self' 'wasm-unsafe-eval'",
   "connect-src 'self'",
 ].join('; ');
+
+/**
+ * Say so when the limits cannot actually be enforced.
+ *
+ * In-memory counters are exact on a runtime where one process serves every request, and on
+ * Workers they count PER ISOLATE — so "60 a minute" becomes 60 times however many isolates
+ * the platform decided to run, which is not a limit. `startFlusher: false` is how the
+ * Worker adapter already says "timers do not survive a request here", which is the same
+ * fact about the same absence of a long-lived process.
+ *
+ * A warning rather than a refusal, because there is a correct answer at that layer —
+ * Cloudflare's own rate limiting, configured outside the app — and refusing to boot over a
+ * limit an operator may have handled elsewhere would be worse than saying it.
+ */
+export function warnOnUnenforceableLimits(config = {}) {
+  const rl = config.rateLimit;
+  if (!rl?.enabled || rl.store === 'kv') return;
+  if (config.startFlusher !== false) return; // a long-lived process; memory counters are exact
+  console.warn(
+    '[trove] Rate limits are counted IN MEMORY on a runtime with no long-lived process, so '
+    + 'they apply per isolate rather than per drive. Set TROVE_RATE_LIMIT_STORE=kv for one '
+    + 'shared budget, or configure rate limiting at the edge.',
+  );
+}
 
 /**
  * Warn (once, to the console) when a configuration is world-open — anonymous auth
@@ -821,6 +856,39 @@ export function configFromEnv(env = (typeof process !== 'undefined' ? process.en
 
   // Per-file upload quota (bytes). Unbounded unless set.
   if (env.TROVE_MAX_UPLOAD_BYTES) config.maxUploadBytes = Number(env.TROVE_MAX_UPLOAD_BYTES);
+
+  // What one caller may cost, per class of work. On by default with the generous defaults
+  // in core/rateLimit.js — a limit nobody turns on is not a limit, and these are chosen so
+  // that using the drive normally never reaches one.
+  //
+  // TROVE_RATE_LIMIT=off        no limiting at all (a single-user drive on a laptop)
+  // TROVE_RATE_LIMIT_STORE=kv   counters in the shared store, so every instance sees one
+  //                             budget. Costs a read and a write per limited request, and
+  //                             it is what a multi-instance or Workers deployment needs —
+  //                             see describeRateLimits for why memory is not enough there.
+  // TROVE_RATE_LIMITS='{"search":{"limit":20,"windowMs":60000}}'  per-class overrides,
+  //                             merged over the defaults so naming one class keeps the rest.
+  config.rateLimit = { enabled: true, store: 'memory', limits: { ...DEFAULT_RATE_LIMITS } };
+  if (env.TROVE_RATE_LIMIT != null && /^(0|off|false|no)$/i.test(String(env.TROVE_RATE_LIMIT))) {
+    config.rateLimit.enabled = false;
+  }
+  if (env.TROVE_RATE_LIMIT_STORE) config.rateLimit.store = String(env.TROVE_RATE_LIMIT_STORE);
+  if (env.TROVE_RATE_LIMITS) {
+    // Refused loudly. A malformed limits document that fell back to the defaults would be
+    // an operator believing they had tightened something they had not.
+    let overrides;
+    try {
+      overrides = JSON.parse(env.TROVE_RATE_LIMITS);
+    } catch (err) {
+      throw TroveError.invalid(`TROVE_RATE_LIMITS is not valid JSON: ${err.message}`);
+    }
+    for (const [name, rule] of Object.entries(overrides)) {
+      if (!RATE_CLASSES.includes(name)) {
+        throw TroveError.invalid(`Unknown rate-limit class "${name}" — expected one of: ${RATE_CLASSES.join(', ')}`);
+      }
+      config.rateLimit.limits[name] = { ...config.rateLimit.limits[name], ...rule };
+    }
+  }
 
   // Deny plugin API calls with no server install record (fully closes the "any client
   // can name any pluginId" gap). Off by default for back-compat with pre-existing

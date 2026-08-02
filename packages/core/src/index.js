@@ -68,6 +68,12 @@ export { VectorizeVectorStore } from './search/vectorize.js';
 // Server-side key/value store (subscriptions, inboxes, profiles).
 export { KeyValueStore, MemoryKV, SqliteKV } from './kv.js';
 export { SignedUrls, resolveUrlSecret, URL_PURPOSES } from './signedUrls.js';
+// What one caller may cost, per class of work — see rateLimit.js for why classes rather
+// than one number, and for which runtimes can enforce a limit at all.
+export {
+  RateLimiter, MemoryRateStore, KvRateStore, rateSubject, describeRateLimits,
+  DEFAULT_RATE_LIMITS, RATE_CLASSES,
+} from './rateLimit.js';
 // API keys: capability without identity. CapabilityProvider is the injection point —
 // the counterpart to IdentityProvider, for credentials that say what rather than who.
 export {

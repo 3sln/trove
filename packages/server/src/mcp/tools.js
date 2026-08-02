@@ -22,6 +22,18 @@ import { toolText } from './protocol.js';
 // rephrasing what was really a 403. `ctx.access` is on the MCP ctx, so the assert path
 // was available all along.
 import { readableCollectionIds, listFor } from '../scope.js';
+import { rateSubject } from '@3sln/trove/core';
+
+/**
+ * Charge this call against the caller's budget for that class of work.
+ *
+ * The HTTP routes declare a class in the route table; a tool declares it here, at the top
+ * of the one that costs something. A search is the expensive one — on a deployment with
+ * embeddings configured it is a paid third-party call — and "an agent is exactly as
+ * privileged as the person whose token it holds" has to include how much they can spend.
+ */
+const meter = (ctx, className) =>
+  (ctx.rateLimiter ? ctx.rateLimiter.enforce(rateSubject({ principal: ctx.principal }), className) : null);
 
 // A file read has to fit in a context window and in memory. Past this the tool returns
 // the head and says so, which is far more useful than refusing or than silently
@@ -133,6 +145,7 @@ export function registerTroveTools(server) {
     },
     async run({ query, collection, limit }, ctx) {
       if (!query?.trim()) throw TroveError.invalid('query is required');
+      await meter(ctx, 'search');
       const collectionIds = await readableCollectionIds(ctx, collection);
       const { results, resolved } = await ctx.vfs.query(query, {
         limit: Math.min(Math.max(1, limit || 10), MAX_RESULTS),

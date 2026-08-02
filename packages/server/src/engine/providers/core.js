@@ -45,6 +45,7 @@ import {
   resolveAuthDiscovery,
   SignedUrls, resolveUrlSecret,
   diagnoseStorage, STORAGE_ISSUE_CODES,
+  RateLimiter, MemoryRateStore, KvRateStore, DEFAULT_RATE_LIMITS,
 } from '@3sln/trove/core';
 import { Provider } from '@3sln/ngin';
 import { need } from '../lazy.js';
@@ -171,6 +172,33 @@ export function coreProviders(config, lifecycleState) {
     // Config as a dependency rather than a captured variable, so a provider that
     // reads it has to say so.
     config: Provider.fromSingleton(config),
+
+    /**
+     * What one caller may cost, per class of work.
+     *
+     * A provider so the route table can lease it like anything else, and so the store is a
+     * decision made once from configuration rather than at each call site. Null when
+     * limiting is switched off, which is the one case a caller has to handle — and it does
+     * so by not asking, since `Router.handle` only enforces for routes that named a class.
+     */
+    rateLimiter: Provider.fromLazySingleton(
+      async (deps) => {
+        // ON unless switched off, including for a library caller who built a config by
+        // hand rather than through `configFromEnv`. A limit that only exists when somebody
+        // remembers to ask for it is not a limit.
+        const rl = config.rateLimit ?? { enabled: true, store: 'memory', limits: DEFAULT_RATE_LIMITS };
+        if (!rl.enabled) return null;
+        // KV counters are shared across instances and cost a read and a write per limited
+        // request; memory counters are free and exact on ONE long-lived process. See
+        // rateLimit.js — the choice is a property of the deployment, not of the code.
+        const store = rl.store === 'kv'
+          ? new KvRateStore({ kv: (await need(deps, ['kv'])).kv })
+          : new MemoryRateStore();
+        return new RateLimiter({ store, limits: rl.limits || DEFAULT_RATE_LIMITS });
+      },
+      null,
+      { deps: ['kv'] },
+    ),
 
     // Shutdown, likewise. Long work has to be able to ask whether the server is
     // going down, and closing over a `let` made that invisible.

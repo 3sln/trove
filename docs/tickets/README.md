@@ -9,7 +9,6 @@ directory of closed tickets is a directory nobody reads.
 
 | # | Ticket | Why it matters |
 |---|--------|----------------|
-| [021](021-nothing-limits-what-one-caller-can-cost.md) | Nothing limits what one caller can cost | No rate limiting anywhere — a leaked key or an open drive can spend CPU, bandwidth and embedding credit without bound |
 | [022](022-a-plugins-directory-and-its-first-tenant.md) | A plugins directory, and its first tenant | `plugins/*` in the monorepo, and storia's audiobook player ported into it as a docking, media-session viewer |
 
 Tickets 012–020 come from a multi-agent architecture audit (Aug 2026): eight lenses over

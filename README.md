@@ -503,6 +503,10 @@ the same values as config fields instead.
 | `TROVE_JWT_ISSUER` / `_AUDIENCE` / `_ALGS` | — | claim checks after the signature passes |
 | `TROVE_AUTH_SERVER` | the JWT issuer | where refused clients are sent to sign in |
 | `TROVE_ADMINS` | — | comma-separated ids with whole-drive rights |
+| **rate limits** | | |
+| `TROVE_RATE_LIMIT` | on | `off` to meter nothing |
+| `TROVE_RATE_LIMIT_STORE` | `memory` | `kv` for one budget across instances (needed on Workers) |
+| `TROVE_RATE_LIMITS` | — | JSON per class, e.g. `{"search":{"limit":20,"windowMs":60000}}` |
 | **collections** | | |
 | `TROVE_DEFAULT_OPEN` | `true` | **set `false`** before exposing it |
 | `TROVE_COLLECTION_CREATOR_ROLES` | — | roles allowed to create collections |

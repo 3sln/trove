@@ -7,6 +7,7 @@
 
 import { TroveError, wrapError, ErrorCode, publicOrigin } from '@3sln/trove/core';
 import { leaseScope } from './scope.js';
+import { rateSubject } from '@3sln/trove/core';
 
 // Methods that change state. A GET is safe by definition, so it isn't checked.
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
@@ -65,6 +66,9 @@ export class Router {
    * @param {string[]|Function} depsOrHandler  the resources this route needs, by
    *   name — or the handler, for a route that needs none.
    * @param {Function} [maybeHandler]
+   * @param {{cost?: string}} [opts] which class of work this is, for rate limiting — see
+   *   core/rateLimit.js. A route that names none is not metered, which is the right answer
+   *   for the cheap reads the shell issues constantly.
    *
    * Declaring dependencies is the point. Every handler used to receive one
    * object carrying the whole server: vfs, collections, kv, sqlite, plugins,
@@ -74,17 +78,17 @@ export class Router {
    * reading it. Named here, the answer is in the route table, and a route that
    * did not ask for `plugins` does not get `plugins`.
    */
-  add(method, pattern, depsOrHandler, maybeHandler) {
+  add(method, pattern, depsOrHandler, maybeHandler, opts = {}) {
     const handler = maybeHandler ?? depsOrHandler;
     const deps = maybeHandler ? depsOrHandler : [];
     const segs = pattern.split('/').filter(Boolean);
-    this.routes.push({ method, segs, handler, deps });
+    this.routes.push({ method, segs, handler, deps, cost: opts.cost || null });
     return this;
   }
-  get(p, d, h) { return this.add('GET', p, d, h); }
-  post(p, d, h) { return this.add('POST', p, d, h); }
-  put(p, d, h) { return this.add('PUT', p, d, h); }
-  delete(p, d, h) { return this.add('DELETE', p, d, h); }
+  get(p, d, h, o) { return this.add('GET', p, d, h, o); }
+  post(p, d, h, o) { return this.add('POST', p, d, h, o); }
+  put(p, d, h, o) { return this.add('PUT', p, d, h, o); }
+  delete(p, d, h, o) { return this.add('DELETE', p, d, h, o); }
 
   #match(method, pathname) {
     const parts = pathname.split('/').filter(Boolean);
@@ -142,6 +146,15 @@ export class Router {
     const scope = leaseScope(ctx.container, ctx.principal, ctx.grant);
     const access = scope.access;
     try {
+      // Before the handler, before the lease, and before any work: the point of a limit is
+      // that the expensive thing does not happen. `rateLimiter` is null when limiting is
+      // off, and a route that named no class is not metered at all.
+      if (found.route.cost && ctx.rateLimiter) {
+        await ctx.rateLimiter.enforce(
+          rateSubject({ grant: ctx.grant, principal: ctx.principal, req, trustProxy: ctx.config?.trustProxy }),
+          found.route.cost,
+        );
+      }
       lease = ctx.container ? await ctx.container.lease(found.route.deps) : null;
       const result = await found.route.handler({
         req, params: found.params, query, url, access, ...ctx, ...(lease?.resources || {}),
@@ -151,7 +164,13 @@ export class Router {
     } catch (raw) {
       const err = raw instanceof TroveError ? raw : wrapError(raw);
       if (err.code === ErrorCode.INTERNAL) console.error('Unhandled:', err.cause || err);
-      return cors(json(err.toJSON(), err.status), origin);
+      // A 429 without a `Retry-After` makes every client guess, and a client that guesses
+      // wrong either hammers or waits far too long. The limiter knows exactly when the
+      // window ends, so it says so — in SECONDS, rounded up, which is what RFC 9110 wants.
+      const headers = err.details?.retryAfterMs != null
+        ? { 'retry-after': String(Math.ceil(err.details.retryAfterMs / 1000)) }
+        : {};
+      return cors(json(err.toJSON(), err.status, headers), origin);
     } finally {
       await scope.release();
       await lease?.release();

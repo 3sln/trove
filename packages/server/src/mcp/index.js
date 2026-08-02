@@ -61,7 +61,7 @@ function authRequired(cfg, identity) {
  * @param {object} deps
  * @param {object} deps.auth the drive's resolved auth discovery (see resolveAuthDiscovery)
  */
-export function createMcpHandler({ vfs, collections, container, identity, config = {}, auth = {}, version } = {}) {
+export function createMcpHandler({ vfs, collections, container, identity, config = {}, auth = {}, version, rateLimiter = null } = {}) {
   const cfg = { path: '/mcp', enabled: true, ...mcpConfigFromEnv(config.env || {}), ...(config.mcp || {}) };
   if (cfg.enabled === false) return null;
   const server = createMcpServer({ version });
@@ -172,7 +172,10 @@ export function createMcpHandler({ vfs, collections, container, identity, config
     // node or collection HANDLE and operates through it, so there is no MCP-shaped path
     // around the collection ACL and no unrestricted `vfs` sitting in a tool body.
     const scope = leaseScope(container, principal);
-    const ctx = { vfs, collections, principal, config, access: scope.access };
+    // The limiter reaches this surface too. An agent holding somebody's token can search
+    // as fast as it likes otherwise, and a search is the paid one — "exactly as privileged
+    // as the person whose token it holds" has to include how much they can spend.
+    const ctx = { vfs, collections, principal, config, access: scope.access, rateLimiter };
 
     try {
       // A batch is an array. Notifications inside it contribute nothing to the reply,

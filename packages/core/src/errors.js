@@ -118,6 +118,14 @@ export class TroveError extends Error {
   static forbidden(message = 'Forbidden', opts) {
     return new TroveError(ErrorCode.FORBIDDEN, message, opts);
   }
+  /**
+   * Rate limited — 429, and retryable, which is what tells it apart from being out of
+   * disk. See the constructor: QUOTA is 507 when it is NOT retryable, because telling a
+   * client to retry against a full volume sends it into a loop only a human can end.
+   */
+  static rateLimited(message, opts) {
+    return new TroveError(ErrorCode.QUOTA, message, { retryable: true, ...opts });
+  }
   static internal(message = 'Internal error', opts) {
     return new TroveError(ErrorCode.INTERNAL, message, opts);
   }

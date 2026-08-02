@@ -8,7 +8,7 @@ import {
 import { Router, json, parseRange } from './router.js';
 import {
   TroveError, assertSafePluginSql, concatBytes, metadataUrl, publicOrigin,
-  shouldEncrypt, estimateRotationCost,
+  shouldEncrypt, estimateRotationCost, describeRateLimits, DEFAULT_RATE_LIMITS,
 } from '@3sln/trove/core';
 import { parseContribUri, CORE_DOMAIN } from '@3sln/trove/core/plugins/identity.js';
 
@@ -195,6 +195,15 @@ export function createRouter() {
       // grammar, so it owns the prompt — a client that hardcodes "# filter by tag"
       // tells people the wrong thing the moment a different transformer is configured.
       searchPrompt: vfs.searchTransformer?.describe?.() || null,
+      // What this deployment will actually enforce, and at what SCOPE. `scope: 'isolate'`
+      // is the admission that in-memory counters on a runtime with no long-lived process
+      // apply per isolate — reported rather than assumed, so a deployment that cannot
+      // enforce a limit says so instead of appearing to. See core/rateLimit.js.
+      rateLimits: describeRateLimits({
+        enabled: true, store: 'memory', limits: DEFAULT_RATE_LIMITS,
+        ...(ctx.config.rateLimit || {}),
+        perProcess: ctx.config.startFlusher !== false,
+      }),
 
       // Where a refused client is sent, and where an agent connects. Both are DEPLOYMENT
       // facts — env, or a field the library caller passed — so they are reported here
@@ -392,6 +401,10 @@ export function createRouter() {
   });
 
   // --- download (presign redirect or range-aware proxy) ----------------------
+  //
+  // `cost: 'download'`, and generously: a media player range-requests one file many
+  // times, which is one file's worth of bandwidth rather than many. The limit is there
+  // to bound a loop, not to bound watching a video.
 
   r.get('/api/items/download', [], async (ctx) => {
     const { query, req } = ctx;
@@ -430,7 +443,7 @@ export function createRouter() {
       return new Response(stream, { status: 206, headers });
     }
     return new Response(stream, { status: 200, headers });
-  });
+  }, { cost: 'download' });
 
   // Mint URLs that carry their own authorization, for the things that cannot send a
   // header. Batched on purpose: a gallery draws hundreds of tiles, and per-object
@@ -461,6 +474,10 @@ export function createRouter() {
 
   // --- uploads ---------------------------------------------------------------
 
+  // Metered at NEGOTIATION rather than per part: one session is one file, which is the
+  // unit `maxUploadBytes` is also about, and metering parts would punish a large file for
+  // being large rather than a caller for being greedy. Encrypted collections proxy BOTH
+  // directions since the drive seals, so this is the more expensive it has ever been.
   r.post('/api/collections/:collection/uploads', ['collections', 'vfs'], async (ctx) => {
     const b = await body(ctx.req);
     if (!b.name) throw TroveError.invalid('name is required');
@@ -479,7 +496,7 @@ export function createRouter() {
       name: b.name, size: Number(b.size ?? 0), contentType: b.contentType,
       overwrite: b.overwrite === true,
     }));
-  });
+  }, { cost: 'upload' });
 
   // An upload spans several requests keyed only by an unguessable id, so each one
   // re-obtains the handle — which re-asserts `write` on the session's collection. A
@@ -544,8 +561,11 @@ export function createRouter() {
     });
     return { query: query.q, results };
   };
-  r.get('/api/search', ['collections', 'vfs'], searchHandler);
-  r.get('/api/collections/:collection/search', ['collections', 'vfs'], searchHandler);
+  // `cost: 'search'` — on a deployment with TROVE_EMBEDDINGS_URL set, every one of these
+  // is a paid call to a third party. It is the one place an attacker spends the operator's
+  // money rather than their own CPU. See core/rateLimit.js.
+  r.get('/api/search', ['collections', 'vfs'], searchHandler, { cost: 'search' });
+  r.get('/api/collections/:collection/search', ['collections', 'vfs'], searchHandler, { cost: 'search' });
 
   // Unified query: a raw user string is run through the search transformer (default
   // parses `#tag` syntax; a plugged-in one may use an LLM), then dispatched. Returns
@@ -564,7 +584,7 @@ export function createRouter() {
     });
     return { query: b.q, results, resolved };
   };
-  r.post('/api/query', ['collections', 'vfs'], queryHandler);
+  r.post('/api/query', ['collections', 'vfs'], queryHandler, { cost: 'search' });
   r.post('/api/collections/:collection/query', ['collections', 'vfs'], queryHandler);
 
   // Drive-wide tag/property filter (the launcher's `#tag` / `#key:op:value`).
@@ -577,8 +597,8 @@ export function createRouter() {
     });
     return { items };
   };
-  r.post('/api/tags/search', ['collections', 'vfs'], tagSearchHandler);
-  r.post('/api/collections/:collection/tags/search', ['collections', 'vfs'], tagSearchHandler);
+  r.post('/api/tags/search', ['collections', 'vfs'], tagSearchHandler, { cost: 'search' });
+  r.post('/api/collections/:collection/tags/search', ['collections', 'vfs'], tagSearchHandler, { cost: 'search' });
 
   r.get('/api/indexers', ['vfs'], ({ vfs }) => ({ indexers: vfs.indexers.list() }));
 
@@ -738,7 +758,7 @@ export function createRouter() {
     // hours and holding the request open for it would just time out.
     const state = await ctx.rotation.begin(collectionId, ctx.principal);
     return { rotation: state };
-  });
+  }, { cost: 'job' });
 
   r.delete('/api/collections/:collection/rotate', ['collections', 'rotation'], async (ctx) => {
     const collectionId = scopedCollection(ctx);
@@ -752,6 +772,8 @@ export function createRouter() {
   // Rebuild the search index on demand. Admin-only: it re-reads every object in the
   // drive, so it is a real load, and it is drive-wide rather than scoped to anything
   // the caller owns. Returns the task, which is how the caller watches it.
+  // `cost: 'job'` — admin-gated is not rate-limited, and an admin key that leaks is
+  // otherwise a way to make the drive scan and re-index forever.
   r.post('/api/reindex', ['backgroundWork', 'collections', 'tasks'], async (ctx) => {
     await requireWholeDrive(ctx, 'rebuild the search index');
     // Two concurrent full rebuilds would double the work to reach the same place, so
@@ -764,7 +786,7 @@ export function createRouter() {
       return { task: local || null, alreadyRunning: true };
     }
     return { task };
-  });
+  }, { cost: 'job' });
 
   // --- trash -----------------------------------------------------------------
   // Deleting moves an item here rather than destroying it. Everything below needs
@@ -815,7 +837,7 @@ export function createRouter() {
       return { task: local || null, alreadyRunning: true };
     }
     return { task };
-  });
+  }, { cost: 'job' });
 
   // --- identity --------------------------------------------------------------
 
@@ -950,7 +972,7 @@ export function createRouter() {
     const bytes = await readBytesCapped(req, plugins.maxPackageBytes || 32 * 1024 * 1024);
     const grants = query.grants ? String(query.grants).split(',').map((s) => s.trim()).filter(Boolean) : undefined;
     return { install: await plugins.install({ principal, bytes, grants }) };
-  });
+  }, { cost: 'install' });
 
   // List this account's server-installed plugins (for cross-device sync).
   r.get('/api/plugins/installed', ['plugins'], async ({ plugins, principal }) => {
